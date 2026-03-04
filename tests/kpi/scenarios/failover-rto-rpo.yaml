@@ -1,0 +1,15 @@
+id: failover-rto-rpo
+description: Validate failover RTO/RPO for strict sync workloads.
+type: failover
+workload:
+  cluster_nodes: 3
+  fault_injection:
+    - kill_primary_node
+  strict_sync: true
+assertions:
+  - metric: failover.rto_sec
+    op: "<="
+    target: 30
+  - metric: failover.rpo_committed_data_loss
+    op: "=="
+    target: 0

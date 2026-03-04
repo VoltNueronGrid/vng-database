@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  voltnuerongridd-1:
+    image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+    container_name: voltnuerongridd-1
+    restart: unless-stopped
+    ports:
+      - "18080:8080"
+      - "15432:5432"
+    environment:
+      VNG_NODE_ID: node-1
+      VNG_CLUSTER_MODE: multi
+      VNG_SEEDS: voltnuerongridd-1:7000,voltnuerongridd-2:7000,voltnuerongridd-3:7000
+      VNG_HTTP_BIND: 0.0.0.0:8080
+      VNG_SQL_BIND: 0.0.0.0:5432
+      VNG_GOSSIP_BIND: 0.0.0.0:7000
+      VNG_DATA_DIR: /var/lib/voltnuerongrid
+      VNG_CONFIG_FILE: /etc/voltnuerongrid/config.yaml
+    volumes:
+      - vng_node1_data:/var/lib/voltnuerongrid
+      - ./config/multi-node-config.yaml:/etc/voltnuerongrid/config.yaml:ro
+    networks: [vngnet]
+
+  voltnuerongridd-2:
+    image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+    container_name: voltnuerongridd-2
+    restart: unless-stopped
+    ports:
+      - "28080:8080"
+      - "25432:5432"
+    environment:
+      VNG_NODE_ID: node-2
+      VNG_CLUSTER_MODE: multi
+      VNG_SEEDS: voltnuerongridd-1:7000,voltnuerongridd-2:7000,voltnuerongridd-3:7000
+      VNG_HTTP_BIND: 0.0.0.0:8080
+      VNG_SQL_BIND: 0.0.0.0:5432
+      VNG_GOSSIP_BIND: 0.0.0.0:7000
+      VNG_DATA_DIR: /var/lib/voltnuerongrid
+      VNG_CONFIG_FILE: /etc/voltnuerongrid/config.yaml
+    volumes:
+      - vng_node2_data:/var/lib/voltnuerongrid
+      - ./config/multi-node-config.yaml:/etc/voltnuerongrid/config.yaml:ro
+    networks: [vngnet]
+    depends_on:
+      - voltnuerongridd-1
+
+  voltnuerongridd-3:
+    image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+    container_name: voltnuerongridd-3
+    restart: unless-stopped
+    ports:
+      - "38080:8080"
+      - "35432:5432"
+    environment:
+      VNG_NODE_ID: node-3
+      VNG_CLUSTER_MODE: multi
+      VNG_SEEDS: voltnuerongridd-1:7000,voltnuerongridd-2:7000,voltnuerongridd-3:7000
+      VNG_HTTP_BIND: 0.0.0.0:8080
+      VNG_SQL_BIND: 0.0.0.0:5432
+      VNG_GOSSIP_BIND: 0.0.0.0:7000
+      VNG_DATA_DIR: /var/lib/voltnuerongrid
+      VNG_CONFIG_FILE: /etc/voltnuerongrid/config.yaml
+    volumes:
+      - vng_node3_data:/var/lib/voltnuerongrid
+      - ./config/multi-node-config.yaml:/etc/voltnuerongrid/config.yaml:ro
+    networks: [vngnet]
+    depends_on:
+      - voltnuerongridd-1
+
+networks:
+  vngnet:
+
+volumes:
+  vng_node1_data:
+  vng_node2_data:
+  vng_node3_data:

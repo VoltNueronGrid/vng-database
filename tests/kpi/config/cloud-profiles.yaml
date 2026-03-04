@@ -1,0 +1,24 @@
+profiles:
+  - name: aws-local-smoke
+    base_url: http://127.0.0.1:8080
+    sql_url: http://127.0.0.1:8080
+    auth_mode: none
+    headers:
+      X-Cloud-Profile: aws
+      X-Smoke-Pack: pr007-phase2
+
+  - name: azure-local-smoke
+    base_url: http://127.0.0.1:8080
+    sql_url: http://127.0.0.1:8080
+    auth_mode: none
+    headers:
+      X-Cloud-Profile: azure
+      X-Smoke-Pack: pr007-phase2
+
+  - name: gcp-local-smoke
+    base_url: http://127.0.0.1:8080
+    sql_url: http://127.0.0.1:8080
+    auth_mode: none
+    headers:
+      X-Cloud-Profile: gcp
+      X-Smoke-Pack: pr007-phase2

@@ -1,0 +1,15 @@
+cluster:
+  mode: single
+
+network:
+  http_bind: "0.0.0.0:8080"
+  sql_bind: "0.0.0.0:5432"
+
+storage:
+  data_dir: "/var/lib/voltnuerongrid"
+
+htap:
+  sync_mode: "near_realtime"
+
+autonomous:
+  mode: "advisory"

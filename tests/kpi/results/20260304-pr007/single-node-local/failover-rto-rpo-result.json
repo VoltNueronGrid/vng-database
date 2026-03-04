@@ -1,0 +1,20 @@
+﻿{
+    "health":  {
+                   "status":  "ok",
+                   "elapsed_ms":  586.258
+               },
+    "status":  "passed",
+    "sql_url":  "http://127.0.0.1:8080",
+    "scenario":  "failover-rto-rpo",
+    "notes":  [
+
+              ],
+    "base_url":  "http://127.0.0.1:8080",
+    "timestamp_utc":  "2026-03-04T16:54:10.4037942Z",
+    "metrics":  {
+                    "reported_rpo_rows":  0,
+                    "reported_rto_seconds":  30,
+                    "threshold_rto_seconds":  30,
+                    "threshold_rpo_rows":  0
+                }
+}

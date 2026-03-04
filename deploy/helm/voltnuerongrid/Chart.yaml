@@ -1,0 +1,6 @@
+apiVersion: v2
+name: voltnuerongrid
+description: Helm chart scaffold for VoltNueronGrid DB
+type: application
+version: 0.1.0
+appVersion: "0.1.0-dev"

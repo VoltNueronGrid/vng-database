@@ -1,0 +1,34 @@
+﻿{
+    "status":  "failed",
+    "cloud_profiles_total":  3,
+    "timestamp_utc":  "2026-03-04T17:16:43.6154952Z",
+    "profiles":  [
+                     {
+                         "profile":  "aws-local-smoke",
+                         "status":  "failed",
+                         "passed":  3,
+                         "failed":  1,
+                         "total_scenarios":  4,
+                         "rollup_path":  "tests\\kpi\\results\\20260304-pr007\\cloud-profiles\\aws-local-smoke\\rollup-summary.json"
+                     },
+                     {
+                         "profile":  "azure-local-smoke",
+                         "status":  "failed",
+                         "passed":  3,
+                         "failed":  1,
+                         "total_scenarios":  4,
+                         "rollup_path":  "tests\\kpi\\results\\20260304-pr007\\cloud-profiles\\azure-local-smoke\\rollup-summary.json"
+                     },
+                     {
+                         "profile":  "gcp-local-smoke",
+                         "status":  "failed",
+                         "passed":  3,
+                         "failed":  1,
+                         "total_scenarios":  4,
+                         "rollup_path":  "tests\\kpi\\results\\20260304-pr007\\cloud-profiles\\gcp-local-smoke\\rollup-summary.json"
+                     }
+                 ],
+    "cloud_profiles_passed":  0,
+    "output_root":  "tests/kpi/results/20260304-pr007/cloud-profiles",
+    "cloud_profiles_failed":  3
+}

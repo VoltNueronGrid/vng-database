@@ -1,0 +1,40 @@
+﻿{
+    "auth":  {
+                 "api_key_header":  "X-API-Key",
+                 "has_token":  false,
+                 "mode":  "none",
+                 "extra_header_count":  2
+             },
+    "scenario":  "htap-mixed-throughput",
+    "metrics":  {
+                    "write_tps":  135.95,
+                    "write_operations":  2719,
+                    "read_operations":  2719,
+                    "threshold_read_qps_min":  25000,
+                    "read_qps":  135.95,
+                    "duration_seconds":  20,
+                    "threshold_write_tps_min":  10000
+                },
+    "run_config":  {
+                       "scenario_id":  "htap-mixed-throughput",
+                       "timeout_seconds":  10,
+                       "scenario_type":  "htap-mixed-throughput",
+                       "targets_path":  "tests/kpi/config/targets.yaml"
+                   },
+    "profile":  "gcp-local-smoke",
+    "base_url":  "http://127.0.0.1:8080",
+    "health":  {
+                   "status":  "ok",
+                   "elapsed_ms":  2.023
+               },
+    "timestamp_utc":  "2026-03-04T17:16:43.2601631Z",
+    "thresholds":  {
+                       "read_qps_min":  25000,
+                       "write_tps_min":  10000
+                   },
+    "status":  "failed",
+    "sql_url":  "http://127.0.0.1:8080",
+    "notes":  [
+
+              ]
+}

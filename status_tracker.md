@@ -28,12 +28,12 @@
 | ID | Prerequisite | Owner | Status | Notes |
 |---|---|---|---|---|
 | PR-001 | Lock naming/folder consistency (`reference/voltnuerongrid-db-design.md`, `reference/voltnuerongrid-ws.md`) | Architecture Board | Done | Completed in docs |
-| PR-002 | Create deployment scaffolds (`deploy/local/single-node.yml`, `deploy/local/multi-node.yml`, `deploy/helm/voltnuerongrid`) | Platform/SRE | Not Started | Required before runnable install |
-| PR-003 | Freeze R1 scope (HTAP baseline, SQL core, ingest core, RBAC baseline, basic drivers) | Program Governance | In Progress | Scope defined, needs formal sign-off |
-| PR-004 | Acceptance harness skeleton aligned to KPI table | QA/Performance | Not Started | OLTP/OLAP/HTAP/RTO/RPO suites pending |
-| PR-005 | Repo skeleton for modules/crates from architecture | Platform Engineering | Not Started | Workspace scaffold pending |
+| PR-002 | Create deployment scaffolds (`deploy/local/single-node.yml`, `deploy/local/multi-node.yml`, `deploy/helm/voltnuerongrid`) | Platform/SRE | Done | Compose + Helm scaffolds created, including starter local config files for single/multi node profiles |
+| PR-003 | Freeze R1 scope (HTAP baseline, SQL core, ingest core, RBAC baseline, basic drivers) | Program Governance | Done | Approved by stakeholder; baseline scope locked |
+| PR-004 | Acceptance harness skeleton aligned to KPI table | QA/Performance | Done | KPI harness scaffold created under `tests/kpi` with scenarios, targets, and runner entry points |
+| PR-005 | Repo skeleton for modules/crates from architecture | Platform Engineering | Done | Rust workspace and core module skeletons created (`crates/`, `services/`, `drivers/`, `tools/`, UI placeholder) |
 | PR-006 | Define immediate start order and ownership assignment | Program Governance | In Progress | Initial order agreed, owner matrix pending |
-| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | Not Started | Depends on PR-002, PR-004, PR-005 |
+| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | In Progress | Phase 1+2 complete: runtime endpoints implemented, thresholds wired from `tests/kpi/config/targets.yaml`, auth/config-capable KPI probes, local and cloud-profile smoke artifacts captured under `tests/kpi/results/20260304-pr007` |
 
 ---
 
@@ -191,12 +191,12 @@ A tracker row moves to **Done** only when:
 | ID | Status | Completion | Risk Trend | This Week Completed | Blocked By | Next Milestone |
 |---|---|---:|---|---|---|---|
 | PR-001 | Done | 100% | improving | Naming/file consistency completed in docs | — | Closed |
-| PR-002 | In Progress | 25% | stable | Deployment scaffold paths finalized in docs/runbook | Repo scaffold not yet created | Create `deploy/local/*` and `deploy/helm/*` skeletons |
-| PR-003 | In Progress | 60% | improving | R1 scope drafted and aligned to HTAP baseline | Formal sign-off pending | Governance sign-off on R1 scope |
-| PR-004 | Not Started | 0% | stable | KPI targets defined in README | Test harness modules not scaffolded | Create KPI harness skeleton and baseline jobs |
-| PR-005 | Not Started | 0% | stable | Module map defined in design/WBS | Workspace bootstrap not started | Initialize workspace/crate skeleton |
+| PR-002 | Done | 100% | improving | Created `deploy/local/single-node.yml`, `deploy/local/multi-node.yml`, local config files, and Helm scaffold under `deploy/helm/voltnuerongrid` | — | Closed |
+| PR-003 | Done | 100% | improving | R1 scope formally approved and locked | — | Closed |
+| PR-004 | Done | 100% | improving | Created `tests/kpi` scaffold with KPI targets, scenario definitions, and executable runner scripts | — | Closed |
+| PR-005 | Done | 100% | improving | Created workspace `Cargo.toml` and module skeletons under `crates/`, `services/`, `drivers/`, `tools/`, plus UI placeholder | — | Closed |
 | PR-006 | In Progress | 50% | improving | Start order documented with sequence guidance | Owner matrix not assigned | Publish owner assignment matrix |
-| PR-007 | Not Started | 0% | stable | Validation path documented | Depends on PR-002/PR-004/PR-005 | First smoke run in single-node local profile |
+| PR-007 | In Progress | 70% | improving | Wired thresholds from `tests/kpi/config/targets.yaml`, added auth/header/timeout config in KPI probes, added cloud smoke pack runner (`tests/kpi/scripts/run-cloud-smoke.ps1`), and executed AWS/Azure/GCP local cloud-profile smoke runs with rollups in `tests/kpi/results/20260304-pr007/cloud-profiles` | Owner matrix and true cloud endpoint validation pending | Execute against real cloud-hosted runtime endpoints with secured auth and collect comparative latency deltas |
 
 ### 9.2 Architecture Hardening Weekly Status (H-01..H-10)
 
@@ -215,9 +215,9 @@ A tracker row moves to **Done** only when:
 
 ### 9.3 PMO Action Queue (Week 2 Readiness)
 
-- Finalize owner assignment for PR-002/PR-004/PR-005/PR-007.
+- Finalize owner assignment for PR-007 and first implementation workstreams.
 - Approve R1 scope freeze and publish release gate checklist.
 - Start scaffold implementation branch for workspace + deploy manifests.
-- Create KPI harness repository folder and baseline test job templates.
+- Execute PR-007 cloud smoke packs against real cloud-hosted endpoints (AWS/Azure/GCP) and publish final KPI gate decision.
 - Schedule first architecture hardening review focused on H-01 to H-04.
 

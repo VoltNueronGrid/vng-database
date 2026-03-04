@@ -1,0 +1,34 @@
+replicaCount: 3
+
+image:
+  repository: ghcr.io/voltnuerongrid/voltnuerongridd
+  tag: dev
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  sqlPort: 5432
+  cachePort: 6380
+  gossipPort: 7000
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClassName: ""
+
+env:
+  VNG_CLUSTER_MODE: multi
+  VNG_HTTP_BIND: 0.0.0.0:8080
+  VNG_SQL_BIND: 0.0.0.0:5432
+  VNG_GOSSIP_BIND: 0.0.0.0:7000
+  VNG_DATA_DIR: /var/lib/voltnuerongrid
+  VNG_CONFIG_FILE: /etc/voltnuerongrid/config.yaml

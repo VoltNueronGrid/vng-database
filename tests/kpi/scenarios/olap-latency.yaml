@@ -1,0 +1,17 @@
+id: olap-latency
+description: Validate OLAP dashboard query latency targets.
+type: olap
+workload:
+  operations:
+    - aggregate
+    - group_by
+    - filter
+  concurrency: 32
+  duration_seconds: 300
+assertions:
+  - metric: olap.p95_ms
+    op: "<="
+    target: 800
+  - metric: olap.p99_ms
+    op: "<="
+    target: 1500

@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: voltnuerongrid
+spec:
+  type: ClusterIP
+  selector:
+    app: voltnuerongrid
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: sql
+      port: 5432
+      targetPort: sql
+    - name: cache
+      port: 6380
+      targetPort: cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voltnuerongrid-headless
+spec:
+  clusterIP: None
+  selector:
+    app: voltnuerongrid
+  ports:
+    - name: gossip
+      port: 7000
+      targetPort: gossip

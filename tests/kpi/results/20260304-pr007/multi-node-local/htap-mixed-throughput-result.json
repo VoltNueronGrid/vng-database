@@ -1,0 +1,20 @@
+﻿{
+    "health":  {
+                   "status":  "ok",
+                   "elapsed_ms":  2.188
+               },
+    "status":  "failed",
+    "sql_url":  "http://127.0.0.1:8080",
+    "scenario":  "htap-mixed-throughput",
+    "notes":  [
+
+              ],
+    "base_url":  "http://127.0.0.1:8080",
+    "timestamp_utc":  "2026-03-04T16:56:34.1088079Z",
+    "metrics":  {
+                    "threshold_ops_per_sec":  2500,
+                    "duration_seconds":  10,
+                    "throughput_ops_per_sec":  337.4,
+                    "total_operations":  3374
+                }
+}

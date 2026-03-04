@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: voltnuerongrid
+spec:
+  serviceName: voltnuerongrid-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: voltnuerongrid
+  template:
+    metadata:
+      labels:
+        app: voltnuerongrid
+    spec:
+      containers:
+        - name: voltnuerongridd
+          image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: sql
+              containerPort: 5432
+            - name: cache
+              containerPort: 6380
+            - name: gossip
+              containerPort: 7000
+          env:
+            - name: VNG_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: VNG_CLUSTER_MODE
+              value: "multi"
+            - name: VNG_HTTP_BIND
+              value: "0.0.0.0:8080"
+            - name: VNG_SQL_BIND
+              value: "0.0.0.0:5432"
+            - name: VNG_GOSSIP_BIND
+              value: "0.0.0.0:7000"
+            - name: VNG_DATA_DIR
+              value: "/var/lib/voltnuerongrid"
+            - name: VNG_CONFIG_FILE
+              value: "/etc/voltnuerongrid/config.yaml"
+            - name: VNG_SEEDS
+              value: "voltnuerongrid-0.voltnuerongrid-headless:7000,voltnuerongrid-1.voltnuerongrid-headless:7000,voltnuerongrid-2.voltnuerongrid-headless:7000"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/voltnuerongrid
+            - name: config
+              mountPath: /etc/voltnuerongrid
+      volumes:
+        - name: config
+          configMap:
+            name: voltnuerongrid-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi

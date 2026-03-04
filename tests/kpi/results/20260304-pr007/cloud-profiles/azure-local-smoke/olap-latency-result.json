@@ -1,0 +1,38 @@
+﻿{
+    "auth":  {
+                 "api_key_header":  "X-API-Key",
+                 "has_token":  false,
+                 "mode":  "none",
+                 "extra_header_count":  2
+             },
+    "scenario":  "olap-latency",
+    "metrics":  {
+                    "threshold_p99_ms":  1500,
+                    "threshold_p95_ms":  800,
+                    "sample_count":  20,
+                    "p99_latency_ms":  10.11,
+                    "p95_latency_ms":  8.086
+                },
+    "run_config":  {
+                       "scenario_id":  "olap-latency",
+                       "timeout_seconds":  10,
+                       "scenario_type":  "olap-latency",
+                       "targets_path":  "tests/kpi/config/targets.yaml"
+                   },
+    "profile":  "azure-local-smoke",
+    "base_url":  "http://127.0.0.1:8080",
+    "health":  {
+                   "status":  "ok",
+                   "elapsed_ms":  5.806
+               },
+    "timestamp_utc":  "2026-03-04T17:16:22.6689350Z",
+    "thresholds":  {
+                       "p99_ms":  1500,
+                       "p95_ms":  800
+                   },
+    "status":  "passed",
+    "sql_url":  "http://127.0.0.1:8080",
+    "notes":  [
+
+              ]
+}

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/voltnuerongrid-core",
+  "crates/voltnuerongrid-sql",
+  "crates/voltnuerongrid-opt",
+  "crates/voltnuerongrid-exec",
+  "crates/voltnuerongrid-store",
+  "crates/voltnuerongrid-meta",
+  "crates/voltnuerongrid-ingest",
+  "crates/voltnuerongrid-plugins",
+  "crates/voltnuerongrid-ai",
+  "crates/voltnuerongrid-auth",
+  "crates/voltnuerongrid-audit",
+  "crates/voltnuerongrid-failover",
+  "services/voltnuerongridd",
+  "drivers/voltnuerongrid-driver-rust",
+  "tools/voltnuerongrid-audit-companion",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["VoltNueronGrid Team"]
+

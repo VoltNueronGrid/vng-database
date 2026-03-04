@@ -1,0 +1,19 @@
+id: oltp-latency
+description: Validate OLTP transaction latency targets.
+type: oltp
+workload:
+  operations:
+    - insert
+    - update
+    - select
+  transaction_mode: pessimistic_locking
+  isolation: serializable
+  concurrency: 64
+  duration_seconds: 300
+assertions:
+  - metric: oltp.p95_ms
+    op: "<="
+    target: 20
+  - metric: oltp.p99_ms
+    op: "<="
+    target: 60

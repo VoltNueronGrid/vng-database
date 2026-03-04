@@ -1,0 +1,19 @@
+kpis:
+  oltp_latency:
+    p95_ms: 20
+    p99_ms: 60
+  olap_latency:
+    p95_ms: 800
+    p99_ms: 1500
+  htap_mixed_throughput:
+    read_qps_min: 25000
+    write_tps_min: 10000
+  failover:
+    rto_sec_max: 30
+    rpo_committed_data_loss: 0
+
+run_defaults:
+  warmup_seconds: 30
+  duration_seconds: 300
+  concurrency: 64
+  strict_sync_required_for_rpo: true

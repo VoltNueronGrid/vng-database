@@ -1,0 +1,21 @@
+﻿{
+    "health":  {
+                   "status":  "ok",
+                   "elapsed_ms":  3
+               },
+    "status":  "passed",
+    "sql_url":  "http://127.0.0.1:8080",
+    "scenario":  "olap-latency",
+    "notes":  [
+
+              ],
+    "base_url":  "http://127.0.0.1:8080",
+    "timestamp_utc":  "2026-03-04T16:54:20.8621510Z",
+    "metrics":  {
+                    "threshold_p99_ms":  500,
+                    "threshold_p95_ms":  200,
+                    "sample_count":  20,
+                    "p99_latency_ms":  16.155,
+                    "p95_latency_ms":  8.005
+                }
+}

@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  voltnuerongridd:
+    image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+    container_name: voltnuerongridd-single
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # HTTP/gateway health
+      - "5432:5432"   # SQL endpoint (placeholder)
+      - "6380:6380"   # Native cache compatibility endpoint
+    environment:
+      VNG_NODE_ID: node-1
+      VNG_CLUSTER_MODE: single
+      VNG_HTTP_BIND: 0.0.0.0:8080
+      VNG_SQL_BIND: 0.0.0.0:5432
+      VNG_DATA_DIR: /var/lib/voltnuerongrid
+      VNG_CONFIG_FILE: /etc/voltnuerongrid/config.yaml
+    volumes:
+      - voltnuerongrid_data:/var/lib/voltnuerongrid
+      - ./config/single-node-config.yaml:/etc/voltnuerongrid/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  voltnuerongrid_data:

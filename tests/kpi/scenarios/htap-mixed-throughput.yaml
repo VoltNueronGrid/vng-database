@@ -1,0 +1,20 @@
+id: htap-mixed-throughput
+description: Validate mixed OLTP/OLAP throughput targets under concurrent load.
+type: htap
+workload:
+  read_query_mix:
+    point_lookup: 0.35
+    aggregate: 0.40
+    range_scan: 0.25
+  write_query_mix:
+    insert: 0.55
+    update: 0.45
+  concurrency: 128
+  duration_seconds: 600
+assertions:
+  - metric: htap.read_qps
+    op: ">="
+    target: 25000
+  - metric: htap.write_tps
+    op: ">="
+    target: 10000
