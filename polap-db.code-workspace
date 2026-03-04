@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../maas"
+		},
+		{
+			"path": "../maas/maas-v2/final-design"
+		},
+		{
+			"path": "../maas/maas-v2/prompts-and-design"
+		}
+	],
+	"settings": {}
+}
