@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 struct AppState {
     node_id: String,
     cluster_mode: String,
+    admin_api_key: Option<String>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -117,6 +118,12 @@ struct AuthorizeActionResponse {
     requested_scope: String,
     decision: &'static str,
     reason: String,
+}
+
+#[derive(Serialize)]
+struct AuthErrorResponse {
+    status: &'static str,
+    reason: &'static str,
 }
 
 #[derive(Serialize)]
@@ -239,6 +246,10 @@ async fn main() {
     let autonomous_mode = AutonomousMode::from_env(
         &env::var("VNG_AUTONOMOUS_MODE").unwrap_or_else(|_| "supervised".to_string()),
     );
+    let admin_api_key = env::var("VNG_ADMIN_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     let emergency_stop = AtomicEmergencyStop::new(
         env::var("VNG_AUTONOMOUS_EMERGENCY_STOP")
             .unwrap_or_else(|_| "false".to_string())
@@ -252,6 +263,7 @@ async fn main() {
     let state = AppState {
         node_id,
         cluster_mode,
+        admin_api_key,
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -426,37 +438,45 @@ async fn failover_status(State(state): State<AppState>) -> Json<FailoverStatusRe
     })
 }
 
-async fn autonomous_guardrails(State(state): State<AppState>) -> Json<AutonomousGuardrailsResponse> {
-    Json(AutonomousGuardrailsResponse {
+async fn autonomous_guardrails(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AutonomousGuardrailsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    Ok(Json(AutonomousGuardrailsResponse {
         status: "ok",
         autonomous_mode: state.autonomous_mode,
         emergency_stop_enabled: state.emergency_stop.get(),
         policy_matrix: state.guardrails.as_ref().clone(),
-    })
+    }))
 }
 
 async fn autonomous_emergency_stop(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<EmergencyStopRequest>,
-) -> Json<EmergencyStopResponse> {
+) -> Result<Json<EmergencyStopResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     state.emergency_stop.set(req.enabled);
-    Json(EmergencyStopResponse {
+    Ok(Json(EmergencyStopResponse {
         status: "ok",
         emergency_stop_enabled: req.enabled,
         reason: req
             .reason
             .unwrap_or_else(|| "manual_control_plane_request".to_string()),
         requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
-    })
+    }))
 }
 
 async fn authorize_autonomous_action(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<AuthorizeActionRequest>,
-) -> (StatusCode, Json<AuthorizeActionResponse>) {
+) -> Result<(StatusCode, Json<AuthorizeActionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let requested_scope = req.scope.unwrap_or_else(|| "cluster".to_string());
     if state.emergency_stop.get() {
-        return (
+        return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(AuthorizeActionResponse {
                 status: "blocked",
@@ -465,11 +485,11 @@ async fn authorize_autonomous_action(
                 decision: "deny",
                 reason: "emergency_stop_enabled".to_string(),
             }),
-        );
+        ));
     }
 
     if state.autonomous_mode == AutonomousMode::Disabled {
-        return (
+        return Ok((
             StatusCode::FORBIDDEN,
             Json(AuthorizeActionResponse {
                 status: "blocked",
@@ -478,7 +498,7 @@ async fn authorize_autonomous_action(
                 decision: "deny",
                 reason: "autonomous_mode_disabled".to_string(),
             }),
-        );
+        ));
     }
 
     let matching_rule = state
@@ -486,7 +506,7 @@ async fn authorize_autonomous_action(
         .iter()
         .find(|r| r.action.eq_ignore_ascii_case(&req.action));
 
-    match matching_rule {
+    Ok(match matching_rule {
         Some(rule) if state.autonomous_mode.rank() >= rule.required_mode.rank() => (
             StatusCode::OK,
             Json(AuthorizeActionResponse {
@@ -523,7 +543,7 @@ async fn authorize_autonomous_action(
                 reason: "no_guardrail_rule_found".to_string(),
             }),
         ),
-    }
+    })
 }
 
 fn default_guardrail_rules() -> Vec<GuardrailRule> {
@@ -640,5 +660,71 @@ fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryRespon
         query_signature: query.chars().take(64).collect(),
         elapsed_ms: elapsed,
         rows: resolved_max_rows.min(10_000),
+    }
+}
+
+fn require_operator_auth(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
+    let Some(required_key) = state.admin_api_key.as_ref() else {
+        return Ok(());
+    };
+
+    let provided = headers
+        .get("x-vng-admin-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+
+    if provided == required_key {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(AuthErrorResponse {
+                status: "unauthorized",
+                reason: "missing_or_invalid_admin_key",
+            }),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn state_with_key(key: Option<&str>) -> AppState {
+        AppState {
+            node_id: "node-1".to_string(),
+            cluster_mode: "single".to_string(),
+            admin_api_key: key.map(|v| v.to_string()),
+            autonomous_mode: AutonomousMode::Supervised,
+            emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
+            guardrails: Arc::new(default_guardrail_rules()),
+        }
+    }
+
+    #[test]
+    fn operator_auth_allows_request_when_admin_key_not_configured() {
+        let state = state_with_key(None);
+        let headers = HeaderMap::new();
+        assert!(require_operator_auth(&headers, &state).is_ok());
+    }
+
+    #[test]
+    fn operator_auth_rejects_request_with_missing_key_when_configured() {
+        let state = state_with_key(Some("secret"));
+        let headers = HeaderMap::new();
+        let auth = require_operator_auth(&headers, &state);
+        assert!(auth.is_err());
+    }
+
+    #[test]
+    fn operator_auth_accepts_request_with_matching_admin_key() {
+        let state = state_with_key(Some("secret"));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-vng-admin-key", HeaderValue::from_static("secret"));
+        assert!(require_operator_auth(&headers, &state).is_ok());
     }
 }

@@ -1,0 +1,9 @@
+{
+  "smoke": "ws5-operator-auth-baseline",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongridd operator_auth",
+  "started_at_utc": "2026-03-05T08:33:26.1948514Z",
+  "finished_at_utc": "2026-03-05T08:33:28.0935269Z",
+  "duration_ms": 1899,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-c10c08cb192858d2.exe)\n\nrunning 3 tests\ntest tests::operator_auth_accepts_request_with_matching_admin_key ... ok\ntest tests::operator_auth_allows_request_when_admin_key_not_configured ... ok\ntest tests::operator_auth_rejects_request_with_missing_key_when_configured ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+}

@@ -87,7 +87,7 @@
 | WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | In Progress | WS2 (route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + `run-ws3-query-routing-smoke.ps1`) |
 | WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | In Progress | WS2 (ingestion connector/registry scaffold + WS4 smoke harness) |
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | In Progress | WS4 (source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + WS4A smoke harnesses) |
-| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | Not Started | WS0 |
+| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | In Progress | WS0 (operator admin-key auth gate scaffolded for autonomous control endpoints + WS5 smoke harness) |
 | WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | Not Started | WS2, WS3 |
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | In Progress | WS1, WS4A (signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 smoke harness) |
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | Not Started | WS1, WS6 |
@@ -202,7 +202,7 @@ A tracker row moves to **Done** only when:
 
 | ID | Status | Completion | Risk Trend | Priority | Release Target | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---:|---|---|---|---|---|---|
-| H-01 | In Progress | 55% | improving | P0 | R2 | Implemented runtime guardrail endpoints (`/api/v1/autonomous/guardrails`, `/api/v1/autonomous/emergency-stop`, `/api/v1/autonomous/actions/authorize`), added contract `reference/autonomous-guardrails-api.md`, added smoke script `tests/kpi/scripts/run-autonomous-guardrail-smoke.ps1`, and captured passing artifact `tests/kpi/results/20260305-h01/autonomous-guardrail-smoke.json` | Policy persistence and authz integration pending | Integrate policy persistence + authenticated operator identity for emergency-stop changes |
+| H-01 | In Progress | 65% | improving | P0 | R2 | Added operator auth gate (`VNG_ADMIN_API_KEY` + `x-vng-admin-key`) for autonomous control endpoints, plus runtime tests and WS5 smoke harness `tests/kpi/scripts/run-ws5-operator-auth-smoke.ps1` | Policy persistence and full RBAC integration pending | Integrate policy persistence + role-based operator identity beyond shared admin key |
 | H-02 | In Progress | 65% | improving | P0 | R2 | Added restart/replay integrity tests + matrix harness artifact `tests/kpi/results/h02/h02-restart-replay-matrix.json`; matrix now includes persisted WAL recovery signal | Distributed sync transport and full replay semantics not yet implemented | Extend matrix to multi-node transport replay and failover handoff |
 | H-03 | In Progress | 15% | stable | P0 | R2 | Control-plane clustering requirement and SPOF closure criteria documented | Cluster runtime implementation pending | Control-plane chaos test plan v1 |
 | H-04 | In Progress | 20% | stable | P0 | R2 | Outbox and replay durability controls defined in architecture | Event bus/outbox services pending | Exactly-once replay test harness draft |
