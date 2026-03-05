@@ -9,8 +9,8 @@ Configuration for AI behavior when interacting with Codacy's MCP Server
 ## using any tool that accepts the arguments: `provider`, `organization`, or `repository`
 - ALWAYS use:
  - provider: gh
- - organization: BY-Product-Development
- - repository: plat-lui-portal
+ - organization: Pavan-Pvj_ghub
+ - repository: polap-db
 - Avoid calling `git remote -v` unless really necessary
 
 ## CRITICAL: After ANY successful `edit_file` or `reapply` operation

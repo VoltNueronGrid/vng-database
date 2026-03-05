@@ -15,6 +15,10 @@ It is designed for:
 - `reference/voltnuerongrid-ws.md`: work structure and phased delivery plan
 - `prompts/prompt-1.md`: source requirements prompt
 
+## High level architecture diagram
+
+![VoltNueronGrid DB Architecture Diagram](reference/architecture-diagram-v1.png)
+
 ## Core Capabilities (Planned)
 
 - ANSI SQL baseline support with DDL/DML and materialized views
