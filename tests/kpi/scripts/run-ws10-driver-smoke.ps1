@@ -15,13 +15,38 @@ function Ensure-OutputDir {
 Ensure-OutputDir -PathValue $OutputPath
 
 $start = Get-Date
-$command = "cargo test -p voltnuerongrid-driver-rust"
+$command = "cargo test -p voltnuerongrid-driver-rust validates_driver_contract; config contract parse checks (json/yaml/properties)"
 $outputLines = @()
 $exitCode = 1
+$contractChecks = [ordered]@{
+  json = $false
+  yaml = $false
+  properties = $false
+}
 
 try {
-  $outputLines = & cargo test -p voltnuerongrid-driver-rust 2>&1
-  $exitCode = $LASTEXITCODE
+  $outputLines = & cargo test -p voltnuerongrid-driver-rust validates_driver_contract 2>&1
+  $testExit = $LASTEXITCODE
+
+  $driverJsonRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/driver-routing-config.json"
+  $driverYamlRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/driver-routing-config.yaml"
+  $driverPropertiesRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/driver-routing-config.properties"
+
+  $contractChecks.json = (
+    $driverJsonRaw -match '"baseUrl"\s*:\s*' -and
+    $driverJsonRaw -match '"maxConnections"\s*:\s*'
+  )
+  $contractChecks.yaml = (
+    $driverYamlRaw -match '(?m)^\s*baseUrl\s*:\s*' -and
+    $driverYamlRaw -match '(?m)^\s*maxConnections\s*:\s*'
+  )
+  $contractChecks.properties = (
+    $driverPropertiesRaw -match '(?m)^\s*driver\.baseUrl\s*=' -and
+    $driverPropertiesRaw -match '(?m)^\s*driver\.pool\.maxConnections\s*='
+  )
+
+  $configExit = if ($contractChecks.json -and $contractChecks.yaml -and $contractChecks.properties) { 0 } else { 1 }
+  $exitCode = if ($testExit -eq 0 -and $configExit -eq 0) { 0 } else { 1 }
 } catch {
   $outputLines += $_.Exception.Message
   $exitCode = 1
@@ -34,6 +59,7 @@ $artifact = [ordered]@{
   smoke = "ws10-driver-baseline"
   status = $status
   command = $command
+  config_contract_checks = $contractChecks
   started_at_utc = $start.ToUniversalTime().ToString("o")
   finished_at_utc = $finished.ToUniversalTime().ToString("o")
   duration_ms = [int](($finished - $start).TotalMilliseconds)

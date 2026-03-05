@@ -55,7 +55,7 @@
 | REQ-12 | Seeded functions + plan-plat parity | Epic 1, Epic 1A | In Progress | P0/P1/P2 parity gap report with P2 stub closures (`tests/kpi/results/parity/legacy-aggregation-gap-report.json`) |
 | REQ-13 | Multi-user roles and privileges | Epic 5 | Not Started | RBAC matrix tests |
 | REQ-14 | UI + engine separation | Epic 9 | Not Started | UI/API integration tests |
-| REQ-15 | Driver support (multi-language) | Epic 10 | Not Started | Driver certification matrix |
+| REQ-15 | Driver support (multi-language) | Epic 10 | In Progress | Rust driver baseline + JSON/YAML/properties routing contract parse coverage + WS10 smoke evidence (`tests/kpi/results/ws10/driver-smoke.json`) |
 | REQ-16 | SSL + encryption/decryption | Epic 5 | Not Started | TLS/TDE/KMS tests |
 | REQ-17 | Distributed failover + zero data loss | Epic 6, Epic 12 | Not Started | RTO/RPO + sync profile tests |
 | REQ-18 | Stream in/out + events for debug/audit | Epic 4A, Epic 8A | Not Started | Event replay + schema tests |
@@ -65,7 +65,7 @@
 | REQ-22 | Pessimistic locking | Epic 1, Epic 3 | Not Started | Deadlock/timeout tests |
 | REQ-23 | ACID transactions | Epic 1, Epic 2, Epic 3 | In Progress | Transaction endpoint now classifies and validates statements before commit path |
 | REQ-24 | Config via properties/YAML/JSON | Epic 14 | Not Started | Config contract validation |
-| REQ-25 | Native connection + pooling | Epic 10, Epic 14 | Not Started | Pool failover/perf tests |
+| REQ-25 | Native connection + pooling | Epic 10, Epic 14 | In Progress | Driver routing contract enforces pool min/max + timeout constraints with cross-format contract checks in WS10 smoke |
 | REQ-26 | Plugin model for streaming sources/sinks | Epic 4A, Epic 7 | Not Started | Connector plugin tests |
 | REQ-27 | Native cache engine (Redis-like compat) | Epic 3, Epic 14 | Not Started | Cache failover/invalidation tests |
 | REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Epic 9A | Not Started | Cross-IDE parity tests |
@@ -94,7 +94,7 @@
 | WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | In Progress | WS4A, WS5 (audit event contract + append-only sink + runtime emission + companion query/export filters for trace/action + WS8A smoke harnesses) |
 | WS9 | Epic 9 | Studio UI | UX Team | In Progress | WS1, WS3 (Studio API client contracts + endpoint typing + WS9 smoke harness) |
 | WS9A | Epic 9A | IDE extension suite | DX Team | In Progress | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness) |
-| WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + WS10 smoke harness) |
+| WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + JSON/properties/YAML `DriverRoutingConfigContract` parsing/validation + WS10 smoke harness evidence `tests/kpi/results/ws10/driver-smoke.json`) |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | In Progress | WS1 (locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + WS11 smoke harness) |
 | WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Ready for Validation | WS6 (runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion, and expanded WS12 gate criteria + smoke harness) |
 | WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Ready for Validation | WS0, WS12 (deploy cloud profile contracts + provider runtime overrides `single-node`/`multi-node` + provider Helm values + provider runbook env matrices (`deploy/cloud/*/README.md`) for AWS/Azure/GCP; WS13 smoke harnesses: `run-ws13-multicloud-profile-smoke.ps1`, `run-ws13-overlay-schema-smoke.ps1`, `run-ws13-env-matrix-smoke.ps1`; CI gate orchestrator: `run-ws13-gate.ps1` -> `tests/kpi/results/ws13/ws13-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |

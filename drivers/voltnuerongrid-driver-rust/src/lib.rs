@@ -72,6 +72,13 @@ impl DriverRoutingConfigContract {
         Ok(contract)
     }
 
+    pub fn from_yaml_str(input: &str) -> Result<Self, String> {
+        let contract =
+            serde_yaml::from_str::<Self>(input).map_err(|e| format!("yaml parse failed: {e}"))?;
+        contract.validate()?;
+        Ok(contract)
+    }
+
     pub fn from_properties_str(input: &str) -> Result<Self, String> {
         let mut map = BTreeMap::<String, String>::new();
         for line in input.lines() {
@@ -285,5 +292,21 @@ driver.requestTimeoutMs=2500
         let contract =
             DriverRoutingConfigContract::from_properties_str(properties).expect("valid");
         assert_eq!(contract.request_timeout_ms, 2500);
+    }
+
+    #[test]
+    fn validates_driver_contract_from_yaml() {
+        let yaml = r#"
+base_url: http://127.0.0.1:8080
+session_header_name: x-vng-session-id
+route_hint_header_name: x-vng-route-hint
+admin_header_name: x-vng-admin-key
+operator_header_name: x-vng-operator-id
+pool_min_connections: 2
+pool_max_connections: 16
+request_timeout_ms: 2500
+"#;
+        let contract = DriverRoutingConfigContract::from_yaml_str(yaml).expect("valid");
+        assert_eq!(contract.pool_min_connections, 2);
     }
 }
