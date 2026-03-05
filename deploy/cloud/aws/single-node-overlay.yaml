@@ -1,0 +1,9 @@
+deployment_mode: single-node
+replica_count: 1
+
+runtime:
+  cluster_mode: single
+  node_id: aws-node-1
+  http_bind: 0.0.0.0:8080
+  sql_bind: 0.0.0.0:5432
+  dr_hook_state_path: /var/lib/vng/state/dr-hook-runtime.json

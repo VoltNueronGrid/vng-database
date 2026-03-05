@@ -1,0 +1,189 @@
+{
+  "smoke": "ws13-overlay-schema-validation",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T15:31:54.3750381Z",
+  "finished_at_utc": "2026-03-05T15:31:54.4124175Z",
+  "duration_ms": 37,
+  "checks": [
+    {
+      "check": "single_overlay_exists_aws",
+      "ok": true,
+      "detail": "deploy/cloud/aws/single-node-overlay.yaml"
+    },
+    {
+      "check": "multi_overlay_exists_aws",
+      "ok": true,
+      "detail": "deploy/cloud/aws/multi-node-overlay.yaml"
+    },
+    {
+      "check": "helm_values_exists_aws",
+      "ok": true,
+      "detail": "deploy/cloud/aws/helm-values.yaml"
+    },
+    {
+      "check": "single_mode_aws",
+      "ok": true,
+      "detail": "deployment_mode single-node"
+    },
+    {
+      "check": "single_replica_aws",
+      "ok": true,
+      "detail": "replica_count 1"
+    },
+    {
+      "check": "single_cluster_mode_aws",
+      "ok": true,
+      "detail": "runtime cluster_mode single"
+    },
+    {
+      "check": "multi_mode_aws",
+      "ok": true,
+      "detail": "deployment_mode multi-node"
+    },
+    {
+      "check": "multi_replica_aws",
+      "ok": true,
+      "detail": "replica_count 3"
+    },
+    {
+      "check": "multi_seed_nodes_aws",
+      "ok": true,
+      "detail": "seed_nodes present"
+    },
+    {
+      "check": "helm_provider_aws",
+      "ok": true,
+      "detail": "cloud provider"
+    },
+    {
+      "check": "helm_loadbalancer_aws",
+      "ok": true,
+      "detail": "service type"
+    },
+    {
+      "check": "helm_cluster_mode_multi_aws",
+      "ok": true,
+      "detail": "env cluster mode"
+    },
+    {
+      "check": "single_overlay_exists_azure",
+      "ok": true,
+      "detail": "deploy/cloud/azure/single-node-overlay.yaml"
+    },
+    {
+      "check": "multi_overlay_exists_azure",
+      "ok": true,
+      "detail": "deploy/cloud/azure/multi-node-overlay.yaml"
+    },
+    {
+      "check": "helm_values_exists_azure",
+      "ok": true,
+      "detail": "deploy/cloud/azure/helm-values.yaml"
+    },
+    {
+      "check": "single_mode_azure",
+      "ok": true,
+      "detail": "deployment_mode single-node"
+    },
+    {
+      "check": "single_replica_azure",
+      "ok": true,
+      "detail": "replica_count 1"
+    },
+    {
+      "check": "single_cluster_mode_azure",
+      "ok": true,
+      "detail": "runtime cluster_mode single"
+    },
+    {
+      "check": "multi_mode_azure",
+      "ok": true,
+      "detail": "deployment_mode multi-node"
+    },
+    {
+      "check": "multi_replica_azure",
+      "ok": true,
+      "detail": "replica_count 3"
+    },
+    {
+      "check": "multi_seed_nodes_azure",
+      "ok": true,
+      "detail": "seed_nodes present"
+    },
+    {
+      "check": "helm_provider_azure",
+      "ok": true,
+      "detail": "cloud provider"
+    },
+    {
+      "check": "helm_loadbalancer_azure",
+      "ok": true,
+      "detail": "service type"
+    },
+    {
+      "check": "helm_cluster_mode_multi_azure",
+      "ok": true,
+      "detail": "env cluster mode"
+    },
+    {
+      "check": "single_overlay_exists_gcp",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/single-node-overlay.yaml"
+    },
+    {
+      "check": "multi_overlay_exists_gcp",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/multi-node-overlay.yaml"
+    },
+    {
+      "check": "helm_values_exists_gcp",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/helm-values.yaml"
+    },
+    {
+      "check": "single_mode_gcp",
+      "ok": true,
+      "detail": "deployment_mode single-node"
+    },
+    {
+      "check": "single_replica_gcp",
+      "ok": true,
+      "detail": "replica_count 1"
+    },
+    {
+      "check": "single_cluster_mode_gcp",
+      "ok": true,
+      "detail": "runtime cluster_mode single"
+    },
+    {
+      "check": "multi_mode_gcp",
+      "ok": true,
+      "detail": "deployment_mode multi-node"
+    },
+    {
+      "check": "multi_replica_gcp",
+      "ok": true,
+      "detail": "replica_count 3"
+    },
+    {
+      "check": "multi_seed_nodes_gcp",
+      "ok": true,
+      "detail": "seed_nodes present"
+    },
+    {
+      "check": "helm_provider_gcp",
+      "ok": true,
+      "detail": "cloud provider"
+    },
+    {
+      "check": "helm_loadbalancer_gcp",
+      "ok": true,
+      "detail": "service type"
+    },
+    {
+      "check": "helm_cluster_mode_multi_gcp",
+      "ok": true,
+      "detail": "env cluster mode"
+    }
+  ]
+}

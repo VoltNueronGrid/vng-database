@@ -1,0 +1,21 @@
+replicaCount: 3
+
+image:
+  repository: ghcr.io/pavan-pvj_ghub/voltnuerongrid
+  tag: dev
+  pullPolicy: IfNotPresent
+
+cloud:
+  provider: azure
+  regionEnv: VNG_AZURE_REGION
+
+service:
+  type: LoadBalancer
+  httpPort: 8080
+  sqlPort: 5432
+  cachePort: 6380
+  gossipPort: 7000
+
+env:
+  VNG_CLUSTER_MODE: multi
+  VNG_DR_HOOK_STATE_PATH: /var/lib/vng/state/dr-hook-runtime.json
