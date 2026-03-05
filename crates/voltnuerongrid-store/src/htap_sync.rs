@@ -22,6 +22,13 @@ pub struct SyncOriginCheckpoint {
     pub pending_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncOriginSnapshot {
+    pub next_sequence: u64,
+    pub last_acknowledged_sequence: u64,
+    pub pending: Vec<RowMutation>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SequenceGap {
     pub expected: u64,
@@ -81,6 +88,22 @@ impl RowStoreSyncOrigin {
 
     pub fn pending_len(&self) -> usize {
         self.pending.len()
+    }
+
+    pub fn snapshot(&self) -> SyncOriginSnapshot {
+        SyncOriginSnapshot {
+            next_sequence: self.next_sequence,
+            last_acknowledged_sequence: self.last_acknowledged_sequence,
+            pending: self.pending.clone(),
+        }
+    }
+
+    pub fn restore(snapshot: SyncOriginSnapshot) -> Self {
+        Self {
+            next_sequence: snapshot.next_sequence,
+            last_acknowledged_sequence: snapshot.last_acknowledged_sequence,
+            pending: snapshot.pending,
+        }
     }
 
     pub fn remove_sequence_for_fault_injection(&mut self, sequence: u64) -> bool {
@@ -158,5 +181,25 @@ mod tests {
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].expected, 2);
         assert_eq!(gaps[0].actual, 3);
+    }
+
+    #[test]
+    fn preserves_continuity_after_checkpoint_and_restore() {
+        let mut origin = RowStoreSyncOrigin::new();
+        origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        origin.ack_through(1);
+
+        let snapshot = origin.snapshot();
+        let mut restored = RowStoreSyncOrigin::restore(snapshot);
+        assert_eq!(restored.pending_len(), 1);
+        assert_eq!(restored.checkpoint().last_sequence, 1);
+
+        let appended = restored.append("orders", "3", "{\"amount\":150}", MutationOp::Insert);
+        assert_eq!(appended.sequence, 3);
+        let batch = restored.export_batch(10);
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].sequence, 2);
+        assert_eq!(batch[1].sequence, 3);
     }
 }

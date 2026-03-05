@@ -27,6 +27,7 @@ Initial KPI coverage:
 - `scripts/run-legacy-aggregation-gap-report.ps1` - WS1A bucketed P0/P1/P2 gap report generator
 - `scripts/run-store-durability-smoke.ps1` - WS2 durability bootstrap validation smoke
 - `scripts/run-ws2a-row-sync-origin-smoke.ps1` - WS2A row-store sync-origin scaffold smoke
+- `scripts/run-ws2-checkpoint-restart-smoke.ps1` - WS2 checkpoint/restart continuity smoke
 - `scripts/run-h02-sync-fault-injection.ps1` - H-02 sequence-gap fault-injection harness
 - `results/` - output folder for run artifacts
 
