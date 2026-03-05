@@ -1,0 +1,15 @@
+{
+  "gate": "ws11",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T16:36:40.3026841Z",
+  "finished_at_utc": "2026-03-05T16:36:42.9311178Z",
+  "duration_ms": 2628,
+  "packs": [
+    {
+      "pack": "ws11-i18n-smoke",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws11/i18n-smoke.json"
+    }
+  ]
+}

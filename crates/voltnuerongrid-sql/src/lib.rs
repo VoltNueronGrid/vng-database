@@ -337,10 +337,22 @@ mod tests {
     }
 
     #[test]
-    fn supports_locale_parsing_and_messages() {
+    fn ws11_supports_locale_parsing_and_messages() {
         let locale = SupportedLocale::parse("fr_FR");
         assert_eq!(locale, SupportedLocale::FrFr);
         let msg = I18nCatalog::message(locale, "unauthorized");
         assert_eq!(msg.message, "Demande non autorisee");
+    }
+
+    #[test]
+    fn ws11_locale_fallback_defaults_to_en_us() {
+        let locale = SupportedLocale::parse("de-DE");
+        assert_eq!(locale, SupportedLocale::EnUs);
+    }
+
+    #[test]
+    fn ws11_unknown_message_key_uses_safe_fallback() {
+        let msg = I18nCatalog::message(SupportedLocale::FrFr, "missing_key_for_test");
+        assert_eq!(msg.message, "Message key not found");
     }
 }

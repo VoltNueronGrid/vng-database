@@ -2219,7 +2219,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_locale_from_header() {
+    fn ws11_parses_locale_from_header() {
         let mut headers = HeaderMap::new();
         headers.insert(
             "accept-language",
@@ -2227,6 +2227,17 @@ mod tests {
         );
         let locale = locale_from_headers(&headers);
         assert_eq!(locale, SupportedLocale::EsEs);
+    }
+
+    #[test]
+    fn ws11_locale_header_falls_back_to_en_us_for_unknown_locale() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "accept-language",
+            HeaderValue::from_static("de-DE,de;q=0.8"),
+        );
+        let locale = locale_from_headers(&headers);
+        assert_eq!(locale, SupportedLocale::EnUs);
     }
 
     #[test]
