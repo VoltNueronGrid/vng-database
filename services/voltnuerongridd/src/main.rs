@@ -1,9 +1,10 @@
 use std::env;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -29,6 +30,8 @@ struct AppState {
     audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
     action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
     dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
+    dr_hook_policy_state: Arc<Mutex<DrHookPolicyState>>,
+    dr_hook_policy_config: Arc<DrHookPolicyConfig>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -364,7 +367,50 @@ struct DrHookExecutionRecord {
     scope: String,
     status: &'static str,
     dry_run: bool,
+    policy_decision: &'static str,
+    cooldown_remaining_ms: u64,
+    retry_backoff_ms: u64,
+    retry_attempt: u32,
     details: String,
+}
+
+#[derive(Default)]
+struct DrHookPolicyState {
+    hooks: HashMap<String, DrHookRuntimeState>,
+}
+
+#[derive(Clone, Default)]
+struct DrHookRuntimeState {
+    last_attempt_unix_ms: u128,
+    consecutive_failures: u32,
+    last_status: String,
+}
+
+#[derive(Clone)]
+struct DrHookPolicyConfig {
+    min_mode: AutonomousMode,
+    cooldown_seconds: u64,
+    max_retries: u32,
+    base_backoff_ms: u64,
+    max_backoff_ms: u64,
+    allowed_hooks: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DrHookPolicyResponse {
+    status: &'static str,
+    policy: DrHookPolicyContract,
+}
+
+#[derive(Serialize)]
+struct DrHookPolicyContract {
+    min_mode: AutonomousMode,
+    cooldown_seconds: u64,
+    max_retries: u32,
+    base_backoff_ms: u64,
+    max_backoff_ms: u64,
+    allowed_hooks: Vec<String>,
+    tracked_hooks: usize,
 }
 
 #[derive(Serialize)]
@@ -424,6 +470,8 @@ async fn main() {
         audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
         action_records: Arc::new(Mutex::new(Vec::new())),
         dr_hook_records: Arc::new(Mutex::new(Vec::new())),
+        dr_hook_policy_state: Arc::new(Mutex::new(DrHookPolicyState::default())),
+        dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -444,6 +492,7 @@ async fn main() {
             "/api/v1/sre/failure-budget/alerts",
             get(sre_failure_budget_alerts),
         )
+        .route("/api/v1/sre/dr/hooks/policy", get(sre_dr_hook_policy))
         .route("/api/v1/sre/dr/hooks/trigger", post(sre_dr_hook_trigger))
         .route("/api/v1/sre/dr/hooks/status", get(sre_dr_hook_status))
         .route("/api/v1/audit/events", get(audit_events))
@@ -713,6 +762,31 @@ async fn sre_failure_budget_alerts(
     Ok(Json(alert))
 }
 
+async fn sre_dr_hook_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<DrHookPolicyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let tracked_hooks = state
+        .dr_hook_policy_state
+        .lock()
+        .map(|value| value.hooks.len())
+        .unwrap_or(0);
+    let policy = state.dr_hook_policy_config.as_ref();
+    Ok(Json(DrHookPolicyResponse {
+        status: "ok",
+        policy: DrHookPolicyContract {
+            min_mode: policy.min_mode,
+            cooldown_seconds: policy.cooldown_seconds,
+            max_retries: policy.max_retries,
+            base_backoff_ms: policy.base_backoff_ms,
+            max_backoff_ms: policy.max_backoff_ms,
+            allowed_hooks: policy.allowed_hooks.clone(),
+            tracked_hooks,
+        },
+    }))
+}
+
 async fn sre_dr_hook_trigger(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -723,7 +797,12 @@ async fn sre_dr_hook_trigger(
         .get("x-vng-operator-id")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown");
-    let execution = execute_dr_hook(&state, &req.hook, req.scope.as_deref(), req.dry_run.unwrap_or(true));
+    let execution = execute_dr_hook(
+        &state,
+        &req.hook,
+        req.scope.as_deref(),
+        req.dry_run.unwrap_or(true),
+    );
     append_audit_event(
         &state,
         AuditEventKind::Failover,
@@ -735,6 +814,10 @@ async fn sre_dr_hook_trigger(
             "hook": execution.hook,
             "scope": execution.scope,
             "dry_run": execution.dry_run,
+            "policy_decision": execution.policy_decision,
+            "cooldown_remaining_ms": execution.cooldown_remaining_ms,
+            "retry_backoff_ms": execution.retry_backoff_ms,
+            "retry_attempt": execution.retry_attempt,
             "details": execution.details,
         })
         .to_string(),
@@ -1122,6 +1205,33 @@ fn evaluate_failure_budget_alert(
     }
 }
 
+fn default_dr_hook_policy_config() -> DrHookPolicyConfig {
+    DrHookPolicyConfig {
+        min_mode: AutonomousMode::Supervised,
+        cooldown_seconds: 30,
+        max_retries: 3,
+        base_backoff_ms: 500,
+        max_backoff_ms: 10_000,
+        allowed_hooks: vec![
+            "failover_drill".to_string(),
+            "replay_checkpoint_verify".to_string(),
+        ],
+    }
+}
+
+fn now_unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+fn compute_retry_backoff_ms(attempt: u32, base_backoff_ms: u64, max_backoff_ms: u64) -> u64 {
+    let exponent = attempt.saturating_sub(1).min(8);
+    let factor = 1u64 << exponent;
+    base_backoff_ms.saturating_mul(factor).min(max_backoff_ms)
+}
+
 fn execute_dr_hook(
     state: &AppState,
     hook: &str,
@@ -1129,6 +1239,8 @@ fn execute_dr_hook(
     dry_run: bool,
 ) -> DrHookExecutionRecord {
     let execution_id = format!("drh-{}", DR_HOOK_COUNTER.fetch_add(1, Ordering::Relaxed));
+    let now_ms = now_unix_ms();
+    let policy = state.dr_hook_policy_config.as_ref();
     let normalized_scope = scope.unwrap_or("cluster").trim();
     let normalized_scope = if normalized_scope.is_empty() {
         "cluster"
@@ -1136,34 +1248,107 @@ fn execute_dr_hook(
         normalized_scope
     };
     let normalized_hook = hook.trim().to_ascii_lowercase();
+    let mut policy_decision = "allow";
+    let mut cooldown_remaining_ms = 0u64;
+    let mut retry_attempt = 1u32;
+    let mut retry_backoff_ms = policy.base_backoff_ms;
+    let mut status: &'static str;
+    let mut details: String;
 
-    let (status, details) = match normalized_hook.as_str() {
-        "failover_drill" => {
-            if dry_run {
-                (
-                    "simulated",
-                    format!("dry_run prepared failover drill for scope={normalized_scope}"),
-                )
+    if state.autonomous_mode.rank() < policy.min_mode.rank() {
+        policy_decision = "deny_mode";
+        status = "rejected";
+        details = format!(
+            "autonomous_mode {:?} below required {:?}",
+            state.autonomous_mode, policy.min_mode
+        );
+    } else if !policy
+        .allowed_hooks
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(&normalized_hook))
+    {
+        policy_decision = "deny_unsupported_hook";
+        status = "rejected";
+        details = format!("unsupported_dr_hook={normalized_hook}");
+    } else if let Ok(mut guard) = state.dr_hook_policy_state.lock() {
+        let runtime = guard
+            .hooks
+            .entry(normalized_hook.clone())
+            .or_insert_with(DrHookRuntimeState::default);
+        let cooldown_window_ms = u128::from(policy.cooldown_seconds) * 1_000;
+
+        if runtime.last_attempt_unix_ms > 0
+            && now_ms.saturating_sub(runtime.last_attempt_unix_ms) < cooldown_window_ms
+        {
+            policy_decision = "deny_cooldown";
+            status = "cooldown";
+            let elapsed = now_ms.saturating_sub(runtime.last_attempt_unix_ms);
+            cooldown_remaining_ms = cooldown_window_ms.saturating_sub(elapsed) as u64;
+            retry_attempt = runtime.consecutive_failures.saturating_add(1);
+            retry_backoff_ms = compute_retry_backoff_ms(
+                retry_attempt,
+                policy.base_backoff_ms,
+                policy.max_backoff_ms,
+            );
+            details = format!(
+                "cooldown_active hook={normalized_hook} remaining_ms={cooldown_remaining_ms}"
+            );
+        } else {
+            retry_attempt = runtime.consecutive_failures.saturating_add(1);
+            retry_backoff_ms = compute_retry_backoff_ms(
+                retry_attempt,
+                policy.base_backoff_ms,
+                policy.max_backoff_ms,
+            );
+
+            let (resolved_status, resolved_details) = match normalized_hook.as_str() {
+                "failover_drill" => {
+                    if dry_run {
+                        (
+                            "simulated",
+                            format!("dry_run prepared failover drill for scope={normalized_scope}"),
+                        )
+                    } else {
+                        let (previous, current) =
+                            rotate_leader(&state.leader_node_id, "node-dr-failover", &state.node_id);
+                        (
+                            "executed",
+                            format!(
+                                "leader rotated from {previous} to {current} for scope={normalized_scope}"
+                            ),
+                        )
+                    }
+                }
+                "replay_checkpoint_verify" => (
+                    if dry_run { "simulated" } else { "executed" },
+                    format!("checkpoint replay verification started for scope={normalized_scope}"),
+                ),
+                _ => ("rejected", format!("unsupported_dr_hook={normalized_hook}")),
+            };
+
+            status = resolved_status;
+            details = resolved_details;
+            runtime.last_attempt_unix_ms = now_ms;
+            if status == "executed" || status == "simulated" {
+                runtime.consecutive_failures = 0;
             } else {
-                let (previous, current) =
-                    rotate_leader(&state.leader_node_id, "node-dr-failover", &state.node_id);
-                (
-                    "executed",
-                    format!(
-                        "leader rotated from {previous} to {current} for scope={normalized_scope}"
-                    ),
-                )
+                runtime.consecutive_failures = runtime.consecutive_failures.saturating_add(1);
             }
+            if runtime.consecutive_failures > policy.max_retries {
+                policy_decision = "deny_retry_budget";
+                status = "rejected";
+                details = format!(
+                    "retry_budget_exceeded hook={normalized_hook} failures={} max_retries={}",
+                    runtime.consecutive_failures, policy.max_retries
+                );
+            }
+            runtime.last_status = status.to_string();
         }
-        "replay_checkpoint_verify" => (
-            if dry_run { "simulated" } else { "executed" },
-            format!("checkpoint replay verification started for scope={normalized_scope}"),
-        ),
-        _ => (
-            "rejected",
-            format!("unsupported_dr_hook={normalized_hook}"),
-        ),
-    };
+    } else {
+        policy_decision = "deny_policy_state_lock_error";
+        status = "rejected";
+        details = "policy_state_lock_error".to_string();
+    }
 
     let record = DrHookExecutionRecord {
         execution_id,
@@ -1171,6 +1356,10 @@ fn execute_dr_hook(
         scope: normalized_scope.to_string(),
         status,
         dry_run,
+        policy_decision,
+        cooldown_remaining_ms,
+        retry_backoff_ms,
+        retry_attempt,
         details,
     };
     append_dr_hook_record(state, record.clone());
@@ -1378,6 +1567,8 @@ mod tests {
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
             action_records: Arc::new(Mutex::new(Vec::new())),
             dr_hook_records: Arc::new(Mutex::new(Vec::new())),
+            dr_hook_policy_state: Arc::new(Mutex::new(DrHookPolicyState::default())),
+            dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -1524,5 +1715,33 @@ mod tests {
         let execution = execute_dr_hook(&state, "unknown_hook", None, true);
         assert_eq!(execution.status, "rejected");
         assert!(execution.details.contains("unsupported_dr_hook"));
+    }
+
+    #[test]
+    fn ws12_dr_hook_applies_cooldown_window() {
+        let state = state_with_key(None);
+        let first = execute_dr_hook(&state, "replay_checkpoint_verify", Some("cluster"), false);
+        assert_eq!(first.status, "executed");
+        let second = execute_dr_hook(&state, "replay_checkpoint_verify", Some("cluster"), false);
+        assert_eq!(second.status, "cooldown");
+        assert_eq!(second.policy_decision, "deny_cooldown");
+        assert!(second.cooldown_remaining_ms > 0);
+    }
+
+    #[test]
+    fn ws12_retry_backoff_growth_is_capped() {
+        assert_eq!(compute_retry_backoff_ms(1, 500, 10_000), 500);
+        assert_eq!(compute_retry_backoff_ms(2, 500, 10_000), 1_000);
+        assert_eq!(compute_retry_backoff_ms(3, 500, 10_000), 2_000);
+        assert_eq!(compute_retry_backoff_ms(8, 500, 10_000), 10_000);
+    }
+
+    #[test]
+    fn ws12_dr_hook_denies_when_mode_below_policy() {
+        let mut state = state_with_key(None);
+        state.autonomous_mode = AutonomousMode::Advisory;
+        let execution = execute_dr_hook(&state, "failover_drill", Some("cluster"), false);
+        assert_eq!(execution.status, "rejected");
+        assert_eq!(execution.policy_decision, "deny_mode");
     }
 }
