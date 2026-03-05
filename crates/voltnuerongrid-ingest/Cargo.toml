@@ -7,3 +7,4 @@ authors.workspace = true
 
 [dependencies]
 voltnuerongrid-core = { path = "../voltnuerongrid-core" }
+voltnuerongrid-store = { path = "../voltnuerongrid-store" }

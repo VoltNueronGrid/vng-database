@@ -1,0 +1,9 @@
+{
+  "smoke": "ws4a-replay-cursor-bridge",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-ingest replays_from_persisted_cursor_checkpoint",
+  "started_at_utc": "2026-03-05T08:26:46.1300847Z",
+  "finished_at_utc": "2026-03-05T08:26:47.6192259Z",
+  "duration_ms": 1489,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-6c4559b058af068f.exe)\n\nrunning 1 test\ntest tests::replays_from_persisted_cursor_checkpoint ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s\n"
+}

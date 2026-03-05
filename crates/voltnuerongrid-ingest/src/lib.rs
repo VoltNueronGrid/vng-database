@@ -3,6 +3,8 @@
 pub const CRATE_NAME: &str = "voltnuerongrid-ingest";
 
 use std::collections::HashMap;
+use voltnuerongrid_store::wal_adapter::WalAdapter;
+use voltnuerongrid_store::WalRecord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngestFormat {
@@ -181,6 +183,98 @@ impl InMemoryEventLog {
     pub fn len(&self) -> usize {
         self.events.len()
     }
+
+    pub fn replay_from_store<S: ReplayCursorStore>(
+        &self,
+        stream_name: &str,
+        store: &S,
+        max_items: usize,
+    ) -> Vec<StreamEventEnvelope> {
+        let from_event_id = store
+            .load(stream_name)
+            .map(|checkpoint| checkpoint + 1)
+            .unwrap_or(1);
+        self.events
+            .iter()
+            .filter(|event| event.stream_name == stream_name && event.event_id >= from_event_id)
+            .take(max_items)
+            .cloned()
+            .collect()
+    }
+
+    pub fn acknowledge_replay<S: ReplayCursorStore>(
+        &self,
+        stream_name: &str,
+        delivered: &[StreamEventEnvelope],
+        store: &mut S,
+    ) -> Result<(), String> {
+        if let Some(last) = delivered.last() {
+            store.save(stream_name, last.event_id)?;
+        }
+        Ok(())
+    }
+}
+
+pub trait ReplayCursorStore {
+    fn load(&self, stream_name: &str) -> Option<u64>;
+    fn save(&mut self, stream_name: &str, last_replayed_event_id: u64) -> Result<(), String>;
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct InMemoryReplayCursorStore {
+    checkpoints: HashMap<String, u64>,
+}
+
+impl ReplayCursorStore for InMemoryReplayCursorStore {
+    fn load(&self, stream_name: &str) -> Option<u64> {
+        self.checkpoints.get(stream_name).copied()
+    }
+
+    fn save(&mut self, stream_name: &str, last_replayed_event_id: u64) -> Result<(), String> {
+        self.checkpoints
+            .insert(stream_name.to_string(), last_replayed_event_id);
+        Ok(())
+    }
+}
+
+pub struct WalBackedReplayCursorStore<A: WalAdapter> {
+    adapter: A,
+    sequence: u64,
+}
+
+impl<A: WalAdapter> WalBackedReplayCursorStore<A> {
+    pub fn new(adapter: A) -> Self {
+        Self {
+            adapter,
+            sequence: 1,
+        }
+    }
+}
+
+impl<A: WalAdapter> ReplayCursorStore for WalBackedReplayCursorStore<A> {
+    fn load(&self, stream_name: &str) -> Option<u64> {
+        let key = format!("replay_cursor::{stream_name}");
+        let records = self.adapter.read_all().ok()?;
+        records
+            .iter()
+            .rev()
+            .find(|record| record.key == key)
+            .and_then(|record| record.value.parse::<u64>().ok())
+    }
+
+    fn save(&mut self, stream_name: &str, last_replayed_event_id: u64) -> Result<(), String> {
+        let key = format!("replay_cursor::{stream_name}");
+        let record = WalRecord {
+            sequence: self.sequence,
+            timestamp_epoch_ms: now_epoch_millis(),
+            key,
+            value: last_replayed_event_id.to_string(),
+        };
+        self.sequence += 1;
+        self.adapter
+            .append(&record)
+            .map_err(|err| format!("wal append failed: {err:?}"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +321,22 @@ fn now_epoch_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use voltnuerongrid_store::wal_adapter::FileWalAdapter;
+
+    fn unique_wal_path() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "vng-ws4a-cursor-test-{}-{}.log",
+            std::process::id(),
+            nanos
+        ))
+    }
 
     #[test]
     fn registers_connector_and_reads_batch() {
@@ -345,5 +455,64 @@ mod tests {
         );
         assert_eq!(replay_count, 2);
         assert_eq!(replay_sink.delivered[1].payload_json, "{\"type\":\"txn\"}");
+    }
+
+    #[test]
+    fn persists_and_loads_cursor_in_memory() {
+        let mut store = InMemoryReplayCursorStore::default();
+        assert_eq!(store.load("ingest.orders"), None);
+        store.save("ingest.orders", 42).expect("save");
+        assert_eq!(store.load("ingest.orders"), Some(42));
+    }
+
+    #[test]
+    fn persists_and_loads_cursor_in_wal_adapter() {
+        let wal_path = unique_wal_path();
+        let adapter = FileWalAdapter::new(&wal_path).expect("adapter");
+        let mut store = WalBackedReplayCursorStore::new(adapter.clone());
+
+        store.save("ingest.orders", 5).expect("save first");
+        store.save("ingest.orders", 8).expect("save second");
+        assert_eq!(store.load("ingest.orders"), Some(8));
+
+        let _ = fs::remove_file(adapter.wal_path());
+    }
+
+    #[test]
+    fn replays_from_persisted_cursor_checkpoint() {
+        let mut log = InMemoryEventLog::new();
+        log.append_event(
+            "ingest.orders",
+            StreamDirection::Inbound,
+            "ftp",
+            "{\"id\":1}",
+            HashMap::new(),
+        );
+        log.append_event(
+            "ingest.orders",
+            StreamDirection::Inbound,
+            "ftp",
+            "{\"id\":2}",
+            HashMap::new(),
+        );
+        log.append_event(
+            "ingest.orders",
+            StreamDirection::Inbound,
+            "ftp",
+            "{\"id\":3}",
+            HashMap::new(),
+        );
+
+        let mut store = InMemoryReplayCursorStore::default();
+        store.save("ingest.orders", 1).expect("checkpoint");
+
+        let replay = log.replay_from_store("ingest.orders", &store, 10);
+        assert_eq!(replay.len(), 2);
+        assert_eq!(replay[0].event_id, 2);
+        assert_eq!(replay[1].event_id, 3);
+
+        log.acknowledge_replay("ingest.orders", &replay, &mut store)
+            .expect("ack");
+        assert_eq!(store.load("ingest.orders"), Some(3));
     }
 }
