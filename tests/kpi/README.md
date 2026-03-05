@@ -54,6 +54,7 @@ Initial KPI coverage:
 - `scripts/run-ws14-config-smoke.ps1` - WS14 driver/security config contract baseline smoke
 - `scripts/run-ws14-schema-lint-gate.ps1` - WS14 schema lint gate for YAML/JSON/properties config contracts
 - `scripts/run-ws14-config-conformance-aggregate.ps1` - WS14 config contract conformance aggregator (cross-format parity and conformance score)
+- `scripts/run-ws14-gate.ps1` - WS14 gate orchestrator (runs baseline + schema lint + conformance and emits one gate summary artifact)
 - `results/` - output folder for run artifacts
 
 ## Usage
