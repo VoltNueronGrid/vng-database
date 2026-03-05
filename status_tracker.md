@@ -54,7 +54,7 @@
 | REQ-11 | Indexes + constraints | Epic 2, Epic 15 | Not Started | Constraint/index test suite |
 | REQ-12 | Seeded functions + plan-plat parity | Epic 1, Epic 1A | In Progress | P0/P1/P2 parity gap report with P2 stub closures (`tests/kpi/results/parity/legacy-aggregation-gap-report.json`) |
 | REQ-13 | Multi-user roles and privileges | Epic 5 | Not Started | RBAC matrix tests |
-| REQ-14 | UI + engine separation | Epic 9 | Not Started | UI/API integration tests |
+| REQ-14 | UI + engine separation | Epic 9 | In Progress | Studio API contract checks now validate endpoint/header/type coverage + contract-script execution with WS9 smoke/gate evidence (`tests/kpi/results/ws9/studio-smoke.json`, `tests/kpi/results/ws9/ws9-gate-summary.json`) |
 | REQ-15 | Driver support (multi-language) | Epic 10 | In Progress | Rust driver baseline + JSON/YAML/properties routing contract parse coverage + WS10 smoke evidence (`tests/kpi/results/ws10/driver-smoke.json`) |
 | REQ-16 | SSL + encryption/decryption | Epic 5 | In Progress | Security contract now enforces TLS/mTLS + encryption-at-rest + KMS key reference constraints across JSON/YAML/properties with WS5 smoke/gate evidence (`tests/kpi/results/ws5/operator-auth-smoke.json`, `tests/kpi/results/ws5/ws5-gate-summary.json`) |
 | REQ-17 | Distributed failover + zero data loss | Epic 6, Epic 12 | Not Started | RTO/RPO + sync profile tests |
@@ -92,7 +92,7 @@
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | In Progress | WS1, WS4A (signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 smoke harness) |
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | In Progress | WS1, WS6 (typed autonomous action execution records + guardrail decision trace IDs + audit linkage + WS8 smoke harness) |
 | WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | In Progress | WS4A, WS5 (audit event contract + append-only sink + runtime emission + companion query/export filters for trace/action + WS8A smoke harnesses) |
-| WS9 | Epic 9 | Studio UI | UX Team | In Progress | WS1, WS3 (Studio API client contracts + endpoint typing + WS9 smoke harness) |
+| WS9 | Epic 9 | Studio UI | UX Team | Ready for Validation | WS1, WS3 (Studio API client contracts + endpoint/header/type checks + contract script execution via WS9 smoke harness + gate orchestrator `run-ws9-gate.ps1` -> `tests/kpi/results/ws9/ws9-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS9A | Epic 9A | IDE extension suite | DX Team | In Progress | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness) |
 | WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + JSON/properties/YAML `DriverRoutingConfigContract` parsing/validation + WS10 smoke harness evidence `tests/kpi/results/ws10/driver-smoke.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | Ready for Validation | WS1 (locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + locale fallback policy tests in SQL/runtime + WS11 smoke harness + gate orchestrator `run-ws11-gate.ps1` -> `tests/kpi/results/ws11/ws11-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
@@ -233,6 +233,7 @@ A tracker row moves to **Done** only when:
 | WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Not Started |
 | WS5 security and crypto | Security Team | Platform Team | In Progress |
 | WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Not Started |
+| WS9 Studio UI API contract | UX Team | Runtime Team, Platform Team | Ready for Validation |
 | WS11 internationalization and UTF-8 | Platform + UX Team | Runtime Team | Ready for Validation |
 | WS8 autonomous control plane | AI Platform Team | Security Team, Runtime Team | In Progress |
 | WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Ready for Validation |

@@ -43,7 +43,8 @@ Initial KPI coverage:
 - `scripts/run-ws8-control-plane-smoke.ps1` - WS8 control-plane typed action record baseline smoke
 - `scripts/run-ws8a-audit-smoke.ps1` - WS8A audit trail baseline smoke
 - `scripts/run-ws8a-audit-companion-smoke.ps1` - WS8A audit companion query/export flow smoke
-- `scripts/run-ws9-studio-smoke.ps1` - WS9 Studio API contract scaffold smoke
+- `scripts/run-ws9-studio-smoke.ps1` - WS9 Studio API contract smoke (script execution + endpoint/header/type checks)
+- `scripts/run-ws9-gate.ps1` - WS9 gate orchestrator (runs studio smoke and emits one gate summary artifact)
 - `scripts/run-ws9a-ide-contract-smoke.ps1` - WS9A IDE extension API contract scaffold smoke
 - `scripts/run-ws10-driver-smoke.ps1` - WS10 driver request/session-routing baseline smoke
 - `scripts/run-ws11-i18n-smoke.ps1` - WS11 i18n/UTF-8 smoke (locale parsing + fallback policy checks)

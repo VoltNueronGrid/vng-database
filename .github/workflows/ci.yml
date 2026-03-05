@@ -54,6 +54,10 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws5-gate.ps1 -OutputPath "./tests/kpi/results/ws5/ci-ws5-gate-summary.json"
 
+      - name: Run WS9 Studio API gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws9-gate.ps1 -OutputPath "./tests/kpi/results/ws9/ci-ws9-gate-summary.json"
+
       - name: Run WS10 driver and pooling smoke
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws10-driver-smoke.ps1 -OutputPath "./tests/kpi/results/ws10/ci-ws10-driver-smoke.json"
@@ -76,6 +80,7 @@ jobs:
             tests/kpi/results/ws13/ci-ws13-gate-summary.json
             tests/kpi/results/ws14/ci-ws14-gate-summary.json
             tests/kpi/results/ws5/ci-ws5-gate-summary.json
+            tests/kpi/results/ws9/ci-ws9-gate-summary.json
             tests/kpi/results/ws10/ci-ws10-driver-smoke.json
             tests/kpi/results/ws11/ci-ws11-gate-summary.json
             tests/kpi/results/ws15/ci-ws15-gate-summary.json
