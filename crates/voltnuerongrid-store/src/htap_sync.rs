@@ -269,4 +269,40 @@ mod tests {
         assert_eq!(out_of_order[0].previous, 3);
         assert_eq!(out_of_order[0].current, 2);
     }
+
+    #[test]
+    fn replay_after_restore_preserves_integrity_without_faults() {
+        let mut origin = RowStoreSyncOrigin::new();
+        origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+        origin.ack_through(1);
+
+        let snapshot = origin.snapshot();
+        let restored = RowStoreSyncOrigin::restore(snapshot);
+        let replay_batch = restored.export_batch(10);
+
+        assert!(RowStoreSyncOrigin::detect_sequence_gaps(&replay_batch).is_empty());
+        assert!(RowStoreSyncOrigin::detect_duplicate_sequences(&replay_batch).is_empty());
+        assert!(RowStoreSyncOrigin::detect_out_of_order(&replay_batch).is_empty());
+    }
+
+    #[test]
+    fn replay_after_restore_detects_gap_when_fault_injected() {
+        let mut origin = RowStoreSyncOrigin::new();
+        origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+
+        let snapshot = origin.snapshot();
+        let mut restored = RowStoreSyncOrigin::restore(snapshot);
+        let removed = restored.remove_sequence_for_fault_injection(2);
+        assert!(removed);
+
+        let replay_batch = restored.export_batch(10);
+        let gaps = RowStoreSyncOrigin::detect_sequence_gaps(&replay_batch);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].expected, 2);
+        assert_eq!(gaps[0].actual, 3);
+    }
 }

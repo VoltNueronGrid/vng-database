@@ -1,0 +1,45 @@
+{
+  "harness": "h02-restart-replay-matrix",
+  "started_at_utc": "2026-03-05T06:55:52.6823475Z",
+  "finished_at_utc": "2026-03-05T06:55:58.8239360Z",
+  "duration_ms": 6142,
+  "status": "passed",
+  "matrix": [
+    {
+      "test_filter": "preserves_continuity_after_checkpoint_and_restore",
+      "status": "passed",
+      "exit_code": 0,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::preserves_continuity_after_checkpoint_and_restore ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+    },
+    {
+      "test_filter": "replay_after_restore_preserves_integrity_without_faults",
+      "status": "passed",
+      "exit_code": 0,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::replay_after_restore_preserves_integrity_without_faults ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+    },
+    {
+      "test_filter": "replay_after_restore_detects_gap_when_fault_injected",
+      "status": "passed",
+      "exit_code": 0,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::replay_after_restore_detects_gap_when_fault_injected ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+    },
+    {
+      "test_filter": "detects_sequence_gap_after_fault_injection",
+      "status": "passed",
+      "exit_code": 0,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::detects_sequence_gap_after_fault_injection ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+    },
+    {
+      "test_filter": "detects_duplicate_sequences_after_fault_injection",
+      "status": "passed",
+      "exit_code": 0,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::detects_duplicate_sequences_after_fault_injection ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+    },
+    {
+      "test_filter": "detects_out_of_order_sequences_after_fault_injection",
+      "status": "passed",
+      "exit_code": 0,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::detects_out_of_order_sequences_after_fault_injection ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+    }
+  ]
+}
