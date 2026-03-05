@@ -33,7 +33,7 @@
 | PR-004 | Acceptance harness skeleton aligned to KPI table | QA/Performance | Done | KPI harness scaffold created under `tests/kpi` with scenarios, targets, and runner entry points |
 | PR-005 | Repo skeleton for modules/crates from architecture | Platform Engineering | Done | Rust workspace and core module skeletons created (`crates/`, `services/`, `drivers/`, `tools/`, UI placeholder) |
 | PR-006 | Define immediate start order and ownership assignment | Program Governance | In Progress | Initial order agreed, owner matrix pending |
-| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | In Progress | Phase 1+2 complete: runtime endpoints implemented, thresholds wired from `tests/kpi/config/targets.yaml`, auth/config-capable KPI probes, local and cloud-profile smoke artifacts captured under `tests/kpi/results/20260304-pr007` |
+| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | In Progress | Phase 1+2 complete; phase 3 now supports deferred execution (`-AllowMissingEnv`) with readiness tracking; env-driven real-cloud profiles and gate report tooling in place pending endpoint/auth handoff |
 
 ---
 
@@ -196,7 +196,7 @@ A tracker row moves to **Done** only when:
 | PR-004 | Done | 100% | improving | Created `tests/kpi` scaffold with KPI targets, scenario definitions, and executable runner scripts | — | Closed |
 | PR-005 | Done | 100% | improving | Created workspace `Cargo.toml` and module skeletons under `crates/`, `services/`, `drivers/`, `tools/`, plus UI placeholder | — | Closed |
 | PR-006 | In Progress | 50% | improving | Start order documented with sequence guidance | Owner matrix not assigned | Publish owner assignment matrix |
-| PR-007 | In Progress | 70% | improving | Wired thresholds from `tests/kpi/config/targets.yaml`, added auth/header/timeout config in KPI probes, added cloud smoke pack runner (`tests/kpi/scripts/run-cloud-smoke.ps1`), and executed AWS/Azure/GCP local cloud-profile smoke runs with rollups in `tests/kpi/results/20260304-pr007/cloud-profiles` | Owner matrix and true cloud endpoint validation pending | Execute against real cloud-hosted runtime endpoints with secured auth and collect comparative latency deltas |
+| PR-007 | In Progress | 88% | improving | Added deferred phase-3 flow: `run-cloud-smoke.ps1 -AllowMissingEnv` produces `cloud-readiness-report.json` + `pending_config` rollup; generated gate report in `tests/kpi/results/20260304-pr007/reports-real` with explicit missing variable checklist per cloud | External cloud endpoint/token handoff still pending | Populate required env vars and execute true remote run to convert `pending_config` to pass/fail evidence |
 
 ### 9.2 Architecture Hardening Weekly Status (H-01..H-10)
 
@@ -218,6 +218,6 @@ A tracker row moves to **Done** only when:
 - Finalize owner assignment for PR-007 and first implementation workstreams.
 - Approve R1 scope freeze and publish release gate checklist.
 - Start scaffold implementation branch for workspace + deploy manifests.
-- Execute PR-007 cloud smoke packs against real cloud-hosted endpoints (AWS/Azure/GCP) and publish final KPI gate decision.
+- Populate real AWS/Azure/GCP endpoint + token environment variables and execute PR-007 true remote smoke packs to close final gate.
 - Schedule first architecture hardening review focused on H-01 to H-04.
 

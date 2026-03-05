@@ -1,0 +1,27 @@
+profiles:
+  - name: aws-prod-remote
+    base_url_env: VNG_AWS_BASE_URL
+    sql_url_env: VNG_AWS_SQL_URL
+    auth_mode: bearer
+    auth_token_env: VNG_AWS_BEARER_TOKEN
+    headers:
+      X-Cloud-Profile: aws
+      X-Smoke-Pack: pr007-phase3
+
+  - name: azure-prod-remote
+    base_url_env: VNG_AZURE_BASE_URL
+    sql_url_env: VNG_AZURE_SQL_URL
+    auth_mode: bearer
+    auth_token_env: VNG_AZURE_BEARER_TOKEN
+    headers:
+      X-Cloud-Profile: azure
+      X-Smoke-Pack: pr007-phase3
+
+  - name: gcp-prod-remote
+    base_url_env: VNG_GCP_BASE_URL
+    sql_url_env: VNG_GCP_SQL_URL
+    auth_mode: bearer
+    auth_token_env: VNG_GCP_BEARER_TOKEN
+    headers:
+      X-Cloud-Profile: gcp
+      X-Smoke-Pack: pr007-phase3
