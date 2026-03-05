@@ -94,7 +94,7 @@
 | WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | In Progress | WS4A, WS5 (audit event contract + append-only sink + runtime emission + companion query/export filters for trace/action + WS8A smoke harnesses) |
 | WS9 | Epic 9 | Studio UI | UX Team | Not Started | WS1, WS3 |
 | WS9A | Epic 9A | IDE extension suite | DX Team | Not Started | WS1, WS10 |
-| WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | Not Started | WS1, WS6 |
+| WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + WS10 smoke harness) |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | Not Started | WS1 |
 | WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Not Started | WS6 |
 | WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Not Started | WS0, WS12 |

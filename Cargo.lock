@@ -606,6 +606,8 @@ version = "0.1.0"
 name = "voltnuerongrid-driver-rust"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "voltnuerongrid-core",
 ]
 

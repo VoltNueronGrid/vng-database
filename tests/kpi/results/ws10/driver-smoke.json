@@ -1,0 +1,9 @@
+{
+  "smoke": "ws10-driver-baseline",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-driver-rust",
+  "started_at_utc": "2026-03-05T11:08:16.2078451Z",
+  "finished_at_utc": "2026-03-05T11:08:18.6311485Z",
+  "duration_ms": 2423,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_driver_rust-24fcc0d1b0335705.exe)\n\nrunning 2 tests\ntest tests::builds_authorize_request_with_admin_and_operator_headers ... ok\ntest tests::builds_sql_execute_request_with_session_headers ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_driver_rust\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+}
