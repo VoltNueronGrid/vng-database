@@ -1,0 +1,39 @@
+{
+  "smoke": "ws9-studio-api-contract",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T11:24:17.3825118Z",
+  "finished_at_utc": "2026-03-05T11:24:17.4627805Z",
+  "duration_ms": 80,
+  "checks": [
+    {
+      "check": "types_file_exists",
+      "ok": true,
+      "detail": "ui/voltnuerongrid-studio/src/api/types.ts"
+    },
+    {
+      "check": "client_file_exists",
+      "ok": true,
+      "detail": "ui/voltnuerongrid-studio/src/api/client.ts"
+    },
+    {
+      "check": "contract_script_exists",
+      "ok": true,
+      "detail": "ui/voltnuerongrid-studio/scripts/check-contracts.mjs"
+    },
+    {
+      "check": "types_has_trace_id",
+      "ok": true,
+      "detail": "trace_id in UI types"
+    },
+    {
+      "check": "client_has_sql_execute_endpoint",
+      "ok": true,
+      "detail": "sql execute endpoint"
+    },
+    {
+      "check": "client_has_action_records_endpoint",
+      "ok": true,
+      "detail": "action records endpoint"
+    }
+  ]
+}
