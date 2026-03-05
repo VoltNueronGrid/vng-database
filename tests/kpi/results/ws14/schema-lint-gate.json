@@ -1,0 +1,89 @@
+{
+  "smoke": "ws14-schema-lint-gate",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T15:48:44.4941582Z",
+  "finished_at_utc": "2026-03-05T15:48:44.6960216Z",
+  "duration_ms": 202,
+  "checks": [
+    {
+      "check": "exists_driverProps",
+      "ok": true,
+      "detail": "reference/config-contracts/ws14/driver-routing-config.properties"
+    },
+    {
+      "check": "exists_driverYaml",
+      "ok": true,
+      "detail": "reference/config-contracts/ws14/driver-routing-config.yaml"
+    },
+    {
+      "check": "exists_securityYaml",
+      "ok": true,
+      "detail": "reference/config-contracts/ws14/security-control-config.yaml"
+    },
+    {
+      "check": "exists_securityProps",
+      "ok": true,
+      "detail": "reference/config-contracts/ws14/security-control-config.properties"
+    },
+    {
+      "check": "exists_securityJson",
+      "ok": true,
+      "detail": "reference/config-contracts/ws14/security-control-config.json"
+    },
+    {
+      "check": "exists_driverJson",
+      "ok": true,
+      "detail": "reference/config-contracts/ws14/driver-routing-config.json"
+    },
+    {
+      "check": "driver_json_schema",
+      "ok": true,
+      "detail": "driver.pool.maxConnections exists"
+    },
+    {
+      "check": "security_json_schema",
+      "ok": true,
+      "detail": "security.allowedOperatorRoles exists"
+    },
+    {
+      "check": "driver_yaml_has_driver_root",
+      "ok": true,
+      "detail": "driver root"
+    },
+    {
+      "check": "driver_yaml_has_pool_root",
+      "ok": true,
+      "detail": "pool root"
+    },
+    {
+      "check": "driver_yaml_has_timeout",
+      "ok": true,
+      "detail": "requestTimeoutMs numeric"
+    },
+    {
+      "check": "security_yaml_has_security_root",
+      "ok": true,
+      "detail": "security root"
+    },
+    {
+      "check": "security_yaml_has_roles",
+      "ok": true,
+      "detail": "allowedOperatorRoles root"
+    },
+    {
+      "check": "security_yaml_has_token_ttl",
+      "ok": true,
+      "detail": "tokenTtlSeconds numeric"
+    },
+    {
+      "check": "driver_properties_kv_format",
+      "ok": true,
+      "detail": "all lines are key=value"
+    },
+    {
+      "check": "security_properties_kv_format",
+      "ok": true,
+      "detail": "all lines are key=value"
+    }
+  ]
+}

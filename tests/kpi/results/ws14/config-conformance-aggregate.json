@@ -1,0 +1,67 @@
+{
+  "smoke": "ws14-config-conformance-aggregate",
+  "status": "passed",
+  "conformance_percent": 100.0,
+  "passed_checks": 11,
+  "total_checks": 11,
+  "started_at_utc": "2026-03-05T15:48:44.9729501Z",
+  "finished_at_utc": "2026-03-05T15:48:45.2268341Z",
+  "duration_ms": 254,
+  "checks": [
+    {
+      "check": "driver_baseurl_json_vs_props",
+      "ok": true,
+      "detail": "baseUrl parity"
+    },
+    {
+      "check": "driver_baseurl_json_vs_yaml",
+      "ok": true,
+      "detail": "baseUrl present in YAML"
+    },
+    {
+      "check": "driver_pool_max_json_vs_props",
+      "ok": true,
+      "detail": "pool.maxConnections parity"
+    },
+    {
+      "check": "driver_pool_min_json_vs_props",
+      "ok": true,
+      "detail": "pool.minConnections parity"
+    },
+    {
+      "check": "driver_timeout_json_vs_props",
+      "ok": true,
+      "detail": "requestTimeoutMs parity"
+    },
+    {
+      "check": "security_admin_env_json_vs_props",
+      "ok": true,
+      "detail": "adminApiKeyEnv parity"
+    },
+    {
+      "check": "security_admin_env_json_vs_yaml",
+      "ok": true,
+      "detail": "adminApiKeyEnv present in YAML"
+    },
+    {
+      "check": "security_tls_json_vs_props",
+      "ok": true,
+      "detail": "tlsRequired parity"
+    },
+    {
+      "check": "security_mtls_json_vs_props",
+      "ok": true,
+      "detail": "mtlsRequired parity"
+    },
+    {
+      "check": "security_ttl_json_vs_props",
+      "ok": true,
+      "detail": "tokenTtlSeconds parity"
+    },
+    {
+      "check": "security_roles_json_vs_props",
+      "ok": true,
+      "detail": "allowedOperatorRoles parity"
+    }
+  ]
+}

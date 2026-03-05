@@ -52,6 +52,8 @@ Initial KPI coverage:
 - `scripts/run-ws13-env-matrix-smoke.ps1` - WS13 runbook env-matrix validation smoke (deploy/cloud/*/README.md coverage for required provider env vars)
 - `scripts/run-ws13-gate.ps1` - WS13 CI gate orchestrator (runs all three WS13 smoke packs and emits one gate summary artifact)
 - `scripts/run-ws14-config-smoke.ps1` - WS14 driver/security config contract baseline smoke
+- `scripts/run-ws14-schema-lint-gate.ps1` - WS14 schema lint gate for YAML/JSON/properties config contracts
+- `scripts/run-ws14-config-conformance-aggregate.ps1` - WS14 config contract conformance aggregator (cross-format parity and conformance score)
 - `results/` - output folder for run artifacts
 
 ## Usage
