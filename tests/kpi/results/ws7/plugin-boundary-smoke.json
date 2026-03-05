@@ -2,8 +2,8 @@
   "smoke": "ws7-plugin-registration-boundary",
   "status": "passed",
   "command": "cargo test -p voltnuerongrid-plugins",
-  "started_at_utc": "2026-03-05T07:58:34.7494220Z",
-  "finished_at_utc": "2026-03-05T07:58:36.8609264Z",
-  "duration_ms": 2112,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-14c46698f6d9cd82.exe)\n\nrunning 4 tests\ntest tests::registers_valid_package ... ok\ntest tests::rejects_package_when_capability_missing ... ok\ntest tests::rejects_package_when_custom_hook_fails ... ok\ntest tests::rejects_package_with_missing_required_fields ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_plugins\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-03-05T08:03:02.5349187Z",
+  "finished_at_utc": "2026-03-05T08:03:04.4004753Z",
+  "duration_ms": 1866,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-182aedb20a806bbb.exe)\n\nrunning 5 tests\ntest tests::registers_valid_package ... ok\ntest tests::rejects_package_when_capability_missing ... ok\ntest tests::rejects_package_when_custom_hook_fails ... ok\ntest tests::rejects_package_when_manifest_checksum_is_tampered ... ok\ntest tests::rejects_package_with_missing_required_fields ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_plugins\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
 }
