@@ -35,6 +35,7 @@ Initial KPI coverage:
 - `scripts/run-ws3-query-routing-smoke.ps1` - WS3 HTAP route-decision scaffold smoke
 - `scripts/run-ws4-ingest-plugin-smoke.ps1` - WS4 ingestion plugin registry scaffold smoke
 - `scripts/run-ws4a-streaming-smoke.ps1` - WS4A streaming in/out + replayable event path scaffold smoke
+- `scripts/run-ws7-plugin-boundary-smoke.ps1` - WS7 connector package registration boundary smoke
 - `results/` - output folder for run artifacts
 
 ## Usage

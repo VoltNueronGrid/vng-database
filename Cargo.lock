@@ -569,6 +569,7 @@ name = "voltnuerongrid-plugins"
 version = "0.1.0"
 dependencies = [
  "voltnuerongrid-core",
+ "voltnuerongrid-ingest",
 ]
 
 [[package]]

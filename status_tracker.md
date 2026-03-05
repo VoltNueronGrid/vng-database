@@ -89,7 +89,7 @@
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | In Progress | WS4 (source/sink interfaces + replayable envelope/event-log scaffold + WS4A smoke harness) |
 | WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | Not Started | WS0 |
 | WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | Not Started | WS2, WS3 |
-| WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | Not Started | WS1, WS4A |
+| WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | In Progress | WS1, WS4A (connector package metadata + validation-hook boundary + WS7 smoke harness) |
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | Not Started | WS1, WS6 |
 | WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | Not Started | WS4A, WS5 |
 | WS9 | Epic 9 | Studio UI | UX Team | Not Started | WS1, WS3 |
