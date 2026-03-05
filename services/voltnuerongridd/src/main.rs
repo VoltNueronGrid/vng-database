@@ -413,6 +413,28 @@ struct DrHookPolicyContract {
     tracked_hooks: usize,
 }
 
+#[derive(Deserialize)]
+struct DrHookRetryPlanQuery {
+    hook: String,
+    attempts: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct DrHookRetryPlanResponse {
+    status: &'static str,
+    hook: String,
+    accepted: bool,
+    reason: String,
+    steps: Vec<DrHookRetryPlanStep>,
+}
+
+#[derive(Serialize)]
+struct DrHookRetryPlanStep {
+    attempt: u32,
+    recommended_backoff_ms: u64,
+    jitter_range_ms: u64,
+}
+
 #[derive(Serialize)]
 struct DrHookTriggerResponse {
     status: &'static str,
@@ -493,6 +515,7 @@ async fn main() {
             get(sre_failure_budget_alerts),
         )
         .route("/api/v1/sre/dr/hooks/policy", get(sre_dr_hook_policy))
+        .route("/api/v1/sre/dr/hooks/retry-plan", get(sre_dr_hook_retry_plan))
         .route("/api/v1/sre/dr/hooks/trigger", post(sre_dr_hook_trigger))
         .route("/api/v1/sre/dr/hooks/status", get(sre_dr_hook_status))
         .route("/api/v1/audit/events", get(audit_events))
@@ -784,6 +807,38 @@ async fn sre_dr_hook_policy(
             allowed_hooks: policy.allowed_hooks.clone(),
             tracked_hooks,
         },
+    }))
+}
+
+async fn sre_dr_hook_retry_plan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<DrHookRetryPlanQuery>,
+) -> Result<Json<DrHookRetryPlanResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let policy = state.dr_hook_policy_config.as_ref();
+    let attempts = query.attempts.unwrap_or(5).clamp(1, 10);
+    let hook = query.hook.trim().to_ascii_lowercase();
+    let accepted = policy
+        .allowed_hooks
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(&hook));
+    if !accepted {
+        return Ok(Json(DrHookRetryPlanResponse {
+            status: "ok",
+            hook,
+            accepted: false,
+            reason: "unsupported_dr_hook".to_string(),
+            steps: Vec::new(),
+        }));
+    }
+    let steps = build_retry_plan(policy, attempts);
+    Ok(Json(DrHookRetryPlanResponse {
+        status: "ok",
+        hook,
+        accepted: true,
+        reason: "plan_generated".to_string(),
+        steps,
     }))
 }
 
@@ -1230,6 +1285,25 @@ fn compute_retry_backoff_ms(attempt: u32, base_backoff_ms: u64, max_backoff_ms: 
     let exponent = attempt.saturating_sub(1).min(8);
     let factor = 1u64 << exponent;
     base_backoff_ms.saturating_mul(factor).min(max_backoff_ms)
+}
+
+fn build_retry_plan(policy: &DrHookPolicyConfig, attempts: u32) -> Vec<DrHookRetryPlanStep> {
+    (1..=attempts)
+        .map(|attempt| {
+            let backoff = compute_retry_backoff_ms(
+                attempt,
+                policy.base_backoff_ms,
+                policy.max_backoff_ms,
+            );
+            // Deterministic jitter contract scaffold: 20% envelope for callers.
+            let jitter = (backoff / 5).max(50);
+            DrHookRetryPlanStep {
+                attempt,
+                recommended_backoff_ms: backoff,
+                jitter_range_ms: jitter,
+            }
+        })
+        .collect()
 }
 
 fn execute_dr_hook(
@@ -1743,5 +1817,15 @@ mod tests {
         let execution = execute_dr_hook(&state, "failover_drill", Some("cluster"), false);
         assert_eq!(execution.status, "rejected");
         assert_eq!(execution.policy_decision, "deny_mode");
+    }
+
+    #[test]
+    fn ws12_retry_plan_builds_monotonic_backoff() {
+        let policy = default_dr_hook_policy_config();
+        let plan = build_retry_plan(&policy, 5);
+        assert_eq!(plan.len(), 5);
+        assert_eq!(plan[0].recommended_backoff_ms, 500);
+        assert!(plan[1].recommended_backoff_ms >= plan[0].recommended_backoff_ms);
+        assert!(plan[4].recommended_backoff_ms >= plan[3].recommended_backoff_ms);
     }
 }

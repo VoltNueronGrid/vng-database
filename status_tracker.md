@@ -96,7 +96,7 @@
 | WS9A | Epic 9A | IDE extension suite | DX Team | In Progress | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness) |
 | WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + WS10 smoke harness) |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | In Progress | WS1 (locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + WS11 smoke harness) |
-| WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | In Progress | WS6 (runtime SRE starter contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,trigger,status}` with policy gating + cooldown + retry-backoff scaffolds + WS12 smoke harness) |
+| WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | In Progress | WS6 (runtime SRE starter contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,trigger,status}` with policy gating + cooldown + retry/backoff+jitter scaffolds + WS12 smoke harness) |
 | WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Not Started | WS0, WS12 |
 | WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | In Progress | WS5, WS10 (driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness) |
 | WS15 | Epic 15 | Competitive feature adoption track | Architecture + Query Team | Not Started | WS3 |
