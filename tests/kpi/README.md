@@ -44,6 +44,7 @@ Initial KPI coverage:
 - `scripts/run-ws8a-audit-companion-smoke.ps1` - WS8A audit companion query/export flow smoke
 - `scripts/run-ws9-studio-smoke.ps1` - WS9 Studio API contract scaffold smoke
 - `scripts/run-ws10-driver-smoke.ps1` - WS10 driver request/session-routing baseline smoke
+- `scripts/run-ws11-i18n-smoke.ps1` - WS11 i18n/UTF-8 baseline smoke
 - `scripts/run-ws14-config-smoke.ps1` - WS14 driver/security config contract baseline smoke
 - `results/` - output folder for run artifacts
 

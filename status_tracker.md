@@ -95,7 +95,7 @@
 | WS9 | Epic 9 | Studio UI | UX Team | In Progress | WS1, WS3 (Studio API client contracts + endpoint typing + WS9 smoke harness) |
 | WS9A | Epic 9A | IDE extension suite | DX Team | Not Started | WS1, WS10 |
 | WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + WS10 smoke harness) |
-| WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | Not Started | WS1 |
+| WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | In Progress | WS1 (locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + WS11 smoke harness) |
 | WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Not Started | WS6 |
 | WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Not Started | WS0, WS12 |
 | WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | In Progress | WS5, WS10 (driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness) |

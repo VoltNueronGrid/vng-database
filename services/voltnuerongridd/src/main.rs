@@ -14,7 +14,7 @@ use serde_json::json;
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
-use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
+use voltnuerongrid_sql::{I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale};
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -132,7 +132,9 @@ struct AuthorizeActionResponse {
 #[derive(Serialize)]
 struct AuthErrorResponse {
     status: &'static str,
-    reason: &'static str,
+    reason: String,
+    locale: String,
+    localized_message: String,
 }
 
 #[derive(Serialize)]
@@ -278,6 +280,18 @@ struct AutonomousActionRecordsResponse {
     records: Vec<AutonomousActionExecutionRecord>,
 }
 
+#[derive(Deserialize)]
+struct I18nMessagesQuery {
+    locale: Option<String>,
+}
+
+#[derive(Serialize)]
+struct I18nMessagesResponse {
+    status: &'static str,
+    locale: String,
+    messages: std::collections::BTreeMap<String, String>,
+}
+
 #[tokio::main]
 async fn main() {
     let node_id = env::var("VNG_NODE_ID")
@@ -331,6 +345,7 @@ async fn main() {
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/audit/events", get(audit_events))
+        .route("/api/v1/i18n/messages", get(i18n_messages))
         .route(
             "/api/v1/autonomous/actions/records",
             get(autonomous_action_records),
@@ -565,6 +580,21 @@ async fn autonomous_action_records(
         total_records: records.len(),
         records,
     }))
+}
+
+async fn i18n_messages(Query(query): Query<I18nMessagesQuery>) -> Json<I18nMessagesResponse> {
+    let locale = SupportedLocale::parse(query.locale.as_deref().unwrap_or("en-US"));
+    let keys = ["unauthorized", "missing_or_invalid_admin_key", "health_ok"];
+    let mut messages = std::collections::BTreeMap::new();
+    for key in keys {
+        let localized = I18nCatalog::message(locale, key);
+        messages.insert(key.to_string(), localized.message.to_string());
+    }
+    Json(I18nMessagesResponse {
+        status: "ok",
+        locale: locale.as_str().to_string(),
+        messages,
+    })
 }
 
 async fn autonomous_guardrails(
@@ -859,14 +889,27 @@ fn require_operator_auth(
     if provided == required_key {
         Ok(())
     } else {
+        let locale = locale_from_headers(headers);
+        let localized = I18nCatalog::message(locale, "missing_or_invalid_admin_key");
         Err((
             StatusCode::UNAUTHORIZED,
             Json(AuthErrorResponse {
                 status: "unauthorized",
-                reason: "missing_or_invalid_admin_key",
+                reason: "missing_or_invalid_admin_key".to_string(),
+                locale: locale.as_str().to_string(),
+                localized_message: localized.message.to_string(),
             }),
         ))
     }
+}
+
+fn locale_from_headers(headers: &HeaderMap) -> SupportedLocale {
+    headers
+        .get("accept-language")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(',').next().unwrap_or("en-US"))
+        .map(SupportedLocale::parse)
+        .unwrap_or(SupportedLocale::EnUs)
 }
 
 fn append_audit_event(
@@ -1056,5 +1099,16 @@ mod tests {
         let records = latest_action_records(&state, 10);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].trace_id, "atrace-test");
+    }
+
+    #[test]
+    fn parses_locale_from_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "accept-language",
+            HeaderValue::from_static("es-ES,es;q=0.9"),
+        );
+        let locale = locale_from_headers(&headers);
+        assert_eq!(locale, SupportedLocale::EsEs);
     }
 }

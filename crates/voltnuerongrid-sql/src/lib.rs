@@ -155,6 +155,70 @@ impl SqlAnalyzer {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportedLocale {
+    EnUs,
+    FrFr,
+    EsEs,
+}
+
+impl SupportedLocale {
+    pub fn parse(value: &str) -> Self {
+        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "fr-fr" => Self::FrFr,
+            "es-es" => Self::EsEs,
+            _ => Self::EnUs,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::EnUs => "en-US",
+            Self::FrFr => "fr-FR",
+            Self::EsEs => "es-ES",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalizedMessage {
+    pub locale: SupportedLocale,
+    pub key: &'static str,
+    pub message: &'static str,
+}
+
+#[derive(Debug, Default)]
+pub struct I18nCatalog;
+
+impl I18nCatalog {
+    pub fn message(locale: SupportedLocale, key: &'static str) -> LocalizedMessage {
+        let message = match (locale, key) {
+            (SupportedLocale::FrFr, "unauthorized") => "Demande non autorisee",
+            (SupportedLocale::EsEs, "unauthorized") => "Solicitud no autorizada",
+            (SupportedLocale::FrFr, "missing_or_invalid_admin_key") => {
+                "Cle administrateur absente ou invalide"
+            }
+            (SupportedLocale::EsEs, "missing_or_invalid_admin_key") => {
+                "Clave de administrador ausente o invalida"
+            }
+            (SupportedLocale::FrFr, "health_ok") => "Sante OK",
+            (SupportedLocale::EsEs, "health_ok") => "Salud OK",
+            _ => match key {
+                "unauthorized" => "Unauthorized request",
+                "missing_or_invalid_admin_key" => "Missing or invalid admin key",
+                "health_ok" => "Health OK",
+                _ => "Message key not found",
+            },
+        };
+        LocalizedMessage {
+            locale,
+            key,
+            message,
+        }
+    }
+}
+
 fn normalize_ident(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
@@ -270,5 +334,13 @@ mod tests {
         let unknown = run_p2_stub("UNKNOWN_P2");
         assert!(!unknown.accepted);
         assert_eq!(unknown.mode, "unsupported");
+    }
+
+    #[test]
+    fn supports_locale_parsing_and_messages() {
+        let locale = SupportedLocale::parse("fr_FR");
+        assert_eq!(locale, SupportedLocale::FrFr);
+        let msg = I18nCatalog::message(locale, "unauthorized");
+        assert_eq!(msg.message, "Demande non autorisee");
     }
 }

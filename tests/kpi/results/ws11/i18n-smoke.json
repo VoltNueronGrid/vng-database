@@ -1,0 +1,9 @@
+{
+  "smoke": "ws11-i18n-utf8-baseline",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-sql supports_locale_parsing_and_messages; cargo test -p voltnuerongridd parses_locale_from_header",
+  "started_at_utc": "2026-03-05T11:30:06.8192418Z",
+  "finished_at_utc": "2026-03-05T11:30:11.8081233Z",
+  "duration_ms": 4989,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_sql-ec677f991cc5968a.exe)\n\nrunning 1 test\ntest tests::supports_locale_parsing_and_messages ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 1 test\ntest tests::parses_locale_from_header ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s\n"
+}
