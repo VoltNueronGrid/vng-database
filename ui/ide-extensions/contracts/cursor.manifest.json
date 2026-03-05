@@ -1,0 +1,12 @@
+{
+  "ide": "cursor",
+  "display_name": "VoltNueronGrid Tools for Cursor",
+  "extension_version": "0.1.0",
+  "contract_ref": "./common-api-contract.json",
+  "features": [
+    "sql_editor_execute",
+    "autonomous_guardrail_controls",
+    "trace_id_jump_to_audit",
+    "localized_message_preview"
+  ]
+}

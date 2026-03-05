@@ -1,0 +1,44 @@
+{
+  "smoke": "ws9a-ide-extension-contract",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T11:44:37.8268516Z",
+  "finished_at_utc": "2026-03-05T11:44:38.0326929Z",
+  "duration_ms": 206,
+  "checks": [
+    {
+      "check": "common_contract_exists",
+      "ok": true,
+      "detail": "ui/ide-extensions/contracts/common-api-contract.json"
+    },
+    {
+      "check": "manifest_exists_visual-studio.manifest",
+      "ok": true,
+      "detail": "ui/ide-extensions/contracts/visual-studio.manifest.json"
+    },
+    {
+      "check": "manifest_exists_cursor.manifest",
+      "ok": true,
+      "detail": "ui/ide-extensions/contracts/cursor.manifest.json"
+    },
+    {
+      "check": "manifest_exists_antigravity.manifest",
+      "ok": true,
+      "detail": "ui/ide-extensions/contracts/antigravity.manifest.json"
+    },
+    {
+      "check": "manifest_exists_jetbrains.manifest",
+      "ok": true,
+      "detail": "ui/ide-extensions/contracts/jetbrains.manifest.json"
+    },
+    {
+      "check": "manifest_exists_eclipse.manifest",
+      "ok": true,
+      "detail": "ui/ide-extensions/contracts/eclipse.manifest.json"
+    },
+    {
+      "check": "common_contract_endpoints",
+      "ok": true,
+      "detail": "Core runtime endpoints in shared IDE contract"
+    }
+  ]
+}

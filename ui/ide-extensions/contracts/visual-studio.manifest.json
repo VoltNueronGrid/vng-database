@@ -1,0 +1,12 @@
+{
+  "ide": "visual-studio",
+  "display_name": "VoltNueronGrid Tools for Visual Studio",
+  "extension_version": "0.1.0",
+  "contract_ref": "./common-api-contract.json",
+  "features": [
+    "sql_editor_execute",
+    "query_plan_inspect",
+    "autonomous_action_authorize",
+    "audit_event_viewer"
+  ]
+}

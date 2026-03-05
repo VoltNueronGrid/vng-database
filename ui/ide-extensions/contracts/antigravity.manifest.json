@@ -1,0 +1,12 @@
+{
+  "ide": "antigravity",
+  "display_name": "VoltNueronGrid Tools for Antigravity",
+  "extension_version": "0.1.0",
+  "contract_ref": "./common-api-contract.json",
+  "features": [
+    "sql_editor_execute",
+    "htap_route_insights",
+    "autonomous_action_authorize",
+    "audit_timeline"
+  ]
+}

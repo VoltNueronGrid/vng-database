@@ -1,0 +1,44 @@
+{
+  "contract_version": "0.1.0",
+  "transport": "REST",
+  "required_headers": [
+    "x-vng-session-id"
+  ],
+  "optional_headers": [
+    "x-vng-admin-key",
+    "x-vng-operator-id",
+    "x-vng-route-hint"
+  ],
+  "endpoints": [
+    {
+      "name": "sql_execute",
+      "method": "POST",
+      "path": "/api/v1/sql/execute"
+    },
+    {
+      "name": "sql_analyze",
+      "method": "POST",
+      "path": "/api/v1/sql/analyze"
+    },
+    {
+      "name": "autonomous_authorize",
+      "method": "POST",
+      "path": "/api/v1/autonomous/actions/authorize"
+    },
+    {
+      "name": "autonomous_action_records",
+      "method": "GET",
+      "path": "/api/v1/autonomous/actions/records"
+    },
+    {
+      "name": "audit_events",
+      "method": "GET",
+      "path": "/api/v1/audit/events"
+    },
+    {
+      "name": "i18n_messages",
+      "method": "GET",
+      "path": "/api/v1/i18n/messages"
+    }
+  ]
+}

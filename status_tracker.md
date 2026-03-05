@@ -93,7 +93,7 @@
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | In Progress | WS1, WS6 (typed autonomous action execution records + guardrail decision trace IDs + audit linkage + WS8 smoke harness) |
 | WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | In Progress | WS4A, WS5 (audit event contract + append-only sink + runtime emission + companion query/export filters for trace/action + WS8A smoke harnesses) |
 | WS9 | Epic 9 | Studio UI | UX Team | In Progress | WS1, WS3 (Studio API client contracts + endpoint typing + WS9 smoke harness) |
-| WS9A | Epic 9A | IDE extension suite | DX Team | Not Started | WS1, WS10 |
+| WS9A | Epic 9A | IDE extension suite | DX Team | In Progress | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness) |
 | WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + WS10 smoke harness) |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | In Progress | WS1 (locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + WS11 smoke harness) |
 | WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Not Started | WS6 |
