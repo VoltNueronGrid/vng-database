@@ -18,6 +18,9 @@ jobs:
       - name: Cargo check runtime
         run: cargo check -p voltnuerongridd
 
+      - name: Cargo test SQL baseline
+        run: cargo test -p voltnuerongrid-sql
+
       - name: Validate R1 gate checklist artifact
         shell: pwsh
         run: ./tests/kpi/scripts/check-r1-gate.ps1 -RepoRoot "." -OutputPath "./tests/kpi/results/gates/ci-r1-gate-check.json"

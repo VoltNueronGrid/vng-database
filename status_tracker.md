@@ -79,7 +79,7 @@
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies |
 |---|---|---|---|---|---|
-| WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 |
+| WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts) |
 | WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway) |
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | Not Started | WS1 |
 | WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | Not Started | WS0 |
