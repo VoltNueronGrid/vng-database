@@ -1,0 +1,78 @@
+{
+  "version": "0.1.0",
+  "scope": "ws15-competitive-feature-adoption",
+  "competitors": [
+    "mysql",
+    "postgresql",
+    "cockroachdb",
+    "oracle",
+    "neo4j",
+    "pinecone"
+  ],
+  "features": [
+    {
+      "id": "cmp-001",
+      "name": "point_in_time_recovery",
+      "category": "durability",
+      "status": "planned_stub",
+      "target_release": "R3",
+      "ws_epic_link": "WS15"
+    },
+    {
+      "id": "cmp-002",
+      "name": "incremental_backup_catalog",
+      "category": "operations",
+      "status": "planned_stub",
+      "target_release": "R3",
+      "ws_epic_link": "WS15"
+    },
+    {
+      "id": "cmp-003",
+      "name": "follower_read_routing",
+      "category": "query",
+      "status": "planned_stub",
+      "target_release": "R3",
+      "ws_epic_link": "WS15"
+    },
+    {
+      "id": "cmp-004",
+      "name": "vector_index_lifecycle",
+      "category": "ai",
+      "status": "planned_stub",
+      "target_release": "R3",
+      "ws_epic_link": "WS15"
+    },
+    {
+      "id": "cmp-005",
+      "name": "graph_pattern_query_bridge",
+      "category": "multimodel",
+      "status": "planned_stub",
+      "target_release": "R4",
+      "ws_epic_link": "WS15"
+    },
+    {
+      "id": "cmp-006",
+      "name": "workload_adaptive_plan_cache",
+      "category": "performance",
+      "status": "planned_stub",
+      "target_release": "R3",
+      "ws_epic_link": "WS15"
+    },
+    {
+      "id": "cmp-007",
+      "name": "tenant_resource_governor",
+      "category": "governance",
+      "status": "planned_stub",
+      "target_release": "R4",
+      "ws_epic_link": "WS15"
+    },
+    {
+      "id": "cmp-008",
+      "name": "zero_downtime_schema_evolution",
+      "category": "schema",
+      "status": "planned_stub",
+      "target_release": "R3",
+      "ws_epic_link": "WS15"
+    }
+  ]
+}

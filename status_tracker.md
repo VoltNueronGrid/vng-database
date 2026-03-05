@@ -99,7 +99,7 @@
 | WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Ready for Validation | WS6 (runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion, and expanded WS12 gate criteria + smoke harness) |
 | WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Ready for Validation | WS0, WS12 (deploy cloud profile contracts + provider runtime overrides `single-node`/`multi-node` + provider Helm values + provider runbook env matrices (`deploy/cloud/*/README.md`) for AWS/Azure/GCP; WS13 smoke harnesses: `run-ws13-multicloud-profile-smoke.ps1`, `run-ws13-overlay-schema-smoke.ps1`, `run-ws13-env-matrix-smoke.ps1`; CI gate orchestrator: `run-ws13-gate.ps1` -> `tests/kpi/results/ws13/ws13-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | Ready for Validation | WS5, WS10 (driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness + schema lint gate `run-ws14-schema-lint-gate.ps1` + config conformance aggregator `run-ws14-config-conformance-aggregate.ps1` + gate orchestrator `run-ws14-gate.ps1` -> `tests/kpi/results/ws14/ws14-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
-| WS15 | Epic 15 | Competitive feature adoption track | Architecture + Query Team | Not Started | WS3 |
+| WS15 | Epic 15 | Competitive feature adoption track | Architecture + Query Team | In Progress | WS3 (competitive adoption matrix contract scaffold `reference/competitive/ws15-feature-adoption-matrix.json` + WS15 smoke harness `run-ws15-competitive-parity-smoke.ps1`) |
 
 ---
 
@@ -237,4 +237,5 @@ A tracker row moves to **Done** only when:
 | WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Ready for Validation |
 | WS13 multi-cloud deployment profiles | Platform/SRE | SRE Team, Security Team | Ready for Validation |
 | WS14 config contracts + tuning playbooks | Platform + SRE + Security | Integrations Team, Security Team | Ready for Validation |
+| WS15 competitive feature adoption track | Architecture + Query Team | AI Platform Team, Integrations Team | In Progress |
 

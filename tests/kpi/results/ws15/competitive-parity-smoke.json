@@ -1,0 +1,64 @@
+{
+  "smoke": "ws15-competitive-parity-baseline",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T16:11:09.1077487Z",
+  "finished_at_utc": "2026-03-05T16:11:09.1724553Z",
+  "duration_ms": 65,
+  "checks": [
+    {
+      "check": "matrix_exists",
+      "ok": true,
+      "detail": "reference/competitive/ws15-feature-adoption-matrix.json"
+    },
+    {
+      "check": "competitor_mysql",
+      "ok": true,
+      "detail": "competitor listed"
+    },
+    {
+      "check": "competitor_postgresql",
+      "ok": true,
+      "detail": "competitor listed"
+    },
+    {
+      "check": "competitor_cockroachdb",
+      "ok": true,
+      "detail": "competitor listed"
+    },
+    {
+      "check": "competitor_oracle",
+      "ok": true,
+      "detail": "competitor listed"
+    },
+    {
+      "check": "competitor_neo4j",
+      "ok": true,
+      "detail": "competitor listed"
+    },
+    {
+      "check": "competitor_pinecone",
+      "ok": true,
+      "detail": "competitor listed"
+    },
+    {
+      "check": "minimum_feature_count",
+      "ok": true,
+      "detail": "features=8 expected>=8"
+    },
+    {
+      "check": "all_features_have_target_release",
+      "ok": true,
+      "detail": "target_release required"
+    },
+    {
+      "check": "all_features_have_ws_link",
+      "ok": true,
+      "detail": "ws_epic_link required"
+    },
+    {
+      "check": "feature_status_values_supported",
+      "ok": true,
+      "detail": "status domain check"
+    }
+  ]
+}
