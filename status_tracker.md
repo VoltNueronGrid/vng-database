@@ -88,7 +88,7 @@
 | WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | In Progress | WS2 (ingestion connector/registry scaffold + WS4 smoke harness) |
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | In Progress | WS4 (source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + WS4A smoke harnesses) |
 | WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | In Progress | WS0 (operator admin-key auth gate scaffolded for autonomous control endpoints + WS5 smoke harness) |
-| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | Not Started | WS2, WS3 |
+| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | In Progress | WS2, WS3 (failover leader-state scaffold + authenticated failover simulation endpoint + WS6 smoke harness) |
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | In Progress | WS1, WS4A (signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 smoke harness) |
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | Not Started | WS1, WS6 |
 | WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | Not Started | WS4A, WS5 |

@@ -2,6 +2,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use axum::extract::State;
@@ -19,6 +20,7 @@ struct AppState {
     node_id: String,
     cluster_mode: String,
     admin_api_key: Option<String>,
+    leader_node_id: Arc<Mutex<String>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -229,6 +231,22 @@ struct FailoverStatusResponse {
     rpo_data_loss_rows_target: u32,
 }
 
+#[derive(Deserialize)]
+struct FailoverSimulateRequest {
+    new_leader_node_id: String,
+    reason: Option<String>,
+    requested_by: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FailoverSimulateResponse {
+    status: &'static str,
+    previous_leader_node_id: String,
+    new_leader_node_id: String,
+    reason: String,
+    requested_by: String,
+}
+
 #[tokio::main]
 async fn main() {
     let node_id = env::var("VNG_NODE_ID")
@@ -264,6 +282,7 @@ async fn main() {
         node_id,
         cluster_mode,
         admin_api_key,
+        leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -277,6 +296,7 @@ async fn main() {
         .route("/api/v1/sql/execute", post(sql_execute))
         .route("/api/v1/olap/query", post(olap_query))
         .route("/api/v1/failover/status", get(failover_status))
+        .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/autonomous/guardrails", get(autonomous_guardrails))
         .route(
             "/api/v1/autonomous/emergency-stop",
@@ -429,13 +449,37 @@ async fn olap_query(Json(req): Json<OlapQueryRequest>) -> Json<OlapQueryResponse
 }
 
 async fn failover_status(State(state): State<AppState>) -> Json<FailoverStatusResponse> {
+    let leader = state
+        .leader_node_id
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_else(|_| state.node_id.clone());
     Json(FailoverStatusResponse {
         status: "healthy",
         cluster_mode: state.cluster_mode,
-        leader_node_id: state.node_id,
+        leader_node_id: leader,
         rto_seconds_target: 30,
         rpo_data_loss_rows_target: 0,
     })
+}
+
+async fn failover_simulate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<FailoverSimulateRequest>,
+) -> Result<Json<FailoverSimulateResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let (previous_leader_node_id, new_leader_node_id) =
+        rotate_leader(&state.leader_node_id, &req.new_leader_node_id, &state.node_id);
+    Ok(Json(FailoverSimulateResponse {
+        status: "ok",
+        previous_leader_node_id,
+        new_leader_node_id,
+        reason: req
+            .reason
+            .unwrap_or_else(|| "manual_failover_simulation".to_string()),
+        requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
+    }))
 }
 
 async fn autonomous_guardrails(
@@ -663,6 +707,28 @@ fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryRespon
     }
 }
 
+fn rotate_leader(
+    leader_state: &Arc<Mutex<String>>,
+    requested_leader: &str,
+    fallback_leader: &str,
+) -> (String, String) {
+    let requested = requested_leader.trim();
+    let next = if requested.is_empty() {
+        fallback_leader.to_string()
+    } else {
+        requested.to_string()
+    };
+
+    match leader_state.lock() {
+        Ok(mut guard) => {
+            let previous = guard.clone();
+            *guard = next.clone();
+            (previous, next)
+        }
+        Err(_) => (fallback_leader.to_string(), fallback_leader.to_string()),
+    }
+}
+
 fn require_operator_auth(
     headers: &HeaderMap,
     state: &AppState,
@@ -699,6 +765,7 @@ mod tests {
             node_id: "node-1".to_string(),
             cluster_mode: "single".to_string(),
             admin_api_key: key.map(|v| v.to_string()),
+            leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -726,5 +793,21 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-vng-admin-key", HeaderValue::from_static("secret"));
         assert!(require_operator_auth(&headers, &state).is_ok());
+    }
+
+    #[test]
+    fn failover_rotate_leader_updates_state() {
+        let leader = Arc::new(Mutex::new("node-1".to_string()));
+        let (previous, current) = rotate_leader(&leader, "node-2", "node-1");
+        assert_eq!(previous, "node-1");
+        assert_eq!(current, "node-2");
+        assert_eq!(leader.lock().expect("lock").as_str(), "node-2");
+    }
+
+    #[test]
+    fn failover_rotate_leader_uses_fallback_for_blank_request() {
+        let leader = Arc::new(Mutex::new("node-1".to_string()));
+        let (_, current) = rotate_leader(&leader, "   ", "node-1");
+        assert_eq!(current, "node-1");
     }
 }
