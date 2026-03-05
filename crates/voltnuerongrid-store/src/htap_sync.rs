@@ -35,6 +35,17 @@ pub struct SequenceGap {
     pub actual: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuplicateSequence {
+    pub sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutOfOrderSequence {
+    pub previous: u64,
+    pub current: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct RowStoreSyncOrigin {
     next_sequence: u64,
@@ -134,6 +145,31 @@ impl RowStoreSyncOrigin {
         }
         gaps
     }
+
+    pub fn detect_duplicate_sequences(batch: &[RowMutation]) -> Vec<DuplicateSequence> {
+        let mut seen = std::collections::HashSet::new();
+        let mut duplicates = Vec::new();
+        for item in batch {
+            if !seen.insert(item.sequence) {
+                duplicates.push(DuplicateSequence {
+                    sequence: item.sequence,
+                });
+            }
+        }
+        duplicates
+    }
+
+    pub fn detect_out_of_order(batch: &[RowMutation]) -> Vec<OutOfOrderSequence> {
+        let mut issues = Vec::new();
+        for window in batch.windows(2) {
+            let previous = window[0].sequence;
+            let current = window[1].sequence;
+            if current <= previous {
+                issues.push(OutOfOrderSequence { previous, current });
+            }
+        }
+        issues
+    }
 }
 
 #[cfg(test)]
@@ -201,5 +237,36 @@ mod tests {
         assert_eq!(batch.len(), 2);
         assert_eq!(batch[0].sequence, 2);
         assert_eq!(batch[1].sequence, 3);
+    }
+
+    #[test]
+    fn detects_duplicate_sequences_after_fault_injection() {
+        let mut origin = RowStoreSyncOrigin::new();
+        let first = origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        let second = origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        let mut batch = vec![first.clone(), second];
+        batch.push(RowMutation {
+            sequence: first.sequence,
+            table: "orders".to_string(),
+            primary_key: "dup".to_string(),
+            payload_json: "{\"amount\":999}".to_string(),
+            op: MutationOp::Update,
+        });
+        let duplicates = RowStoreSyncOrigin::detect_duplicate_sequences(&batch);
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0].sequence, 1);
+    }
+
+    #[test]
+    fn detects_out_of_order_sequences_after_fault_injection() {
+        let mut origin = RowStoreSyncOrigin::new();
+        let first = origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        let second = origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        let third = origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+        let batch = vec![first, third, second];
+        let out_of_order = RowStoreSyncOrigin::detect_out_of_order(&batch);
+        assert_eq!(out_of_order.len(), 1);
+        assert_eq!(out_of_order[0].previous, 3);
+        assert_eq!(out_of_order[0].current, 2);
     }
 }

@@ -29,6 +29,7 @@ Initial KPI coverage:
 - `scripts/run-ws2a-row-sync-origin-smoke.ps1` - WS2A row-store sync-origin scaffold smoke
 - `scripts/run-ws2-checkpoint-restart-smoke.ps1` - WS2 checkpoint/restart continuity smoke
 - `scripts/run-h02-sync-fault-injection.ps1` - H-02 sequence-gap fault-injection harness
+- `scripts/run-h02-reorder-duplicate-faults.ps1` - H-02 reorder/duplicate fault harness
 - `results/` - output folder for run artifacts
 
 ## Usage

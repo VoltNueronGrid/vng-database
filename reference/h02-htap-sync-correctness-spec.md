@@ -22,14 +22,25 @@ Detect sequence integrity violations early and prevent silent data divergence be
 `remove_sequence_for_fault_injection(sequence)` deliberately removes a pending mutation to simulate a dropped record.  
 `detect_sequence_gaps(batch)` validates that the gap is surfaced.
 
+## Fault Injection (Expanded)
+
+- Duplicate detection:
+  - `detect_duplicate_sequences(batch)`
+- Reorder detection:
+  - `detect_out_of_order(batch)`
+
 ## Executable Evidence
 
 - Unit test:
   - `detects_sequence_gap_after_fault_injection` in `crates/voltnuerongrid-store/src/htap_sync.rs`
+  - `detects_duplicate_sequences_after_fault_injection` in `crates/voltnuerongrid-store/src/htap_sync.rs`
+  - `detects_out_of_order_sequences_after_fault_injection` in `crates/voltnuerongrid-store/src/htap_sync.rs`
 - Harness script:
   - `tests/kpi/scripts/run-h02-sync-fault-injection.ps1`
+  - `tests/kpi/scripts/run-h02-reorder-duplicate-faults.ps1`
 - Artifact:
   - `tests/kpi/results/h02/htap-sync-fault-injection.json`
+  - `tests/kpi/results/h02/htap-sync-reorder-duplicate-faults.json`
 
 ## Next Expansion
 
