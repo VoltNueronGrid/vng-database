@@ -13,8 +13,8 @@
     "properties_encryption": true,
     "properties_kms": true
   },
-  "started_at_utc": "2026-03-05T16:42:02.0012655Z",
-  "finished_at_utc": "2026-03-05T16:42:06.2489413Z",
-  "duration_ms": 4248,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 3 tests\ntest tests::operator_auth_accepts_request_with_matching_admin_key ... ok\ntest tests::operator_auth_allows_request_when_admin_key_not_configured ... ok\ntest tests::operator_auth_rejects_request_with_missing_key_when_configured ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-060fb2b15e8f54f7.exe)\n\nrunning 3 tests\ntest tests::validates_security_config_from_json ... ok\ntest tests::validates_security_config_from_properties ... ok\ntest tests::ws5_validates_security_config_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-03-05T16:52:26.7325047Z",
+  "finished_at_utc": "2026-03-05T16:52:32.6699212Z",
+  "duration_ms": 5937,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 3 tests\ntest tests::operator_auth_accepts_request_with_matching_admin_key ... ok\ntest tests::operator_auth_allows_request_when_admin_key_not_configured ... ok\ntest tests::operator_auth_rejects_request_with_missing_key_when_configured ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.01s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-060fb2b15e8f54f7.exe)\n\nrunning 3 tests\ntest tests::validates_security_config_from_json ... ok\ntest tests::validates_security_config_from_properties ... ok\ntest tests::ws5_validates_security_config_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s\n"
 }
