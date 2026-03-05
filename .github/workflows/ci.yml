@@ -52,7 +52,11 @@ jobs:
 
       - name: Run WS5 security gate
         shell: pwsh
-        run: ./tests/kpi/scripts/run-ws5-gate.ps1 -OutputPath "./tests/kpi/results/ws5/ci-ws5-gate-summary.json"
+        run: ./tests/kpi/scripts/run-ws5-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-ws5-gate-summary.json"
+
+      - name: Build WS5 gate badge artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws5-gate-badge.ps1 -SummaryPath "./tests/kpi/results/gates/ci-ws5-gate-summary.json" -OutputPath "./tests/kpi/results/gates/ci-ws5-gate-badge.json"
 
       - name: Run WS9 Studio API gate
         shell: pwsh
@@ -91,7 +95,8 @@ jobs:
             tests/kpi/results/ws1/ci-sql-analyze-smoke.json
             tests/kpi/results/ws13/ci-ws13-gate-summary.json
             tests/kpi/results/ws14/ci-ws14-gate-summary.json
-            tests/kpi/results/ws5/ci-ws5-gate-summary.json
+            tests/kpi/results/gates/ci-ws5-gate-summary.json
+            tests/kpi/results/gates/ci-ws5-gate-badge.json
             tests/kpi/results/ws9/ci-ws9-gate-summary.json
             tests/kpi/results/ws9a/ci-ws9a-gate-summary.json
             tests/kpi/results/gates/ci-release-dx-api-readiness.json

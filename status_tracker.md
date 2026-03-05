@@ -87,7 +87,7 @@
 | WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | In Progress | WS2 (route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + `run-ws3-query-routing-smoke.ps1`) |
 | WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | In Progress | WS2 (ingestion connector/registry scaffold + WS4 smoke harness) |
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | In Progress | WS4 (source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + WS4A smoke harnesses) |
-| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | In Progress | WS0 (operator admin-key auth gate scaffolded for autonomous control endpoints + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | Ready for Validation | WS0 (operator admin-key auth gate scaffolded for autonomous control endpoints + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json`; release-facing CI gate summary + badge artifacts `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | In Progress | WS2, WS3 (failover leader-state scaffold + authenticated failover simulation endpoint + WS6 smoke harness) |
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | In Progress | WS1, WS4A (signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 smoke harness) |
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | In Progress | WS1, WS6 (typed autonomous action execution records + guardrail decision trace IDs + audit linkage + WS8 smoke harness) |
@@ -111,6 +111,14 @@
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | In Progress | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | In Progress | Autonomous governance + audit evidence + plugin cert + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Not Started | RTO/RPO game-day success + global ops sign-off |
+
+---
+
+## 5.1) Release-Facing WS5 Gate Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
+|---|---|---|---|---|
+| WS5 Security Gate | Epic 5 (Auth/RBAC/TLS/TDE/KMS) | `tests/kpi/results/ws5/ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-badge.json` |
 
 ---
 
@@ -231,7 +239,7 @@ A tracker row moves to **Done** only when:
 | WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Not Started |
 | WS3 query routing and execution | Query/Runtime Team | Storage Team | Not Started |
 | WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Not Started |
-| WS5 security and crypto | Security Team | Platform Team | In Progress |
+| WS5 security and crypto | Security Team | Platform Team | Ready for Validation |
 | WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Not Started |
 | WS9 Studio UI API contract | UX Team | Runtime Team, Platform Team | Ready for Validation |
 | WS9A IDE extension contract | DX Team | Integrations Team, UX Team | Ready for Validation |

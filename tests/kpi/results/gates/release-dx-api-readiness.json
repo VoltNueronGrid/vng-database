@@ -8,9 +8,9 @@
     "WS9A",
     "WS10"
   ],
-  "started_at_utc": "2026-03-05T17:10:40.7901628Z",
-  "finished_at_utc": "2026-03-05T17:10:50.6071989Z",
-  "duration_ms": 9817,
+  "started_at_utc": "2026-03-05T17:24:30.2802837Z",
+  "finished_at_utc": "2026-03-05T17:24:40.1828604Z",
+  "duration_ms": 9903,
   "packs": [
     {
       "pack": "ws5-security-gate",
