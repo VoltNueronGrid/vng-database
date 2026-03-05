@@ -41,7 +41,7 @@
 
 | Req ID | Requirement Area | Primary Epic(s) | Status | Validation Evidence |
 |---|---|---|---|---|
-| REQ-01 | ANSI SQL + AI chat/extract/ingest/export | Epic 1, Epic 8 | In Progress | SQL analyzer baseline in `crates/voltnuerongrid-sql` + conformance expansion tests |
+| REQ-01 | ANSI SQL + AI chat/extract/ingest/export | Epic 1, Epic 8 | In Progress | SQL analyzer baseline in `crates/voltnuerongrid-sql` + runtime analyze API smoke (`tests/kpi/results/20260305-ws1/sql-analyze-smoke.json`) |
 | REQ-02 | DB/table/view/materialized view/function lifecycle | Epic 1 | In Progress | Statement classifier includes create/alter/drop/view/function lifecycle categories |
 | REQ-03 | Rust/JS/Python function support | Epic 1 | Not Started | UDF runtime tests |
 | REQ-04 | HA/FT/elasticity/i18n/UTF-8 | Epic 6, Epic 11, Epic 12 | Not Started | Chaos + i18n certification |
@@ -80,7 +80,7 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies |
 |---|---|---|---|---|---|
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts) |
-| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway) |
+| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online) |
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | Not Started | WS1 |
 | WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | Not Started | WS0 |
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | Not Started | WS2 |

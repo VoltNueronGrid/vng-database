@@ -1,0 +1,35 @@
+﻿{
+    "status":  "ok",
+    "total_statements":  4,
+    "rejected_statements":  1,
+    "statements":  [
+                       {
+                           "statement":  "BEGIN",
+                           "kind":  "Begin",
+                           "requires_transaction":  false,
+                           "touches_catalog":  false,
+                           "accepted":  true
+                       },
+                       {
+                           "statement":  "CREATE TABLE t(id int)",
+                           "kind":  "CreateTable",
+                           "requires_transaction":  true,
+                           "touches_catalog":  true,
+                           "accepted":  true
+                       },
+                       {
+                           "statement":  "SELECT * FROM t",
+                           "kind":  "Select",
+                           "requires_transaction":  false,
+                           "touches_catalog":  false,
+                           "accepted":  true
+                       },
+                       {
+                           "statement":  "nonsense command",
+                           "kind":  "Unknown",
+                           "requires_transaction":  false,
+                           "touches_catalog":  false,
+                           "accepted":  false
+                       }
+                   ]
+}

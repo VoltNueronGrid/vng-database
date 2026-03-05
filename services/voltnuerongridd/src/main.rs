@@ -130,6 +130,28 @@ struct SqlTransactionRequest {
     statements: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct SqlAnalyzeRequest {
+    sql_batch: String,
+}
+
+#[derive(Serialize)]
+struct AnalyzedStatement {
+    statement: String,
+    kind: String,
+    requires_transaction: bool,
+    touches_catalog: bool,
+    accepted: bool,
+}
+
+#[derive(Serialize)]
+struct SqlAnalyzeResponse {
+    status: &'static str,
+    total_statements: usize,
+    rejected_statements: usize,
+    statements: Vec<AnalyzedStatement>,
+}
+
 #[derive(Serialize)]
 struct SqlTransactionResponse {
     status: &'static str,
@@ -202,6 +224,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/v1/sql/transaction", post(sql_transaction))
+        .route("/api/v1/sql/analyze", post(sql_analyze))
         .route("/api/v1/olap/query", post(olap_query))
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/autonomous/guardrails", get(autonomous_guardrails))
@@ -290,6 +313,33 @@ async fn sql_transaction(
             elapsed_ms: elapsed,
         }),
     )
+}
+
+async fn sql_analyze(Json(req): Json<SqlAnalyzeRequest>) -> Json<SqlAnalyzeResponse> {
+    let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
+    let mut rejected = 0usize;
+    let mut statements = Vec::with_capacity(parsed.len());
+    for statement in parsed {
+        let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
+        let accepted = analysis.kind != SqlStatementKind::Unknown;
+        if !accepted {
+            rejected += 1;
+        }
+        statements.push(AnalyzedStatement {
+            statement: statement.raw,
+            kind: format!("{:?}", analysis.kind),
+            requires_transaction: analysis.requires_transaction,
+            touches_catalog: analysis.touches_catalog,
+            accepted,
+        });
+    }
+
+    Json(SqlAnalyzeResponse {
+        status: "ok",
+        total_statements: statements.len(),
+        rejected_statements: rejected,
+        statements,
+    })
 }
 
 async fn olap_query(Json(req): Json<OlapQueryRequest>) -> Json<OlapQueryResponse> {
