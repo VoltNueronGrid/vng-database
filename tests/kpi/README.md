@@ -33,6 +33,7 @@ Initial KPI coverage:
 - `scripts/run-h02-reorder-duplicate-faults.ps1` - H-02 reorder/duplicate fault harness
 - `scripts/run-h02-restart-replay-matrix.ps1` - H-02 restart+replay fault matrix harness
 - `scripts/run-ws3-query-routing-smoke.ps1` - WS3 HTAP route-decision scaffold smoke
+- `scripts/run-ws4-ingest-plugin-smoke.ps1` - WS4 ingestion plugin registry scaffold smoke
 - `results/` - output folder for run artifacts
 
 ## Usage
