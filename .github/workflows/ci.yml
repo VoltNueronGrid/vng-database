@@ -25,6 +25,19 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/check-r1-gate.ps1 -RepoRoot "." -OutputPath "./tests/kpi/results/gates/ci-r1-gate-check.json"
 
+      - name: Runtime smoke for SQL analyze API
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p voltnuerongridd > /tmp/voltnuerongridd.log 2>&1 &
+          RUNTIME_PID=$!
+          cleanup() {
+            kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          sleep 5
+          pwsh ./tests/kpi/scripts/run-sql-analyze-smoke.ps1 -BaseUrl "http://127.0.0.1:8080" -OutputPath "./tests/kpi/results/ws1/ci-sql-analyze-smoke.json"
+
       - name: Run phase-3 bootstrap in deferred-safe mode
         shell: pwsh
         run: ./tests/kpi/scripts/bootstrap-phase3.ps1 -LocalBaselineRoot "./tests/kpi/results/20260304-pr007"
