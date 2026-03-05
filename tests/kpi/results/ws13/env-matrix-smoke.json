@@ -1,9 +1,9 @@
 {
   "smoke": "ws13-env-matrix-validation",
   "status": "passed",
-  "started_at_utc": "2026-03-05T15:42:05.8339605Z",
-  "finished_at_utc": "2026-03-05T15:42:05.8894895Z",
-  "duration_ms": 56,
+  "started_at_utc": "2026-03-05T15:45:02.7278299Z",
+  "finished_at_utc": "2026-03-05T15:45:02.8116722Z",
+  "duration_ms": 84,
   "checks": [
     {
       "check": "runbook_exists_aws",

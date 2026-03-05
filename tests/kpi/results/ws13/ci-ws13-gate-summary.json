@@ -1,0 +1,27 @@
+{
+  "gate": "ws13",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T15:45:02.3394937Z",
+  "finished_at_utc": "2026-03-05T15:45:02.8240010Z",
+  "duration_ms": 485,
+  "packs": [
+    {
+      "pack": "ws13-multicloud-profile",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws13/multicloud-profile-smoke.json"
+    },
+    {
+      "pack": "ws13-overlay-schema",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws13/overlay-schema-smoke.json"
+    },
+    {
+      "pack": "ws13-env-matrix",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws13/env-matrix-smoke.json"
+    }
+  ]
+}
