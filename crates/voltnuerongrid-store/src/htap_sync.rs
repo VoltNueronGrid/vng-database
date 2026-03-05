@@ -22,6 +22,12 @@ pub struct SyncOriginCheckpoint {
     pub pending_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SequenceGap {
+    pub expected: u64,
+    pub actual: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct RowStoreSyncOrigin {
     next_sequence: u64,
@@ -76,6 +82,35 @@ impl RowStoreSyncOrigin {
     pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
+
+    pub fn remove_sequence_for_fault_injection(&mut self, sequence: u64) -> bool {
+        let before = self.pending.len();
+        self.pending.retain(|m| m.sequence != sequence);
+        before != self.pending.len()
+    }
+
+    pub fn detect_sequence_gaps(batch: &[RowMutation]) -> Vec<SequenceGap> {
+        if batch.is_empty() {
+            return Vec::new();
+        }
+        let mut sorted = batch.to_vec();
+        sorted.sort_by_key(|m| m.sequence);
+
+        let mut gaps = Vec::new();
+        let mut expected = sorted[0].sequence;
+        for item in sorted {
+            if item.sequence != expected {
+                gaps.push(SequenceGap {
+                    expected,
+                    actual: item.sequence,
+                });
+                expected = item.sequence + 1;
+            } else {
+                expected += 1;
+            }
+        }
+        gaps
+    }
 }
 
 #[cfg(test)]
@@ -107,5 +142,21 @@ mod tests {
         let checkpoint = origin.checkpoint();
         assert_eq!(checkpoint.last_sequence, 2);
         assert_eq!(checkpoint.pending_count, 1);
+    }
+
+    #[test]
+    fn detects_sequence_gap_after_fault_injection() {
+        let mut origin = RowStoreSyncOrigin::new();
+        origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+        let removed = origin.remove_sequence_for_fault_injection(2);
+        assert!(removed);
+
+        let batch = origin.export_batch(10);
+        let gaps = RowStoreSyncOrigin::detect_sequence_gaps(&batch);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].expected, 2);
+        assert_eq!(gaps[0].actual, 3);
     }
 }

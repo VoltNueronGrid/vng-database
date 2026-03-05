@@ -26,6 +26,7 @@ Initial KPI coverage:
 - `scripts/run-legacy-aggregation-parity.ps1` - WS1A legacy aggregation parity harness
 - `scripts/run-store-durability-smoke.ps1` - WS2 durability bootstrap validation smoke
 - `scripts/run-ws2a-row-sync-origin-smoke.ps1` - WS2A row-store sync-origin scaffold smoke
+- `scripts/run-h02-sync-fault-injection.ps1` - H-02 sequence-gap fault-injection harness
 - `results/` - output folder for run artifacts
 
 ## Usage

@@ -119,7 +119,7 @@
 | ID | Hardening Item | Owner | Priority | Release Target | Status | Closure Evidence |
 |---|---|---|---|---|---|---|
 | H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | R2 | In Progress | Guardrail API contract + emergency-stop smoke evidence + policy conformance test |
-| H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | R2 | Not Started | HTAP consistency fault-injection report |
+| H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | R2 | In Progress | Starter HTAP sync correctness spec + fault-injection harness artifact (`tests/kpi/results/h02/htap-sync-fault-injection.json`) |
 | H-03 | Control-plane resilience hardening | Distributed Systems | P0 | R2 | Not Started | Control-plane chaos certification |
 | H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | R2 | Not Started | Exactly-once/replay evidence |
 | H-05 | KMS multi-region failover hardening | Security | P1 | R3 | Not Started | Regional outage simulation |
@@ -203,7 +203,7 @@ A tracker row moves to **Done** only when:
 | ID | Status | Completion | Risk Trend | Priority | Release Target | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---:|---|---|---|---|---|---|
 | H-01 | In Progress | 55% | improving | P0 | R2 | Implemented runtime guardrail endpoints (`/api/v1/autonomous/guardrails`, `/api/v1/autonomous/emergency-stop`, `/api/v1/autonomous/actions/authorize`), added contract `reference/autonomous-guardrails-api.md`, added smoke script `tests/kpi/scripts/run-autonomous-guardrail-smoke.ps1`, and captured passing artifact `tests/kpi/results/20260305-h01/autonomous-guardrail-smoke.json` | Policy persistence and authz integration pending | Integrate policy persistence + authenticated operator identity for emergency-stop changes |
-| H-02 | Not Started | 0% | stable | P0 | R2 | HTAP sync hardening defined as explicit backlog item | HTAP core implementation pending | Define sync consistency test spec (ordering/conflict cases) |
+| H-02 | In Progress | 25% | improving | P0 | R2 | Published `reference/h02-htap-sync-correctness-spec.md`, added sequence-gap fault injection test in `htap_sync.rs`, and captured harness artifact `tests/kpi/results/h02/htap-sync-fault-injection.json` | Distributed sync transport and restart semantics not yet implemented | Expand fault matrix with reorder/duplicate/restart continuity scenarios |
 | H-03 | In Progress | 15% | stable | P0 | R2 | Control-plane clustering requirement and SPOF closure criteria documented | Cluster runtime implementation pending | Control-plane chaos test plan v1 |
 | H-04 | In Progress | 20% | stable | P0 | R2 | Outbox and replay durability controls defined in architecture | Event bus/outbox services pending | Exactly-once replay test harness draft |
 | H-05 | Not Started | 0% | stable | P1 | R3 | Multi-region KMS fallback requirement documented | KMS integration code pending | KMS outage simulation checklist |
