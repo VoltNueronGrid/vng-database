@@ -1,0 +1,9 @@
+{
+  "smoke": "ws12-reliability-sre-baseline",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongridd ws12_",
+  "started_at_utc": "2026-03-05T11:57:04.7561093Z",
+  "finished_at_utc": "2026-03-05T11:57:16.6598034Z",
+  "duration_ms": 11904,
+  "output_excerpt": "   Compiling voltnuerongridd v0.1.0 (D:\\by\\polap-db\\services\\voltnuerongridd)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.10s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 3 tests\ntest tests::ws12_evaluate_rate_limit_allows_with_burst_allowance ... ok\ntest tests::ws12_evaluate_rate_limit_denies_when_hard_limit_exceeded ... ok\ntest tests::ws12_failure_budget_snapshot_computes_remaining ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n"
+}

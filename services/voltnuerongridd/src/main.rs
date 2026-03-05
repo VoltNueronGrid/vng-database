@@ -292,6 +292,45 @@ struct I18nMessagesResponse {
     messages: std::collections::BTreeMap<String, String>,
 }
 
+#[derive(Serialize)]
+struct SreReliabilityStatusResponse {
+    status: &'static str,
+    service_health: &'static str,
+    failure_budget: FailureBudgetSnapshot,
+    rate_limit_policy: RateLimitPolicySnapshot,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct FailureBudgetSnapshot {
+    window_minutes: u32,
+    error_budget_percent: f64,
+    consumed_percent: f64,
+    remaining_percent: f64,
+    burn_rate: f64,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct RateLimitPolicySnapshot {
+    requests_per_minute: u32,
+    burst_limit: u32,
+    current_minute_count: u32,
+    allowed: bool,
+}
+
+#[derive(Deserialize)]
+struct RateLimitCheckRequest {
+    current_minute_count: u32,
+    requested_units: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct RateLimitCheckResponse {
+    status: &'static str,
+    allowed: bool,
+    remaining_units: u32,
+    reason: String,
+}
+
 #[tokio::main]
 async fn main() {
     let node_id = env::var("VNG_NODE_ID")
@@ -344,6 +383,8 @@ async fn main() {
         .route("/api/v1/olap/query", post(olap_query))
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/failover/simulate", post(failover_simulate))
+        .route("/api/v1/sre/reliability/status", get(sre_reliability_status))
+        .route("/api/v1/sre/rate-limit/check", post(sre_rate_limit_check))
         .route("/api/v1/audit/events", get(audit_events))
         .route("/api/v1/i18n/messages", get(i18n_messages))
         .route(
@@ -545,6 +586,57 @@ async fn failover_simulate(
             .reason
             .unwrap_or_else(|| "manual_failover_simulation".to_string()),
         requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
+    }))
+}
+
+async fn sre_reliability_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SreReliabilityStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    Ok(Json(SreReliabilityStatusResponse {
+        status: "ok",
+        service_health: "healthy",
+        failure_budget: failure_budget_snapshot(12.5),
+        rate_limit_policy: rate_limit_policy_snapshot(540),
+    }))
+}
+
+async fn sre_rate_limit_check(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RateLimitCheckRequest>,
+) -> Result<Json<RateLimitCheckResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let requested_units = req.requested_units.unwrap_or(1).max(1);
+    let (allowed, remaining_units, reason) = evaluate_rate_limit(
+        req.current_minute_count,
+        requested_units,
+        600,
+        50,
+    );
+    append_audit_event(
+        &state,
+        AuditEventKind::Security,
+        headers
+            .get("x-vng-operator-id")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("unknown"),
+        "sre_rate_limit_check",
+        if allowed { "allow" } else { "deny" },
+        &json!({
+            "current_minute_count": req.current_minute_count,
+            "requested_units": requested_units,
+            "remaining_units": remaining_units,
+            "reason": reason,
+        })
+        .to_string(),
+    );
+    Ok(Json(RateLimitCheckResponse {
+        status: "ok",
+        allowed,
+        remaining_units,
+        reason: reason.to_string(),
     }))
 }
 
@@ -851,6 +943,48 @@ fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryRespon
     }
 }
 
+fn failure_budget_snapshot(consumed_percent: f64) -> FailureBudgetSnapshot {
+    let bounded_consumed = consumed_percent.clamp(0.0, 100.0);
+    let remaining = (100.0 - bounded_consumed).max(0.0);
+    FailureBudgetSnapshot {
+        window_minutes: 60,
+        error_budget_percent: 1.0,
+        consumed_percent: bounded_consumed,
+        remaining_percent: remaining,
+        burn_rate: (bounded_consumed / 10.0).max(0.1),
+    }
+}
+
+fn rate_limit_policy_snapshot(current_minute_count: u32) -> RateLimitPolicySnapshot {
+    let (allowed, _, _) = evaluate_rate_limit(current_minute_count, 1, 600, 50);
+    RateLimitPolicySnapshot {
+        requests_per_minute: 600,
+        burst_limit: 50,
+        current_minute_count,
+        allowed,
+    }
+}
+
+fn evaluate_rate_limit(
+    current_minute_count: u32,
+    requested_units: u32,
+    requests_per_minute: u32,
+    burst_limit: u32,
+) -> (bool, u32, &'static str) {
+    let hard_limit = requests_per_minute.saturating_add(burst_limit);
+    let projected = current_minute_count.saturating_add(requested_units);
+    if projected > hard_limit {
+        return (false, 0, "hard_limit_exceeded");
+    }
+    let remaining_units = hard_limit.saturating_sub(projected);
+    let reason = if projected > requests_per_minute {
+        "burst_allowance"
+    } else {
+        "within_budget"
+    };
+    (true, remaining_units, reason)
+}
+
 fn rotate_leader(
     leader_state: &Arc<Mutex<String>>,
     requested_leader: &str,
@@ -1110,5 +1244,31 @@ mod tests {
         );
         let locale = locale_from_headers(&headers);
         assert_eq!(locale, SupportedLocale::EsEs);
+    }
+
+    #[test]
+    fn ws12_evaluate_rate_limit_denies_when_hard_limit_exceeded() {
+        let (allowed, remaining, reason) = evaluate_rate_limit(650, 1, 600, 50);
+        assert!(!allowed);
+        assert_eq!(remaining, 0);
+        assert_eq!(reason, "hard_limit_exceeded");
+    }
+
+    #[test]
+    fn ws12_evaluate_rate_limit_allows_with_burst_allowance() {
+        let (allowed, remaining, reason) = evaluate_rate_limit(620, 5, 600, 50);
+        assert!(allowed);
+        assert_eq!(remaining, 25);
+        assert_eq!(reason, "burst_allowance");
+    }
+
+    #[test]
+    fn ws12_failure_budget_snapshot_computes_remaining() {
+        let snapshot = failure_budget_snapshot(12.5);
+        assert_eq!(snapshot.window_minutes, 60);
+        assert_eq!(snapshot.error_budget_percent, 1.0);
+        assert_eq!(snapshot.consumed_percent, 12.5);
+        assert_eq!(snapshot.remaining_percent, 87.5);
+        assert!(snapshot.burn_rate > 0.0);
     }
 }
