@@ -1,0 +1,34 @@
+﻿{
+    "timestamp_utc":  "2026-03-05T02:40:56.7626418Z",
+    "checks":  [
+                   {
+                       "profile":  "aws-prod-remote",
+                       "ready":  false,
+                       "missing_requirements":  [
+                                                    "VNG_AWS_BASE_URL",
+                                                    "VNG_AWS_SQL_URL",
+                                                    "VNG_AWS_BEARER_TOKEN"
+                                                ]
+                   },
+                   {
+                       "profile":  "azure-prod-remote",
+                       "ready":  false,
+                       "missing_requirements":  [
+                                                    "VNG_AZURE_BASE_URL",
+                                                    "VNG_AZURE_SQL_URL",
+                                                    "VNG_AZURE_BEARER_TOKEN"
+                                                ]
+                   },
+                   {
+                       "profile":  "gcp-prod-remote",
+                       "ready":  false,
+                       "missing_requirements":  [
+                                                    "VNG_GCP_BASE_URL",
+                                                    "VNG_GCP_SQL_URL",
+                                                    "VNG_GCP_BEARER_TOKEN"
+                                                ]
+                   }
+               ],
+    "allow_missing_env":  true,
+    "cloud_profiles_path":  "D:\\by\\polap-db\\tests\\kpi\\config\\cloud-profiles-real.yaml"
+}

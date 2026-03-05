@@ -1,5 +1,6 @@
 use std::env;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -15,6 +16,105 @@ static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 struct AppState {
     node_id: String,
     cluster_mode: String,
+    autonomous_mode: AutonomousMode,
+    emergency_stop: Arc<AtomicEmergencyStop>,
+    guardrails: Arc<Vec<GuardrailRule>>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AutonomousMode {
+    Disabled,
+    Advisory,
+    Supervised,
+    Autonomous,
+}
+
+impl AutonomousMode {
+    fn from_env(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" => Self::Disabled,
+            "advisory" => Self::Advisory,
+            "autonomous" => Self::Autonomous,
+            _ => Self::Supervised,
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Disabled => 0,
+            Self::Advisory => 1,
+            Self::Supervised => 2,
+            Self::Autonomous => 3,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AtomicEmergencyStop {
+    enabled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AtomicEmergencyStop {
+    fn new(initial: bool) -> Self {
+        Self {
+            enabled: Arc::new(std::sync::atomic::AtomicBool::new(initial)),
+        }
+    }
+
+    fn get(&self) -> bool {
+        self.enabled.load(Ordering::SeqCst)
+    }
+
+    fn set(&self, value: bool) {
+        self.enabled.store(value, Ordering::SeqCst);
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct GuardrailRule {
+    action: String,
+    required_mode: AutonomousMode,
+    scope: String,
+    rationale: String,
+}
+
+#[derive(Serialize)]
+struct AutonomousGuardrailsResponse {
+    status: &'static str,
+    autonomous_mode: AutonomousMode,
+    emergency_stop_enabled: bool,
+    policy_matrix: Vec<GuardrailRule>,
+}
+
+#[derive(Deserialize)]
+struct EmergencyStopRequest {
+    enabled: bool,
+    reason: Option<String>,
+    requested_by: Option<String>,
+}
+
+#[derive(Serialize)]
+struct EmergencyStopResponse {
+    status: &'static str,
+    emergency_stop_enabled: bool,
+    reason: String,
+    requested_by: String,
+}
+
+#[derive(Deserialize)]
+struct AuthorizeActionRequest {
+    action: String,
+    scope: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AuthorizeActionResponse {
+    status: &'static str,
+    action: String,
+    requested_scope: String,
+    decision: &'static str,
+    reason: String,
 }
 
 #[derive(Serialize)]
@@ -74,6 +174,15 @@ async fn main() {
         .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
         .trim()
         .to_string();
+    let autonomous_mode = AutonomousMode::from_env(
+        &env::var("VNG_AUTONOMOUS_MODE").unwrap_or_else(|_| "supervised".to_string()),
+    );
+    let emergency_stop = AtomicEmergencyStop::new(
+        env::var("VNG_AUTONOMOUS_EMERGENCY_STOP")
+            .unwrap_or_else(|_| "false".to_string())
+            .trim()
+            .eq_ignore_ascii_case("true"),
+    );
     let addr: SocketAddr = http_bind
         .parse()
         .unwrap_or_else(|_| "127.0.0.1:8080".parse().expect("fallback socket parse"));
@@ -81,6 +190,9 @@ async fn main() {
     let state = AppState {
         node_id,
         cluster_mode,
+        autonomous_mode,
+        emergency_stop: Arc::new(emergency_stop),
+        guardrails: Arc::new(default_guardrail_rules()),
     };
 
     let app = Router::new()
@@ -88,6 +200,15 @@ async fn main() {
         .route("/api/v1/sql/transaction", post(sql_transaction))
         .route("/api/v1/olap/query", post(olap_query))
         .route("/api/v1/failover/status", get(failover_status))
+        .route("/api/v1/autonomous/guardrails", get(autonomous_guardrails))
+        .route(
+            "/api/v1/autonomous/emergency-stop",
+            post(autonomous_emergency_stop),
+        )
+        .route(
+            "/api/v1/autonomous/actions/authorize",
+            post(authorize_autonomous_action),
+        )
         .with_state(state);
 
     println!("voltnuerongridd listening on {}", addr);
@@ -154,4 +275,140 @@ async fn failover_status(State(state): State<AppState>) -> Json<FailoverStatusRe
         rto_seconds_target: 30,
         rpo_data_loss_rows_target: 0,
     })
+}
+
+async fn autonomous_guardrails(State(state): State<AppState>) -> Json<AutonomousGuardrailsResponse> {
+    Json(AutonomousGuardrailsResponse {
+        status: "ok",
+        autonomous_mode: state.autonomous_mode,
+        emergency_stop_enabled: state.emergency_stop.get(),
+        policy_matrix: state.guardrails.as_ref().clone(),
+    })
+}
+
+async fn autonomous_emergency_stop(
+    State(state): State<AppState>,
+    Json(req): Json<EmergencyStopRequest>,
+) -> Json<EmergencyStopResponse> {
+    state.emergency_stop.set(req.enabled);
+    Json(EmergencyStopResponse {
+        status: "ok",
+        emergency_stop_enabled: req.enabled,
+        reason: req
+            .reason
+            .unwrap_or_else(|| "manual_control_plane_request".to_string()),
+        requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
+    })
+}
+
+async fn authorize_autonomous_action(
+    State(state): State<AppState>,
+    Json(req): Json<AuthorizeActionRequest>,
+) -> (StatusCode, Json<AuthorizeActionResponse>) {
+    let requested_scope = req.scope.unwrap_or_else(|| "cluster".to_string());
+    if state.emergency_stop.get() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(AuthorizeActionResponse {
+                status: "blocked",
+                action: req.action,
+                requested_scope,
+                decision: "deny",
+                reason: "emergency_stop_enabled".to_string(),
+            }),
+        );
+    }
+
+    if state.autonomous_mode == AutonomousMode::Disabled {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(AuthorizeActionResponse {
+                status: "blocked",
+                action: req.action,
+                requested_scope,
+                decision: "deny",
+                reason: "autonomous_mode_disabled".to_string(),
+            }),
+        );
+    }
+
+    let matching_rule = state
+        .guardrails
+        .iter()
+        .find(|r| r.action.eq_ignore_ascii_case(&req.action));
+
+    match matching_rule {
+        Some(rule) if state.autonomous_mode.rank() >= rule.required_mode.rank() => (
+            StatusCode::OK,
+            Json(AuthorizeActionResponse {
+                status: "ok",
+                action: req.action,
+                requested_scope,
+                decision: "allow",
+                reason: format!(
+                    "mode {:?} satisfies required mode {:?}",
+                    state.autonomous_mode, rule.required_mode
+                ),
+            }),
+        ),
+        Some(rule) => (
+            StatusCode::FORBIDDEN,
+            Json(AuthorizeActionResponse {
+                status: "blocked",
+                action: req.action,
+                requested_scope,
+                decision: "deny",
+                reason: format!(
+                    "required mode {:?} exceeds current mode {:?}",
+                    rule.required_mode, state.autonomous_mode
+                ),
+            }),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(AuthorizeActionResponse {
+                status: "unknown_action",
+                action: req.action,
+                requested_scope,
+                decision: "deny",
+                reason: "no_guardrail_rule_found".to_string(),
+            }),
+        ),
+    }
+}
+
+fn default_guardrail_rules() -> Vec<GuardrailRule> {
+    vec![
+        GuardrailRule {
+            action: "schema_change".to_string(),
+            required_mode: AutonomousMode::Supervised,
+            scope: "database".to_string(),
+            rationale: "DDL and schema drift changes require human oversight".to_string(),
+        },
+        GuardrailRule {
+            action: "plugin_install".to_string(),
+            required_mode: AutonomousMode::Supervised,
+            scope: "cluster".to_string(),
+            rationale: "Plugin supply-chain changes require supervised execution".to_string(),
+        },
+        GuardrailRule {
+            action: "security_patch".to_string(),
+            required_mode: AutonomousMode::Supervised,
+            scope: "cluster".to_string(),
+            rationale: "Security posture changes require explicit review and audit".to_string(),
+        },
+        GuardrailRule {
+            action: "self_heal_failover".to_string(),
+            required_mode: AutonomousMode::Autonomous,
+            scope: "cluster".to_string(),
+            rationale: "Fast autonomous failover is allowed only in full autonomous mode"
+                .to_string(),
+        },
+        GuardrailRule {
+            action: "performance_tune".to_string(),
+            required_mode: AutonomousMode::Advisory,
+            scope: "session".to_string(),
+            rationale: "Low-risk tuning actions can run in advisory mode".to_string(),
+        },
+    ]
 }

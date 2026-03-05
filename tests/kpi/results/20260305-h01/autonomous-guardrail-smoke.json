@@ -1,0 +1,23 @@
+﻿{
+    "base_url":  "http://127.0.0.1:8080",
+    "status":  "passed",
+    "checks":  [
+                   {
+                       "ok":  true,
+                       "policy_rule_count":  5,
+                       "emergency_stop_enabled":  false,
+                       "check":  "guardrails_endpoint"
+                   },
+                   {
+                       "ok":  true,
+                       "decision":  "allow",
+                       "reason":  "mode Supervised satisfies required mode Advisory",
+                       "check":  "authorize_allowed_action"
+                   },
+                   {
+                       "ok":  true,
+                       "check":  "emergency_stop_blocks_actions"
+                   }
+               ],
+    "timestamp_utc":  "2026-03-05T02:37:26.9175074Z"
+}

@@ -1,0 +1,50 @@
+﻿{
+    "cloud_profiles_failed":  0,
+    "profiles":  [
+                     {
+                         "profile":  "aws-prod-remote",
+                         "status":  "pending_config",
+                         "passed":  0,
+                         "failed":  0,
+                         "total_scenarios":  0,
+                         "rollup_path":  "",
+                         "missing_requirements":  [
+                                                      "VNG_AWS_BASE_URL",
+                                                      "VNG_AWS_SQL_URL",
+                                                      "VNG_AWS_BEARER_TOKEN"
+                                                  ]
+                     },
+                     {
+                         "profile":  "azure-prod-remote",
+                         "status":  "pending_config",
+                         "passed":  0,
+                         "failed":  0,
+                         "total_scenarios":  0,
+                         "rollup_path":  "",
+                         "missing_requirements":  [
+                                                      "VNG_AZURE_BASE_URL",
+                                                      "VNG_AZURE_SQL_URL",
+                                                      "VNG_AZURE_BEARER_TOKEN"
+                                                  ]
+                     },
+                     {
+                         "profile":  "gcp-prod-remote",
+                         "status":  "pending_config",
+                         "passed":  0,
+                         "failed":  0,
+                         "total_scenarios":  0,
+                         "rollup_path":  "",
+                         "missing_requirements":  [
+                                                      "VNG_GCP_BASE_URL",
+                                                      "VNG_GCP_SQL_URL",
+                                                      "VNG_GCP_BEARER_TOKEN"
+                                                  ]
+                     }
+                 ],
+    "status":  "pending_config",
+    "cloud_profiles_passed":  0,
+    "output_root":  "D:\\by\\polap-db\\tests\\kpi\\results\\20260304-pr007\\cloud-profiles-real",
+    "cloud_profiles_total":  3,
+    "timestamp_utc":  "2026-03-05T02:40:56.5856852Z",
+    "cloud_profiles_pending_config":  3
+}

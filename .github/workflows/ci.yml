@@ -1,0 +1,27 @@
+name: voltneuron-grid-ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  build-and-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo check runtime
+        run: cargo check -p voltnuerongridd
+
+      - name: Validate R1 gate checklist artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/check-r1-gate.ps1 -RepoRoot "." -OutputPath "./tests/kpi/results/gates/ci-r1-gate-check.json"
+
+      - name: Run phase-3 bootstrap in deferred-safe mode
+        shell: pwsh
+        run: ./tests/kpi/scripts/bootstrap-phase3.ps1 -LocalBaselineRoot "./tests/kpi/results/20260304-pr007"

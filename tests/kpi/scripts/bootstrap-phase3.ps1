@@ -21,7 +21,7 @@ if ([string]::IsNullOrWhiteSpace($TargetsPath)) {
   $TargetsPath = Join-Path $configDir "targets.yaml"
 }
 if ([string]::IsNullOrWhiteSpace($LocalBaselineRoot)) {
-  $LocalBaselineRoot = Join-Path (Split-Path -Parent $kpiRoot) "results/20260304-pr007"
+  $LocalBaselineRoot = Join-Path $kpiRoot "results/20260304-pr007"
 }
 if ([string]::IsNullOrWhiteSpace($CloudOutputDir)) {
   $CloudOutputDir = Join-Path $LocalBaselineRoot "cloud-profiles-real"

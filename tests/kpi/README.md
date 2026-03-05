@@ -20,6 +20,8 @@ Initial KPI coverage:
 - `config/cloud-profiles-real.yaml` - env-driven real cloud endpoint profiles
 - `scripts/generate-gate-report.ps1` - final gate report + local-baseline deltas
 - `scripts/bootstrap-phase3.ps1` - phase-3 orchestrator (env validation + run + report + exit code policy)
+- `scripts/run-autonomous-guardrail-smoke.ps1` - H-01 guardrail control smoke test
+- `scripts/check-r1-gate.ps1` - executable R1 gate checklist artifact validator
 - `results/` - output folder for run artifacts
 
 ## Usage

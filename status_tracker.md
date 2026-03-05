@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-03-04
+**Last updated:** 2026-03-05
 
 ---
 
@@ -32,7 +32,7 @@
 | PR-003 | Freeze R1 scope (HTAP baseline, SQL core, ingest core, RBAC baseline, basic drivers) | Program Governance | Done | Approved by stakeholder; baseline scope locked |
 | PR-004 | Acceptance harness skeleton aligned to KPI table | QA/Performance | Done | KPI harness scaffold created under `tests/kpi` with scenarios, targets, and runner entry points |
 | PR-005 | Repo skeleton for modules/crates from architecture | Platform Engineering | Done | Rust workspace and core module skeletons created (`crates/`, `services/`, `drivers/`, `tools/`, UI placeholder) |
-| PR-006 | Define immediate start order and ownership assignment | Program Governance | In Progress | Initial order agreed, owner matrix pending |
+| PR-006 | Define immediate start order and ownership assignment | Program Governance | Done | Owner assignment matrix and execution order published in tracker sections 4 and 9.4 |
 | PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | In Progress | Phase 1+2 complete; phase 3 now supports deferred execution (`-AllowMissingEnv`) with readiness tracking; env-driven real-cloud profiles and gate report tooling in place pending endpoint/auth handoff |
 
 ---
@@ -107,7 +107,7 @@
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Not Started | PR-002..PR-005 complete + KPI smoke baseline |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | In Progress | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Not Started | High SPOF closure + failover/RPO evidence |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Not Started | Autonomous governance + audit evidence + plugin cert |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Not Started | RTO/RPO game-day success + global ops sign-off |
@@ -118,7 +118,7 @@
 
 | ID | Hardening Item | Owner | Priority | Release Target | Status | Closure Evidence |
 |---|---|---|---|---|---|---|
-| H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | R2 | Not Started | Policy conformance + emergency stop drill |
+| H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | R2 | In Progress | Guardrail API contract + emergency-stop smoke evidence + policy conformance test |
 | H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | R2 | Not Started | HTAP consistency fault-injection report |
 | H-03 | Control-plane resilience hardening | Distributed Systems | P0 | R2 | Not Started | Control-plane chaos certification |
 | H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | R2 | Not Started | Exactly-once/replay evidence |
@@ -195,14 +195,14 @@ A tracker row moves to **Done** only when:
 | PR-003 | Done | 100% | improving | R1 scope formally approved and locked | — | Closed |
 | PR-004 | Done | 100% | improving | Created `tests/kpi` scaffold with KPI targets, scenario definitions, and executable runner scripts | — | Closed |
 | PR-005 | Done | 100% | improving | Created workspace `Cargo.toml` and module skeletons under `crates/`, `services/`, `drivers/`, `tools/`, plus UI placeholder | — | Closed |
-| PR-006 | In Progress | 50% | improving | Start order documented with sequence guidance | Owner matrix not assigned | Publish owner assignment matrix |
+| PR-006 | Done | 100% | improving | Published owner assignment matrix and workstream execution order | — | Closed |
 | PR-007 | In Progress | 88% | improving | Added deferred phase-3 flow: `run-cloud-smoke.ps1 -AllowMissingEnv` produces `cloud-readiness-report.json` + `pending_config` rollup; generated gate report in `tests/kpi/results/20260304-pr007/reports-real` with explicit missing variable checklist per cloud | External cloud endpoint/token handoff still pending | Populate required env vars and execute true remote run to convert `pending_config` to pass/fail evidence |
 
 ### 9.2 Architecture Hardening Weekly Status (H-01..H-10)
 
 | ID | Status | Completion | Risk Trend | Priority | Release Target | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---:|---|---|---|---|---|---|
-| H-01 | In Progress | 20% | stable | P0 | R2 | Autonomous action catalog defined in WBS; guardrail requirements documented | Policy engine implementation pending | Draft allow/deny policy matrix + emergency stop API contract |
+| H-01 | In Progress | 55% | improving | P0 | R2 | Implemented runtime guardrail endpoints (`/api/v1/autonomous/guardrails`, `/api/v1/autonomous/emergency-stop`, `/api/v1/autonomous/actions/authorize`), added contract `reference/autonomous-guardrails-api.md`, added smoke script `tests/kpi/scripts/run-autonomous-guardrail-smoke.ps1`, and captured passing artifact `tests/kpi/results/20260305-h01/autonomous-guardrail-smoke.json` | Policy persistence and authz integration pending | Integrate policy persistence + authenticated operator identity for emergency-stop changes |
 | H-02 | Not Started | 0% | stable | P0 | R2 | HTAP sync hardening defined as explicit backlog item | HTAP core implementation pending | Define sync consistency test spec (ordering/conflict cases) |
 | H-03 | In Progress | 15% | stable | P0 | R2 | Control-plane clustering requirement and SPOF closure criteria documented | Cluster runtime implementation pending | Control-plane chaos test plan v1 |
 | H-04 | In Progress | 20% | stable | P0 | R2 | Outbox and replay durability controls defined in architecture | Event bus/outbox services pending | Exactly-once replay test harness draft |
@@ -216,8 +216,23 @@ A tracker row moves to **Done** only when:
 ### 9.3 PMO Action Queue (Week 2 Readiness)
 
 - Finalize owner assignment for PR-007 and first implementation workstreams.
-- Approve R1 scope freeze and publish release gate checklist.
+- R1 scope freeze approved; release gate checklist automation published (`tests/kpi/scripts/check-r1-gate.ps1`).
 - Start scaffold implementation branch for workspace + deploy manifests.
 - Populate real AWS/Azure/GCP endpoint + token environment variables and execute PR-007 true remote smoke packs to close final gate.
-- Schedule first architecture hardening review focused on H-01 to H-04.
+- Hardening review template for H-01..H-04 published at `reference/hardening-review-h01-h04-template.md`; schedule and assign attendees.
+
+### 9.4 Owner Assignment Matrix (Published)
+
+| Scope | DRI Team | Supporting Teams | Current State |
+|---|---|---|---|
+| PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | In Progress |
+| WS0 governance and CI | Platform + Program Governance | SRE | In Progress |
+| WS1 SQL core | SQL Engine Team | Query/Runtime Team | Not Started |
+| WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Not Started |
+| WS3 query routing and execution | Query/Runtime Team | Storage Team | Not Started |
+| WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Not Started |
+| WS5 security and crypto | Security Team | Platform Team | Not Started |
+| WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Not Started |
+| WS8 autonomous control plane | AI Platform Team | Security Team, Runtime Team | In Progress |
+| WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Not Started |
 

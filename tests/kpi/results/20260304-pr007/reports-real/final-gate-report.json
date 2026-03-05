@@ -1,0 +1,53 @@
+﻿{
+    "timestamp_utc":  "2026-03-05T02:40:57.2429538Z",
+    "cloud_rollup_path":  "D:\\by\\polap-db\\tests\\kpi\\results\\20260304-pr007\\cloud-profiles-real\\cloud-rollup-summary.json",
+    "profiles":  [
+                     {
+                         "passed":  0,
+                         "failed":  0,
+                         "profile":  "aws-prod-remote",
+                         "missing_requirements":  [
+                                                      "VNG_AWS_BASE_URL",
+                                                      "VNG_AWS_SQL_URL",
+                                                      "VNG_AWS_BEARER_TOKEN"
+                                                  ],
+                         "total_scenarios":  0,
+                         "status":  "pending_config",
+                         "scenario_deltas":  [
+
+                                             ]
+                     },
+                     {
+                         "passed":  0,
+                         "failed":  0,
+                         "profile":  "azure-prod-remote",
+                         "missing_requirements":  [
+                                                      "VNG_AZURE_BASE_URL",
+                                                      "VNG_AZURE_SQL_URL",
+                                                      "VNG_AZURE_BEARER_TOKEN"
+                                                  ],
+                         "total_scenarios":  0,
+                         "status":  "pending_config",
+                         "scenario_deltas":  [
+
+                                             ]
+                     },
+                     {
+                         "passed":  0,
+                         "failed":  0,
+                         "profile":  "gcp-prod-remote",
+                         "missing_requirements":  [
+                                                      "VNG_GCP_BASE_URL",
+                                                      "VNG_GCP_SQL_URL",
+                                                      "VNG_GCP_BEARER_TOKEN"
+                                                  ],
+                         "total_scenarios":  0,
+                         "status":  "pending_config",
+                         "scenario_deltas":  [
+
+                                             ]
+                     }
+                 ],
+    "local_baseline_root":  "D:\\by\\polap-db\\tests\\kpi\\results\\20260304-pr007",
+    "overall_status":  "pending_config"
+}
