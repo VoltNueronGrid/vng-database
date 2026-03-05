@@ -68,7 +68,7 @@
 | REQ-25 | Native connection + pooling | Epic 10, Epic 14 | In Progress | Driver routing contract enforces pool min/max + timeout constraints with cross-format contract checks in WS10 smoke |
 | REQ-26 | Plugin model for streaming sources/sinks | Epic 4A, Epic 7 | Not Started | Connector plugin tests |
 | REQ-27 | Native cache engine (Redis-like compat) | Epic 3, Epic 14 | Not Started | Cache failover/invalidation tests |
-| REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Epic 9A | Not Started | Cross-IDE parity tests |
+| REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Epic 9A | In Progress | Shared IDE contract + provider manifests validated via WS9A smoke/gate evidence (`tests/kpi/results/ws9a/ide-contract-smoke.json`, `tests/kpi/results/ws9a/ws9a-gate-summary.json`) |
 | REQ-29 | Fully autonomous operations | Epic 8, Epic 14 | Not Started | Autonomous mode validation |
 | REQ-30 | AI agent authoring for objects/plugins | Epic 8, Epic 7 | Not Started | Guardrailed agent workflow tests |
 | REQ-31 | HTAP (OLTP + OLAP) extreme performance | Epic 2, Epic 3 | Not Started | Mixed-workload KPI benchmarks |
@@ -93,7 +93,7 @@
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | In Progress | WS1, WS6 (typed autonomous action execution records + guardrail decision trace IDs + audit linkage + WS8 smoke harness) |
 | WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | In Progress | WS4A, WS5 (audit event contract + append-only sink + runtime emission + companion query/export filters for trace/action + WS8A smoke harnesses) |
 | WS9 | Epic 9 | Studio UI | UX Team | Ready for Validation | WS1, WS3 (Studio API client contracts + endpoint/header/type checks + contract script execution via WS9 smoke harness + gate orchestrator `run-ws9-gate.ps1` -> `tests/kpi/results/ws9/ws9-gate-summary.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
-| WS9A | Epic 9A | IDE extension suite | DX Team | In Progress | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness + combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`) |
+| WS9A | Epic 9A | IDE extension suite | DX Team | Ready for Validation | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness + gate orchestrator `run-ws9a-gate.ps1` -> `tests/kpi/results/ws9a/ws9a-gate-summary.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + JSON/properties/YAML `DriverRoutingConfigContract` parsing/validation + WS10 smoke harness evidence `tests/kpi/results/ws10/driver-smoke.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | Ready for Validation | WS1 (locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + locale fallback policy tests in SQL/runtime + WS11 smoke harness + gate orchestrator `run-ws11-gate.ps1` -> `tests/kpi/results/ws11/ws11-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Ready for Validation | WS6 (runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion, and expanded WS12 gate criteria + smoke harness; combined Ops/Resilience cluster gate `run-release-ops-resilience-gate.ps1` -> `tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
@@ -234,7 +234,7 @@ A tracker row moves to **Done** only when:
 | WS5 security and crypto | Security Team | Platform Team | In Progress |
 | WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Not Started |
 | WS9 Studio UI API contract | UX Team | Runtime Team, Platform Team | Ready for Validation |
-| WS9A IDE extension contract | DX Team | Integrations Team, UX Team | In Progress |
+| WS9A IDE extension contract | DX Team | Integrations Team, UX Team | Ready for Validation |
 | WS10 driver and pooling contract | Integrations Team | Platform Team, Security Team | In Progress |
 | Release DX/API contract cluster gate (WS5/WS9/WS9A/WS10) | Platform + Program Governance | Security Team, UX Team, DX Team, Integrations Team | In Progress |
 | WS11 internationalization and UTF-8 | Platform + UX Team | Runtime Team | Ready for Validation |

@@ -58,6 +58,10 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws9-gate.ps1 -OutputPath "./tests/kpi/results/ws9/ci-ws9-gate-summary.json"
 
+      - name: Run WS9A IDE extension gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws9a-gate.ps1 -OutputPath "./tests/kpi/results/ws9a/ci-ws9a-gate-summary.json"
+
       - name: Run release DX/API contract cluster gate
         shell: pwsh
         run: ./tests/kpi/scripts/run-release-dx-api-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-dx-api-readiness.json"
@@ -89,6 +93,7 @@ jobs:
             tests/kpi/results/ws14/ci-ws14-gate-summary.json
             tests/kpi/results/ws5/ci-ws5-gate-summary.json
             tests/kpi/results/ws9/ci-ws9-gate-summary.json
+            tests/kpi/results/ws9a/ci-ws9a-gate-summary.json
             tests/kpi/results/gates/ci-release-dx-api-readiness.json
             tests/kpi/results/gates/ci-release-ops-resilience-readiness.json
             tests/kpi/results/ws10/ci-ws10-driver-smoke.json

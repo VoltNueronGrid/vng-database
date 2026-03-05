@@ -45,7 +45,8 @@ Initial KPI coverage:
 - `scripts/run-ws8a-audit-companion-smoke.ps1` - WS8A audit companion query/export flow smoke
 - `scripts/run-ws9-studio-smoke.ps1` - WS9 Studio API contract smoke (script execution + endpoint/header/type checks)
 - `scripts/run-ws9-gate.ps1` - WS9 gate orchestrator (runs studio smoke and emits one gate summary artifact)
-- `scripts/run-ws9a-ide-contract-smoke.ps1` - WS9A IDE extension API contract scaffold smoke
+- `scripts/run-ws9a-ide-contract-smoke.ps1` - WS9A IDE extension API contract smoke
+- `scripts/run-ws9a-gate.ps1` - WS9A gate orchestrator (runs IDE contract smoke and emits one gate summary artifact)
 - `scripts/run-ws10-driver-smoke.ps1` - WS10 driver request/session-routing baseline smoke
 - `scripts/run-release-dx-api-gate.ps1` - Combined DX/API contract cluster gate (WS5 + WS9 + WS9A + WS10) with release-readiness summary artifact
 - `scripts/run-release-ops-resilience-gate.ps1` - Combined Ops/Resilience cluster gate (WS12 + WS13 + WS14) with R2/R3 release-readiness summary artifact
