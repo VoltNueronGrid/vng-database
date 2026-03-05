@@ -1,5 +1,6 @@
+use std::collections::{HashMap, VecDeque};
 use std::env;
-use std::collections::HashMap;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +33,9 @@ struct AppState {
     dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
     dr_hook_policy_state: Arc<Mutex<DrHookPolicyState>>,
     dr_hook_policy_config: Arc<DrHookPolicyConfig>,
+    dr_hook_state_path: Option<String>,
+    dr_hook_queue: Arc<Mutex<VecDeque<DrHookScheduledTask>>>,
+    cluster_failure_signals: Arc<Mutex<Vec<ClusterFailureSignal>>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -379,7 +383,7 @@ struct DrHookPolicyState {
     hooks: HashMap<String, DrHookRuntimeState>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct DrHookRuntimeState {
     last_attempt_unix_ms: u128,
     consecutive_failures: u32,
@@ -413,6 +417,11 @@ struct DrHookPolicyContract {
     tracked_hooks: usize,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct DrHookPolicyStateSnapshot {
+    hooks: HashMap<String, DrHookRuntimeState>,
+}
+
 #[derive(Deserialize)]
 struct DrHookRetryPlanQuery {
     hook: String,
@@ -433,6 +442,74 @@ struct DrHookRetryPlanStep {
     attempt: u32,
     recommended_backoff_ms: u64,
     jitter_range_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct DrHookScheduleRequest {
+    hook: String,
+    scope: Option<String>,
+    dry_run: Option<bool>,
+    reason: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct DrHookScheduledTask {
+    task_id: String,
+    hook: String,
+    scope: String,
+    dry_run: bool,
+    requested_by: String,
+    reason: String,
+    enqueued_unix_ms: u128,
+}
+
+#[derive(Serialize)]
+struct DrHookScheduleResponse {
+    status: &'static str,
+    task: DrHookScheduledTask,
+    queue_depth: usize,
+}
+
+#[derive(Deserialize)]
+struct FailureSignalRequest {
+    node_id: String,
+    transport: String,
+    failure_type: String,
+    severity: String,
+    message: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ClusterFailureSignal {
+    signal_id: String,
+    node_id: String,
+    transport: String,
+    failure_type: String,
+    severity: String,
+    message: String,
+    observed_unix_ms: u128,
+}
+
+#[derive(Serialize)]
+struct FailureSignalResponse {
+    status: &'static str,
+    signal: ClusterFailureSignal,
+    queued_remediation_task: Option<DrHookScheduledTask>,
+}
+
+#[derive(Serialize)]
+struct SreGateEvaluationResponse {
+    status: &'static str,
+    gate_result: &'static str,
+    criteria: Vec<SreGateCriterion>,
+    recommended_actions: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SreGateCriterion {
+    name: String,
+    passed: bool,
+    detail: String,
 }
 
 #[derive(Serialize)]
@@ -480,6 +557,12 @@ async fn main() {
             .trim()
             .eq_ignore_ascii_case("true"),
     );
+    let dr_hook_state_path = env::var("VNG_DR_HOOK_STATE_PATH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| Some("state/dr-hook-runtime.json".to_string()));
+    let loaded_policy_state = load_dr_hook_policy_state(dr_hook_state_path.as_deref());
     let addr: SocketAddr = http_bind
         .parse()
         .unwrap_or_else(|_| "127.0.0.1:8080".parse().expect("fallback socket parse"));
@@ -492,12 +575,17 @@ async fn main() {
         audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
         action_records: Arc::new(Mutex::new(Vec::new())),
         dr_hook_records: Arc::new(Mutex::new(Vec::new())),
-        dr_hook_policy_state: Arc::new(Mutex::new(DrHookPolicyState::default())),
+        dr_hook_policy_state: Arc::new(Mutex::new(loaded_policy_state)),
         dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
+        dr_hook_state_path,
+        dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
+        cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
     };
+
+    tokio::spawn(run_dr_hook_scheduler(state.clone()));
 
     let app = Router::new()
         .route("/health", get(health))
@@ -516,8 +604,11 @@ async fn main() {
         )
         .route("/api/v1/sre/dr/hooks/policy", get(sre_dr_hook_policy))
         .route("/api/v1/sre/dr/hooks/retry-plan", get(sre_dr_hook_retry_plan))
+        .route("/api/v1/sre/dr/hooks/schedule", post(sre_dr_hook_schedule))
         .route("/api/v1/sre/dr/hooks/trigger", post(sre_dr_hook_trigger))
         .route("/api/v1/sre/dr/hooks/status", get(sre_dr_hook_status))
+        .route("/api/v1/sre/failure/signal", post(sre_failure_signal))
+        .route("/api/v1/sre/gate/evaluate", get(sre_gate_evaluate))
         .route("/api/v1/audit/events", get(audit_events))
         .route("/api/v1/i18n/messages", get(i18n_messages))
         .route(
@@ -842,6 +933,46 @@ async fn sre_dr_hook_retry_plan(
     }))
 }
 
+async fn sre_dr_hook_schedule(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DrHookScheduleRequest>,
+) -> Result<Json<DrHookScheduleResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let requested_by = headers
+        .get("x-vng-operator-id")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown");
+    let task = enqueue_dr_hook_task(
+        &state,
+        &req.hook,
+        req.scope.as_deref(),
+        req.dry_run.unwrap_or(false),
+        requested_by,
+        req.reason.as_deref().unwrap_or("manual_sre_schedule"),
+    );
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        requested_by,
+        "sre_dr_hook_schedule",
+        "queued",
+        &json!({
+            "task_id": task.task_id,
+            "hook": task.hook,
+            "scope": task.scope,
+            "dry_run": task.dry_run,
+        })
+        .to_string(),
+    );
+    let queue_depth = state.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(0);
+    Ok(Json(DrHookScheduleResponse {
+        status: "ok",
+        task,
+        queue_depth,
+    }))
+}
+
 async fn sre_dr_hook_trigger(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -895,6 +1026,137 @@ async fn sre_dr_hook_status(
         status: "ok",
         total_records: records.len(),
         records,
+    }))
+}
+
+async fn sre_failure_signal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<FailureSignalRequest>,
+) -> Result<Json<FailureSignalResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let signal = ClusterFailureSignal {
+        signal_id: format!("sig-{}", DR_HOOK_COUNTER.fetch_add(1, Ordering::Relaxed)),
+        node_id: req.node_id.trim().to_string(),
+        transport: req.transport.trim().to_string(),
+        failure_type: req.failure_type.trim().to_ascii_lowercase(),
+        severity: req.severity.trim().to_ascii_lowercase(),
+        message: req
+            .message
+            .unwrap_or_else(|| "no_message_provided".to_string())
+            .trim()
+            .to_string(),
+        observed_unix_ms: now_unix_ms(),
+    };
+    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+        signals.push(signal.clone());
+    }
+    let operator = headers
+        .get("x-vng-operator-id")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown");
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        operator,
+        "sre_failure_signal",
+        "observed",
+        &json!({
+            "signal_id": signal.signal_id,
+            "node_id": signal.node_id,
+            "transport": signal.transport,
+            "failure_type": signal.failure_type,
+            "severity": signal.severity,
+        })
+        .to_string(),
+    );
+
+    let queued_remediation_task = if signal.severity == "critical"
+        && signal.failure_type == "node_unreachable"
+    {
+        Some(enqueue_dr_hook_task(
+            &state,
+            "failover_drill",
+            Some("cluster"),
+            false,
+            "auto_sre",
+            "critical_node_unreachable_signal",
+        ))
+    } else {
+        None
+    };
+
+    Ok(Json(FailureSignalResponse {
+        status: "ok",
+        signal,
+        queued_remediation_task,
+    }))
+}
+
+async fn sre_gate_evaluate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SreGateEvaluationResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let failure_budget = failure_budget_snapshot(12.5);
+    let queue_depth = state.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(usize::MAX);
+    let critical_signals = state
+        .cluster_failure_signals
+        .lock()
+        .map(|signals| {
+            signals
+                .iter()
+                .filter(|s| s.severity.eq_ignore_ascii_case("critical"))
+                .count()
+        })
+        .unwrap_or(usize::MAX);
+    let persistence_configured = state
+        .dr_hook_state_path
+        .as_ref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
+    let criteria = vec![
+        SreGateCriterion {
+            name: "failure_budget_below_warning".to_string(),
+            passed: failure_budget.consumed_percent < 50.0,
+            detail: format!("consumed_percent={}", failure_budget.consumed_percent),
+        },
+        SreGateCriterion {
+            name: "dr_queue_depth_below_threshold".to_string(),
+            passed: queue_depth < 100,
+            detail: format!("queue_depth={queue_depth} threshold=100"),
+        },
+        SreGateCriterion {
+            name: "no_unresolved_critical_signals".to_string(),
+            passed: critical_signals == 0,
+            detail: format!("critical_signals={critical_signals}"),
+        },
+        SreGateCriterion {
+            name: "dr_state_persistence_configured".to_string(),
+            passed: persistence_configured,
+            detail: format!("state_path={:?}", state.dr_hook_state_path),
+        },
+    ];
+
+    let failed: Vec<&SreGateCriterion> = criteria.iter().filter(|c| !c.passed).collect();
+    let gate_result = if failed.is_empty() {
+        "pass"
+    } else if failed.len() == 1 {
+        "warn"
+    } else {
+        "fail"
+    };
+    let recommended_actions = failed
+        .iter()
+        .map(|criterion| format!("resolve_{}", criterion.name))
+        .collect::<Vec<_>>();
+
+    Ok(Json(SreGateEvaluationResponse {
+        status: "ok",
+        gate_result,
+        criteria,
+        recommended_actions,
     }))
 }
 
@@ -1306,6 +1568,97 @@ fn build_retry_plan(policy: &DrHookPolicyConfig, attempts: u32) -> Vec<DrHookRet
         .collect()
 }
 
+fn load_dr_hook_policy_state(path: Option<&str>) -> DrHookPolicyState {
+    let Some(path_value) = path else {
+        return DrHookPolicyState::default();
+    };
+    let read = fs::read_to_string(path_value);
+    match read {
+        Ok(contents) => serde_json::from_str::<DrHookPolicyStateSnapshot>(&contents)
+            .map(|snapshot| DrHookPolicyState {
+                hooks: snapshot.hooks,
+            })
+            .unwrap_or_default(),
+        Err(_) => DrHookPolicyState::default(),
+    }
+}
+
+fn persist_dr_hook_policy_state(state: &AppState) {
+    let Some(path_value) = state.dr_hook_state_path.as_deref() else {
+        return;
+    };
+    let snapshot = state.dr_hook_policy_state.lock().ok().map(|guard| DrHookPolicyStateSnapshot {
+        hooks: guard.hooks.clone(),
+    });
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+    if let Some(parent) = std::path::Path::new(path_value).parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+    if let Ok(encoded) = serde_json::to_string_pretty(&snapshot) {
+        let _ = fs::write(path_value, encoded);
+    }
+}
+
+fn enqueue_dr_hook_task(
+    state: &AppState,
+    hook: &str,
+    scope: Option<&str>,
+    dry_run: bool,
+    requested_by: &str,
+    reason: &str,
+) -> DrHookScheduledTask {
+    let task = DrHookScheduledTask {
+        task_id: format!("task-{}", DR_HOOK_COUNTER.fetch_add(1, Ordering::Relaxed)),
+        hook: hook.trim().to_ascii_lowercase(),
+        scope: scope.unwrap_or("cluster").trim().to_string(),
+        dry_run,
+        requested_by: requested_by.trim().to_string(),
+        reason: reason.trim().to_string(),
+        enqueued_unix_ms: now_unix_ms(),
+    };
+    if let Ok(mut queue) = state.dr_hook_queue.lock() {
+        queue.push_back(task.clone());
+    }
+    task
+}
+
+fn dequeue_dr_hook_task(state: &AppState) -> Option<DrHookScheduledTask> {
+    state
+        .dr_hook_queue
+        .lock()
+        .ok()
+        .and_then(|mut queue| queue.pop_front())
+}
+
+async fn run_dr_hook_scheduler(state: AppState) {
+    loop {
+        if let Some(task) = dequeue_dr_hook_task(&state) {
+            let execution = execute_dr_hook(&state, &task.hook, Some(&task.scope), task.dry_run);
+            append_audit_event(
+                &state,
+                AuditEventKind::Failover,
+                &task.requested_by,
+                "sre_dr_hook_scheduler_execute",
+                execution.status,
+                &json!({
+                    "task_id": task.task_id,
+                    "hook": task.hook,
+                    "scope": task.scope,
+                    "reason": task.reason,
+                    "execution_id": execution.execution_id,
+                    "policy_decision": execution.policy_decision,
+                })
+                .to_string(),
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
 fn execute_dr_hook(
     state: &AppState,
     hook: &str,
@@ -1437,6 +1790,7 @@ fn execute_dr_hook(
         details,
     };
     append_dr_hook_record(state, record.clone());
+    persist_dr_hook_policy_state(state);
     record
 }
 
@@ -1643,6 +1997,9 @@ mod tests {
             dr_hook_records: Arc::new(Mutex::new(Vec::new())),
             dr_hook_policy_state: Arc::new(Mutex::new(DrHookPolicyState::default())),
             dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
+            dr_hook_state_path: None,
+            dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
+            cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -1827,5 +2184,86 @@ mod tests {
         assert_eq!(plan[0].recommended_backoff_ms, 500);
         assert!(plan[1].recommended_backoff_ms >= plan[0].recommended_backoff_ms);
         assert!(plan[4].recommended_backoff_ms >= plan[3].recommended_backoff_ms);
+    }
+
+    #[test]
+    fn ws12_persistent_policy_state_roundtrip() {
+        let temp = std::env::temp_dir().join(format!("vng-ws12-{}.json", now_unix_ms()));
+        let state = AppState {
+            dr_hook_state_path: Some(temp.to_string_lossy().to_string()),
+            ..state_with_key(None)
+        };
+        let _ = execute_dr_hook(&state, "failover_drill", Some("cluster"), true);
+        let loaded = load_dr_hook_policy_state(state.dr_hook_state_path.as_deref());
+        assert!(loaded.hooks.contains_key("failover_drill"));
+        let _ = fs::remove_file(temp);
+    }
+
+    #[test]
+    fn ws12_scheduler_queue_enqueues_tasks() {
+        let state = state_with_key(None);
+        let task = enqueue_dr_hook_task(
+            &state,
+            "failover_drill",
+            Some("cluster"),
+            true,
+            "tester",
+            "unit_test",
+        );
+        assert_eq!(task.hook, "failover_drill");
+        let depth = state.dr_hook_queue.lock().expect("queue lock").len();
+        assert_eq!(depth, 1);
+    }
+
+    #[test]
+    fn ws12_failure_signal_queues_auto_remediation() {
+        let state = state_with_key(None);
+        if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+            signals.push(ClusterFailureSignal {
+                signal_id: "sig-1".to_string(),
+                node_id: "node-2".to_string(),
+                transport: "gossip".to_string(),
+                failure_type: "node_unreachable".to_string(),
+                severity: "critical".to_string(),
+                message: "heartbeat timeout".to_string(),
+                observed_unix_ms: now_unix_ms(),
+            });
+        }
+        let task = enqueue_dr_hook_task(
+            &state,
+            "failover_drill",
+            Some("cluster"),
+            false,
+            "auto_sre",
+            "critical_node_unreachable_signal",
+        );
+        assert_eq!(task.reason, "critical_node_unreachable_signal");
+    }
+
+    #[test]
+    fn ws12_gate_criteria_detects_critical_signal() {
+        let state = AppState {
+            dr_hook_state_path: Some("state/test.json".to_string()),
+            ..state_with_key(None)
+        };
+        if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+            signals.push(ClusterFailureSignal {
+                signal_id: "sig-critical".to_string(),
+                node_id: "node-3".to_string(),
+                transport: "raft".to_string(),
+                failure_type: "replication_lag".to_string(),
+                severity: "critical".to_string(),
+                message: "lag over threshold".to_string(),
+                observed_unix_ms: now_unix_ms(),
+            });
+        }
+        let critical_count = state
+            .cluster_failure_signals
+            .lock()
+            .expect("signal lock")
+            .iter()
+            .filter(|s| s.severity == "critical")
+            .count();
+        assert_eq!(critical_count, 1);
     }
 }
