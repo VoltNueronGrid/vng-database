@@ -86,6 +86,144 @@ impl IngestionConnector for StaticInMemoryConnector {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamDirection {
+    Inbound,
+    Outbound,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamEventEnvelope {
+    pub event_id: u64,
+    pub stream_name: String,
+    pub direction: StreamDirection,
+    pub origin: String,
+    pub occurred_epoch_ms: u128,
+    pub payload_json: String,
+    pub attributes: HashMap<String, String>,
+}
+
+impl StreamEventEnvelope {
+    pub fn replay_key(&self) -> String {
+        format!("{}:{}", self.stream_name, self.event_id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayCursor {
+    pub from_event_id: u64,
+    pub max_items: usize,
+}
+
+pub trait StreamSource: Send {
+    fn next_event(&mut self) -> Option<StreamEventEnvelope>;
+}
+
+pub trait StreamSink: Send {
+    fn push_event(&mut self, event: &StreamEventEnvelope);
+}
+
+#[derive(Default)]
+pub struct InMemoryEventLog {
+    next_event_id: u64,
+    events: Vec<StreamEventEnvelope>,
+}
+
+impl InMemoryEventLog {
+    pub fn new() -> Self {
+        Self {
+            next_event_id: 1,
+            events: Vec::new(),
+        }
+    }
+
+    pub fn append_event(
+        &mut self,
+        stream_name: &str,
+        direction: StreamDirection,
+        origin: &str,
+        payload_json: &str,
+        attributes: HashMap<String, String>,
+    ) -> StreamEventEnvelope {
+        let event = StreamEventEnvelope {
+            event_id: self.next_event_id,
+            stream_name: stream_name.to_string(),
+            direction,
+            origin: origin.to_string(),
+            occurred_epoch_ms: now_epoch_millis(),
+            payload_json: payload_json.to_string(),
+            attributes,
+        };
+        self.next_event_id += 1;
+        self.events.push(event.clone());
+        event
+    }
+
+    pub fn replay(&self, cursor: ReplayCursor) -> Vec<StreamEventEnvelope> {
+        self.events
+            .iter()
+            .filter(|event| event.event_id >= cursor.from_event_id)
+            .take(cursor.max_items)
+            .cloned()
+            .collect()
+    }
+
+    pub fn publish_to_sink<S: StreamSink>(&self, cursor: ReplayCursor, sink: &mut S) -> usize {
+        let replayed = self.replay(cursor);
+        let count = replayed.len();
+        for event in replayed {
+            sink.push_event(&event);
+        }
+        count
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticStreamSource {
+    cursor: usize,
+    events: Vec<StreamEventEnvelope>,
+}
+
+impl StaticStreamSource {
+    pub fn new(events: Vec<StreamEventEnvelope>) -> Self {
+        Self { cursor: 0, events }
+    }
+}
+
+impl StreamSource for StaticStreamSource {
+    fn next_event(&mut self) -> Option<StreamEventEnvelope> {
+        if self.cursor >= self.events.len() {
+            return None;
+        }
+        let event = self.events[self.cursor].clone();
+        self.cursor += 1;
+        Some(event)
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct CapturingStreamSink {
+    pub delivered: Vec<StreamEventEnvelope>,
+}
+
+impl StreamSink for CapturingStreamSink {
+    fn push_event(&mut self, event: &StreamEventEnvelope) {
+        self.delivered.push(event.clone());
+    }
+}
+
+fn now_epoch_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock before epoch")
+        .as_millis()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +258,92 @@ mod tests {
             .expect("connector should exist");
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].key, "k1");
+    }
+
+    #[test]
+    fn appends_replayable_event_envelopes() {
+        let mut log = InMemoryEventLog::new();
+        let mut attrs = HashMap::new();
+        attrs.insert("tenant".to_string(), "acme".to_string());
+        let first = log.append_event(
+            "ingest.orders",
+            StreamDirection::Inbound,
+            "ftp-connector",
+            "{\"id\":1}",
+            attrs,
+        );
+        let second = log.append_event(
+            "ingest.orders",
+            StreamDirection::Inbound,
+            "ftp-connector",
+            "{\"id\":2}",
+            HashMap::new(),
+        );
+        assert_eq!(first.event_id, 1);
+        assert_eq!(second.event_id, 2);
+        assert_eq!(first.replay_key(), "ingest.orders:1");
+        assert_eq!(log.len(), 2);
+
+        let replayed = log.replay(ReplayCursor {
+            from_event_id: 2,
+            max_items: 10,
+        });
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(replayed[0].payload_json, "{\"id\":2}");
+    }
+
+    #[test]
+    fn streams_from_source_and_replays_to_sink() {
+        let source_events = vec![
+            StreamEventEnvelope {
+                event_id: 101,
+                stream_name: "outbound.events".to_string(),
+                direction: StreamDirection::Outbound,
+                origin: "query-engine".to_string(),
+                occurred_epoch_ms: 1000,
+                payload_json: "{\"type\":\"query\"}".to_string(),
+                attributes: HashMap::new(),
+            },
+            StreamEventEnvelope {
+                event_id: 102,
+                stream_name: "outbound.events".to_string(),
+                direction: StreamDirection::Outbound,
+                origin: "query-engine".to_string(),
+                occurred_epoch_ms: 1001,
+                payload_json: "{\"type\":\"txn\"}".to_string(),
+                attributes: HashMap::new(),
+            },
+        ];
+
+        let mut source = StaticStreamSource::new(source_events);
+        let mut sink = CapturingStreamSink::default();
+        while let Some(event) = source.next_event() {
+            sink.push_event(&event);
+        }
+
+        assert_eq!(sink.delivered.len(), 2);
+        assert_eq!(sink.delivered[0].event_id, 101);
+
+        let mut replay_log = InMemoryEventLog::new();
+        for delivered in &sink.delivered {
+            replay_log.append_event(
+                &delivered.stream_name,
+                delivered.direction,
+                &delivered.origin,
+                &delivered.payload_json,
+                delivered.attributes.clone(),
+            );
+        }
+
+        let mut replay_sink = CapturingStreamSink::default();
+        let replay_count = replay_log.publish_to_sink(
+            ReplayCursor {
+                from_event_id: 1,
+                max_items: 5,
+            },
+            &mut replay_sink,
+        );
+        assert_eq!(replay_count, 2);
+        assert_eq!(replay_sink.delivered[1].payload_json, "{\"type\":\"txn\"}");
     }
 }

@@ -86,7 +86,7 @@
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | In Progress | WS2 (row-sync origin scaffold + smoke evidence captured) |
 | WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | In Progress | WS2 (route-decision scaffold in `voltnuerongrid-exec` + `run-ws3-query-routing-smoke.ps1`) |
 | WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | In Progress | WS2 (ingestion connector/registry scaffold + WS4 smoke harness) |
-| WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | Not Started | WS4 |
+| WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | In Progress | WS4 (source/sink interfaces + replayable envelope/event-log scaffold + WS4A smoke harness) |
 | WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | Not Started | WS0 |
 | WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | Not Started | WS2, WS3 |
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | Not Started | WS1, WS4A |

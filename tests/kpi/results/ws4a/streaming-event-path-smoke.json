@@ -1,0 +1,9 @@
+{
+  "smoke": "ws4a-streaming-event-path",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-ingest streams_from_source_and_replays_to_sink",
+  "started_at_utc": "2026-03-05T07:55:05.0524017Z",
+  "finished_at_utc": "2026-03-05T07:55:06.0947448Z",
+  "duration_ms": 1042,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-f6dc675632584644.exe)\n\nrunning 1 test\ntest tests::streams_from_source_and_replays_to_sink ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s\n"
+}
