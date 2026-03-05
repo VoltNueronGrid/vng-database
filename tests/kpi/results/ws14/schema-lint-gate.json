@@ -1,24 +1,14 @@
 {
   "smoke": "ws14-schema-lint-gate",
   "status": "passed",
-  "started_at_utc": "2026-03-05T16:43:16.6474379Z",
-  "finished_at_utc": "2026-03-05T16:43:16.7508768Z",
-  "duration_ms": 103,
+  "started_at_utc": "2026-03-05T16:59:27.4391192Z",
+  "finished_at_utc": "2026-03-05T16:59:27.5356789Z",
+  "duration_ms": 97,
   "checks": [
-    {
-      "check": "exists_securityYaml",
-      "ok": true,
-      "detail": "reference/config-contracts/ws14/security-control-config.yaml"
-    },
     {
       "check": "exists_driverProps",
       "ok": true,
       "detail": "reference/config-contracts/ws14/driver-routing-config.properties"
-    },
-    {
-      "check": "exists_securityProps",
-      "ok": true,
-      "detail": "reference/config-contracts/ws14/security-control-config.properties"
     },
     {
       "check": "exists_securityJson",
@@ -26,9 +16,19 @@
       "detail": "reference/config-contracts/ws14/security-control-config.json"
     },
     {
+      "check": "exists_securityYaml",
+      "ok": true,
+      "detail": "reference/config-contracts/ws14/security-control-config.yaml"
+    },
+    {
       "check": "exists_driverYaml",
       "ok": true,
       "detail": "reference/config-contracts/ws14/driver-routing-config.yaml"
+    },
+    {
+      "check": "exists_securityProps",
+      "ok": true,
+      "detail": "reference/config-contracts/ws14/security-control-config.properties"
     },
     {
       "check": "exists_driverJson",

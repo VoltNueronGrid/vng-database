@@ -44,7 +44,7 @@
 | REQ-01 | ANSI SQL + AI chat/extract/ingest/export | Epic 1, Epic 8 | In Progress | SQL analyzer baseline in `crates/voltnuerongrid-sql` + runtime analyze API smoke (`tests/kpi/results/20260305-ws1/sql-analyze-smoke.json`) |
 | REQ-02 | DB/table/view/materialized view/function lifecycle | Epic 1 | In Progress | Statement classifier includes create/alter/drop/view/function lifecycle categories |
 | REQ-03 | Rust/JS/Python function support | Epic 1 | Not Started | UDF runtime tests |
-| REQ-04 | HA/FT/elasticity/i18n/UTF-8 | Epic 6, Epic 11, Epic 12 | Not Started | Chaos + i18n certification |
+| REQ-04 | HA/FT/elasticity/i18n/UTF-8 | Epic 6, Epic 11, Epic 12 | In Progress | WS12 reliability contracts and WS13/WS14 operational hardening now aggregate under Ops/Resilience release-readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | REQ-05 | Separate compute and data files | Epic 2, Epic 6 | In Progress | WS2 durability contract scaffold + validation smoke (`tests/kpi/results/ws2/store-durability-smoke.json`) |
 | REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Epic 4, Epic 4A, Epic 7 | Not Started | Connector/format test matrix |
 | REQ-07 | Multithreaded high-speed import | Epic 4 | Not Started | Ingest throughput benchmark |
@@ -60,11 +60,11 @@
 | REQ-17 | Distributed failover + zero data loss | Epic 6, Epic 12 | Not Started | RTO/RPO + sync profile tests |
 | REQ-18 | Stream in/out + events for debug/audit | Epic 4A, Epic 8A | Not Started | Event replay + schema tests |
 | REQ-19 | Blazing ingest/update/read at scale | Epic 3, Epic 4, Epic 6 | Not Started | KPI benchmark gates |
-| REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Epic 13 | Not Started | Multi-cloud certification |
+| REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Epic 13 | In Progress | WS13 multi-cloud profile gates + Ops/Resilience release-readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | REQ-21 | Any-number-user concurrency | Epic 3, Epic 10, Epic 12 | Not Started | Concurrency stress tests |
 | REQ-22 | Pessimistic locking | Epic 1, Epic 3 | Not Started | Deadlock/timeout tests |
 | REQ-23 | ACID transactions | Epic 1, Epic 2, Epic 3 | In Progress | Transaction endpoint now classifies and validates statements before commit path |
-| REQ-24 | Config via properties/YAML/JSON | Epic 14 | Not Started | Config contract validation |
+| REQ-24 | Config via properties/YAML/JSON | Epic 14 | In Progress | WS14 schema/conformance gates + Ops/Resilience release-readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | REQ-25 | Native connection + pooling | Epic 10, Epic 14 | In Progress | Driver routing contract enforces pool min/max + timeout constraints with cross-format contract checks in WS10 smoke |
 | REQ-26 | Plugin model for streaming sources/sinks | Epic 4A, Epic 7 | Not Started | Connector plugin tests |
 | REQ-27 | Native cache engine (Redis-like compat) | Epic 3, Epic 14 | Not Started | Cache failover/invalidation tests |
@@ -96,9 +96,9 @@
 | WS9A | Epic 9A | IDE extension suite | DX Team | In Progress | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness + combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`) |
 | WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + JSON/properties/YAML `DriverRoutingConfigContract` parsing/validation + WS10 smoke harness evidence `tests/kpi/results/ws10/driver-smoke.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | Ready for Validation | WS1 (locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + locale fallback policy tests in SQL/runtime + WS11 smoke harness + gate orchestrator `run-ws11-gate.ps1` -> `tests/kpi/results/ws11/ws11-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
-| WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Ready for Validation | WS6 (runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion, and expanded WS12 gate criteria + smoke harness) |
-| WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Ready for Validation | WS0, WS12 (deploy cloud profile contracts + provider runtime overrides `single-node`/`multi-node` + provider Helm values + provider runbook env matrices (`deploy/cloud/*/README.md`) for AWS/Azure/GCP; WS13 smoke harnesses: `run-ws13-multicloud-profile-smoke.ps1`, `run-ws13-overlay-schema-smoke.ps1`, `run-ws13-env-matrix-smoke.ps1`; CI gate orchestrator: `run-ws13-gate.ps1` -> `tests/kpi/results/ws13/ws13-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
-| WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | Ready for Validation | WS5, WS10 (driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness + schema lint gate `run-ws14-schema-lint-gate.ps1` + config conformance aggregator `run-ws14-config-conformance-aggregate.ps1` + gate orchestrator `run-ws14-gate.ps1` -> `tests/kpi/results/ws14/ws14-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Ready for Validation | WS6 (runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion, and expanded WS12 gate criteria + smoke harness; combined Ops/Resilience cluster gate `run-release-ops-resilience-gate.ps1` -> `tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
+| WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Ready for Validation | WS0, WS12 (deploy cloud profile contracts + provider runtime overrides `single-node`/`multi-node` + provider Helm values + provider runbook env matrices (`deploy/cloud/*/README.md`) for AWS/Azure/GCP; WS13 smoke harnesses: `run-ws13-multicloud-profile-smoke.ps1`, `run-ws13-overlay-schema-smoke.ps1`, `run-ws13-env-matrix-smoke.ps1`; CI gate orchestrator: `run-ws13-gate.ps1` -> `tests/kpi/results/ws13/ws13-gate-summary.json`; combined Ops/Resilience cluster gate `run-release-ops-resilience-gate.ps1` -> `tests/kpi/results/gates/release-ops-resilience-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | Ready for Validation | WS5, WS10 (driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness + schema lint gate `run-ws14-schema-lint-gate.ps1` + config conformance aggregator `run-ws14-config-conformance-aggregate.ps1` + gate orchestrator `run-ws14-gate.ps1` -> `tests/kpi/results/ws14/ws14-gate-summary.json`; combined Ops/Resilience cluster gate `run-release-ops-resilience-gate.ps1` -> `tests/kpi/results/gates/release-ops-resilience-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS15 | Epic 15 | Competitive feature adoption track | Architecture + Query Team | Ready for Validation | WS3 (competitive adoption matrix contract scaffold `reference/competitive/ws15-feature-adoption-matrix.json` + scored implementation backlog `reference/competitive/ws15-implementation-backlog.json`; WS15 smoke harnesses: `run-ws15-competitive-parity-smoke.ps1`, `run-ws15-backlog-score-smoke.ps1`; gate orchestrator: `run-ws15-gate.ps1` -> `tests/kpi/results/ws15/ws15-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
 
 ---
@@ -108,8 +108,8 @@
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | In Progress | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) |
-| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Not Started | High SPOF closure + failover/RPO evidence |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Not Started | Autonomous governance + audit evidence + plugin cert |
+| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | In Progress | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | In Progress | Autonomous governance + audit evidence + plugin cert + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Not Started | RTO/RPO game-day success + global ops sign-off |
 
 ---
@@ -242,5 +242,6 @@ A tracker row moves to **Done** only when:
 | WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Ready for Validation |
 | WS13 multi-cloud deployment profiles | Platform/SRE | SRE Team, Security Team | Ready for Validation |
 | WS14 config contracts + tuning playbooks | Platform + SRE + Security | Integrations Team, Security Team | Ready for Validation |
+| Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | In Progress |
 | WS15 competitive feature adoption track | Architecture + Query Team | AI Platform Team, Integrations Team | Ready for Validation |
 
