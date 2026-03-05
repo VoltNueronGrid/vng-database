@@ -70,9 +70,9 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/run-release-ops-resilience-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-ops-resilience-readiness.json"
 
-      - name: Run WS10 driver and pooling smoke
+      - name: Run WS10 driver and pooling gate
         shell: pwsh
-        run: ./tests/kpi/scripts/run-ws10-driver-smoke.ps1 -OutputPath "./tests/kpi/results/ws10/ci-ws10-driver-smoke.json"
+        run: ./tests/kpi/scripts/run-ws10-gate.ps1 -OutputPath "./tests/kpi/results/ws10/ci-ws10-gate-summary.json"
 
       - name: Run WS11 i18n and UTF-8 gate
         shell: pwsh
@@ -96,6 +96,6 @@ jobs:
             tests/kpi/results/ws9a/ci-ws9a-gate-summary.json
             tests/kpi/results/gates/ci-release-dx-api-readiness.json
             tests/kpi/results/gates/ci-release-ops-resilience-readiness.json
-            tests/kpi/results/ws10/ci-ws10-driver-smoke.json
+            tests/kpi/results/ws10/ci-ws10-gate-summary.json
             tests/kpi/results/ws11/ci-ws11-gate-summary.json
             tests/kpi/results/ws15/ci-ws15-gate-summary.json

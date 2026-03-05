@@ -1,5 +1,5 @@
 param(
-  [string]$OutputPath = "tests/kpi/results/gates/release-dx-api-readiness.json"
+  [string]$OutputPath = "tests/kpi/results/ws10/ws10-gate-summary.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,24 +20,9 @@ $status = "passed"
 
 $packs = @(
   @{
-    Name = "ws5-security-gate"
-    Script = "tests/kpi/scripts/run-ws5-gate.ps1"
-    Artifact = "tests/kpi/results/ws5/ws5-gate-summary.json"
-  },
-  @{
-    Name = "ws9-studio-gate"
-    Script = "tests/kpi/scripts/run-ws9-gate.ps1"
-    Artifact = "tests/kpi/results/ws9/ws9-gate-summary.json"
-  },
-  @{
-    Name = "ws9a-ide-contract-smoke"
-    Script = "tests/kpi/scripts/run-ws9a-ide-contract-smoke.ps1"
-    Artifact = "tests/kpi/results/ws9a/ide-contract-smoke.json"
-  },
-  @{
-    Name = "ws10-driver-gate"
-    Script = "tests/kpi/scripts/run-ws10-gate.ps1"
-    Artifact = "tests/kpi/results/ws10/ws10-gate-summary.json"
+    Name = "ws10-driver-contract-smoke"
+    Script = "tests/kpi/scripts/run-ws10-driver-smoke.ps1"
+    Artifact = "tests/kpi/results/ws10/driver-smoke.json"
   }
 )
 
@@ -71,10 +56,8 @@ foreach ($pack in $packs) {
 
 $finished = Get-Date
 $summary = [ordered]@{
-  gate = "release-dx-api-cluster"
+  gate = "ws10"
   status = $status
-  release_readiness = if ($status -eq "passed") { "ready_for_validation" } else { "blocked" }
-  scope = @("WS5", "WS9", "WS9A", "WS10")
   started_at_utc = $start.ToUniversalTime().ToString("o")
   finished_at_utc = $finished.ToUniversalTime().ToString("o")
   duration_ms = [int](($finished - $start).TotalMilliseconds)
@@ -83,7 +66,7 @@ $summary = [ordered]@{
 
 $summary | ConvertTo-Json -Depth 8 | Set-Content -Path $OutputPath
 
-Write-Host "Release DX/API gate summary: $OutputPath ($status)"
+Write-Host "WS10 gate summary: $OutputPath ($status)"
 if ($status -ne "passed") {
   exit 1
 }

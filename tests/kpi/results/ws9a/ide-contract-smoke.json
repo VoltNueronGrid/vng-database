@@ -1,9 +1,9 @@
 {
   "smoke": "ws9a-ide-extension-contract",
   "status": "passed",
-  "started_at_utc": "2026-03-05T17:03:22.6826672Z",
-  "finished_at_utc": "2026-03-05T17:03:22.7258262Z",
-  "duration_ms": 43,
+  "started_at_utc": "2026-03-05T17:11:12.3899662Z",
+  "finished_at_utc": "2026-03-05T17:11:12.4484410Z",
+  "duration_ms": 58,
   "checks": [
     {
       "check": "common_contract_exists",

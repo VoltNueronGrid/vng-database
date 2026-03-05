@@ -7,8 +7,8 @@
     "yaml": true,
     "properties": true
   },
-  "started_at_utc": "2026-03-05T16:52:34.3398789Z",
-  "finished_at_utc": "2026-03-05T16:52:37.1293274Z",
-  "duration_ms": 2789,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.56s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_driver_rust-1da95cf21971cc84.exe)\n\nrunning 3 tests\ntest tests::validates_driver_contract_from_json ... ok\ntest tests::validates_driver_contract_from_properties ... ok\ntest tests::validates_driver_contract_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s\n"
+  "started_at_utc": "2026-03-05T17:11:12.5247082Z",
+  "finished_at_utc": "2026-03-05T17:11:13.8554138Z",
+  "duration_ms": 1331,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_driver_rust-1da95cf21971cc84.exe)\n\nrunning 3 tests\ntest tests::validates_driver_contract_from_json ... ok\ntest tests::validates_driver_contract_from_properties ... ok\ntest tests::validates_driver_contract_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s\n"
 }

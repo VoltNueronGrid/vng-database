@@ -8,9 +8,9 @@
     "WS9A",
     "WS10"
   ],
-  "started_at_utc": "2026-03-05T16:52:26.5584551Z",
-  "finished_at_utc": "2026-03-05T16:52:37.1558376Z",
-  "duration_ms": 10597,
+  "started_at_utc": "2026-03-05T17:11:05.0109855Z",
+  "finished_at_utc": "2026-03-05T17:11:13.8667646Z",
+  "duration_ms": 8856,
   "packs": [
     {
       "pack": "ws5-security-gate",
@@ -31,10 +31,10 @@
       "artifact": "tests/kpi/results/ws9a/ide-contract-smoke.json"
     },
     {
-      "pack": "ws10-driver-contract-smoke",
+      "pack": "ws10-driver-gate",
       "status": "passed",
       "detail": "ok",
-      "artifact": "tests/kpi/results/ws10/driver-smoke.json"
+      "artifact": "tests/kpi/results/ws10/ws10-gate-summary.json"
     }
   ]
 }
