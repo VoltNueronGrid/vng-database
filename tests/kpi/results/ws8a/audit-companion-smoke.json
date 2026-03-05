@@ -1,0 +1,11 @@
+{
+  "smoke": "ws8a-audit-companion-flow",
+  "status": "passed",
+  "command": "cargo run -p voltnuerongrid-audit-companion -- --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json",
+  "report_path": "tests/kpi/results/ws8a/audit-companion-report.json",
+  "started_at_utc": "2026-03-05T10:59:19.6408860Z",
+  "finished_at_utc": "2026-03-05T10:59:28.1090489Z",
+  "duration_ms": 8468,
+  "validation_ok": true,
+  "output_excerpt": "   Compiling memchr v2.8.0\n   Compiling serde_json v1.0.149\n   Compiling voltnuerongrid-audit-companion v0.1.0 (D:\\by\\polap-db\\tools\\voltnuerongrid-audit-companion)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.06s\n     Running `target\\debug\\voltnuerongrid-audit-companion.exe --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json`\naudit companion report written: tests/kpi/results/ws8a/audit-companion-report.json"
+}

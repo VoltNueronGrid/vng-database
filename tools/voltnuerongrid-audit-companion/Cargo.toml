@@ -6,5 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+serde_json = "1"
 voltnuerongrid-core = { path = "../../crates/voltnuerongrid-core" }
 voltnuerongrid-audit = { path = "../../crates/voltnuerongrid-audit" }
+voltnuerongrid-ai = { path = "../../crates/voltnuerongrid-ai" }

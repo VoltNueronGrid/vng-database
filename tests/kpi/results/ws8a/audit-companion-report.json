@@ -1,0 +1,21 @@
+{
+  "action_filter": "autonomous_action_authorize",
+  "action_records": [],
+  "audit_events": [
+    {
+      "action": "autonomous_action_authorize",
+      "actor": "operator-a",
+      "details_json": "{\"trace_id\":\"atrace-101\",\"action\":\"schema_change\",\"requested_scope\":\"database\",\"decision\":\"allow\",\"reason\":\"policy satisfied\"}",
+      "event_id": 1,
+      "kind": "autonomous",
+      "occurred_epoch_ms": 1700000000001,
+      "outcome": "allow"
+    }
+  ],
+  "generated_epoch_ms": 1772708368050,
+  "linked_trace_matches": 0,
+  "status": "ok",
+  "total_action_records": 0,
+  "total_audit_events": 1,
+  "trace_id_filter": "atrace-101"
+}

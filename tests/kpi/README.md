@@ -41,6 +41,7 @@ Initial KPI coverage:
 - `scripts/run-ws7-plugin-boundary-smoke.ps1` - WS7 connector package registration boundary smoke
 - `scripts/run-ws8-control-plane-smoke.ps1` - WS8 control-plane typed action record baseline smoke
 - `scripts/run-ws8a-audit-smoke.ps1` - WS8A audit trail baseline smoke
+- `scripts/run-ws8a-audit-companion-smoke.ps1` - WS8A audit companion query/export flow smoke
 - `results/` - output folder for run artifacts
 
 ## Usage

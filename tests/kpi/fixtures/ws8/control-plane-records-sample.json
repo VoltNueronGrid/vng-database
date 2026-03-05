@@ -1,0 +1,20 @@
+[
+  {
+    "trace_id": "atrace-101",
+    "occurred_epoch_ms": 1700000001001,
+    "action": "schema_change",
+    "scope": "database",
+    "requested_by": "operator-a",
+    "decision": "allow",
+    "reason": "policy satisfied"
+  },
+  {
+    "trace_id": "atrace-102",
+    "occurred_epoch_ms": 1700000001002,
+    "action": "plugin_install",
+    "scope": "cluster",
+    "requested_by": "operator-a",
+    "decision": "deny",
+    "reason": "mode too low"
+  }
+]
