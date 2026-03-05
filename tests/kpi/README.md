@@ -24,6 +24,7 @@ Initial KPI coverage:
 - `scripts/check-r1-gate.ps1` - executable R1 gate checklist artifact validator
 - `scripts/run-sql-analyze-smoke.ps1` - WS1 SQL analyzer API smoke evidence generator
 - `scripts/run-legacy-aggregation-parity.ps1` - WS1A legacy aggregation parity harness
+- `scripts/run-store-durability-smoke.ps1` - WS2 durability bootstrap validation smoke
 - `results/` - output folder for run artifacts
 
 ## Usage

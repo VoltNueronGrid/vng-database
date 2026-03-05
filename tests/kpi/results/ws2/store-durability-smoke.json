@@ -1,0 +1,7 @@
+﻿{
+    "timestamp_utc":  "2026-03-05T03:27:21.0339565Z",
+    "status":  "passed",
+    "crate":  "voltnuerongrid-store",
+    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 3 tests\ntest tests::appends_mutation_and_reads_latest_value ... ok\ntest tests::checkpoints_after_threshold ... ok\ntest tests::force_checkpoint_records_manifest ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_store\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n",
+    "command":  "cargo test -p voltnuerongrid-store -- --nocapture"
+}

@@ -45,7 +45,7 @@
 | REQ-02 | DB/table/view/materialized view/function lifecycle | Epic 1 | In Progress | Statement classifier includes create/alter/drop/view/function lifecycle categories |
 | REQ-03 | Rust/JS/Python function support | Epic 1 | Not Started | UDF runtime tests |
 | REQ-04 | HA/FT/elasticity/i18n/UTF-8 | Epic 6, Epic 11, Epic 12 | Not Started | Chaos + i18n certification |
-| REQ-05 | Separate compute and data files | Epic 2, Epic 6 | Not Started | Storage topology validation |
+| REQ-05 | Separate compute and data files | Epic 2, Epic 6 | In Progress | WS2 durability contract scaffold + validation smoke (`tests/kpi/results/ws2/store-durability-smoke.json`) |
 | REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Epic 4, Epic 4A, Epic 7 | Not Started | Connector/format test matrix |
 | REQ-07 | Multithreaded high-speed import | Epic 4 | Not Started | Ingest throughput benchmark |
 | REQ-08 | Local + cloud SaaS operation | Epic 13 | Not Started | Local/cloud deployment smoke tests |
@@ -82,7 +82,7 @@
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts) |
 | WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online) |
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | In Progress | WS1 (starter parity manifest + harness in place) |
-| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | Not Started | WS0 |
+| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | In Progress | WS0 (durability contract bootstrap merged) |
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | Not Started | WS2 |
 | WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | Not Started | WS2 |
 | WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | Not Started | WS2 |
