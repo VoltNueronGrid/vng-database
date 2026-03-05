@@ -1,0 +1,21 @@
+{
+  "gate": "ws15",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T17:35:20.3026116Z",
+  "finished_at_utc": "2026-03-05T17:35:20.4391282Z",
+  "duration_ms": 137,
+  "packs": [
+    {
+      "pack": "ws15-competitive-parity",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws15/competitive-parity-smoke.json"
+    },
+    {
+      "pack": "ws15-backlog-score",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws15/backlog-score-smoke.json"
+    }
+  ]
+}

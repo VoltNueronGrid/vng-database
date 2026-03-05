@@ -1,9 +1,9 @@
 {
   "gate": "ws10",
   "status": "passed",
-  "started_at_utc": "2026-03-05T17:35:05.4885297Z",
-  "finished_at_utc": "2026-03-05T17:35:06.6871611Z",
-  "duration_ms": 1199,
+  "started_at_utc": "2026-03-05T17:35:15.1763408Z",
+  "finished_at_utc": "2026-03-05T17:35:16.1430178Z",
+  "duration_ms": 967,
   "packs": [
     {
       "pack": "ws10-driver-contract-smoke",

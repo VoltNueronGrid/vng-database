@@ -1,0 +1,40 @@
+{
+  "gate": "release-dx-api-cluster",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "scope": [
+    "WS5",
+    "WS9",
+    "WS9A",
+    "WS10"
+  ],
+  "started_at_utc": "2026-03-05T17:35:00.2858836Z",
+  "finished_at_utc": "2026-03-05T17:35:06.6931459Z",
+  "duration_ms": 6407,
+  "packs": [
+    {
+      "pack": "ws5-security-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws5/ws5-gate-summary.json"
+    },
+    {
+      "pack": "ws9-studio-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws9/ws9-gate-summary.json"
+    },
+    {
+      "pack": "ws9a-ide-contract-smoke",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws9a/ide-contract-smoke.json"
+    },
+    {
+      "pack": "ws10-driver-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws10/ws10-gate-summary.json"
+    }
+  ]
+}

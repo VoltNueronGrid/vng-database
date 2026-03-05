@@ -1,0 +1,37 @@
+{
+  "gate": "release-ops-resilience-cluster",
+  "status": "passed",
+  "release_targets": [
+    "R2",
+    "R3"
+  ],
+  "release_readiness": "ready_for_validation",
+  "scope": [
+    "WS12",
+    "WS13",
+    "WS14"
+  ],
+  "started_at_utc": "2026-03-05T17:35:06.7273335Z",
+  "finished_at_utc": "2026-03-05T17:35:10.6125175Z",
+  "duration_ms": 3885,
+  "packs": [
+    {
+      "pack": "ws12-reliability-smoke",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws12/reliability-sre-smoke.json"
+    },
+    {
+      "pack": "ws13-multicloud-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws13/ws13-gate-summary.json"
+    },
+    {
+      "pack": "ws14-config-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws14/ws14-gate-summary.json"
+    }
+  ]
+}
