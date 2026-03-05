@@ -576,6 +576,7 @@ dependencies = [
 name = "voltnuerongrid-audit"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "voltnuerongrid-core",
 ]
 
@@ -673,6 +674,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "voltnuerongrid-audit",
  "voltnuerongrid-core",
  "voltnuerongrid-exec",
  "voltnuerongrid-sql",

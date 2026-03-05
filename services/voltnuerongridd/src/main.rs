@@ -5,11 +5,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 
@@ -21,6 +23,7 @@ struct AppState {
     cluster_mode: String,
     admin_api_key: Option<String>,
     leader_node_id: Arc<Mutex<String>>,
+    audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -247,6 +250,18 @@ struct FailoverSimulateResponse {
     requested_by: String,
 }
 
+#[derive(Deserialize)]
+struct AuditEventsQuery {
+    max_items: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct AuditEventsResponse {
+    status: &'static str,
+    total_events: usize,
+    events: Vec<AuditEvent>,
+}
+
 #[tokio::main]
 async fn main() {
     let node_id = env::var("VNG_NODE_ID")
@@ -283,6 +298,7 @@ async fn main() {
         cluster_mode,
         admin_api_key,
         leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
+        audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -297,6 +313,7 @@ async fn main() {
         .route("/api/v1/olap/query", post(olap_query))
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/failover/simulate", post(failover_simulate))
+        .route("/api/v1/audit/events", get(audit_events))
         .route("/api/v1/autonomous/guardrails", get(autonomous_guardrails))
         .route(
             "/api/v1/autonomous/emergency-stop",
@@ -471,6 +488,19 @@ async fn failover_simulate(
     require_operator_auth(&headers, &state)?;
     let (previous_leader_node_id, new_leader_node_id) =
         rotate_leader(&state.leader_node_id, &req.new_leader_node_id, &state.node_id);
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        req.requested_by.as_deref().unwrap_or("unknown"),
+        "failover_simulate",
+        "ok",
+        &json!({
+            "previous_leader_node_id": previous_leader_node_id.clone(),
+            "new_leader_node_id": new_leader_node_id.clone(),
+            "reason": req.reason.clone().unwrap_or_else(|| "manual_failover_simulation".to_string())
+        })
+        .to_string(),
+    );
     Ok(Json(FailoverSimulateResponse {
         status: "ok",
         previous_leader_node_id,
@@ -479,6 +509,25 @@ async fn failover_simulate(
             .reason
             .unwrap_or_else(|| "manual_failover_simulation".to_string()),
         requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
+    }))
+}
+
+async fn audit_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AuditEventsQuery>,
+) -> Result<Json<AuditEventsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let max_items = query.max_items.unwrap_or(100).min(1_000);
+    let events = state
+        .audit_sink
+        .lock()
+        .map(|sink| sink.latest(max_items))
+        .unwrap_or_default();
+    Ok(Json(AuditEventsResponse {
+        status: "ok",
+        total_events: events.len(),
+        events,
     }))
 }
 
@@ -502,13 +551,28 @@ async fn autonomous_emergency_stop(
 ) -> Result<Json<EmergencyStopResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     state.emergency_stop.set(req.enabled);
+    let reason = req
+        .reason
+        .clone()
+        .unwrap_or_else(|| "manual_control_plane_request".to_string());
+    let requested_by = req.requested_by.clone().unwrap_or_else(|| "unknown".to_string());
+    append_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &requested_by,
+        "autonomous_emergency_stop",
+        "ok",
+        &json!({
+            "enabled": req.enabled,
+            "reason": reason,
+        })
+        .to_string(),
+    );
     Ok(Json(EmergencyStopResponse {
         status: "ok",
         emergency_stop_enabled: req.enabled,
-        reason: req
-            .reason
-            .unwrap_or_else(|| "manual_control_plane_request".to_string()),
-        requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
+        reason,
+        requested_by,
     }))
 }
 
@@ -755,6 +819,19 @@ fn require_operator_auth(
     }
 }
 
+fn append_audit_event(
+    state: &AppState,
+    kind: AuditEventKind,
+    actor: &str,
+    action: &str,
+    outcome: &str,
+    details_json: &str,
+) {
+    if let Ok(mut sink) = state.audit_sink.lock() {
+        sink.append(kind, actor, action, outcome, details_json);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,6 +843,7 @@ mod tests {
             cluster_mode: "single".to_string(),
             admin_api_key: key.map(|v| v.to_string()),
             leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
+            audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -809,5 +887,24 @@ mod tests {
         let leader = Arc::new(Mutex::new("node-1".to_string()));
         let (_, current) = rotate_leader(&leader, "   ", "node-1");
         assert_eq!(current, "node-1");
+    }
+
+    #[test]
+    fn audit_append_event_writes_to_sink() {
+        let state = state_with_key(None);
+        append_audit_event(
+            &state,
+            AuditEventKind::Security,
+            "operator",
+            "autonomous_emergency_stop",
+            "ok",
+            "{\"enabled\":true}",
+        );
+        let count = state
+            .audit_sink
+            .lock()
+            .expect("sink lock")
+            .len();
+        assert_eq!(count, 1);
     }
 }
