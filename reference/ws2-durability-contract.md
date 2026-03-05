@@ -33,5 +33,8 @@ This engine is not a final storage engine; it is an executable contract to valid
 ## Validation
 
 - Unit tests in `crates/voltnuerongrid-store/src/lib.rs`
+- WAL adapter interface + file I/O boundary in `crates/voltnuerongrid-store/src/wal_adapter.rs`
 - Smoke script: `tests/kpi/scripts/run-store-durability-smoke.ps1`
 - Artifact: `tests/kpi/results/ws2/store-durability-smoke.json`
+- Smoke script (disk adapter): `tests/kpi/scripts/run-ws2-disk-wal-smoke.ps1`
+- Artifact (disk adapter): `tests/kpi/results/ws2/disk-wal-adapter-smoke.json`

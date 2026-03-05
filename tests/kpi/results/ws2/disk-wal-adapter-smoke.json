@@ -1,0 +1,9 @@
+{
+  "smoke": "ws2-disk-wal-adapter",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-store wal_adapter",
+  "started_at_utc": "2026-03-05T06:53:08.3395881Z",
+  "finished_at_utc": "2026-03-05T06:53:09.3735811Z",
+  "duration_ms": 1034,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 2 tests\ntest wal_adapter::tests::truncates_wal_file ... ok\ntest wal_adapter::tests::appends_and_reads_records_from_disk ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s\n"
+}
