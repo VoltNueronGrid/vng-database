@@ -595,6 +595,8 @@ dependencies = [
 name = "voltnuerongrid-auth"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "voltnuerongrid-core",
 ]
 

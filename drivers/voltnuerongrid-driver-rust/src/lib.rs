@@ -3,6 +3,7 @@
 pub const CRATE_NAME: &str = "voltnuerongrid-driver-rust";
 
 use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverConfig {
@@ -22,6 +23,107 @@ impl DriverConfig {
             return Err("session_id must not be empty".to_string());
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriverRoutingConfigContract {
+    pub base_url: String,
+    pub session_header_name: String,
+    pub route_hint_header_name: String,
+    pub admin_header_name: String,
+    pub operator_header_name: String,
+    pub pool_min_connections: u32,
+    pub pool_max_connections: u32,
+    pub request_timeout_ms: u64,
+}
+
+impl DriverRoutingConfigContract {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.base_url.trim().is_empty() {
+            return Err("base_url must not be empty".to_string());
+        }
+        for header in [
+            &self.session_header_name,
+            &self.route_hint_header_name,
+            &self.admin_header_name,
+            &self.operator_header_name,
+        ] {
+            if header.trim().is_empty() || !header.starts_with("x-") {
+                return Err("all header names must start with 'x-'".to_string());
+            }
+        }
+        if self.pool_min_connections == 0 {
+            return Err("pool_min_connections must be >= 1".to_string());
+        }
+        if self.pool_max_connections < self.pool_min_connections {
+            return Err("pool_max_connections must be >= pool_min_connections".to_string());
+        }
+        if self.request_timeout_ms < 100 {
+            return Err("request_timeout_ms must be >= 100".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn from_json_str(input: &str) -> Result<Self, String> {
+        let contract =
+            serde_json::from_str::<Self>(input).map_err(|e| format!("json parse failed: {e}"))?;
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    pub fn from_properties_str(input: &str) -> Result<Self, String> {
+        let mut map = BTreeMap::<String, String>::new();
+        for line in input.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
+                continue;
+            }
+            if let Some((k, v)) = trimmed.split_once('=') {
+                map.insert(k.trim().to_string(), v.trim().to_string());
+            }
+        }
+
+        let parse_u32 = |key: &str| -> Result<u32, String> {
+            map.get(key)
+                .ok_or_else(|| format!("missing {key}"))?
+                .parse::<u32>()
+                .map_err(|_| format!("{key} must be integer"))
+        };
+        let parse_u64 = |key: &str| -> Result<u64, String> {
+            map.get(key)
+                .ok_or_else(|| format!("missing {key}"))?
+                .parse::<u64>()
+                .map_err(|_| format!("{key} must be integer"))
+        };
+
+        let contract = Self {
+            base_url: map
+                .get("driver.baseUrl")
+                .ok_or_else(|| "missing driver.baseUrl".to_string())?
+                .to_string(),
+            session_header_name: map
+                .get("driver.sessionHeaderName")
+                .ok_or_else(|| "missing driver.sessionHeaderName".to_string())?
+                .to_string(),
+            route_hint_header_name: map
+                .get("driver.routeHintHeaderName")
+                .ok_or_else(|| "missing driver.routeHintHeaderName".to_string())?
+                .to_string(),
+            admin_header_name: map
+                .get("driver.adminHeaderName")
+                .ok_or_else(|| "missing driver.adminHeaderName".to_string())?
+                .to_string(),
+            operator_header_name: map
+                .get("driver.operatorHeaderName")
+                .ok_or_else(|| "missing driver.operatorHeaderName".to_string())?
+                .to_string(),
+            pool_min_connections: parse_u32("driver.pool.minConnections")?,
+            pool_max_connections: parse_u32("driver.pool.maxConnections")?,
+            request_timeout_ms: parse_u64("driver.requestTimeoutMs")?,
+        };
+        contract.validate()?;
+        Ok(contract)
     }
 }
 
@@ -150,5 +252,38 @@ mod tests {
             Some("operator-a")
         );
         assert!(request.body_json.contains("schema_change"));
+    }
+
+    #[test]
+    fn validates_driver_contract_from_json() {
+        let json = r#"{
+          "base_url":"http://127.0.0.1:8080",
+          "session_header_name":"x-vng-session-id",
+          "route_hint_header_name":"x-vng-route-hint",
+          "admin_header_name":"x-vng-admin-key",
+          "operator_header_name":"x-vng-operator-id",
+          "pool_min_connections":2,
+          "pool_max_connections":16,
+          "request_timeout_ms":2500
+        }"#;
+        let contract = DriverRoutingConfigContract::from_json_str(json).expect("valid");
+        assert_eq!(contract.pool_max_connections, 16);
+    }
+
+    #[test]
+    fn validates_driver_contract_from_properties() {
+        let properties = r#"
+driver.baseUrl=http://127.0.0.1:8080
+driver.sessionHeaderName=x-vng-session-id
+driver.routeHintHeaderName=x-vng-route-hint
+driver.adminHeaderName=x-vng-admin-key
+driver.operatorHeaderName=x-vng-operator-id
+driver.pool.minConnections=2
+driver.pool.maxConnections=16
+driver.requestTimeoutMs=2500
+"#;
+        let contract =
+            DriverRoutingConfigContract::from_properties_str(properties).expect("valid");
+        assert_eq!(contract.request_timeout_ms, 2500);
     }
 }

@@ -1,0 +1,9 @@
+security:
+  adminApiKeyEnv: "VNG_ADMIN_API_KEY"
+  adminHeaderName: "x-vng-admin-key"
+  tlsRequired: true
+  mtlsRequired: false
+  allowedOperatorRoles:
+    - "dba"
+    - "sre"
+  tokenTtlSeconds: 300

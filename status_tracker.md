@@ -98,7 +98,7 @@
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | Not Started | WS1 |
 | WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Not Started | WS6 |
 | WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Not Started | WS0, WS12 |
-| WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | Not Started | WS5, WS10 |
+| WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | In Progress | WS5, WS10 (driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness) |
 | WS15 | Epic 15 | Competitive feature adoption track | Architecture + Query Team | Not Started | WS3 |
 
 ---

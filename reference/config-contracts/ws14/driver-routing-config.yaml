@@ -1,0 +1,10 @@
+driver:
+  baseUrl: "http://127.0.0.1:8080"
+  sessionHeaderName: "x-vng-session-id"
+  routeHintHeaderName: "x-vng-route-hint"
+  adminHeaderName: "x-vng-admin-key"
+  operatorHeaderName: "x-vng-operator-id"
+  requestTimeoutMs: 2500
+  pool:
+    minConnections: 2
+    maxConnections: 16
