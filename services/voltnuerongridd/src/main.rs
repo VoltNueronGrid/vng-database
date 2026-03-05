@@ -9,6 +9,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -134,6 +135,9 @@ struct SqlTransactionResponse {
     status: &'static str,
     transaction_id: String,
     statements_executed: usize,
+    requires_transaction: bool,
+    touches_catalog: bool,
+    rejected_statement_count: usize,
     elapsed_ms: u128,
 }
 
@@ -236,6 +240,36 @@ async fn sql_transaction(
                 status: "error",
                 transaction_id: String::new(),
                 statements_executed: 0,
+                requires_transaction: false,
+                touches_catalog: false,
+                rejected_statement_count: 0,
+                elapsed_ms: 0,
+            }),
+        );
+    }
+
+    let mut requires_transaction = false;
+    let mut touches_catalog = false;
+    let mut rejected_statement_count = 0usize;
+    for stmt in &req.statements {
+        let analysis = SqlAnalyzer::analyze_statement(stmt);
+        if analysis.kind == SqlStatementKind::Unknown {
+            rejected_statement_count += 1;
+        }
+        requires_transaction |= analysis.requires_transaction;
+        touches_catalog |= analysis.touches_catalog;
+    }
+
+    if rejected_statement_count > 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SqlTransactionResponse {
+                status: "error",
+                transaction_id: String::new(),
+                statements_executed: 0,
+                requires_transaction,
+                touches_catalog,
+                rejected_statement_count,
                 elapsed_ms: 0,
             }),
         );
@@ -250,6 +284,9 @@ async fn sql_transaction(
             status: "committed",
             transaction_id: format!("tx-{tx_id}"),
             statements_executed: req.statements.len(),
+            requires_transaction,
+            touches_catalog,
+            rejected_statement_count,
             elapsed_ms: elapsed,
         }),
     )

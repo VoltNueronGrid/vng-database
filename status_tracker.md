@@ -63,7 +63,7 @@
 | REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Epic 13 | Not Started | Multi-cloud certification |
 | REQ-21 | Any-number-user concurrency | Epic 3, Epic 10, Epic 12 | Not Started | Concurrency stress tests |
 | REQ-22 | Pessimistic locking | Epic 1, Epic 3 | Not Started | Deadlock/timeout tests |
-| REQ-23 | ACID transactions | Epic 1, Epic 2, Epic 3 | Not Started | Transaction correctness suite |
+| REQ-23 | ACID transactions | Epic 1, Epic 2, Epic 3 | In Progress | Transaction endpoint now classifies and validates statements before commit path |
 | REQ-24 | Config via properties/YAML/JSON | Epic 14 | Not Started | Config contract validation |
 | REQ-25 | Native connection + pooling | Epic 10, Epic 14 | Not Started | Pool failover/perf tests |
 | REQ-26 | Plugin model for streaming sources/sinks | Epic 4A, Epic 7 | Not Started | Connector plugin tests |
@@ -80,7 +80,7 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies |
 |---|---|---|---|---|---|
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 |
-| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 |
+| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway) |
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | Not Started | WS1 |
 | WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | Not Started | WS0 |
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | Not Started | WS2 |
