@@ -1,0 +1,14 @@
+{
+  "smoke": "ws10-driver-baseline",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-driver-rust validates_driver_contract; config contract parse checks (json/yaml/properties)",
+  "config_contract_checks": {
+    "json": true,
+    "yaml": true,
+    "properties": true
+  },
+  "started_at_utc": "2026-03-05T16:32:13.5859865Z",
+  "finished_at_utc": "2026-03-05T16:32:15.3716183Z",
+  "duration_ms": 1786,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_driver_rust-1da95cf21971cc84.exe)\n\nrunning 3 tests\ntest tests::validates_driver_contract_from_json ... ok\ntest tests::validates_driver_contract_from_properties ... ok\ntest tests::validates_driver_contract_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s\n"
+}
