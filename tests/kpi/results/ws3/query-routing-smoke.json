@@ -1,0 +1,9 @@
+{
+  "smoke": "ws3-query-routing",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-exec",
+  "started_at_utc": "2026-03-05T06:48:21.3441985Z",
+  "finished_at_utc": "2026-03-05T06:48:22.9676224Z",
+  "duration_ms": 1623,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_exec-b9466befc9dff994.exe)\n\nrunning 3 tests\ntest tests::routes_aggregate_query_to_olap ... ok\ntest tests::routes_mixed_batch_to_hybrid ... ok\ntest tests::routes_transactional_statement_to_oltp ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_exec\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+}

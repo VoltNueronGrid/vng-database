@@ -533,6 +533,7 @@ name = "voltnuerongrid-exec"
 version = "0.1.0"
 dependencies = [
  "voltnuerongrid-core",
+ "voltnuerongrid-sql",
 ]
 
 [[package]]
@@ -593,6 +594,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "voltnuerongrid-core",
+ "voltnuerongrid-exec",
  "voltnuerongrid-sql",
  "voltnuerongrid-store",
 ]

@@ -9,6 +9,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -152,6 +153,25 @@ struct SqlAnalyzeResponse {
     statements: Vec<AnalyzedStatement>,
 }
 
+#[derive(Deserialize)]
+struct SqlRouteRequest {
+    sql_batch: String,
+}
+
+#[derive(Serialize)]
+struct RoutedStatementResponse {
+    statement: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct SqlRouteResponse {
+    status: &'static str,
+    route_path: String,
+    reason: String,
+    statements: Vec<RoutedStatementResponse>,
+}
+
 #[derive(Serialize)]
 struct SqlTransactionResponse {
     status: &'static str,
@@ -225,6 +245,7 @@ async fn main() {
         .route("/health", get(health))
         .route("/api/v1/sql/transaction", post(sql_transaction))
         .route("/api/v1/sql/analyze", post(sql_analyze))
+        .route("/api/v1/sql/route", post(sql_route))
         .route("/api/v1/olap/query", post(olap_query))
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/autonomous/guardrails", get(autonomous_guardrails))
@@ -339,6 +360,23 @@ async fn sql_analyze(Json(req): Json<SqlAnalyzeRequest>) -> Json<SqlAnalyzeRespo
         total_statements: statements.len(),
         rejected_statements: rejected,
         statements,
+    })
+}
+
+async fn sql_route(Json(req): Json<SqlRouteRequest>) -> Json<SqlRouteResponse> {
+    let decision = HtapQueryRouter::route_batch(&req.sql_batch);
+    Json(SqlRouteResponse {
+        status: "ok",
+        route_path: route_path_name(decision.path).to_string(),
+        reason: decision.reason,
+        statements: decision
+            .statements
+            .into_iter()
+            .map(|s| RoutedStatementResponse {
+                statement: s.statement,
+                path: route_path_name(s.path).to_string(),
+            })
+            .collect(),
     })
 }
 
@@ -498,4 +536,13 @@ fn default_guardrail_rules() -> Vec<GuardrailRule> {
             rationale: "Low-risk tuning actions can run in advisory mode".to_string(),
         },
     ]
+}
+
+fn route_path_name(path: QueryPath) -> &'static str {
+    match path {
+        QueryPath::Oltp => "oltp",
+        QueryPath::Olap => "olap",
+        QueryPath::Hybrid => "hybrid",
+        QueryPath::Unknown => "unknown",
+    }
 }
