@@ -47,3 +47,8 @@ Detect sequence integrity violations early and prevent silent data divergence be
 - Add out-of-order mutation replay scenarios.
 - Add duplicate-sequence detection.
 - Add checkpoint + restart continuity tests for sequence invariants.
+
+## Completed in this milestone
+
+- Out-of-order mutation replay detection added.
+- Duplicate-sequence detection added.
