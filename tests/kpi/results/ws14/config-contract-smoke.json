@@ -3,8 +3,8 @@
   "status": "passed",
   "command": "cargo test -p voltnuerongrid-driver-rust validates_driver_contract; cargo test -p voltnuerongrid-auth validates_security_config; json schema parse checks",
   "schema_ok": true,
-  "started_at_utc": "2026-03-05T15:54:33.7849068Z",
-  "finished_at_utc": "2026-03-05T15:54:37.7292722Z",
-  "duration_ms": 3944,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_driver_rust-24fcc0d1b0335705.exe)\n\nrunning 2 tests\ntest tests::validates_driver_contract_from_json ... ok\ntest tests::validates_driver_contract_from_properties ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-7009bd4f4304d2cf.exe)\n\nrunning 2 tests\ntest tests::validates_security_config_from_json ... ok\ntest tests::validates_security_config_from_properties ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-03-05T16:07:29.3392792Z",
+  "finished_at_utc": "2026-03-05T16:07:32.1942468Z",
+  "duration_ms": 2855,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_driver_rust-24fcc0d1b0335705.exe)\n\nrunning 2 tests\ntest tests::validates_driver_contract_from_json ... ok\ntest tests::validates_driver_contract_from_properties ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-7009bd4f4304d2cf.exe)\n\nrunning 2 tests\ntest tests::validates_security_config_from_json ... ok\ntest tests::validates_security_config_from_properties ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
 }
