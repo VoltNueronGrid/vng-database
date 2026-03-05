@@ -15,13 +15,17 @@ function Ensure-OutputDir {
 Ensure-OutputDir -PathValue $OutputPath
 
 $start = Get-Date
-$command = "cargo test -p voltnuerongrid-plugins"
+$command = "cargo test -p voltnuerongrid-plugins registers_valid_package; cargo test -p voltnuerongrid-plugins rejects_package_when_manifest_key_is_revoked"
 $outputLines = @()
 $exitCode = 1
 
 try {
-  $outputLines = & cargo test -p voltnuerongrid-plugins 2>&1
-  $exitCode = $LASTEXITCODE
+  $first = & cargo test -p voltnuerongrid-plugins registers_valid_package 2>&1
+  $firstExit = $LASTEXITCODE
+  $second = & cargo test -p voltnuerongrid-plugins rejects_package_when_manifest_key_is_revoked 2>&1
+  $secondExit = $LASTEXITCODE
+  $outputLines = @($first + $second)
+  $exitCode = if ($firstExit -eq 0 -and $secondExit -eq 0) { 0 } else { 1 }
 } catch {
   $outputLines += $_.Exception.Message
   $exitCode = 1

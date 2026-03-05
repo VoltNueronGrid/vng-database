@@ -3,6 +3,7 @@
 pub const CRATE_NAME: &str = "voltnuerongrid-plugins";
 
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use voltnuerongrid_ingest::{
     ConnectorDescriptor, ConnectorDirection, ConnectorRegistry, IngestRecord, StaticInMemoryConnector,
 };
@@ -31,6 +32,7 @@ pub struct SignedPluginManifest {
     pub declared_checksum_sha256: String,
     pub generated_epoch_ms: u128,
     pub signature: PluginManifestSignature,
+    pub revoked_key_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +50,108 @@ pub trait ConnectorValidationHook: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginRegistrationError {
     ValidationFailed(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TrustLevel {
+    Development,
+    Internal,
+    Production,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyTrustRecord {
+    pub trust_level: TrustLevel,
+    pub revoked: bool,
+}
+
+pub trait SigningKeyring: Send + Sync {
+    fn lookup_key(&self, key_id: &str) -> Option<KeyTrustRecord>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InMemorySigningKeyring {
+    key_records: HashMap<String, KeyTrustRecord>,
+}
+
+impl InMemorySigningKeyring {
+    pub fn with_records(records: HashMap<String, KeyTrustRecord>) -> Self {
+        Self {
+            key_records: records,
+        }
+    }
+}
+
+impl SigningKeyring for InMemorySigningKeyring {
+    fn lookup_key(&self, key_id: &str) -> Option<KeyTrustRecord> {
+        self.key_records.get(key_id).copied()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureVerificationPolicy {
+    pub required_algorithm: String,
+    pub minimum_trust_level: TrustLevel,
+    pub require_non_revoked_key: bool,
+}
+
+impl Default for SignatureVerificationPolicy {
+    fn default() -> Self {
+        Self {
+            required_algorithm: "ed25519".to_string(),
+            minimum_trust_level: TrustLevel::Production,
+            require_non_revoked_key: true,
+        }
+    }
+}
+
+pub struct SignaturePolicyHook {
+    policy: SignatureVerificationPolicy,
+    keyring: Box<dyn SigningKeyring>,
+}
+
+impl SignaturePolicyHook {
+    pub fn new(policy: SignatureVerificationPolicy, keyring: Box<dyn SigningKeyring>) -> Self {
+        Self { policy, keyring }
+    }
+}
+
+impl ConnectorValidationHook for SignaturePolicyHook {
+    fn validate(&self, package: &ConnectorPluginPackage) -> Result<(), String> {
+        let signature = &package.manifest.signature;
+        if signature.algorithm != self.policy.required_algorithm {
+            return Err("manifest signature algorithm is not allowed by policy".to_string());
+        }
+
+        let key_info = self
+            .keyring
+            .lookup_key(&signature.key_id)
+            .ok_or_else(|| "manifest key_id is unknown to keyring".to_string())?;
+
+        if package
+            .manifest
+            .revoked_key_ids
+            .iter()
+            .any(|revoked| revoked == &signature.key_id)
+        {
+            return Err("manifest key_id is listed in manifest.revoked_key_ids".to_string());
+        }
+
+        if self.policy.require_non_revoked_key && key_info.revoked {
+            return Err("manifest key_id is revoked in keyring".to_string());
+        }
+
+        if key_info.trust_level < self.policy.minimum_trust_level {
+            return Err("manifest key trust level is below policy minimum".to_string());
+        }
+
+        // Placeholder signature verification until cryptographic signature validation lands.
+        if signature.signature_base64.len() < 16 {
+            return Err("manifest signature payload is too short".to_string());
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -75,8 +179,16 @@ pub struct PluginRegistrationBoundary {
 
 impl PluginRegistrationBoundary {
     pub fn new() -> Self {
+        Self::new_with_keyring(Box::new(default_signing_keyring()))
+    }
+
+    pub fn new_with_keyring(keyring: Box<dyn SigningKeyring>) -> Self {
         let mut boundary = Self { hooks: Vec::new() };
         boundary.register_hook(Box::new(ChecksumVerificationHook));
+        boundary.register_hook(Box::new(SignaturePolicyHook::new(
+            SignatureVerificationPolicy::default(),
+            keyring,
+        )));
         boundary
     }
 
@@ -124,6 +236,9 @@ fn validate_metadata_and_capabilities(package: &ConnectorPluginPackage) -> Vec<S
     if package.manifest.signature.signature_base64.trim().is_empty() {
         issues.push("manifest.signature.signature_base64 must not be empty".to_string());
     }
+    if package.manifest.revoked_key_ids.iter().any(|k| k.trim().is_empty()) {
+        issues.push("manifest.revoked_key_ids must not contain empty entries".to_string());
+    }
 
     if package.metadata.plugin_id.trim().is_empty() {
         issues.push("metadata.plugin_id must not be empty".to_string());
@@ -161,6 +276,32 @@ fn validate_metadata_and_capabilities(package: &ConnectorPluginPackage) -> Vec<S
     }
 
     issues
+}
+
+fn default_signing_keyring() -> InMemorySigningKeyring {
+    let mut records = HashMap::new();
+    records.insert(
+        "ws7-signer-1".to_string(),
+        KeyTrustRecord {
+            trust_level: TrustLevel::Production,
+            revoked: false,
+        },
+    );
+    records.insert(
+        "ws7-signer-dev".to_string(),
+        KeyTrustRecord {
+            trust_level: TrustLevel::Development,
+            revoked: false,
+        },
+    );
+    records.insert(
+        "ws7-signer-revoked".to_string(),
+        KeyTrustRecord {
+            trust_level: TrustLevel::Production,
+            revoked: true,
+        },
+    );
+    InMemorySigningKeyring::with_records(records)
 }
 
 pub fn compute_package_checksum_sha256(package: &ConnectorPluginPackage) -> String {
@@ -234,6 +375,7 @@ mod tests {
                     key_id: "ws7-signer-1".to_string(),
                     signature_base64: "c2lnbmF0dXJlLWJhc2U2NA==".to_string(),
                 },
+                revoked_key_ids: Vec::new(),
             },
             metadata: ConnectorPackageMetadata {
                 plugin_id: "connector.ftp".to_string(),
@@ -352,6 +494,58 @@ mod tests {
         match error {
             PluginRegistrationError::ValidationFailed(issues) => {
                 assert!(issues.iter().any(|i| i.contains("checksum")));
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_package_when_manifest_key_is_unknown() {
+        let mut registry = ConnectorRegistry::default();
+        let boundary = PluginRegistrationBoundary::new();
+        let mut package = valid_package();
+        package.manifest.signature.key_id = "unknown-key".to_string();
+
+        let error = boundary
+            .register_connector_package(&mut registry, package)
+            .expect_err("expected keyring failure");
+        match error {
+            PluginRegistrationError::ValidationFailed(issues) => {
+                assert!(issues.iter().any(|i| i.contains("unknown")));
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_package_when_manifest_key_is_revoked() {
+        let mut registry = ConnectorRegistry::default();
+        let boundary = PluginRegistrationBoundary::new();
+        let mut package = valid_package();
+        package.manifest.signature.key_id = "ws7-signer-revoked".to_string();
+        package.manifest.revoked_key_ids = vec!["ws7-signer-revoked".to_string()];
+
+        let error = boundary
+            .register_connector_package(&mut registry, package)
+            .expect_err("expected revoked key failure");
+        match error {
+            PluginRegistrationError::ValidationFailed(issues) => {
+                assert!(issues.iter().any(|i| i.contains("revoked")));
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_package_when_manifest_key_trust_too_low() {
+        let mut registry = ConnectorRegistry::default();
+        let boundary = PluginRegistrationBoundary::new();
+        let mut package = valid_package();
+        package.manifest.signature.key_id = "ws7-signer-dev".to_string();
+
+        let error = boundary
+            .register_connector_package(&mut registry, package)
+            .expect_err("expected trust-level failure");
+        match error {
+            PluginRegistrationError::ValidationFailed(issues) => {
+                assert!(issues.iter().any(|i| i.contains("trust level")));
             }
         }
     }
