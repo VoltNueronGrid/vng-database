@@ -6,4 +6,5 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 voltnuerongrid-core = { path = "../voltnuerongrid-core" }

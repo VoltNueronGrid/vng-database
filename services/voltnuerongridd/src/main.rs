@@ -12,10 +12,12 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
+use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
+static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 struct AppState {
@@ -24,6 +26,7 @@ struct AppState {
     admin_api_key: Option<String>,
     leader_node_id: Arc<Mutex<String>>,
     audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
+    action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -123,6 +126,7 @@ struct AuthorizeActionResponse {
     requested_scope: String,
     decision: &'static str,
     reason: String,
+    trace_id: String,
 }
 
 #[derive(Serialize)]
@@ -262,6 +266,18 @@ struct AuditEventsResponse {
     events: Vec<AuditEvent>,
 }
 
+#[derive(Deserialize)]
+struct AutonomousActionRecordsQuery {
+    max_items: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct AutonomousActionRecordsResponse {
+    status: &'static str,
+    total_records: usize,
+    records: Vec<AutonomousActionExecutionRecord>,
+}
+
 #[tokio::main]
 async fn main() {
     let node_id = env::var("VNG_NODE_ID")
@@ -299,6 +315,7 @@ async fn main() {
         admin_api_key,
         leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
         audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
+        action_records: Arc::new(Mutex::new(Vec::new())),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -314,6 +331,10 @@ async fn main() {
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/audit/events", get(audit_events))
+        .route(
+            "/api/v1/autonomous/actions/records",
+            get(autonomous_action_records),
+        )
         .route("/api/v1/autonomous/guardrails", get(autonomous_guardrails))
         .route(
             "/api/v1/autonomous/emergency-stop",
@@ -531,6 +552,21 @@ async fn audit_events(
     }))
 }
 
+async fn autonomous_action_records(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AutonomousActionRecordsQuery>,
+) -> Result<Json<AutonomousActionRecordsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let max_items = query.max_items.unwrap_or(100).min(1_000);
+    let records = latest_action_records(&state, max_items);
+    Ok(Json(AutonomousActionRecordsResponse {
+        status: "ok",
+        total_records: records.len(),
+        records,
+    }))
+}
+
 async fn autonomous_guardrails(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -583,73 +619,87 @@ async fn authorize_autonomous_action(
 ) -> Result<(StatusCode, Json<AuthorizeActionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let requested_scope = req.scope.unwrap_or_else(|| "cluster".to_string());
+    let requested_by = headers
+        .get("x-vng-operator-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    let action = req.action;
+    let trace_id = next_action_trace_id();
     if state.emergency_stop.get() {
-        return Ok((
+        return Ok(build_authorize_action_response(
+            &state,
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(AuthorizeActionResponse {
-                status: "blocked",
-                action: req.action,
-                requested_scope,
-                decision: "deny",
-                reason: "emergency_stop_enabled".to_string(),
-            }),
+            &action,
+            &requested_scope,
+            "blocked",
+            "emergency_stop_enabled".to_string(),
+            &trace_id,
+            &requested_by,
+            AutonomousActionDecision::Blocked,
         ));
     }
 
     if state.autonomous_mode == AutonomousMode::Disabled {
-        return Ok((
+        return Ok(build_authorize_action_response(
+            &state,
             StatusCode::FORBIDDEN,
-            Json(AuthorizeActionResponse {
-                status: "blocked",
-                action: req.action,
-                requested_scope,
-                decision: "deny",
-                reason: "autonomous_mode_disabled".to_string(),
-            }),
+            &action,
+            &requested_scope,
+            "blocked",
+            "autonomous_mode_disabled".to_string(),
+            &trace_id,
+            &requested_by,
+            AutonomousActionDecision::Blocked,
         ));
     }
 
     let matching_rule = state
         .guardrails
         .iter()
-        .find(|r| r.action.eq_ignore_ascii_case(&req.action));
+        .find(|r| r.action.eq_ignore_ascii_case(&action));
 
     Ok(match matching_rule {
-        Some(rule) if state.autonomous_mode.rank() >= rule.required_mode.rank() => (
-            StatusCode::OK,
-            Json(AuthorizeActionResponse {
-                status: "ok",
-                action: req.action,
-                requested_scope,
-                decision: "allow",
-                reason: format!(
+        Some(rule) if state.autonomous_mode.rank() >= rule.required_mode.rank() => {
+            build_authorize_action_response(
+                &state,
+                StatusCode::OK,
+                &action,
+                &requested_scope,
+                "allow",
+                format!(
                     "mode {:?} satisfies required mode {:?}",
                     state.autonomous_mode, rule.required_mode
                 ),
-            }),
-        ),
-        Some(rule) => (
+                &trace_id,
+                &requested_by,
+                AutonomousActionDecision::Allow,
+            )
+        }
+        Some(rule) => build_authorize_action_response(
+            &state,
             StatusCode::FORBIDDEN,
-            Json(AuthorizeActionResponse {
-                status: "blocked",
-                action: req.action,
-                requested_scope,
-                decision: "deny",
-                reason: format!(
-                    "required mode {:?} exceeds current mode {:?}",
-                    rule.required_mode, state.autonomous_mode
-                ),
-            }),
+            &action,
+            &requested_scope,
+            "deny",
+            format!(
+                "required mode {:?} exceeds current mode {:?}",
+                rule.required_mode, state.autonomous_mode
+            ),
+            &trace_id,
+            &requested_by,
+            AutonomousActionDecision::Deny,
         ),
-        None => (
+        None => build_authorize_action_response(
+            &state,
             StatusCode::NOT_FOUND,
-            Json(AuthorizeActionResponse {
-                status: "unknown_action",
-                action: req.action,
-                requested_scope,
-                decision: "deny",
-                reason: "no_guardrail_rule_found".to_string(),
-            }),
+            &action,
+            &requested_scope,
+            "deny",
+            "no_guardrail_rule_found".to_string(),
+            &trace_id,
+            &requested_by,
+            AutonomousActionDecision::Unknown,
         ),
     })
 }
@@ -832,6 +882,82 @@ fn append_audit_event(
     }
 }
 
+fn next_action_trace_id() -> String {
+    let id = ACTION_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("atrace-{id}")
+}
+
+fn latest_action_records(state: &AppState, max_items: usize) -> Vec<AutonomousActionExecutionRecord> {
+    match state.action_records.lock() {
+        Ok(records) => {
+            let len = records.len();
+            let start = len.saturating_sub(max_items);
+            records[start..].to_vec()
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+fn append_action_record(state: &AppState, record: AutonomousActionExecutionRecord) {
+    if let Ok(mut records) = state.action_records.lock() {
+        records.push(record);
+    }
+}
+
+fn build_authorize_action_response(
+    state: &AppState,
+    status_code: StatusCode,
+    action: &str,
+    requested_scope: &str,
+    decision: &'static str,
+    reason: String,
+    trace_id: &str,
+    requested_by: &str,
+    typed_decision: AutonomousActionDecision,
+) -> (StatusCode, Json<AuthorizeActionResponse>) {
+    let record = AutonomousActionExecutionRecord::new(
+        trace_id.to_string(),
+        action,
+        requested_scope,
+        requested_by,
+        typed_decision,
+        &reason,
+    );
+    append_action_record(state, record);
+    append_audit_event(
+        state,
+        AuditEventKind::Autonomous,
+        requested_by,
+        "autonomous_action_authorize",
+        decision,
+        &json!({
+            "trace_id": trace_id,
+            "action": action,
+            "requested_scope": requested_scope,
+            "decision": decision,
+            "reason": reason.clone(),
+        })
+        .to_string(),
+    );
+    (
+        status_code,
+        Json(AuthorizeActionResponse {
+            status: if status_code == StatusCode::OK {
+                "ok"
+            } else if status_code == StatusCode::NOT_FOUND {
+                "unknown_action"
+            } else {
+                "blocked"
+            },
+            action: action.to_string(),
+            requested_scope: requested_scope.to_string(),
+            decision,
+            reason,
+            trace_id: trace_id.to_string(),
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -844,6 +970,7 @@ mod tests {
             admin_api_key: key.map(|v| v.to_string()),
             leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
+            action_records: Arc::new(Mutex::new(Vec::new())),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -906,5 +1033,28 @@ mod tests {
             .expect("sink lock")
             .len();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn action_trace_id_is_generated() {
+        let first = next_action_trace_id();
+        assert!(first.starts_with("atrace-"));
+    }
+
+    #[test]
+    fn append_action_record_writes_to_history() {
+        let state = state_with_key(None);
+        let record = AutonomousActionExecutionRecord::new(
+            "atrace-test".to_string(),
+            "performance_tune",
+            "session",
+            "operator",
+            AutonomousActionDecision::Allow,
+            "ok",
+        );
+        append_action_record(&state, record);
+        let records = latest_action_records(&state, 10);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].trace_id, "atrace-test");
     }
 }

@@ -2,8 +2,8 @@
   "smoke": "ws8a-audit-trail-baseline",
   "status": "passed",
   "command": "cargo test -p voltnuerongrid-audit; cargo test -p voltnuerongridd audit_append_event",
-  "started_at_utc": "2026-03-05T09:43:33.3943269Z",
-  "finished_at_utc": "2026-03-05T09:43:36.8709107Z",
-  "duration_ms": 3477,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_audit-08cad733e16902bc.exe)\n\nrunning 2 tests\ntest tests::appends_audit_events_with_monotonic_ids ... ok\ntest tests::returns_latest_window ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_audit\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-2a1bd3145e7338ac.exe)\n\nrunning 1 test\ntest tests::audit_append_event_writes_to_sink ... ok"
+  "started_at_utc": "2026-03-05T10:17:09.5616495Z",
+  "finished_at_utc": "2026-03-05T10:17:12.8847370Z",
+  "duration_ms": 3323,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_audit-08cad733e16902bc.exe)\n\nrunning 2 tests\ntest tests::appends_audit_events_with_monotonic_ids ... ok\ntest tests::returns_latest_window ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_audit\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 1 test\ntest tests::audit_append_event_writes_to_sink ... ok"
 }

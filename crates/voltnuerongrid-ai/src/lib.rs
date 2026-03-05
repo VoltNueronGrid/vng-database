@@ -1,3 +1,74 @@
 #![forbid(unsafe_code)]
 
 pub const CRATE_NAME: &str = "voltnuerongrid-ai";
+
+use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousActionDecision {
+    Allow,
+    Deny,
+    Blocked,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutonomousActionExecutionRecord {
+    pub trace_id: String,
+    pub occurred_epoch_ms: u128,
+    pub action: String,
+    pub scope: String,
+    pub requested_by: String,
+    pub decision: AutonomousActionDecision,
+    pub reason: String,
+}
+
+impl AutonomousActionExecutionRecord {
+    pub fn new(
+        trace_id: String,
+        action: &str,
+        scope: &str,
+        requested_by: &str,
+        decision: AutonomousActionDecision,
+        reason: &str,
+    ) -> Self {
+        Self {
+            trace_id,
+            occurred_epoch_ms: now_epoch_millis(),
+            action: action.to_string(),
+            scope: scope.to_string(),
+            requested_by: requested_by.to_string(),
+            decision,
+            reason: reason.to_string(),
+        }
+    }
+}
+
+fn now_epoch_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock before epoch")
+        .as_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creates_typed_execution_record() {
+        let record = AutonomousActionExecutionRecord::new(
+            "trace-1".to_string(),
+            "schema_change",
+            "database",
+            "operator",
+            AutonomousActionDecision::Allow,
+            "policy satisfied",
+        );
+        assert_eq!(record.trace_id, "trace-1");
+        assert_eq!(record.action, "schema_change");
+        assert_eq!(record.decision, AutonomousActionDecision::Allow);
+    }
+}

@@ -39,6 +39,7 @@ Initial KPI coverage:
 - `scripts/run-ws5-operator-auth-smoke.ps1` - WS5 operator auth baseline smoke
 - `scripts/run-ws6-failover-sim-smoke.ps1` - WS6 failover simulation scaffold smoke
 - `scripts/run-ws7-plugin-boundary-smoke.ps1` - WS7 connector package registration boundary smoke
+- `scripts/run-ws8-control-plane-smoke.ps1` - WS8 control-plane typed action record baseline smoke
 - `scripts/run-ws8a-audit-smoke.ps1` - WS8A audit trail baseline smoke
 - `results/` - output folder for run artifacts
 

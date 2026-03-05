@@ -12,6 +12,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"] }
 voltnuerongrid-core = { path = "../../crates/voltnuerongrid-core" }
 voltnuerongrid-audit = { path = "../../crates/voltnuerongrid-audit" }
+voltnuerongrid-ai = { path = "../../crates/voltnuerongrid-ai" }
 voltnuerongrid-exec = { path = "../../crates/voltnuerongrid-exec" }
 voltnuerongrid-sql = { path = "../../crates/voltnuerongrid-sql" }
 voltnuerongrid-store = { path = "../../crates/voltnuerongrid-store" }
