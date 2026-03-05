@@ -56,6 +56,8 @@ Initial KPI coverage:
 - `scripts/run-ws14-config-conformance-aggregate.ps1` - WS14 config contract conformance aggregator (cross-format parity and conformance score)
 - `scripts/run-ws14-gate.ps1` - WS14 gate orchestrator (runs baseline + schema lint + conformance and emits one gate summary artifact)
 - `scripts/run-ws15-competitive-parity-smoke.ps1` - WS15 competitive feature adoption baseline smoke (matrix presence + competitor coverage + feature contract completeness)
+- `scripts/run-ws15-backlog-score-smoke.ps1` - WS15 backlog scoring validation smoke (impact/effort coverage + priority formula + owner completeness)
+- `scripts/run-ws15-gate.ps1` - WS15 gate orchestrator (runs parity + backlog scoring and emits one gate summary artifact)
 - `results/` - output folder for run artifacts
 
 ## Usage

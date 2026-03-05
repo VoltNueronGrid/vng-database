@@ -1,0 +1,44 @@
+{
+  "smoke": "ws15-backlog-score-validation",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T16:21:23.6845499Z",
+  "finished_at_utc": "2026-03-05T16:21:23.7388225Z",
+  "duration_ms": 54,
+  "checks": [
+    {
+      "check": "matrix_exists",
+      "ok": true,
+      "detail": "reference/competitive/ws15-feature-adoption-matrix.json"
+    },
+    {
+      "check": "backlog_exists",
+      "ok": true,
+      "detail": "reference/competitive/ws15-implementation-backlog.json"
+    },
+    {
+      "check": "all_matrix_features_scored",
+      "ok": true,
+      "detail": "all matrix ids mapped in backlog"
+    },
+    {
+      "check": "no_unknown_backlog_features",
+      "ok": true,
+      "detail": "unknown_feature_ids="
+    },
+    {
+      "check": "score_domain_valid",
+      "ok": true,
+      "detail": "impact/effort scores within 1..5"
+    },
+    {
+      "check": "priority_formula_consistent",
+      "ok": true,
+      "detail": "priority_score follows formula"
+    },
+    {
+      "check": "all_items_have_owner",
+      "ok": true,
+      "detail": "owner_team required"
+    }
+  ]
+}

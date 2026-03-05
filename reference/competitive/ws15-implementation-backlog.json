@@ -1,0 +1,91 @@
+{
+  "version": "0.1.0",
+  "scope": "ws15-implementation-backlog",
+  "scoring_model": {
+    "impact_scale": "1-5",
+    "effort_scale": "1-5",
+    "priority_formula": "round((impact_score*2)-effort_score, 2)"
+  },
+  "items": [
+    {
+      "feature_id": "cmp-001",
+      "feature_name": "point_in_time_recovery",
+      "impact_score": 5,
+      "effort_score": 4,
+      "priority_score": 6,
+      "target_release": "R3",
+      "owner_team": "Storage + SRE",
+      "acceptance_stub": "restore_snapshot_to_target_timestamp"
+    },
+    {
+      "feature_id": "cmp-002",
+      "feature_name": "incremental_backup_catalog",
+      "impact_score": 4,
+      "effort_score": 3,
+      "priority_score": 5,
+      "target_release": "R3",
+      "owner_team": "Storage + Platform",
+      "acceptance_stub": "incremental_backup_chain_metadata_validation"
+    },
+    {
+      "feature_id": "cmp-003",
+      "feature_name": "follower_read_routing",
+      "impact_score": 4,
+      "effort_score": 2,
+      "priority_score": 6,
+      "target_release": "R3",
+      "owner_team": "Query + Distributed Systems",
+      "acceptance_stub": "follower_read_consistency_lag_bounds"
+    },
+    {
+      "feature_id": "cmp-004",
+      "feature_name": "vector_index_lifecycle",
+      "impact_score": 5,
+      "effort_score": 4,
+      "priority_score": 6,
+      "target_release": "R3",
+      "owner_team": "AI Platform + Query",
+      "acceptance_stub": "vector_index_build_rebuild_retain_policy"
+    },
+    {
+      "feature_id": "cmp-005",
+      "feature_name": "graph_pattern_query_bridge",
+      "impact_score": 3,
+      "effort_score": 4,
+      "priority_score": 2,
+      "target_release": "R4",
+      "owner_team": "Query + Multimodel",
+      "acceptance_stub": "graph_pattern_translation_contract"
+    },
+    {
+      "feature_id": "cmp-006",
+      "feature_name": "workload_adaptive_plan_cache",
+      "impact_score": 4,
+      "effort_score": 3,
+      "priority_score": 5,
+      "target_release": "R3",
+      "owner_team": "Query + Runtime",
+      "acceptance_stub": "plan_cache_eviction_adaptive_thresholds"
+    },
+    {
+      "feature_id": "cmp-007",
+      "feature_name": "tenant_resource_governor",
+      "impact_score": 5,
+      "effort_score": 5,
+      "priority_score": 5,
+      "target_release": "R4",
+      "owner_team": "Security + Platform",
+      "acceptance_stub": "tenant_quota_enforcement_and_fairness"
+    },
+    {
+      "feature_id": "cmp-008",
+      "feature_name": "zero_downtime_schema_evolution",
+      "impact_score": 5,
+      "effort_score": 4,
+      "priority_score": 6,
+      "target_release": "R3",
+      "owner_team": "Schema + Runtime",
+      "acceptance_stub": "schema_migration_backward_compatibility_window"
+    }
+  ]
+}
