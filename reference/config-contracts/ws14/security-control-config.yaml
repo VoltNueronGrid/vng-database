@@ -3,6 +3,8 @@ security:
   adminHeaderName: "x-vng-admin-key"
   tlsRequired: true
   mtlsRequired: false
+  encryptionAtRestRequired: true
+  kmsKeyRefEnv: "VNG_KMS_KEY_URI"
   allowedOperatorRoles:
     - "dba"
     - "sre"

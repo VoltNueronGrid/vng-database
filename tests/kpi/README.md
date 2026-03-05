@@ -36,7 +36,8 @@ Initial KPI coverage:
 - `scripts/run-ws4-ingest-plugin-smoke.ps1` - WS4 ingestion plugin registry scaffold smoke
 - `scripts/run-ws4a-streaming-smoke.ps1` - WS4A streaming in/out + replayable event path scaffold smoke
 - `scripts/run-ws4a-replay-cursor-smoke.ps1` - WS4A replay cursor durability bridge smoke
-- `scripts/run-ws5-operator-auth-smoke.ps1` - WS5 operator auth baseline smoke
+- `scripts/run-ws5-operator-auth-smoke.ps1` - WS5 security smoke (operator auth + TLS/encryption contract checks)
+- `scripts/run-ws5-gate.ps1` - WS5 gate orchestrator (runs WS5 security smoke and emits one gate summary artifact)
 - `scripts/run-ws6-failover-sim-smoke.ps1` - WS6 failover simulation scaffold smoke
 - `scripts/run-ws7-plugin-boundary-smoke.ps1` - WS7 connector package registration boundary smoke
 - `scripts/run-ws8-control-plane-smoke.ps1` - WS8 control-plane typed action record baseline smoke

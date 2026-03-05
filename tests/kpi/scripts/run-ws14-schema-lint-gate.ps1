@@ -50,7 +50,11 @@ if (Test-Path $files.driverJson) {
 if (Test-Path $files.securityJson) {
   try {
     $j = Get-Content -Raw -Path $files.securityJson | ConvertFrom-Json
-    Add-Check -Name "security_json_schema" -Ok ($null -ne $j.security.allowedOperatorRoles) -Detail "security.allowedOperatorRoles exists"
+    Add-Check -Name "security_json_schema" -Ok (
+      $null -ne $j.security.allowedOperatorRoles -and
+      $null -ne $j.security.encryptionAtRestRequired -and
+      $null -ne $j.security.kmsKeyRefEnv
+    ) -Detail "security allowedOperatorRoles + encryptionAtRestRequired + kmsKeyRefEnv exist"
   } catch {
     Add-Check -Name "security_json_schema" -Ok $false -Detail $_.Exception.Message
   }
@@ -67,6 +71,8 @@ if (Test-Path $files.securityYaml) {
   $y = Get-Content -Raw -Path $files.securityYaml
   Add-Check -Name "security_yaml_has_security_root" -Ok ($y -match "(?m)^security:") -Detail "security root"
   Add-Check -Name "security_yaml_has_roles" -Ok ($y -match "(?m)^\s{2}allowedOperatorRoles:") -Detail "allowedOperatorRoles root"
+  Add-Check -Name "security_yaml_has_encryption_required" -Ok ($y -match "(?m)^\s{2}encryptionAtRestRequired:\s*(true|false)\s*$") -Detail "encryptionAtRestRequired boolean"
+  Add-Check -Name "security_yaml_has_kms_ref" -Ok ($y -match "(?m)^\s{2}kmsKeyRefEnv:\s*.+$") -Detail "kmsKeyRefEnv present"
   Add-Check -Name "security_yaml_has_token_ttl" -Ok ($y -match "tokenTtlSeconds:\s*\d+") -Detail "tokenTtlSeconds numeric"
 }
 

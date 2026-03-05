@@ -35,7 +35,9 @@ try {
     $null -ne $driverSchema.driver.baseUrl -and
     $null -ne $driverSchema.driver.pool.maxConnections -and
     $null -ne $securitySchema.security.adminApiKeyEnv -and
-    $null -ne $securitySchema.security.allowedOperatorRoles
+    $null -ne $securitySchema.security.allowedOperatorRoles -and
+    $null -ne $securitySchema.security.encryptionAtRestRequired -and
+    $null -ne $securitySchema.security.kmsKeyRefEnv
   )
 
   $outputLines = @($first + $second)

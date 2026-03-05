@@ -1,0 +1,15 @@
+{
+  "gate": "ws5",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T16:42:01.9367851Z",
+  "finished_at_utc": "2026-03-05T16:42:06.3203234Z",
+  "duration_ms": 4384,
+  "packs": [
+    {
+      "pack": "ws5-security-smoke",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws5/operator-auth-smoke.json"
+    }
+  ]
+}

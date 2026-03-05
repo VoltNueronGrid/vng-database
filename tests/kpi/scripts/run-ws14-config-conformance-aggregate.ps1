@@ -66,6 +66,10 @@ Add-Check -Name "security_admin_env_json_vs_props" -Ok ($securityJson.security.a
 Add-Check -Name "security_admin_env_json_vs_yaml" -Ok ($securityYaml -match ("adminApiKeyEnv:\s*`"" + [regex]::Escape([string]$securityJson.security.adminApiKeyEnv) + "`"")) -Detail "adminApiKeyEnv present in YAML"
 Add-Check -Name "security_tls_json_vs_props" -Ok (([string]$securityJson.security.tlsRequired).ToLower() -eq ([string]$securityProps["security.tlsRequired"]).ToLower()) -Detail "tlsRequired parity"
 Add-Check -Name "security_mtls_json_vs_props" -Ok (([string]$securityJson.security.mtlsRequired).ToLower() -eq ([string]$securityProps["security.mtlsRequired"]).ToLower()) -Detail "mtlsRequired parity"
+Add-Check -Name "security_encryption_json_vs_props" -Ok (([string]$securityJson.security.encryptionAtRestRequired).ToLower() -eq ([string]$securityProps["security.encryptionAtRestRequired"]).ToLower()) -Detail "encryptionAtRestRequired parity"
+Add-Check -Name "security_kms_json_vs_props" -Ok ([string]$securityJson.security.kmsKeyRefEnv -eq [string]$securityProps["security.kmsKeyRefEnv"]) -Detail "kmsKeyRefEnv parity"
+Add-Check -Name "security_encryption_json_vs_yaml" -Ok ($securityYaml -match ("encryptionAtRestRequired:\s*" + ([string]$securityJson.security.encryptionAtRestRequired).ToLower())) -Detail "encryptionAtRestRequired present in YAML"
+Add-Check -Name "security_kms_json_vs_yaml" -Ok ($securityYaml -match ("kmsKeyRefEnv:\s*`"" + [regex]::Escape([string]$securityJson.security.kmsKeyRefEnv) + "`"")) -Detail "kmsKeyRefEnv present in YAML"
 Add-Check -Name "security_ttl_json_vs_props" -Ok ([string]$securityJson.security.tokenTtlSeconds -eq $securityProps["security.tokenTtlSeconds"]) -Detail "tokenTtlSeconds parity"
 
 $rolesFromJson = @($securityJson.security.allowedOperatorRoles)
