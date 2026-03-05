@@ -15,13 +15,17 @@ function New-OutputDir {
 New-OutputDir -PathValue $OutputPath
 
 $start = Get-Date
-$command = "cargo test -p voltnuerongrid-exec"
+$command = "cargo test -p voltnuerongrid-exec; cargo check -p voltnuerongridd"
 $outputLines = @()
 $exitCode = 1
 
 try {
-  $outputLines = & cargo test -p voltnuerongrid-exec 2>&1
-  $exitCode = $LASTEXITCODE
+  $first = & cargo test -p voltnuerongrid-exec 2>&1
+  $firstExit = $LASTEXITCODE
+  $second = & cargo check -p voltnuerongridd 2>&1
+  $secondExit = $LASTEXITCODE
+  $outputLines = @($first + $second)
+  $exitCode = if ($firstExit -eq 0 -and $secondExit -eq 0) { 0 } else { 1 }
 } catch {
   $outputLines += $_.Exception.Message
   $exitCode = 1

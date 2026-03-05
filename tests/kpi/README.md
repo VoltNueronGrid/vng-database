@@ -32,7 +32,7 @@ Initial KPI coverage:
 - `scripts/run-h02-sync-fault-injection.ps1` - H-02 sequence-gap fault-injection harness
 - `scripts/run-h02-reorder-duplicate-faults.ps1` - H-02 reorder/duplicate fault harness
 - `scripts/run-h02-restart-replay-matrix.ps1` - H-02 restart+replay fault matrix harness
-- `scripts/run-ws3-query-routing-smoke.ps1` - WS3 HTAP route-decision scaffold smoke
+- `scripts/run-ws3-query-routing-smoke.ps1` - WS3 HTAP route-decision + runtime dispatch scaffold smoke
 - `scripts/run-ws4-ingest-plugin-smoke.ps1` - WS4 ingestion plugin registry scaffold smoke
 - `scripts/run-ws4a-streaming-smoke.ps1` - WS4A streaming in/out + replayable event path scaffold smoke
 - `scripts/run-ws7-plugin-boundary-smoke.ps1` - WS7 connector package registration boundary smoke

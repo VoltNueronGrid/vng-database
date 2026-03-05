@@ -172,6 +172,22 @@ struct SqlRouteResponse {
     statements: Vec<RoutedStatementResponse>,
 }
 
+#[derive(Deserialize)]
+struct SqlExecuteRequest {
+    sql_batch: String,
+    max_rows: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct SqlExecuteResponse {
+    status: &'static str,
+    route_path: String,
+    reason: String,
+    transaction: Option<SqlTransactionResponse>,
+    olap: Option<OlapQueryResponse>,
+    rejected_statement_count: usize,
+}
+
 #[derive(Serialize)]
 struct SqlTransactionResponse {
     status: &'static str,
@@ -246,6 +262,7 @@ async fn main() {
         .route("/api/v1/sql/transaction", post(sql_transaction))
         .route("/api/v1/sql/analyze", post(sql_analyze))
         .route("/api/v1/sql/route", post(sql_route))
+        .route("/api/v1/sql/execute", post(sql_execute))
         .route("/api/v1/olap/query", post(olap_query))
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/autonomous/guardrails", get(autonomous_guardrails))
@@ -277,63 +294,8 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
 async fn sql_transaction(
     Json(req): Json<SqlTransactionRequest>,
 ) -> (StatusCode, Json<SqlTransactionResponse>) {
-    if req.statements.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(SqlTransactionResponse {
-                status: "error",
-                transaction_id: String::new(),
-                statements_executed: 0,
-                requires_transaction: false,
-                touches_catalog: false,
-                rejected_statement_count: 0,
-                elapsed_ms: 0,
-            }),
-        );
-    }
-
-    let mut requires_transaction = false;
-    let mut touches_catalog = false;
-    let mut rejected_statement_count = 0usize;
-    for stmt in &req.statements {
-        let analysis = SqlAnalyzer::analyze_statement(stmt);
-        if analysis.kind == SqlStatementKind::Unknown {
-            rejected_statement_count += 1;
-        }
-        requires_transaction |= analysis.requires_transaction;
-        touches_catalog |= analysis.touches_catalog;
-    }
-
-    if rejected_statement_count > 0 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(SqlTransactionResponse {
-                status: "error",
-                transaction_id: String::new(),
-                statements_executed: 0,
-                requires_transaction,
-                touches_catalog,
-                rejected_statement_count,
-                elapsed_ms: 0,
-            }),
-        );
-    }
-
-    let started = Instant::now();
-    let tx_id = TX_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let elapsed = started.elapsed().as_millis();
-    (
-        StatusCode::OK,
-        Json(SqlTransactionResponse {
-            status: "committed",
-            transaction_id: format!("tx-{tx_id}"),
-            statements_executed: req.statements.len(),
-            requires_transaction,
-            touches_catalog,
-            rejected_statement_count,
-            elapsed_ms: elapsed,
-        }),
-    )
+    let (status, response) = execute_transaction_statements(req.statements);
+    (status, Json(response))
 }
 
 async fn sql_analyze(Json(req): Json<SqlAnalyzeRequest>) -> Json<SqlAnalyzeResponse> {
@@ -380,16 +342,78 @@ async fn sql_route(Json(req): Json<SqlRouteRequest>) -> Json<SqlRouteResponse> {
     })
 }
 
+async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<SqlExecuteResponse>) {
+    let decision = HtapQueryRouter::route_batch(&req.sql_batch);
+    let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
+
+    if matches!(decision.path, QueryPath::Unknown) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SqlExecuteResponse {
+                status: "error",
+                route_path: "unknown".to_string(),
+                reason: decision.reason,
+                transaction: None,
+                olap: None,
+                rejected_statement_count: parsed.len(),
+            }),
+        );
+    }
+
+    let mut transaction_statements = Vec::new();
+    let mut olap_statements = Vec::new();
+    for statement in parsed {
+        let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
+        if analysis.kind == SqlStatementKind::Select {
+            olap_statements.push(statement.raw);
+        } else {
+            transaction_statements.push(statement.raw);
+        }
+    }
+
+    let mut transaction = None;
+    let mut olap = None;
+    let mut rejected_statement_count = 0usize;
+
+    if !transaction_statements.is_empty() {
+        let (status, response) = execute_transaction_statements(transaction_statements);
+        rejected_statement_count += response.rejected_statement_count;
+        if status != StatusCode::OK {
+            return (
+                status,
+                Json(SqlExecuteResponse {
+                    status: "error",
+                    route_path: route_path_name(decision.path).to_string(),
+                    reason: decision.reason,
+                    transaction: Some(response),
+                    olap: None,
+                    rejected_statement_count,
+                }),
+            );
+        }
+        transaction = Some(response);
+    }
+
+    if !olap_statements.is_empty() {
+        let query = olap_statements.join("; ");
+        olap = Some(execute_olap_query(query, req.max_rows));
+    }
+
+    (
+        StatusCode::OK,
+        Json(SqlExecuteResponse {
+            status: "ok",
+            route_path: route_path_name(decision.path).to_string(),
+            reason: decision.reason,
+            transaction,
+            olap,
+            rejected_statement_count,
+        }),
+    )
+}
+
 async fn olap_query(Json(req): Json<OlapQueryRequest>) -> Json<OlapQueryResponse> {
-    let started = Instant::now();
-    let elapsed = started.elapsed().as_millis();
-    let max_rows = req.max_rows.unwrap_or(1000);
-    Json(OlapQueryResponse {
-        status: "ok",
-        query_signature: req.query.chars().take(64).collect(),
-        elapsed_ms: elapsed,
-        rows: max_rows.min(10_000),
-    })
+    Json(execute_olap_query(req.query, req.max_rows))
 }
 
 async fn failover_status(State(state): State<AppState>) -> Json<FailoverStatusResponse> {
@@ -544,5 +568,77 @@ fn route_path_name(path: QueryPath) -> &'static str {
         QueryPath::Olap => "olap",
         QueryPath::Hybrid => "hybrid",
         QueryPath::Unknown => "unknown",
+    }
+}
+
+fn execute_transaction_statements(statements: Vec<String>) -> (StatusCode, SqlTransactionResponse) {
+    if statements.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            SqlTransactionResponse {
+                status: "error",
+                transaction_id: String::new(),
+                statements_executed: 0,
+                requires_transaction: false,
+                touches_catalog: false,
+                rejected_statement_count: 0,
+                elapsed_ms: 0,
+            },
+        );
+    }
+
+    let mut requires_transaction = false;
+    let mut touches_catalog = false;
+    let mut rejected_statement_count = 0usize;
+    for stmt in &statements {
+        let analysis = SqlAnalyzer::analyze_statement(stmt);
+        if analysis.kind == SqlStatementKind::Unknown {
+            rejected_statement_count += 1;
+        }
+        requires_transaction |= analysis.requires_transaction;
+        touches_catalog |= analysis.touches_catalog;
+    }
+
+    if rejected_statement_count > 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            SqlTransactionResponse {
+                status: "error",
+                transaction_id: String::new(),
+                statements_executed: 0,
+                requires_transaction,
+                touches_catalog,
+                rejected_statement_count,
+                elapsed_ms: 0,
+            },
+        );
+    }
+
+    let started = Instant::now();
+    let tx_id = TX_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let elapsed = started.elapsed().as_millis();
+    (
+        StatusCode::OK,
+        SqlTransactionResponse {
+            status: "committed",
+            transaction_id: format!("tx-{tx_id}"),
+            statements_executed: statements.len(),
+            requires_transaction,
+            touches_catalog,
+            rejected_statement_count,
+            elapsed_ms: elapsed,
+        },
+    )
+}
+
+fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryResponse {
+    let started = Instant::now();
+    let elapsed = started.elapsed().as_millis();
+    let resolved_max_rows = max_rows.unwrap_or(1000);
+    OlapQueryResponse {
+        status: "ok",
+        query_signature: query.chars().take(64).collect(),
+        elapsed_ms: elapsed,
+        rows: resolved_max_rows.min(10_000),
     }
 }
