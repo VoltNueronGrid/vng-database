@@ -1,0 +1,16 @@
+cloud:
+  provider: gcp
+  region_env: VNG_GCP_REGION
+
+runtime:
+  kubernetes_namespace: voltnuerongrid
+  image_repository: ghcr.io/pavan-pvj_ghub/voltnuerongrid
+  image_tag_env: VNG_GCP_IMAGE_TAG
+  service:
+    port: 8080
+  dr_hook_state_path: /var/lib/vng/state/dr-hook-runtime.json
+
+security:
+  auth:
+    mode: bearer
+    admin_key_env: VNG_GCP_ADMIN_API_KEY

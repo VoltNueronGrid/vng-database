@@ -1,0 +1,13 @@
+version: 0.1.0
+kind: voltnuerongrid.multicloud.profile
+
+required_fields:
+  - cloud.provider
+  - cloud.region_env
+  - runtime.kubernetes_namespace
+  - runtime.image_repository
+  - runtime.image_tag_env
+  - runtime.service.port
+  - runtime.dr_hook_state_path
+  - security.auth.mode
+  - security.auth.admin_key_env

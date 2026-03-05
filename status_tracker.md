@@ -96,8 +96,8 @@
 | WS9A | Epic 9A | IDE extension suite | DX Team | In Progress | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness) |
 | WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | In Progress | WS1, WS6 (Rust driver request builder + session/admin/operator headers + WS10 smoke harness) |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | In Progress | WS1 (locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + WS11 smoke harness) |
-| WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | In Progress | WS6 (runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion, and expanded WS12 gate criteria + smoke harness) |
-| WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | Not Started | WS0, WS12 |
+| WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | Ready for Validation | WS6 (runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion, and expanded WS12 gate criteria + smoke harness) |
+| WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | In Progress | WS0, WS12 (deploy cloud profile contracts for AWS/Azure/GCP + WS13 smoke harness `tests/kpi/scripts/run-ws13-multicloud-profile-smoke.ps1`) |
 | WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | In Progress | WS5, WS10 (driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness) |
 | WS15 | Epic 15 | Competitive feature adoption track | Architecture + Query Team | Not Started | WS3 |
 
@@ -234,5 +234,6 @@ A tracker row moves to **Done** only when:
 | WS5 security and crypto | Security Team | Platform Team | Not Started |
 | WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Not Started |
 | WS8 autonomous control plane | AI Platform Team | Security Team, Runtime Team | In Progress |
-| WS12 reliability and DR automation | SRE Team | Distributed Systems Team | In Progress |
+| WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Ready for Validation |
+| WS13 multi-cloud deployment profiles | Platform/SRE | SRE Team, Security Team | In Progress |
 

@@ -1,0 +1,109 @@
+{
+  "smoke": "ws13-multicloud-deployment-profile-baseline",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T15:27:40.6240538Z",
+  "finished_at_utc": "2026-03-05T15:27:40.7024018Z",
+  "duration_ms": 78,
+  "checks": [
+    {
+      "check": "profile_contract_exists",
+      "ok": true,
+      "detail": "deploy/cloud/common/profile-contract.yaml"
+    },
+    {
+      "check": "profile_exists_aws",
+      "ok": true,
+      "detail": "deploy/cloud/aws/profile.yaml"
+    },
+    {
+      "check": "profile_provider_aws",
+      "ok": true,
+      "detail": "provider key"
+    },
+    {
+      "check": "profile_region_env_aws",
+      "ok": true,
+      "detail": "VNG_AWS_REGION"
+    },
+    {
+      "check": "profile_admin_env_aws",
+      "ok": true,
+      "detail": "VNG_AWS_ADMIN_API_KEY"
+    },
+    {
+      "check": "profile_dr_state_path_aws",
+      "ok": true,
+      "detail": "dr_hook_state_path"
+    },
+    {
+      "check": "profile_exists_azure",
+      "ok": true,
+      "detail": "deploy/cloud/azure/profile.yaml"
+    },
+    {
+      "check": "profile_provider_azure",
+      "ok": true,
+      "detail": "provider key"
+    },
+    {
+      "check": "profile_region_env_azure",
+      "ok": true,
+      "detail": "VNG_AZURE_REGION"
+    },
+    {
+      "check": "profile_admin_env_azure",
+      "ok": true,
+      "detail": "VNG_AZURE_ADMIN_API_KEY"
+    },
+    {
+      "check": "profile_dr_state_path_azure",
+      "ok": true,
+      "detail": "dr_hook_state_path"
+    },
+    {
+      "check": "profile_exists_gcp",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/profile.yaml"
+    },
+    {
+      "check": "profile_provider_gcp",
+      "ok": true,
+      "detail": "provider key"
+    },
+    {
+      "check": "profile_region_env_gcp",
+      "ok": true,
+      "detail": "VNG_GCP_REGION"
+    },
+    {
+      "check": "profile_admin_env_gcp",
+      "ok": true,
+      "detail": "VNG_GCP_ADMIN_API_KEY"
+    },
+    {
+      "check": "profile_dr_state_path_gcp",
+      "ok": true,
+      "detail": "dr_hook_state_path"
+    },
+    {
+      "check": "kpi_cloud_profiles_real_exists",
+      "ok": true,
+      "detail": "tests/kpi/config/cloud-profiles-real.yaml"
+    },
+    {
+      "check": "kpi_cloud_profiles_contains_aws",
+      "ok": true,
+      "detail": "aws env bindings"
+    },
+    {
+      "check": "kpi_cloud_profiles_contains_azure",
+      "ok": true,
+      "detail": "azure env bindings"
+    },
+    {
+      "check": "kpi_cloud_profiles_contains_gcp",
+      "ok": true,
+      "detail": "gcp env bindings"
+    }
+  ]
+}

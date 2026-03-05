@@ -47,6 +47,7 @@ Initial KPI coverage:
 - `scripts/run-ws10-driver-smoke.ps1` - WS10 driver request/session-routing baseline smoke
 - `scripts/run-ws11-i18n-smoke.ps1` - WS11 i18n/UTF-8 baseline smoke
 - `scripts/run-ws12-reliability-smoke.ps1` - WS12 reliability/SRE baseline smoke (health + rate-limit + failure-budget alerts + DR hook persistence/scheduler/policy/retry-plan + failure signal reconciliation + gate evaluation/export contracts)
+- `scripts/run-ws13-multicloud-profile-smoke.ps1` - WS13 multi-cloud deployment profile baseline smoke (AWS/Azure/GCP profile contracts + KPI cloud config alignment)
 - `scripts/run-ws14-config-smoke.ps1` - WS14 driver/security config contract baseline smoke
 - `results/` - output folder for run artifacts
 
