@@ -4,6 +4,8 @@ pub const CRATE_NAME: &str = "voltnuerongrid-sql";
 
 use std::collections::HashMap;
 
+pub mod legacy_aggregations;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SqlStatementKind {
     Select,
@@ -177,6 +179,9 @@ fn normalize_sql_for_match(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::legacy_aggregations::{
+        is_legacy_aggregation_supported, SUPPORTED_LEGACY_AGGREGATIONS,
+    };
 
     #[test]
     fn classifies_core_statements() {
@@ -229,5 +234,26 @@ mod tests {
         assert!(registry.contains("SUM_FAST"));
         let f = registry.get("sum_fast").expect("function should exist");
         assert_eq!(f.language, FunctionLanguage::Builtin);
+    }
+
+    #[test]
+    fn legacy_aggregation_parity_manifest_alignment() {
+        let required = include_str!("../../../tests/parity/legacy/required-aggregations.txt");
+        let mut missing = Vec::new();
+        for line in required.lines() {
+            let value = line.trim();
+            if value.is_empty() || value.starts_with('#') {
+                continue;
+            }
+            if !is_legacy_aggregation_supported(value) {
+                missing.push(value.to_string());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "missing legacy aggregation support for: {:?}; supported={:?}",
+            missing,
+            SUPPORTED_LEGACY_AGGREGATIONS
+        );
     }
 }

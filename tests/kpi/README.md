@@ -23,6 +23,7 @@ Initial KPI coverage:
 - `scripts/run-autonomous-guardrail-smoke.ps1` - H-01 guardrail control smoke test
 - `scripts/check-r1-gate.ps1` - executable R1 gate checklist artifact validator
 - `scripts/run-sql-analyze-smoke.ps1` - WS1 SQL analyzer API smoke evidence generator
+- `scripts/run-legacy-aggregation-parity.ps1` - WS1A legacy aggregation parity harness
 - `results/` - output folder for run artifacts
 
 ## Usage

@@ -1,0 +1,12 @@
+# Starter parity manifest for legacy MDAP aggregation coverage.
+# One aggregation per line.
+SUM
+COUNT
+MIN
+MAX
+AVG
+COUNT_DISTINCT
+MEDIAN
+STDDEV
+VARIANCE
+PERCENTILE

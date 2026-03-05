@@ -1,0 +1,13 @@
+﻿{
+    "required_count":  10,
+    "timestamp_utc":  "2026-03-05T03:20:47.2731463Z",
+    "missing":  [
+
+                ],
+    "manifest_path":  "tests/parity/legacy/required-aggregations.txt",
+    "supported_count":  10,
+    "status":  "passed",
+    "extra_supported":  [
+
+                        ]
+}
