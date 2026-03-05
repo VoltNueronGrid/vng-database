@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod htap_sync;
 pub mod wal_adapter;
+use wal_adapter::{WalAdapter, WalAdapterError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurabilityConfig {
@@ -72,6 +73,42 @@ impl InMemoryDurabilityEngine {
         record
     }
 
+    pub fn append_mutation_with_adapter<A: WalAdapter>(
+        &mut self,
+        key: &str,
+        value: &str,
+        adapter: &A,
+    ) -> Result<WalRecord, WalAdapterError> {
+        let record = self.append_mutation(key, value);
+        if self.config.wal_enabled {
+            adapter.append(&record)?;
+        }
+        Ok(record)
+    }
+
+    pub fn recover_from_records(
+        config: DurabilityConfig,
+        records: &[WalRecord],
+    ) -> InMemoryDurabilityEngine {
+        let mut engine = InMemoryDurabilityEngine::with_config(config);
+        for record in records {
+            engine.sequence = engine.sequence.max(record.sequence);
+            engine.store.insert(record.key.clone(), record.value.clone());
+            if engine.config.wal_enabled {
+                engine.wal.push(record.clone());
+            }
+        }
+        engine
+    }
+
+    pub fn recover_from_adapter<A: WalAdapter>(
+        config: DurabilityConfig,
+        adapter: &A,
+    ) -> Result<InMemoryDurabilityEngine, WalAdapterError> {
+        let records = adapter.read_all()?;
+        Ok(Self::recover_from_records(config, &records))
+    }
+
     pub fn get(&self, key: &str) -> Option<&str> {
         self.store.get(key).map(String::as_str)
     }
@@ -117,6 +154,22 @@ fn now_epoch_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wal_adapter::FileWalAdapter;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_wal_path() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "vng-durability-replay-test-{}-{}.log",
+            std::process::id(),
+            nanos
+        ))
+    }
 
     #[test]
     fn appends_mutation_and_reads_latest_value() {
@@ -154,5 +207,29 @@ mod tests {
                 .checkpoint_id,
             1
         );
+    }
+
+    #[test]
+    fn recovers_state_from_wal_adapter_records() {
+        let wal_path = unique_wal_path();
+        let adapter = FileWalAdapter::new(&wal_path).expect("adapter");
+
+        let mut writer = InMemoryDurabilityEngine::default();
+        writer
+            .append_mutation_with_adapter("tenant", "acme", &adapter)
+            .expect("append first");
+        writer
+            .append_mutation_with_adapter("region", "us-east-1", &adapter)
+            .expect("append second");
+
+        let recovered =
+            InMemoryDurabilityEngine::recover_from_adapter(DurabilityConfig::default(), &adapter)
+                .expect("recover");
+        assert_eq!(recovered.get("tenant"), Some("acme"));
+        assert_eq!(recovered.get("region"), Some("us-east-1"));
+        assert_eq!(recovered.latest_sequence(), 2);
+        assert_eq!(recovered.wal_len(), 2);
+
+        let _ = fs::remove_file(adapter.wal_path());
     }
 }

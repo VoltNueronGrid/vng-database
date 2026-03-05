@@ -40,6 +40,7 @@ $cases = @(
   "preserves_continuity_after_checkpoint_and_restore",
   "replay_after_restore_preserves_integrity_without_faults",
   "replay_after_restore_detects_gap_when_fault_injected",
+  "recovers_state_from_wal_adapter_records",
   "detects_sequence_gap_after_fault_injection",
   "detects_duplicate_sequences_after_fault_injection",
   "detects_out_of_order_sequences_after_fault_injection"

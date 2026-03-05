@@ -82,7 +82,7 @@
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts + SQL analyze runtime smoke) |
 | WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online) |
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | In Progress | WS1 (bucketed manifests + P2 stub implementations + gap report outputs in place) |
-| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | In Progress | WS0 (durability bootstrap + checkpoint/restart + disk-backed WAL adapter skeleton merged) |
+| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | In Progress | WS0 (durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged) |
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | In Progress | WS2 (row-sync origin scaffold + smoke evidence captured) |
 | WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | In Progress | WS2 (route-decision scaffold in `voltnuerongrid-exec` + `run-ws3-query-routing-smoke.ps1`) |
 | WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | Not Started | WS2 |
@@ -203,7 +203,7 @@ A tracker row moves to **Done** only when:
 | ID | Status | Completion | Risk Trend | Priority | Release Target | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---:|---|---|---|---|---|---|
 | H-01 | In Progress | 55% | improving | P0 | R2 | Implemented runtime guardrail endpoints (`/api/v1/autonomous/guardrails`, `/api/v1/autonomous/emergency-stop`, `/api/v1/autonomous/actions/authorize`), added contract `reference/autonomous-guardrails-api.md`, added smoke script `tests/kpi/scripts/run-autonomous-guardrail-smoke.ps1`, and captured passing artifact `tests/kpi/results/20260305-h01/autonomous-guardrail-smoke.json` | Policy persistence and authz integration pending | Integrate policy persistence + authenticated operator identity for emergency-stop changes |
-| H-02 | In Progress | 55% | improving | P0 | R2 | Added restart/replay integrity tests + matrix harness artifact `tests/kpi/results/h02/h02-restart-replay-matrix.json`; correctness spec updated | Distributed sync transport and full replay semantics not yet implemented | Wire WS2 disk WAL replay path and run matrix against persisted logs |
+| H-02 | In Progress | 65% | improving | P0 | R2 | Added restart/replay integrity tests + matrix harness artifact `tests/kpi/results/h02/h02-restart-replay-matrix.json`; matrix now includes persisted WAL recovery signal | Distributed sync transport and full replay semantics not yet implemented | Extend matrix to multi-node transport replay and failover handoff |
 | H-03 | In Progress | 15% | stable | P0 | R2 | Control-plane clustering requirement and SPOF closure criteria documented | Cluster runtime implementation pending | Control-plane chaos test plan v1 |
 | H-04 | In Progress | 20% | stable | P0 | R2 | Outbox and replay durability controls defined in architecture | Event bus/outbox services pending | Exactly-once replay test harness draft |
 | H-05 | Not Started | 0% | stable | P1 | R3 | Multi-region KMS fallback requirement documented | KMS integration code pending | KMS outage simulation checklist |

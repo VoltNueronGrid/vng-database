@@ -56,3 +56,4 @@ Detect sequence integrity violations early and prevent silent data divergence be
 - Out-of-order mutation replay detection added.
 - Duplicate-sequence detection added.
 - Restart+replay matrix harness added with explicit integrity checks after restore.
+- Matrix now includes persisted WAL recovery test coverage (`recovers_state_from_wal_adapter_records`).
