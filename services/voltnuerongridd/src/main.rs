@@ -18,6 +18,7 @@ use voltnuerongrid_sql::{I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLo
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
+static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 struct AppState {
@@ -27,6 +28,7 @@ struct AppState {
     leader_node_id: Arc<Mutex<String>>,
     audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
     action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
+    dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -331,6 +333,58 @@ struct RateLimitCheckResponse {
     reason: String,
 }
 
+#[derive(Deserialize)]
+struct FailureBudgetAlertQuery {
+    consumed_percent: Option<f64>,
+    burn_rate: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct FailureBudgetAlertResponse {
+    status: &'static str,
+    alert_state: &'static str,
+    severity: &'static str,
+    threshold_percent: f64,
+    consumed_percent: f64,
+    burn_rate: f64,
+    recommended_action: &'static str,
+}
+
+#[derive(Deserialize)]
+struct DrHookTriggerRequest {
+    hook: String,
+    scope: Option<String>,
+    dry_run: Option<bool>,
+}
+
+#[derive(Clone, Serialize)]
+struct DrHookExecutionRecord {
+    execution_id: String,
+    hook: String,
+    scope: String,
+    status: &'static str,
+    dry_run: bool,
+    details: String,
+}
+
+#[derive(Serialize)]
+struct DrHookTriggerResponse {
+    status: &'static str,
+    execution: DrHookExecutionRecord,
+}
+
+#[derive(Deserialize)]
+struct DrHookStatusQuery {
+    max_items: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct DrHookStatusResponse {
+    status: &'static str,
+    total_records: usize,
+    records: Vec<DrHookExecutionRecord>,
+}
+
 #[tokio::main]
 async fn main() {
     let node_id = env::var("VNG_NODE_ID")
@@ -369,6 +423,7 @@ async fn main() {
         leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
         audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
         action_records: Arc::new(Mutex::new(Vec::new())),
+        dr_hook_records: Arc::new(Mutex::new(Vec::new())),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -385,6 +440,12 @@ async fn main() {
         .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/sre/reliability/status", get(sre_reliability_status))
         .route("/api/v1/sre/rate-limit/check", post(sre_rate_limit_check))
+        .route(
+            "/api/v1/sre/failure-budget/alerts",
+            get(sre_failure_budget_alerts),
+        )
+        .route("/api/v1/sre/dr/hooks/trigger", post(sre_dr_hook_trigger))
+        .route("/api/v1/sre/dr/hooks/status", get(sre_dr_hook_status))
         .route("/api/v1/audit/events", get(audit_events))
         .route("/api/v1/i18n/messages", get(i18n_messages))
         .route(
@@ -637,6 +698,65 @@ async fn sre_rate_limit_check(
         allowed,
         remaining_units,
         reason: reason.to_string(),
+    }))
+}
+
+async fn sre_failure_budget_alerts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FailureBudgetAlertQuery>,
+) -> Result<Json<FailureBudgetAlertResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let consumed_percent = query.consumed_percent.unwrap_or(12.5).clamp(0.0, 100.0);
+    let burn_rate = query.burn_rate.unwrap_or((consumed_percent / 10.0).max(0.1));
+    let alert = evaluate_failure_budget_alert(consumed_percent, burn_rate);
+    Ok(Json(alert))
+}
+
+async fn sre_dr_hook_trigger(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DrHookTriggerRequest>,
+) -> Result<Json<DrHookTriggerResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let requested_by = headers
+        .get("x-vng-operator-id")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown");
+    let execution = execute_dr_hook(&state, &req.hook, req.scope.as_deref(), req.dry_run.unwrap_or(true));
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        requested_by,
+        "sre_dr_hook_trigger",
+        execution.status,
+        &json!({
+            "execution_id": execution.execution_id,
+            "hook": execution.hook,
+            "scope": execution.scope,
+            "dry_run": execution.dry_run,
+            "details": execution.details,
+        })
+        .to_string(),
+    );
+    Ok(Json(DrHookTriggerResponse {
+        status: "ok",
+        execution,
+    }))
+}
+
+async fn sre_dr_hook_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<DrHookStatusQuery>,
+) -> Result<Json<DrHookStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let max_items = query.max_items.unwrap_or(50).min(500);
+    let records = latest_dr_hook_records(&state, max_items);
+    Ok(Json(DrHookStatusResponse {
+        status: "ok",
+        total_records: records.len(),
+        records,
     }))
 }
 
@@ -965,6 +1085,115 @@ fn rate_limit_policy_snapshot(current_minute_count: u32) -> RateLimitPolicySnaps
     }
 }
 
+fn evaluate_failure_budget_alert(
+    consumed_percent: f64,
+    burn_rate: f64,
+) -> FailureBudgetAlertResponse {
+    if consumed_percent >= 80.0 || burn_rate >= 3.0 {
+        return FailureBudgetAlertResponse {
+            status: "ok",
+            alert_state: "triggered",
+            severity: "critical",
+            threshold_percent: 80.0,
+            consumed_percent,
+            burn_rate,
+            recommended_action: "start_automated_dr_failover_drill",
+        };
+    }
+    if consumed_percent >= 50.0 || burn_rate >= 1.5 {
+        return FailureBudgetAlertResponse {
+            status: "ok",
+            alert_state: "warning",
+            severity: "high",
+            threshold_percent: 50.0,
+            consumed_percent,
+            burn_rate,
+            recommended_action: "increase_error_budget_sampling_and_throttle_low_priority_jobs",
+        };
+    }
+    FailureBudgetAlertResponse {
+        status: "ok",
+        alert_state: "nominal",
+        severity: "info",
+        threshold_percent: 50.0,
+        consumed_percent,
+        burn_rate,
+        recommended_action: "continue_monitoring",
+    }
+}
+
+fn execute_dr_hook(
+    state: &AppState,
+    hook: &str,
+    scope: Option<&str>,
+    dry_run: bool,
+) -> DrHookExecutionRecord {
+    let execution_id = format!("drh-{}", DR_HOOK_COUNTER.fetch_add(1, Ordering::Relaxed));
+    let normalized_scope = scope.unwrap_or("cluster").trim();
+    let normalized_scope = if normalized_scope.is_empty() {
+        "cluster"
+    } else {
+        normalized_scope
+    };
+    let normalized_hook = hook.trim().to_ascii_lowercase();
+
+    let (status, details) = match normalized_hook.as_str() {
+        "failover_drill" => {
+            if dry_run {
+                (
+                    "simulated",
+                    format!("dry_run prepared failover drill for scope={normalized_scope}"),
+                )
+            } else {
+                let (previous, current) =
+                    rotate_leader(&state.leader_node_id, "node-dr-failover", &state.node_id);
+                (
+                    "executed",
+                    format!(
+                        "leader rotated from {previous} to {current} for scope={normalized_scope}"
+                    ),
+                )
+            }
+        }
+        "replay_checkpoint_verify" => (
+            if dry_run { "simulated" } else { "executed" },
+            format!("checkpoint replay verification started for scope={normalized_scope}"),
+        ),
+        _ => (
+            "rejected",
+            format!("unsupported_dr_hook={normalized_hook}"),
+        ),
+    };
+
+    let record = DrHookExecutionRecord {
+        execution_id,
+        hook: normalized_hook,
+        scope: normalized_scope.to_string(),
+        status,
+        dry_run,
+        details,
+    };
+    append_dr_hook_record(state, record.clone());
+    record
+}
+
+fn latest_dr_hook_records(state: &AppState, max_items: usize) -> Vec<DrHookExecutionRecord> {
+    match state.dr_hook_records.lock() {
+        Ok(records) => {
+            let len = records.len();
+            let start = len.saturating_sub(max_items);
+            records[start..].to_vec()
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+fn append_dr_hook_record(state: &AppState, record: DrHookExecutionRecord) {
+    if let Ok(mut records) = state.dr_hook_records.lock() {
+        records.push(record);
+    }
+}
+
 fn evaluate_rate_limit(
     current_minute_count: u32,
     requested_units: u32,
@@ -1148,6 +1377,7 @@ mod tests {
             leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
             action_records: Arc::new(Mutex::new(Vec::new())),
+            dr_hook_records: Arc::new(Mutex::new(Vec::new())),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -1270,5 +1500,29 @@ mod tests {
         assert_eq!(snapshot.consumed_percent, 12.5);
         assert_eq!(snapshot.remaining_percent, 87.5);
         assert!(snapshot.burn_rate > 0.0);
+    }
+
+    #[test]
+    fn ws12_failure_budget_alert_escalates_to_critical() {
+        let alert = evaluate_failure_budget_alert(82.0, 1.2);
+        assert_eq!(alert.alert_state, "triggered");
+        assert_eq!(alert.severity, "critical");
+    }
+
+    #[test]
+    fn ws12_dr_hook_executes_failover_when_not_dry_run() {
+        let state = state_with_key(None);
+        let execution = execute_dr_hook(&state, "failover_drill", Some("cluster"), false);
+        assert_eq!(execution.status, "executed");
+        assert!(execution.details.contains("leader rotated"));
+        assert_eq!(latest_dr_hook_records(&state, 10).len(), 1);
+    }
+
+    #[test]
+    fn ws12_dr_hook_rejects_unsupported_hook() {
+        let state = state_with_key(None);
+        let execution = execute_dr_hook(&state, "unknown_hook", None, true);
+        assert_eq!(execution.status, "rejected");
+        assert!(execution.details.contains("unsupported_dr_hook"));
     }
 }
