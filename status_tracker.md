@@ -52,7 +52,7 @@
 | REQ-09 | Extensible plugin ecosystem | Epic 7 | Not Started | Plugin SDK conformance suite |
 | REQ-10 | Trillion-row scale + high-speed retrieval | Epic 2, Epic 3, Epic 6 | Not Started | Scale benchmark report |
 | REQ-11 | Indexes + constraints | Epic 2, Epic 15 | Not Started | Constraint/index test suite |
-| REQ-12 | Seeded functions + plan-plat parity | Epic 1, Epic 1A | In Progress | Legacy aggregation parity harness + artifact (`tests/kpi/results/parity/legacy-aggregation-parity.json`) |
+| REQ-12 | Seeded functions + plan-plat parity | Epic 1, Epic 1A | In Progress | Legacy aggregation parity harness + P0/P1/P2 gap report (`tests/kpi/results/parity/legacy-aggregation-gap-report.json`) |
 | REQ-13 | Multi-user roles and privileges | Epic 5 | Not Started | RBAC matrix tests |
 | REQ-14 | UI + engine separation | Epic 9 | Not Started | UI/API integration tests |
 | REQ-15 | Driver support (multi-language) | Epic 10 | Not Started | Driver certification matrix |
@@ -81,7 +81,7 @@
 |---|---|---|---|---|---|
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts + SQL analyze runtime smoke) |
 | WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online) |
-| WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | In Progress | WS1 (starter parity manifest + harness in place) |
+| WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | In Progress | WS1 (bucketed manifests + gap report outputs in place) |
 | WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | In Progress | WS0 (durability contract bootstrap merged) |
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | In Progress | WS2 (row-sync origin scaffold + smoke evidence captured) |
 | WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | Not Started | WS2 |

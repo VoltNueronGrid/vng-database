@@ -1,0 +1,41 @@
+﻿{
+    "timestamp_utc":  "2026-03-05T05:46:15.5428760Z",
+    "status":  "gaps_present",
+    "supported_count":  10,
+    "global_missing":  [
+                           "APPROX_COUNT_DISTINCT",
+                           "BOTTOM_N",
+                           "TOP_N"
+                       ],
+    "buckets":  [
+                    {
+                        "missing":  [
+
+                                    ],
+                        "required_count":  6,
+                        "bucket":  "P0",
+                        "present_count":  6,
+                        "missing_count":  0
+                    },
+                    {
+                        "missing":  [
+
+                                    ],
+                        "required_count":  4,
+                        "bucket":  "P1",
+                        "present_count":  4,
+                        "missing_count":  0
+                    },
+                    {
+                        "missing":  [
+                                        "APPROX_COUNT_DISTINCT",
+                                        "TOP_N",
+                                        "BOTTOM_N"
+                                    ],
+                        "required_count":  3,
+                        "bucket":  "P2",
+                        "present_count":  0,
+                        "missing_count":  3
+                    }
+                ]
+}

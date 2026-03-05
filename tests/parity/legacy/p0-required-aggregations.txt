@@ -1,0 +1,7 @@
+# P0: Mandatory for immediate legacy parity
+SUM
+COUNT
+MIN
+MAX
+AVG
+COUNT_DISTINCT
