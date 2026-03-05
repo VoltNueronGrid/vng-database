@@ -180,7 +180,8 @@ fn normalize_sql_for_match(sql: &str) -> String {
 mod tests {
     use super::*;
     use crate::legacy_aggregations::{
-        is_legacy_aggregation_supported, SUPPORTED_LEGACY_AGGREGATIONS,
+        is_legacy_aggregation_supported, is_p2_stub_supported, run_p2_stub,
+        P2_STUB_AGGREGATIONS, SUPPORTED_LEGACY_AGGREGATIONS,
     };
 
     #[test]
@@ -255,5 +256,19 @@ mod tests {
             missing,
             SUPPORTED_LEGACY_AGGREGATIONS
         );
+    }
+
+    #[test]
+    fn p2_stub_hooks_cover_expected_aggregations() {
+        for agg in P2_STUB_AGGREGATIONS {
+            assert!(is_p2_stub_supported(agg));
+            let result = run_p2_stub(agg);
+            assert!(result.accepted, "stub should accept {agg}");
+            assert_eq!(result.mode, "stub");
+        }
+
+        let unknown = run_p2_stub("UNKNOWN_P2");
+        assert!(!unknown.accepted);
+        assert_eq!(unknown.mode, "unsupported");
     }
 }

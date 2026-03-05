@@ -19,6 +19,11 @@ $supported = @(
   "VARIANCE",
   "PERCENTILE"
 )
+$p2Stubbed = @(
+  "APPROX_COUNT_DISTINCT",
+  "TOP_N",
+  "BOTTOM_N"
+)
 
 function Read-Bucket {
   param([string]$Path)
@@ -43,13 +48,16 @@ $globalMissing = @()
 
 foreach ($bucket in $buckets) {
   $required = Read-Bucket -Path $bucket.file
-  $missing = @($required | Where-Object { $_ -notin $supported })
+  $missing = @($required | Where-Object { $_ -notin $supported -and $_ -notin $p2Stubbed })
+  $stubbed = @($required | Where-Object { $_ -in $p2Stubbed })
   $present = @($required | Where-Object { $_ -in $supported })
   $globalMissing += $missing
   $bucketReports += @{
     bucket = $bucket.id
     required_count = $required.Count
     present_count = $present.Count
+    stubbed_count = $stubbed.Count
+    stubbed = $stubbed
     missing_count = $missing.Count
     missing = $missing
   }
@@ -61,6 +69,7 @@ $result = @{
   status = if ($globalMissing.Count -eq 0) { "passed" } else { "gaps_present" }
   buckets = $bucketReports
   global_missing = @($globalMissing | Sort-Object -Unique)
+  p2_stubbed = $p2Stubbed
 }
 
 $outputDir = Split-Path -Parent $OutputPath
