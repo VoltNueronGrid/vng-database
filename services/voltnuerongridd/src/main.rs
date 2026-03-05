@@ -488,6 +488,10 @@ struct ClusterFailureSignal {
     severity: String,
     message: String,
     observed_unix_ms: u128,
+    resolved: bool,
+    resolved_by: Option<String>,
+    resolved_unix_ms: Option<u128>,
+    resolution_note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -495,6 +499,20 @@ struct FailureSignalResponse {
     status: &'static str,
     signal: ClusterFailureSignal,
     queued_remediation_task: Option<DrHookScheduledTask>,
+}
+
+#[derive(Deserialize)]
+struct FailureReconcileRequest {
+    signal_ids: Option<Vec<String>>,
+    resolve_all_critical: Option<bool>,
+    note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FailureReconcileResponse {
+    status: &'static str,
+    resolved_count: usize,
+    unresolved_critical_count: usize,
 }
 
 #[derive(Serialize)]
@@ -510,6 +528,18 @@ struct SreGateCriterion {
     name: String,
     passed: bool,
     detail: String,
+}
+
+#[derive(Deserialize)]
+struct SreGateExportRequest {
+    output_path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SreGateExportResponse {
+    status: &'static str,
+    output_path: String,
+    gate_result: &'static str,
 }
 
 #[derive(Serialize)]
@@ -608,7 +638,9 @@ async fn main() {
         .route("/api/v1/sre/dr/hooks/trigger", post(sre_dr_hook_trigger))
         .route("/api/v1/sre/dr/hooks/status", get(sre_dr_hook_status))
         .route("/api/v1/sre/failure/signal", post(sre_failure_signal))
+        .route("/api/v1/sre/failure/reconcile", post(sre_failure_reconcile))
         .route("/api/v1/sre/gate/evaluate", get(sre_gate_evaluate))
+        .route("/api/v1/sre/gate/export", post(sre_gate_export))
         .route("/api/v1/audit/events", get(audit_events))
         .route("/api/v1/i18n/messages", get(i18n_messages))
         .route(
@@ -1047,6 +1079,10 @@ async fn sre_failure_signal(
             .trim()
             .to_string(),
         observed_unix_ms: now_unix_ms(),
+        resolved: false,
+        resolved_by: None,
+        resolved_unix_ms: None,
+        resolution_note: None,
     };
     if let Ok(mut signals) = state.cluster_failure_signals.lock() {
         signals.push(signal.clone());
@@ -1093,70 +1129,92 @@ async fn sre_failure_signal(
     }))
 }
 
-async fn sre_gate_evaluate(
+async fn sre_failure_reconcile(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<SreGateEvaluationResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    Json(req): Json<FailureReconcileRequest>,
+) -> Result<Json<FailureReconcileResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let failure_budget = failure_budget_snapshot(12.5);
-    let queue_depth = state.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(usize::MAX);
-    let critical_signals = state
+    let operator = headers
+        .get("x-vng-operator-id")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown");
+    let mut resolved_count = 0usize;
+    let now = now_unix_ms();
+    let selected_ids = req.signal_ids.unwrap_or_default();
+    let resolve_all_critical = req.resolve_all_critical.unwrap_or(false);
+    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+        for signal in signals.iter_mut() {
+            if signal.resolved {
+                continue;
+            }
+            let targeted = if resolve_all_critical {
+                signal.severity.eq_ignore_ascii_case("critical")
+            } else {
+                selected_ids.iter().any(|id| id == &signal.signal_id)
+            };
+            if targeted {
+                signal.resolved = true;
+                signal.resolved_by = Some(operator.to_string());
+                signal.resolved_unix_ms = Some(now);
+                signal.resolution_note = req.note.clone();
+                resolved_count += 1;
+            }
+        }
+    }
+    let unresolved_critical_count = state
         .cluster_failure_signals
         .lock()
         .map(|signals| {
             signals
                 .iter()
-                .filter(|s| s.severity.eq_ignore_ascii_case("critical"))
+                .filter(|s| s.severity.eq_ignore_ascii_case("critical") && !s.resolved)
                 .count()
         })
         .unwrap_or(usize::MAX);
-    let persistence_configured = state
-        .dr_hook_state_path
-        .as_ref()
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-
-    let criteria = vec![
-        SreGateCriterion {
-            name: "failure_budget_below_warning".to_string(),
-            passed: failure_budget.consumed_percent < 50.0,
-            detail: format!("consumed_percent={}", failure_budget.consumed_percent),
-        },
-        SreGateCriterion {
-            name: "dr_queue_depth_below_threshold".to_string(),
-            passed: queue_depth < 100,
-            detail: format!("queue_depth={queue_depth} threshold=100"),
-        },
-        SreGateCriterion {
-            name: "no_unresolved_critical_signals".to_string(),
-            passed: critical_signals == 0,
-            detail: format!("critical_signals={critical_signals}"),
-        },
-        SreGateCriterion {
-            name: "dr_state_persistence_configured".to_string(),
-            passed: persistence_configured,
-            detail: format!("state_path={:?}", state.dr_hook_state_path),
-        },
-    ];
-
-    let failed: Vec<&SreGateCriterion> = criteria.iter().filter(|c| !c.passed).collect();
-    let gate_result = if failed.is_empty() {
-        "pass"
-    } else if failed.len() == 1 {
-        "warn"
-    } else {
-        "fail"
-    };
-    let recommended_actions = failed
-        .iter()
-        .map(|criterion| format!("resolve_{}", criterion.name))
-        .collect::<Vec<_>>();
-
-    Ok(Json(SreGateEvaluationResponse {
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        operator,
+        "sre_failure_reconcile",
+        "ok",
+        &json!({
+            "resolved_count": resolved_count,
+            "unresolved_critical_count": unresolved_critical_count,
+            "resolve_all_critical": resolve_all_critical,
+        })
+        .to_string(),
+    );
+    Ok(Json(FailureReconcileResponse {
         status: "ok",
-        gate_result,
-        criteria,
-        recommended_actions,
+        resolved_count,
+        unresolved_critical_count,
+    }))
+}
+
+async fn sre_gate_evaluate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SreGateEvaluationResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    Ok(Json(build_sre_gate_evaluation(&state)))
+}
+
+async fn sre_gate_export(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SreGateExportRequest>,
+) -> Result<Json<SreGateExportResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let evaluation = build_sre_gate_evaluation(&state);
+    let output_path = req
+        .output_path
+        .unwrap_or_else(|| "tests/kpi/results/ws12/gate-fail-report.json".to_string());
+    export_gate_report(&output_path, &evaluation);
+    Ok(Json(SreGateExportResponse {
+        status: "ok",
+        output_path,
+        gate_result: evaluation.gate_result,
     }))
 }
 
@@ -1656,6 +1714,79 @@ async fn run_dr_hook_scheduler(state: AppState) {
             );
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+fn build_sre_gate_evaluation(state: &AppState) -> SreGateEvaluationResponse {
+    let failure_budget = failure_budget_snapshot(12.5);
+    let queue_depth = state.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(usize::MAX);
+    let unresolved_critical_signals = state
+        .cluster_failure_signals
+        .lock()
+        .map(|signals| {
+            signals
+                .iter()
+                .filter(|s| s.severity.eq_ignore_ascii_case("critical") && !s.resolved)
+                .count()
+        })
+        .unwrap_or(usize::MAX);
+    let persistence_configured = state
+        .dr_hook_state_path
+        .as_ref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
+    let criteria = vec![
+        SreGateCriterion {
+            name: "failure_budget_below_warning".to_string(),
+            passed: failure_budget.consumed_percent < 50.0,
+            detail: format!("consumed_percent={}", failure_budget.consumed_percent),
+        },
+        SreGateCriterion {
+            name: "dr_queue_depth_below_threshold".to_string(),
+            passed: queue_depth < 100,
+            detail: format!("queue_depth={queue_depth} threshold=100"),
+        },
+        SreGateCriterion {
+            name: "no_unresolved_critical_signals".to_string(),
+            passed: unresolved_critical_signals == 0,
+            detail: format!("unresolved_critical_signals={unresolved_critical_signals}"),
+        },
+        SreGateCriterion {
+            name: "dr_state_persistence_configured".to_string(),
+            passed: persistence_configured,
+            detail: format!("state_path={:?}", state.dr_hook_state_path),
+        },
+    ];
+    let failed: Vec<&SreGateCriterion> = criteria.iter().filter(|c| !c.passed).collect();
+    let gate_result = if failed.is_empty() {
+        "pass"
+    } else if failed.len() == 1 {
+        "warn"
+    } else {
+        "fail"
+    };
+    let recommended_actions = failed
+        .iter()
+        .map(|criterion| format!("resolve_{}", criterion.name))
+        .collect::<Vec<_>>();
+
+    SreGateEvaluationResponse {
+        status: "ok",
+        gate_result,
+        criteria,
+        recommended_actions,
+    }
+}
+
+fn export_gate_report(path: &str, evaluation: &SreGateEvaluationResponse) {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+    if let Ok(encoded) = serde_json::to_string_pretty(evaluation) {
+        let _ = fs::write(path, encoded);
     }
 }
 
@@ -2227,6 +2358,10 @@ mod tests {
                 severity: "critical".to_string(),
                 message: "heartbeat timeout".to_string(),
                 observed_unix_ms: now_unix_ms(),
+                resolved: false,
+                resolved_by: None,
+                resolved_unix_ms: None,
+                resolution_note: None,
             });
         }
         let task = enqueue_dr_hook_task(
@@ -2255,15 +2390,61 @@ mod tests {
                 severity: "critical".to_string(),
                 message: "lag over threshold".to_string(),
                 observed_unix_ms: now_unix_ms(),
+                resolved: false,
+                resolved_by: None,
+                resolved_unix_ms: None,
+                resolution_note: None,
             });
         }
-        let critical_count = state
+        let evaluation = build_sre_gate_evaluation(&state);
+        assert_eq!(evaluation.gate_result, "warn");
+    }
+
+    #[test]
+    fn ws12_reconcile_marks_critical_resolved() {
+        let state = state_with_key(None);
+        if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+            signals.push(ClusterFailureSignal {
+                signal_id: "sig-reconcile".to_string(),
+                node_id: "node-4".to_string(),
+                transport: "gossip".to_string(),
+                failure_type: "node_unreachable".to_string(),
+                severity: "critical".to_string(),
+                message: "heartbeat timeout".to_string(),
+                observed_unix_ms: now_unix_ms(),
+                resolved: false,
+                resolved_by: None,
+                resolved_unix_ms: None,
+                resolution_note: None,
+            });
+        }
+        if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+            for signal in signals.iter_mut() {
+                if signal.signal_id == "sig-reconcile" {
+                    signal.resolved = true;
+                    signal.resolved_by = Some("tester".to_string());
+                    signal.resolved_unix_ms = Some(now_unix_ms());
+                }
+            }
+        }
+        let unresolved = state
             .cluster_failure_signals
             .lock()
             .expect("signal lock")
             .iter()
-            .filter(|s| s.severity == "critical")
+            .filter(|s| s.severity == "critical" && !s.resolved)
             .count();
-        assert_eq!(critical_count, 1);
+        assert_eq!(unresolved, 0);
+    }
+
+    #[test]
+    fn ws12_gate_export_writes_artifact() {
+        let state = state_with_key(None);
+        let evaluation = build_sre_gate_evaluation(&state);
+        let output = std::env::temp_dir().join(format!("vng-gate-{}.json", now_unix_ms()));
+        export_gate_report(output.to_string_lossy().as_ref(), &evaluation);
+        let exists = output.exists();
+        let _ = fs::remove_file(output);
+        assert!(exists);
     }
 }
