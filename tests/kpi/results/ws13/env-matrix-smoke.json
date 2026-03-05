@@ -1,0 +1,139 @@
+{
+  "smoke": "ws13-env-matrix-validation",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T15:36:49.0278491Z",
+  "finished_at_utc": "2026-03-05T15:36:49.1129548Z",
+  "duration_ms": 85,
+  "checks": [
+    {
+      "check": "runbook_exists_aws",
+      "ok": true,
+      "detail": "deploy/cloud/aws/README.md"
+    },
+    {
+      "check": "runbook_has_matrix_aws",
+      "ok": true,
+      "detail": "matrix heading"
+    },
+    {
+      "check": "runbook_var_aws_VNG_AWS_REGION",
+      "ok": true,
+      "detail": "VNG_AWS_REGION"
+    },
+    {
+      "check": "runbook_var_aws_VNG_AWS_IMAGE_TAG",
+      "ok": true,
+      "detail": "VNG_AWS_IMAGE_TAG"
+    },
+    {
+      "check": "runbook_var_aws_VNG_AWS_ADMIN_API_KEY",
+      "ok": true,
+      "detail": "VNG_AWS_ADMIN_API_KEY"
+    },
+    {
+      "check": "runbook_var_aws_VNG_AWS_BASE_URL",
+      "ok": true,
+      "detail": "VNG_AWS_BASE_URL"
+    },
+    {
+      "check": "runbook_var_aws_VNG_AWS_SQL_URL",
+      "ok": true,
+      "detail": "VNG_AWS_SQL_URL"
+    },
+    {
+      "check": "runbook_var_aws_VNG_AWS_BEARER_TOKEN",
+      "ok": true,
+      "detail": "VNG_AWS_BEARER_TOKEN"
+    },
+    {
+      "check": "runbook_exists_azure",
+      "ok": true,
+      "detail": "deploy/cloud/azure/README.md"
+    },
+    {
+      "check": "runbook_has_matrix_azure",
+      "ok": true,
+      "detail": "matrix heading"
+    },
+    {
+      "check": "runbook_var_azure_VNG_AZURE_REGION",
+      "ok": true,
+      "detail": "VNG_AZURE_REGION"
+    },
+    {
+      "check": "runbook_var_azure_VNG_AZURE_IMAGE_TAG",
+      "ok": true,
+      "detail": "VNG_AZURE_IMAGE_TAG"
+    },
+    {
+      "check": "runbook_var_azure_VNG_AZURE_ADMIN_API_KEY",
+      "ok": true,
+      "detail": "VNG_AZURE_ADMIN_API_KEY"
+    },
+    {
+      "check": "runbook_var_azure_VNG_AZURE_BASE_URL",
+      "ok": true,
+      "detail": "VNG_AZURE_BASE_URL"
+    },
+    {
+      "check": "runbook_var_azure_VNG_AZURE_SQL_URL",
+      "ok": true,
+      "detail": "VNG_AZURE_SQL_URL"
+    },
+    {
+      "check": "runbook_var_azure_VNG_AZURE_BEARER_TOKEN",
+      "ok": true,
+      "detail": "VNG_AZURE_BEARER_TOKEN"
+    },
+    {
+      "check": "runbook_exists_gcp",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/README.md"
+    },
+    {
+      "check": "runbook_has_matrix_gcp",
+      "ok": true,
+      "detail": "matrix heading"
+    },
+    {
+      "check": "runbook_var_gcp_VNG_GCP_REGION",
+      "ok": true,
+      "detail": "VNG_GCP_REGION"
+    },
+    {
+      "check": "runbook_var_gcp_VNG_GCP_IMAGE_TAG",
+      "ok": true,
+      "detail": "VNG_GCP_IMAGE_TAG"
+    },
+    {
+      "check": "runbook_var_gcp_VNG_GCP_ADMIN_API_KEY",
+      "ok": true,
+      "detail": "VNG_GCP_ADMIN_API_KEY"
+    },
+    {
+      "check": "runbook_var_gcp_VNG_GCP_BASE_URL",
+      "ok": true,
+      "detail": "VNG_GCP_BASE_URL"
+    },
+    {
+      "check": "runbook_var_gcp_VNG_GCP_SQL_URL",
+      "ok": true,
+      "detail": "VNG_GCP_SQL_URL"
+    },
+    {
+      "check": "runbook_var_gcp_VNG_GCP_BEARER_TOKEN",
+      "ok": true,
+      "detail": "VNG_GCP_BEARER_TOKEN"
+    },
+    {
+      "check": "common_runbook_exists",
+      "ok": true,
+      "detail": "deploy/cloud/common/README.md"
+    },
+    {
+      "check": "common_contract_ref",
+      "ok": true,
+      "detail": "contract reference"
+    }
+  ]
+}
