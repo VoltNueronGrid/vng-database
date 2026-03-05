@@ -5,6 +5,8 @@ pub const CRATE_NAME: &str = "voltnuerongrid-store";
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod htap_sync;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurabilityConfig {
     pub wal_enabled: bool,

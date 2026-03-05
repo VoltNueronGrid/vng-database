@@ -83,7 +83,7 @@
 | WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online) |
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | In Progress | WS1 (starter parity manifest + harness in place) |
 | WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | In Progress | WS0 (durability contract bootstrap merged) |
-| WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | Not Started | WS2 |
+| WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | In Progress | WS2 (row-sync origin scaffold + smoke evidence captured) |
 | WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | Not Started | WS2 |
 | WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | Not Started | WS2 |
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | Not Started | WS4 |

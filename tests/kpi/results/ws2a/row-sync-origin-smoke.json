@@ -1,0 +1,6 @@
+﻿{
+    "timestamp_utc":  "2026-03-05T05:42:23.0601572Z",
+    "status":  "passed",
+    "command":  "cargo test -p voltnuerongrid-store htap_sync -- --nocapture",
+    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 2 tests\ntest htap_sync::tests::ack_through_removes_flushed_rows ... ok\ntest htap_sync::tests::appends_mutations_with_monotonic_sequence ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s\n"
+}

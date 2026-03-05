@@ -25,6 +25,7 @@ Initial KPI coverage:
 - `scripts/run-sql-analyze-smoke.ps1` - WS1 SQL analyzer API smoke evidence generator
 - `scripts/run-legacy-aggregation-parity.ps1` - WS1A legacy aggregation parity harness
 - `scripts/run-store-durability-smoke.ps1` - WS2 durability bootstrap validation smoke
+- `scripts/run-ws2a-row-sync-origin-smoke.ps1` - WS2A row-store sync-origin scaffold smoke
 - `results/` - output folder for run artifacts
 
 ## Usage
