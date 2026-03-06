@@ -213,6 +213,48 @@ struct SqlExecuteResponse {
     transaction: Option<SqlTransactionResponse>,
     olap: Option<OlapQueryResponse>,
     rejected_statement_count: usize,
+    udf_results: Option<Vec<UdfExecutionResult>>,
+    udf_guardrail_status: Option<String>,
+    udf_function_catalog: Vec<UdfFunctionCatalogEntry>,
+    udf_guard_policies: Vec<UdfLanguageGuardPolicy>,
+    udf_execution_plan: Vec<UdfExecutionPlanStep>,
+}
+
+#[derive(Debug, Serialize)]
+struct UdfExecutionResult {
+    language: &'static str,
+    function: &'static str,
+    input: String,
+    output: String,
+}
+
+#[derive(Serialize)]
+struct UdfFunctionCatalogEntry {
+    name: &'static str,
+    language: &'static str,
+    deterministic: bool,
+    status: &'static str,
+}
+
+#[derive(Serialize)]
+struct UdfLanguageGuardPolicy {
+    language: &'static str,
+    blocked_tokens: Vec<&'static str>,
+    max_input_bytes: usize,
+}
+
+#[derive(Serialize)]
+struct UdfExecutionPlanStep {
+    statement: String,
+    route_path: String,
+    udf_invocations: Vec<UdfInvocationPlan>,
+}
+
+#[derive(Serialize)]
+struct UdfInvocationPlan {
+    function: &'static str,
+    language: &'static str,
+    guard_policy: &'static str,
 }
 
 #[derive(Serialize)]
@@ -727,6 +769,32 @@ async fn sql_route(Json(req): Json<SqlRouteRequest>) -> Json<SqlRouteResponse> {
 async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<SqlExecuteResponse>) {
     let decision = HtapQueryRouter::route_batch(&req.sql_batch);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
+    let udf_function_catalog = udf_function_catalog_contract();
+    let udf_guard_policies = udf_guard_policy_contract();
+    let udf_execution_plan = build_udf_execution_plan(&req.sql_batch);
+    let udf_execution = execute_udf_runtime_scaffold(&req.sql_batch);
+
+    let udf_results = match udf_execution {
+        Ok(results) => results,
+        Err(reason) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(SqlExecuteResponse {
+                    status: "error",
+                    route_path: route_path_name(decision.path).to_string(),
+                    reason,
+                    transaction: None,
+                    olap: None,
+                    rejected_statement_count: parsed.len(),
+                    udf_results: None,
+                    udf_guardrail_status: Some("blocked".to_string()),
+                    udf_function_catalog,
+                    udf_guard_policies,
+                    udf_execution_plan,
+                }),
+            );
+        }
+    };
 
     if matches!(decision.path, QueryPath::Unknown) {
         return (
@@ -738,6 +806,11 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
                 transaction: None,
                 olap: None,
                 rejected_statement_count: parsed.len(),
+                udf_results: None,
+                udf_guardrail_status: None,
+                udf_function_catalog,
+                udf_guard_policies,
+                udf_execution_plan,
             }),
         );
     }
@@ -770,6 +843,11 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
                     transaction: Some(response),
                     olap: None,
                     rejected_statement_count,
+                    udf_results: None,
+                    udf_guardrail_status: None,
+                    udf_function_catalog,
+                    udf_guard_policies,
+                    udf_execution_plan,
                 }),
             );
         }
@@ -790,6 +868,15 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
             transaction,
             olap,
             rejected_statement_count,
+            udf_results: if udf_results.is_empty() {
+                None
+            } else {
+                Some(udf_results)
+            },
+            udf_guardrail_status: Some("passed".to_string()),
+            udf_function_catalog,
+            udf_guard_policies,
+            udf_execution_plan,
         }),
     )
 }
@@ -1521,6 +1608,152 @@ fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryRespon
     }
 }
 
+fn execute_udf_runtime_scaffold(sql_batch: &str) -> Result<Vec<UdfExecutionResult>, String> {
+    enforce_udf_guardrails(sql_batch)?;
+    let mut results = Vec::new();
+    for statement in SqlAnalyzer::parse_batch(sql_batch) {
+        let normalized = statement.raw.to_ascii_lowercase();
+        if normalized.contains("udf_rust(") {
+            let input = extract_udf_input(&statement.raw).unwrap_or_else(|| "sample".to_string());
+            results.push(UdfExecutionResult {
+                language: "rust",
+                function: "udf_rust",
+                output: input.to_ascii_uppercase(),
+                input,
+            });
+        }
+        if normalized.contains("udf_js(") {
+            let input = extract_udf_input(&statement.raw).unwrap_or_else(|| "sample".to_string());
+            let output: String = input.chars().rev().collect();
+            results.push(UdfExecutionResult {
+                language: "javascript",
+                function: "udf_js",
+                output,
+                input,
+            });
+        }
+        if normalized.contains("udf_python(") {
+            let input = extract_udf_input(&statement.raw).unwrap_or_else(|| "sample".to_string());
+            results.push(UdfExecutionResult {
+                language: "python",
+                function: "udf_python",
+                output: input.len().to_string(),
+                input,
+            });
+        }
+    }
+    Ok(results)
+}
+
+fn udf_function_catalog_contract() -> Vec<UdfFunctionCatalogEntry> {
+    vec![
+        UdfFunctionCatalogEntry {
+            name: "udf_rust",
+            language: "rust",
+            deterministic: true,
+            status: "enabled",
+        },
+        UdfFunctionCatalogEntry {
+            name: "udf_js",
+            language: "javascript",
+            deterministic: false,
+            status: "enabled",
+        },
+        UdfFunctionCatalogEntry {
+            name: "udf_python",
+            language: "python",
+            deterministic: false,
+            status: "enabled",
+        },
+    ]
+}
+
+fn udf_guard_policy_contract() -> Vec<UdfLanguageGuardPolicy> {
+    vec![
+        UdfLanguageGuardPolicy {
+            language: "rust",
+            blocked_tokens: vec!["unsafe", "std::process", "process::"],
+            max_input_bytes: 256,
+        },
+        UdfLanguageGuardPolicy {
+            language: "javascript",
+            blocked_tokens: vec!["eval(", "function(", "child_process"],
+            max_input_bytes: 256,
+        },
+        UdfLanguageGuardPolicy {
+            language: "python",
+            blocked_tokens: vec!["import os", "subprocess", "exec("],
+            max_input_bytes: 256,
+        },
+    ]
+}
+
+fn build_udf_execution_plan(sql_batch: &str) -> Vec<UdfExecutionPlanStep> {
+    let mut plan = Vec::new();
+    for statement in SqlAnalyzer::parse_batch(sql_batch) {
+        let mut invocations = Vec::new();
+        let normalized = statement.raw.to_ascii_lowercase();
+        if normalized.contains("udf_rust(") {
+            invocations.push(UdfInvocationPlan {
+                function: "udf_rust",
+                language: "rust",
+                guard_policy: "rust_default",
+            });
+        }
+        if normalized.contains("udf_js(") {
+            invocations.push(UdfInvocationPlan {
+                function: "udf_js",
+                language: "javascript",
+                guard_policy: "javascript_default",
+            });
+        }
+        if normalized.contains("udf_python(") {
+            invocations.push(UdfInvocationPlan {
+                function: "udf_python",
+                language: "python",
+                guard_policy: "python_default",
+            });
+        }
+        let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
+        let route_path = if analysis.kind == SqlStatementKind::Select {
+            "olap"
+        } else {
+            "oltp"
+        };
+        plan.push(UdfExecutionPlanStep {
+            statement: statement.raw,
+            route_path: route_path.to_string(),
+            udf_invocations: invocations,
+        });
+    }
+    plan
+}
+
+fn enforce_udf_guardrails(sql_batch: &str) -> Result<(), String> {
+    let lowered = sql_batch.to_ascii_lowercase();
+    let has_rust_udf = lowered.contains("udf_rust(");
+    let has_js_udf = lowered.contains("udf_js(");
+    let has_python_udf = lowered.contains("udf_python(");
+
+    if has_rust_udf && ["unsafe", "std::process", "process::"].iter().any(|t| lowered.contains(t)) {
+        return Err("udf_guardrail_blocked_rust_payload".to_string());
+    }
+    if has_js_udf && ["eval(", "function(", "child_process"].iter().any(|t| lowered.contains(t)) {
+        return Err("udf_guardrail_blocked_javascript_payload".to_string());
+    }
+    if has_python_udf && ["import os", "subprocess", "exec("].iter().any(|t| lowered.contains(t)) {
+        return Err("udf_guardrail_blocked_python_payload".to_string());
+    }
+    Ok(())
+}
+
+fn extract_udf_input(statement: &str) -> Option<String> {
+    let first = statement.find('\'')?;
+    let remaining = &statement[first + 1..];
+    let end = remaining.find('\'')?;
+    Some(remaining[..end].to_string())
+}
+
 fn failure_budget_snapshot(consumed_percent: f64) -> FailureBudgetSnapshot {
     let bounded_consumed = consumed_percent.clamp(0.0, 100.0);
     let remaining = (100.0 - bounded_consumed).max(0.0);
@@ -2216,6 +2449,51 @@ mod tests {
         let records = latest_action_records(&state, 10);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].trace_id, "atrace-test");
+    }
+
+    #[test]
+    fn ws1_udf_runtime_scaffold_executes_polyglot_functions() {
+        let sql = "SELECT udf_rust('hello'); SELECT udf_js('abc'); SELECT udf_python('delta');";
+        let results = execute_udf_runtime_scaffold(sql).expect("udf scaffold should execute");
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].language, "rust");
+        assert_eq!(results[0].output, "HELLO");
+        assert_eq!(results[1].language, "javascript");
+        assert_eq!(results[1].output, "cba");
+        assert_eq!(results[2].language, "python");
+        assert_eq!(results[2].output, "5");
+    }
+
+    #[test]
+    fn ws1_udf_runtime_scaffold_blocks_unsafe_payload() {
+        let sql = "SELECT udf_python('x'); import os";
+        let err = execute_udf_runtime_scaffold(sql).expect_err("unsafe payload should be blocked");
+        assert_eq!(err, "udf_guardrail_blocked_python_payload");
+    }
+
+    #[test]
+    fn ws1_udf_execution_plan_contains_route_and_invocations() {
+        let sql = "SELECT udf_rust('hello'); UPDATE t SET v = udf_python('xy')";
+        let plan = build_udf_execution_plan(sql);
+        assert_eq!(plan.len(), 2);
+        assert_eq!(plan[0].route_path, "olap");
+        assert_eq!(plan[0].udf_invocations.len(), 1);
+        assert_eq!(plan[0].udf_invocations[0].language, "rust");
+        assert_eq!(plan[1].route_path, "oltp");
+        assert_eq!(plan[1].udf_invocations[0].language, "python");
+    }
+
+    #[test]
+    fn ws1_udf_catalog_and_policy_contracts_cover_polyglot_set() {
+        let catalog = udf_function_catalog_contract();
+        assert_eq!(catalog.len(), 3);
+        assert!(catalog.iter().any(|f| f.language == "rust"));
+        assert!(catalog.iter().any(|f| f.language == "javascript"));
+        assert!(catalog.iter().any(|f| f.language == "python"));
+
+        let policies = udf_guard_policy_contract();
+        assert_eq!(policies.len(), 3);
+        assert!(policies.iter().all(|p| p.max_input_bytes == 256));
     }
 
     #[test]

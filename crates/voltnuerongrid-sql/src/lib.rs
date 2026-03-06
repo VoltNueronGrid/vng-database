@@ -302,6 +302,43 @@ mod tests {
     }
 
     #[test]
+    fn function_registry_supports_polyglot_udf_contract() {
+        let mut registry = FunctionRegistry::new();
+        assert!(registry.register(RegisteredFunction {
+            name: "risk_score_rs".to_string(),
+            language: FunctionLanguage::Rust,
+            deterministic: true,
+            description: "Rust UDF".to_string(),
+        }));
+        assert!(registry.register(RegisteredFunction {
+            name: "risk_score_js".to_string(),
+            language: FunctionLanguage::JavaScript,
+            deterministic: false,
+            description: "JavaScript UDF".to_string(),
+        }));
+        assert!(registry.register(RegisteredFunction {
+            name: "risk_score_py".to_string(),
+            language: FunctionLanguage::Python,
+            deterministic: false,
+            description: "Python UDF".to_string(),
+        }));
+
+        assert_eq!(
+            registry.get("risk_score_rs").map(|f| f.language),
+            Some(FunctionLanguage::Rust)
+        );
+        assert_eq!(
+            registry.get("risk_score_js").map(|f| f.language),
+            Some(FunctionLanguage::JavaScript)
+        );
+        assert_eq!(
+            registry.get("risk_score_py").map(|f| f.language),
+            Some(FunctionLanguage::Python)
+        );
+        assert_eq!(registry.list().len(), 3);
+    }
+
+    #[test]
     fn legacy_aggregation_parity_manifest_alignment() {
         let required = include_str!("../../../tests/parity/legacy/required-aggregations.txt");
         let mut missing = Vec::new();
