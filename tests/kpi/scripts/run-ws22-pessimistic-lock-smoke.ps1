@@ -23,6 +23,10 @@ $contractChecks = [ordered]@{
   release_route_present = $false
   acquire_logic_present = $false
   release_logic_present = $false
+  wait_timeout_request_field_present = $false
+  wait_timeout_state_present = $false
+  wait_timeout_reason_present = $false
+  wait_timeout_unit_test_present = $false
 }
 
 try {
@@ -34,12 +38,20 @@ try {
   $contractChecks.release_route_present = ($runtimeRaw -match '/api/v1/sql/locks/pessimistic/release')
   $contractChecks.acquire_logic_present = ($runtimeRaw -match 'fn acquire_pessimistic_lock\(')
   $contractChecks.release_logic_present = ($runtimeRaw -match 'fn release_pessimistic_lock\(')
+  $contractChecks.wait_timeout_request_field_present = ($runtimeRaw -match 'wait_timeout_ms')
+  $contractChecks.wait_timeout_state_present = ($runtimeRaw -match 'lock_state:\s*"wait_timeout"')
+  $contractChecks.wait_timeout_reason_present = ($runtimeRaw -match 'pessimistic_lock_wait_timeout')
+  $contractChecks.wait_timeout_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_wait_timeout_returns_request_timeout')
 
   $contractExit = if (
     $contractChecks.acquire_route_present -and
     $contractChecks.release_route_present -and
     $contractChecks.acquire_logic_present -and
-    $contractChecks.release_logic_present
+    $contractChecks.release_logic_present -and
+    $contractChecks.wait_timeout_request_field_present -and
+    $contractChecks.wait_timeout_state_present -and
+    $contractChecks.wait_timeout_reason_present -and
+    $contractChecks.wait_timeout_unit_test_present
   ) { 0 } else { 1 }
   $exitCode = if ($testExit -eq 0 -and $contractExit -eq 0) { 0 } else { 1 }
 } catch {
