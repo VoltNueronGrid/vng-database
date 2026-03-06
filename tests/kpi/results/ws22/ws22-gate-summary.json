@@ -1,15 +1,21 @@
 {
   "gate": "ws22",
   "status": "passed",
-  "started_at_utc": "2026-03-06T06:53:13.6105130Z",
-  "finished_at_utc": "2026-03-06T06:53:16.6396110Z",
-  "duration_ms": 3029,
+  "started_at_utc": "2026-03-06T11:27:15.4189761Z",
+  "finished_at_utc": "2026-03-06T11:27:18.7184522Z",
+  "duration_ms": 3299,
   "packs": [
     {
       "pack": "ws22-pessimistic-lock-smoke",
       "status": "passed",
       "detail": "ok",
       "artifact": "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json"
+    },
+    {
+      "pack": "ws22-lock-contention-metrics-smoke",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json"
     },
     {
       "pack": "ws22-gate-trend-comparison",

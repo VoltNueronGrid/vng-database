@@ -27,6 +27,11 @@ $packs = @(
     Name = "ws22-pessimistic-lock-smoke"
     Script = "tests/kpi/scripts/run-ws22-pessimistic-lock-smoke.ps1"
     Artifact = "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json"
+  },
+  @{
+    Name = "ws22-lock-contention-metrics-smoke"
+    Script = "tests/kpi/scripts/run-ws22-lock-contention-metrics-smoke.ps1"
+    Artifact = "tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json"
   }
 )
 

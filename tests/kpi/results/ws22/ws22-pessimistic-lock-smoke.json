@@ -6,10 +6,23 @@
     "acquire_route_present": true,
     "release_route_present": true,
     "acquire_logic_present": true,
-    "release_logic_present": true
+    "release_logic_present": true,
+    "wait_timeout_request_field_present": true,
+    "wait_timeout_state_present": true,
+    "wait_timeout_reason_present": true,
+    "wait_timeout_unit_test_present": true,
+    "deadlock_state_present": true,
+    "deadlock_reason_present": true,
+    "deadlock_unit_test_present": true,
+    "deadlock_multi_hop_unit_test_present": true,
+    "deadlock_scan_cap_present": true,
+    "scan_cap_timeout_reason_present": true,
+    "scan_cap_unit_test_present": true,
+    "wait_edge_release_cleanup_unit_test_present": true,
+    "wait_edge_expiry_cleanup_unit_test_present": true
   },
-  "started_at_utc": "2026-03-06T06:53:13.6665313Z",
-  "finished_at_utc": "2026-03-06T06:53:16.6301341Z",
-  "duration_ms": 2964,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.03s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::ws22_pessimistic_lock_release_requires_owner_transaction ... ok\ntest tests::ws22_pessimistic_lock_blocks_conflicting_transaction ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-03-06T11:27:15.4669125Z",
+  "finished_at_utc": "2026-03-06T11:27:17.1567740Z",
+  "duration_ms": 1690,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 9 tests\ntest tests::ws22_pessimistic_lock_blocks_conflicting_transaction ... ok\ntest tests::ws22_pessimistic_lock_contention_metrics_counts_outcomes ... ok\ntest tests::ws22_pessimistic_lock_detects_deadlock_risk_cycle ... ok\ntest tests::ws22_pessimistic_lock_detects_deadlock_risk_multi_hop_cycle ... ok\ntest tests::ws22_pessimistic_lock_expiry_cleans_wait_edges_for_resource ... ok\ntest tests::ws22_pessimistic_lock_release_cleans_wait_edges_for_resource ... ok\ntest tests::ws22_pessimistic_lock_release_requires_owner_transaction ... ok\ntest tests::ws22_pessimistic_lock_scan_cap_returns_timeout_diagnostic ... ok\ntest tests::ws22_pessimistic_lock_wait_timeout_returns_request_timeout ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s\n"
 }

@@ -27,6 +27,15 @@ $contractChecks = [ordered]@{
   wait_timeout_state_present = $false
   wait_timeout_reason_present = $false
   wait_timeout_unit_test_present = $false
+  deadlock_state_present = $false
+  deadlock_reason_present = $false
+  deadlock_unit_test_present = $false
+  deadlock_multi_hop_unit_test_present = $false
+  deadlock_scan_cap_present = $false
+  scan_cap_timeout_reason_present = $false
+  scan_cap_unit_test_present = $false
+  wait_edge_release_cleanup_unit_test_present = $false
+  wait_edge_expiry_cleanup_unit_test_present = $false
 }
 
 try {
@@ -42,6 +51,15 @@ try {
   $contractChecks.wait_timeout_state_present = ($runtimeRaw -match 'lock_state:\s*"wait_timeout"')
   $contractChecks.wait_timeout_reason_present = ($runtimeRaw -match 'pessimistic_lock_wait_timeout')
   $contractChecks.wait_timeout_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_wait_timeout_returns_request_timeout')
+  $contractChecks.deadlock_state_present = ($runtimeRaw -match 'lock_state:\s*"deadlock_risk"')
+  $contractChecks.deadlock_reason_present = ($runtimeRaw -match 'pessimistic_lock_deadlock_risk')
+  $contractChecks.deadlock_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_detects_deadlock_risk_cycle')
+  $contractChecks.deadlock_multi_hop_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_detects_deadlock_risk_multi_hop_cycle')
+  $contractChecks.deadlock_scan_cap_present = ($runtimeRaw -match 'DEADLOCK_SCAN_MAX_HOPS')
+  $contractChecks.scan_cap_timeout_reason_present = ($runtimeRaw -match 'pessimistic_lock_wait_timeout_scan_cap_reached')
+  $contractChecks.scan_cap_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_scan_cap_returns_timeout_diagnostic')
+  $contractChecks.wait_edge_release_cleanup_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_release_cleans_wait_edges_for_resource')
+  $contractChecks.wait_edge_expiry_cleanup_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_expiry_cleans_wait_edges_for_resource')
 
   $contractExit = if (
     $contractChecks.acquire_route_present -and
@@ -51,7 +69,16 @@ try {
     $contractChecks.wait_timeout_request_field_present -and
     $contractChecks.wait_timeout_state_present -and
     $contractChecks.wait_timeout_reason_present -and
-    $contractChecks.wait_timeout_unit_test_present
+    $contractChecks.wait_timeout_unit_test_present -and
+    $contractChecks.deadlock_state_present -and
+    $contractChecks.deadlock_reason_present -and
+    $contractChecks.deadlock_unit_test_present -and
+    $contractChecks.deadlock_multi_hop_unit_test_present -and
+    $contractChecks.deadlock_scan_cap_present -and
+    $contractChecks.scan_cap_timeout_reason_present -and
+    $contractChecks.scan_cap_unit_test_present -and
+    $contractChecks.wait_edge_release_cleanup_unit_test_present -and
+    $contractChecks.wait_edge_expiry_cleanup_unit_test_present
   ) { 0 } else { 1 }
   $exitCode = if ($testExit -eq 0 -and $contractExit -eq 0) { 0 } else { 1 }
 } catch {

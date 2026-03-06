@@ -30,6 +30,12 @@ $packs = @(
     Script = "tests/kpi/scripts/run-ws1-closure-gate.ps1"
     Artifact = "tests/kpi/results/ws1/ws1-closure-gate-summary.json"
     Runner = { & "tests/kpi/scripts/run-ws1-closure-gate.ps1" -OutputPath "tests/kpi/results/ws1/ws1-closure-gate-summary.json" }
+  },
+  @{
+    Name = "ws22-closure-gate"
+    Script = "tests/kpi/scripts/run-ws22-closure-gate.ps1"
+    Artifact = "tests/kpi/results/ws22/ws22-closure-gate-summary.json"
+    Runner = { & "tests/kpi/scripts/run-ws22-closure-gate.ps1" -OutputPath "tests/kpi/results/ws22/ws22-closure-gate-summary.json" }
   }
 )
 
@@ -65,7 +71,7 @@ $artifact = [ordered]@{
   status = $status
   release_target = "R1"
   release_readiness = if ($status -eq "passed") { "ready_for_validation" } else { "blocked" }
-  scope = @("WS1", "REQ-03", "PR-004", "PR-007")
+  scope = @("WS1", "WS22", "REQ-03", "REQ-22", "PR-004", "PR-007")
   started_at_utc = $start.ToUniversalTime().ToString("o")
   finished_at_utc = $finished.ToUniversalTime().ToString("o")
   duration_ms = [int](($finished - $start).TotalMilliseconds)
@@ -73,5 +79,5 @@ $artifact = [ordered]@{
 }
 
 $artifact | ConvertTo-Json -Depth 10 | Set-Content -Path $OutputPath
-Write-Host "Release R1 SQL/UDF gate summary: $OutputPath ($status)"
+Write-Host "Release R1 SQL/UDF/locking gate summary: $OutputPath ($status)"
 if ($status -ne "passed") { exit 1 }

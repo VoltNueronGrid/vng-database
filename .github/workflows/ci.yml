@@ -237,6 +237,7 @@ jobs:
             tests/kpi/results/ws11/ci-ws11-gate-summary.json
             tests/kpi/results/ws22/ci-ws22-gate-summary.json
             tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json
+            tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json
             tests/kpi/results/ws22/ws22-gate-trend-comparison.json
             tests/kpi/results/ws22/ws22-pessimistic-lock-stability-badge.json
             tests/kpi/results/gates/ci-ws22-release-readiness.json

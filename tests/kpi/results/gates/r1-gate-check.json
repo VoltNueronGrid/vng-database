@@ -1,71 +1,71 @@
-﻿{
-    "gate":  "R1",
-    "baseline_artifacts":  [
-                               {
-                                   "path":  "tests/kpi/results/20260304-pr007/single-node-local/oltp-latency-result.json",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "tests/kpi/results/20260304-pr007/single-node-local/olap-latency-result.json",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "tests/kpi/results/20260304-pr007/multi-node-local/oltp-latency-result.json",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "tests/kpi/results/20260304-pr007/multi-node-local/failover-rto-rpo-result.json",
-                                   "exists":  true
-                               }
-                           ],
-    "timestamp_utc":  "2026-03-05T02:38:55.5755390Z",
-    "criteria":  [
-                     "PR-002 deploy scaffolds present",
-                     "PR-004 KPI harness present",
-                     "PR-005 workspace/runtime scaffolds present",
-                     "KPI smoke baseline artifacts present"
-                 ],
-    "status":  "passed",
-    "required_artifacts":  [
-                               {
-                                   "path":  "deploy/local/single-node.yml",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "deploy/local/multi-node.yml",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "deploy/helm/voltnuerongrid/Chart.yaml",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "Cargo.toml",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "services/voltnuerongridd/src/main.rs",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "tests/kpi/scripts/run-kpi.ps1",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "tests/kpi/scenarios/oltp-latency.yaml",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "tests/kpi/scenarios/olap-latency.yaml",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "tests/kpi/scenarios/htap-mixed-throughput.yaml",
-                                   "exists":  true
-                               },
-                               {
-                                   "path":  "tests/kpi/scenarios/failover-rto-rpo.yaml",
-                                   "exists":  true
-                               }
-                           ]
+{
+  "timestamp_utc": "2026-03-06T06:53:00.6697772Z",
+  "gate": "R1",
+  "criteria": [
+    "PR-002 deploy scaffolds present",
+    "PR-004 KPI harness present",
+    "PR-005 workspace/runtime scaffolds present",
+    "KPI smoke baseline artifacts present"
+  ],
+  "required_artifacts": [
+    {
+      "path": "deploy/local/single-node.yml",
+      "exists": true
+    },
+    {
+      "path": "deploy/local/multi-node.yml",
+      "exists": true
+    },
+    {
+      "path": "deploy/helm/voltnuerongrid/Chart.yaml",
+      "exists": true
+    },
+    {
+      "path": "Cargo.toml",
+      "exists": true
+    },
+    {
+      "path": "services/voltnuerongridd/src/main.rs",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/scripts/run-kpi.ps1",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/scenarios/oltp-latency.yaml",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/scenarios/olap-latency.yaml",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/scenarios/htap-mixed-throughput.yaml",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/scenarios/failover-rto-rpo.yaml",
+      "exists": true
+    }
+  ],
+  "baseline_artifacts": [
+    {
+      "path": "tests/kpi/results/20260304-pr007/single-node-local/oltp-latency-result.json",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/results/20260304-pr007/single-node-local/olap-latency-result.json",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/results/20260304-pr007/multi-node-local/oltp-latency-result.json",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/results/20260304-pr007/multi-node-local/failover-rto-rpo-result.json",
+      "exists": true
+    }
+  ],
+  "status": "passed"
 }

@@ -1,9 +1,9 @@
 {
   "gate": "ws14",
   "status": "passed",
-  "started_at_utc": "2026-03-05T17:35:08.3242334Z",
-  "finished_at_utc": "2026-03-05T17:35:10.6071345Z",
-  "duration_ms": 2283,
+  "started_at_utc": "2026-03-06T00:35:55.4271540Z",
+  "finished_at_utc": "2026-03-06T00:35:58.4833911Z",
+  "duration_ms": 3056,
   "packs": [
     {
       "pack": "ws14-config-baseline",

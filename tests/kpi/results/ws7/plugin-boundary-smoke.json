@@ -2,8 +2,8 @@
   "smoke": "ws7-plugin-registration-boundary",
   "status": "passed",
   "command": "cargo test -p voltnuerongrid-plugins registers_valid_package; cargo test -p voltnuerongrid-plugins rejects_package_when_manifest_key_is_revoked",
-  "started_at_utc": "2026-03-05T08:19:43.6299131Z",
-  "finished_at_utc": "2026-03-05T08:19:46.6065910Z",
-  "duration_ms": 2977,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-182aedb20a806bbb.exe)\n\nrunning 1 test\ntest tests::registers_valid_package ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-182aedb20a806bbb.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_key_is_revoked ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-03-06T05:45:39.5100955Z",
+  "finished_at_utc": "2026-03-06T05:45:45.1796857Z",
+  "duration_ms": 5670,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-d47ba42730831ace.exe)\n\nrunning 1 test\ntest tests::registers_valid_package ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-d47ba42730831ace.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_key_is_revoked ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n"
 }

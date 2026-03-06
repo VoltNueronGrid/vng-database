@@ -1,0 +1,23 @@
+{
+  "smoke": "ws22-lock-contention-metrics",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongridd ws22_pessimistic_lock_contention_metrics; runtime contention-metrics contract checks",
+  "contract_checks": {
+    "metrics_route_present": true,
+    "metrics_handler_present": true,
+    "metrics_response_struct_present": true,
+    "contention_metrics_struct_present": true,
+    "deadlock_detections_counter_present": true,
+    "scan_cap_timeouts_counter_present": true,
+    "wait_timeouts_counter_present": true,
+    "lock_grants_counter_present": true,
+    "lock_conflicts_counter_present": true,
+    "lock_releases_counter_present": true,
+    "contention_ratio_field_present": true,
+    "contention_metrics_unit_test_present": true
+  },
+  "started_at_utc": "2026-03-06T11:27:17.2472174Z",
+  "finished_at_utc": "2026-03-06T11:27:18.7120884Z",
+  "duration_ms": 1465,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 1 test\ntest tests::ws22_pessimistic_lock_contention_metrics_counts_outcomes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.00s\n"
+}

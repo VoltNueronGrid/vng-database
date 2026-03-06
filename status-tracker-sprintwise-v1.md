@@ -199,13 +199,13 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
 | WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | 🔵 In Progress | WS2 | Ingestion connector/registry scaffold + gate orchestrator `run-ws4-gate.ps1` -> `tests/kpi/results/ws4/ws4-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS22 | (Epic 1 sub) | Pessimistic locking baseline | SQL Engine Team | 🔵 In Progress | WS1 | Runtime pessimistic-lock scaffold endpoints (`/api/v1/sql/locks/pessimistic/acquire`, `/api/v1/sql/locks/pessimistic/release`) with conflict/ownership enforcement + WS22 smoke/gate posture evidence (`tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json`, `tests/kpi/results/ws22/ws22-gate-summary.json`) and unit evidence (`cargo test -p voltnuerongridd ws22_`) |
+| WS22 | (Epic 1 sub) | Pessimistic locking baseline | SQL Engine Team | 🔵 In Progress | WS1 | Runtime pessimistic-lock scaffold endpoints (`/api/v1/sql/locks/pessimistic/acquire`, `/api/v1/sql/locks/pessimistic/release`) with conflict/ownership enforcement + lock contention metrics endpoint (`/api/v1/sql/locks/pessimistic/metrics`) exposing deadlock-detection vs cap-hit-timeout counts + contention ratio for trend artifacts + WS22 smoke/gate posture evidence (`tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json`, `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json`, `tests/kpi/results/ws22/ws22-gate-summary.json`) and unit evidence (`cargo test -p voltnuerongridd ws22_`) |
 
 ### Requirements Covered
 - REQ-06 (CSV/Parquet/JSON/Excel + enterprise ingest) — WS4 ingest scaffold with gate summary
 - REQ-07 (Multithreaded high-speed import) — ⬜ Not Started: Ingest throughput benchmark pending
 - REQ-19 (Blazing ingest/update/read at scale) — ⬜ Not Started: KPI benchmark gates pending
-- REQ-22 (Pessimistic locking) — WS22 runtime scaffold with conflict/ownership enforcement
+- REQ-22 (Pessimistic locking) — WS22 runtime scaffold with conflict/ownership enforcement + contention metrics endpoint for trend analysis
 
 ### Sprint 3 Deliverables
 - [x] WS4: Ingestion connector/registry scaffold created
@@ -213,12 +213,15 @@
 - [ ] WS4: Multithreaded import benchmark (REQ-07)
 - [x] WS22: Pessimistic lock acquire/release endpoints online
 - [x] WS22: Conflict/ownership enforcement unit tests passing
+- [x] WS22: Lock contention metrics endpoint (`/api/v1/sql/locks/pessimistic/metrics`) with deadlock/cap-hit/timeout/grant/conflict/release counters + contention ratio
+- [x] WS22: Contention metrics unit test + smoke script
 
 ### Gate Evidence — WS22 Pessimistic Locking (REQ-22)
 
 | Gate | Scope | Status Source | CI Summary Artifact |
 |---|---|---|---|
-| WS22 Pessimistic Locking Gate | Epic 1 + REQ-22 (pessimistic lock acquire/release contracts + conflict/ownership enforcement posture) | `tests/kpi/results/ws22/ws22-gate-summary.json` | `tests/kpi/results/ws22/ci-ws22-gate-summary.json` |
+| WS22 Pessimistic Locking Gate | Epic 1 + REQ-22 (pessimistic lock acquire/release contracts + conflict/ownership + contention metrics posture) | `tests/kpi/results/ws22/ws22-gate-summary.json` | `tests/kpi/results/ws22/ci-ws22-gate-summary.json` |
+| WS22 Lock Contention Metrics | Epic 1 + REQ-22 (deadlock-detection vs cap-hit-timeout vs wait-timeout vs grant vs conflict vs release counts + contention ratio) | `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json` | (included in ws22-gate-summary) |
 
 ---
 

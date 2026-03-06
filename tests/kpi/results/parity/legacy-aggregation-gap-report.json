@@ -1,56 +1,44 @@
-﻿{
-    "buckets":  [
-                    {
-                        "bucket":  "P0",
-                        "stubbed":  [
-
-                                    ],
-                        "required_count":  6,
-                        "stubbed_count":  0,
-                        "present_count":  6,
-                        "missing_count":  0,
-                        "missing":  [
-
-                                    ]
-                    },
-                    {
-                        "bucket":  "P1",
-                        "stubbed":  [
-
-                                    ],
-                        "required_count":  4,
-                        "stubbed_count":  0,
-                        "present_count":  4,
-                        "missing_count":  0,
-                        "missing":  [
-
-                                    ]
-                    },
-                    {
-                        "bucket":  "P2",
-                        "stubbed":  [
-                                        "APPROX_COUNT_DISTINCT",
-                                        "TOP_N",
-                                        "BOTTOM_N"
-                                    ],
-                        "required_count":  3,
-                        "stubbed_count":  3,
-                        "present_count":  0,
-                        "missing_count":  0,
-                        "missing":  [
-
-                                    ]
-                    }
-                ],
-    "p2_stubbed":  [
-                       "APPROX_COUNT_DISTINCT",
-                       "TOP_N",
-                       "BOTTOM_N"
-                   ],
-    "timestamp_utc":  "2026-03-05T05:56:41.9564610Z",
-    "global_missing":  [
-
-                       ],
-    "supported_count":  10,
-    "status":  "passed"
+{
+  "global_missing": [],
+  "timestamp_utc": "2026-03-06T05:00:56.3533331Z",
+  "supported_count": 10,
+  "status": "passed",
+  "p2_stubbed": [
+    "APPROX_COUNT_DISTINCT",
+    "TOP_N",
+    "BOTTOM_N"
+  ],
+  "buckets": [
+    {
+      "required_count": 6,
+      "stubbed_count": 0,
+      "stubbed": [],
+      "bucket": "P0",
+      "present_count": 6,
+      "missing_count": 0,
+      "missing": []
+    },
+    {
+      "required_count": 4,
+      "stubbed_count": 0,
+      "stubbed": [],
+      "bucket": "P1",
+      "present_count": 4,
+      "missing_count": 0,
+      "missing": []
+    },
+    {
+      "required_count": 3,
+      "stubbed_count": 3,
+      "stubbed": [
+        "APPROX_COUNT_DISTINCT",
+        "TOP_N",
+        "BOTTOM_N"
+      ],
+      "bucket": "P2",
+      "present_count": 0,
+      "missing_count": 0,
+      "missing": []
+    }
+  ]
 }

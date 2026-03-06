@@ -5,13 +5,15 @@
   "release_readiness": "ready_for_validation",
   "scope": [
     "WS1",
+    "WS22",
     "REQ-03",
+    "REQ-22",
     "PR-004",
     "PR-007"
   ],
-  "started_at_utc": "2026-03-06T05:44:28.5013103Z",
-  "finished_at_utc": "2026-03-06T05:44:41.8091678Z",
-  "duration_ms": 13308,
+  "started_at_utc": "2026-03-06T06:53:00.5303262Z",
+  "finished_at_utc": "2026-03-06T06:53:16.9130779Z",
+  "duration_ms": 16383,
   "packs": [
     {
       "pack": "r1-baseline-checklist",
@@ -24,6 +26,12 @@
       "status": "passed",
       "detail": "ok",
       "artifact": "tests/kpi/results/ws1/ws1-closure-gate-summary.json"
+    },
+    {
+      "pack": "ws22-closure-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws22/ws22-closure-gate-summary.json"
     }
   ]
 }

@@ -2,8 +2,8 @@
   "smoke": "ws4-ingest-plugin-scaffold",
   "status": "passed",
   "command": "cargo test -p voltnuerongrid-ingest",
-  "started_at_utc": "2026-03-05T07:46:50.5150559Z",
-  "finished_at_utc": "2026-03-05T07:46:51.7247460Z",
-  "duration_ms": 1210,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-f6dc675632584644.exe)\n\nrunning 1 test\ntest tests::registers_connector_and_reads_batch ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_ingest\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-03-05T17:43:00.3253555Z",
+  "finished_at_utc": "2026-03-05T17:43:01.7127225Z",
+  "duration_ms": 1387,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-6c4559b058af068f.exe)\n\nrunning 6 tests\ntest tests::appends_replayable_event_envelopes ... ok\ntest tests::persists_and_loads_cursor_in_memory ... ok\ntest tests::registers_connector_and_reads_batch ... ok\ntest tests::replays_from_persisted_cursor_checkpoint ... ok\ntest tests::streams_from_source_and_replays_to_sink ... ok\ntest tests::persists_and_loads_cursor_in_wal_adapter ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n   Doc-tests voltnuerongrid_ingest\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
 }

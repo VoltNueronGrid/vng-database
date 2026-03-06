@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::net::SocketAddr;
@@ -22,6 +22,37 @@ static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
 static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
+const DEADLOCK_SCAN_MAX_HOPS: usize = 8;
+
+#[derive(Clone)]
+struct PessimisticLockContentionMetrics {
+    deadlock_detections: Arc<AtomicU64>,
+    scan_cap_timeouts: Arc<AtomicU64>,
+    wait_timeouts: Arc<AtomicU64>,
+    lock_grants: Arc<AtomicU64>,
+    lock_conflicts: Arc<AtomicU64>,
+    lock_releases: Arc<AtomicU64>,
+}
+
+impl PessimisticLockContentionMetrics {
+    fn new() -> Self {
+        Self {
+            deadlock_detections: Arc::new(AtomicU64::new(0)),
+            scan_cap_timeouts: Arc::new(AtomicU64::new(0)),
+            wait_timeouts: Arc::new(AtomicU64::new(0)),
+            lock_grants: Arc::new(AtomicU64::new(0)),
+            lock_conflicts: Arc::new(AtomicU64::new(0)),
+            lock_releases: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeadlockScanOutcome {
+    CycleDetected,
+    ScanCapReached,
+    NoCycle,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -38,6 +69,8 @@ struct AppState {
     dr_hook_queue: Arc<Mutex<VecDeque<DrHookScheduledTask>>>,
     cluster_failure_signals: Arc<Mutex<Vec<ClusterFailureSignal>>>,
     pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
+    pessimistic_lock_waits: Arc<Mutex<HashMap<String, String>>>,
+    pessimistic_lock_metrics: PessimisticLockContentionMetrics,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -301,6 +334,18 @@ struct PessimisticLockResponse {
     lock_state: &'static str,
     reason: String,
     lock: Option<PessimisticLockRecord>,
+}
+
+#[derive(Serialize)]
+struct PessimisticLockContentionMetricsResponse {
+    status: &'static str,
+    deadlock_detections: u64,
+    scan_cap_timeouts: u64,
+    wait_timeouts: u64,
+    lock_grants: u64,
+    lock_conflicts: u64,
+    lock_releases: u64,
+    contention_ratio: f64,
 }
 
 #[derive(Deserialize)]
@@ -688,6 +733,8 @@ async fn main() {
         dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
         cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
         pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
+        pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
+        pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -705,6 +752,10 @@ async fn main() {
         .route(
             "/api/v1/sql/locks/pessimistic/release",
             post(sql_pessimistic_lock_release),
+        )
+        .route(
+            "/api/v1/sql/locks/pessimistic/metrics",
+            get(sql_pessimistic_lock_metrics),
         )
         .route("/api/v1/sql/analyze", post(sql_analyze))
         .route("/api/v1/sql/route", post(sql_route))
@@ -789,10 +840,25 @@ async fn sql_pessimistic_lock_acquire(
             )
         }
     };
+    let mut wait_graph = match state.pessimistic_lock_waits.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PessimisticLockResponse {
+                    status: "error",
+                    lock_state: "failed",
+                    reason: "wait_graph_state_poisoned".to_string(),
+                    lock: None,
+                }),
+            )
+        }
+    };
 
     let (status, response) =
         acquire_pessimistic_lock(
             &mut lock_table,
+            &mut wait_graph,
             &req.transaction_id,
             &req.resource,
             &owner,
@@ -800,6 +866,14 @@ async fn sql_pessimistic_lock_acquire(
             req.wait_timeout_ms.unwrap_or(0),
             now_ms,
         );
+    match response.lock_state {
+        "deadlock_risk" => { state.pessimistic_lock_metrics.deadlock_detections.fetch_add(1, Ordering::Relaxed); }
+        "wait_timeout" if response.reason.contains("scan_cap") => { state.pessimistic_lock_metrics.scan_cap_timeouts.fetch_add(1, Ordering::Relaxed); }
+        "wait_timeout" => { state.pessimistic_lock_metrics.wait_timeouts.fetch_add(1, Ordering::Relaxed); }
+        "acquired" | "renewed" => { state.pessimistic_lock_metrics.lock_grants.fetch_add(1, Ordering::Relaxed); }
+        "held_by_other_transaction" => { state.pessimistic_lock_metrics.lock_conflicts.fetch_add(1, Ordering::Relaxed); }
+        _ => {}
+    }
     (status, Json(response))
 }
 
@@ -821,9 +895,53 @@ async fn sql_pessimistic_lock_release(
             )
         }
     };
+    let mut wait_graph = match state.pessimistic_lock_waits.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PessimisticLockResponse {
+                    status: "error",
+                    lock_state: "failed",
+                    reason: "wait_graph_state_poisoned".to_string(),
+                    lock: None,
+                }),
+            )
+        }
+    };
     let (status, response) =
-        release_pessimistic_lock(&mut lock_table, &req.transaction_id, &req.resource);
+        release_pessimistic_lock(&mut lock_table, &mut wait_graph, &req.transaction_id, &req.resource);
+    if response.lock_state == "released" {
+        state.pessimistic_lock_metrics.lock_releases.fetch_add(1, Ordering::Relaxed);
+    }
     (status, Json(response))
+}
+
+async fn sql_pessimistic_lock_metrics(
+    State(state): State<AppState>,
+) -> Json<PessimisticLockContentionMetricsResponse> {
+    let deadlock_detections = state.pessimistic_lock_metrics.deadlock_detections.load(Ordering::Relaxed);
+    let scan_cap_timeouts = state.pessimistic_lock_metrics.scan_cap_timeouts.load(Ordering::Relaxed);
+    let wait_timeouts = state.pessimistic_lock_metrics.wait_timeouts.load(Ordering::Relaxed);
+    let lock_grants = state.pessimistic_lock_metrics.lock_grants.load(Ordering::Relaxed);
+    let lock_conflicts = state.pessimistic_lock_metrics.lock_conflicts.load(Ordering::Relaxed);
+    let lock_releases = state.pessimistic_lock_metrics.lock_releases.load(Ordering::Relaxed);
+    let total_attempts = deadlock_detections + scan_cap_timeouts + wait_timeouts + lock_grants + lock_conflicts;
+    let contention_ratio = if total_attempts > 0 {
+        (deadlock_detections + scan_cap_timeouts + wait_timeouts + lock_conflicts) as f64 / total_attempts as f64
+    } else {
+        0.0
+    };
+    Json(PessimisticLockContentionMetricsResponse {
+        status: "ok",
+        deadlock_detections,
+        scan_cap_timeouts,
+        wait_timeouts,
+        lock_grants,
+        lock_conflicts,
+        lock_releases,
+        contention_ratio,
+    })
 }
 
 async fn sql_analyze(Json(req): Json<SqlAnalyzeRequest>) -> Json<SqlAnalyzeResponse> {
@@ -1702,6 +1820,7 @@ fn execute_transaction_statements(statements: Vec<String>) -> (StatusCode, SqlTr
 
 fn acquire_pessimistic_lock(
     lock_table: &mut HashMap<String, PessimisticLockRecord>,
+    wait_graph: &mut HashMap<String, String>,
     transaction_id: &str,
     resource: &str,
     owner: &str,
@@ -1723,17 +1842,42 @@ fn acquire_pessimistic_lock(
         );
     }
 
+    wait_graph.remove(tx);
     if let Some(existing) = lock_table.get(resource_key).cloned() {
         if existing.expires_unix_ms <= now_ms {
             lock_table.remove(resource_key);
+            cleanup_wait_edges_for_resource(wait_graph, resource_key);
         } else if existing.transaction_id != tx {
+            let holder_tx = existing.transaction_id.clone();
+            let mut scan_outcome = DeadlockScanOutcome::NoCycle;
             if wait_timeout_ms > 0 {
+                wait_graph.insert(tx.to_string(), resource_key.to_string());
+                scan_outcome =
+                    evaluate_deadlock_scan_outcome(wait_graph, lock_table, tx, &holder_tx);
+                if scan_outcome == DeadlockScanOutcome::CycleDetected {
+                    return (
+                        StatusCode::CONFLICT,
+                        PessimisticLockResponse {
+                            status: "blocked",
+                            lock_state: "deadlock_risk",
+                            reason: "pessimistic_lock_deadlock_risk".to_string(),
+                            lock: Some(existing),
+                        },
+                    );
+                }
+            }
+            if wait_timeout_ms > 0 {
+                let timeout_reason = if scan_outcome == DeadlockScanOutcome::ScanCapReached {
+                    "pessimistic_lock_wait_timeout_scan_cap_reached"
+                } else {
+                    "pessimistic_lock_wait_timeout"
+                };
                 return (
                     StatusCode::REQUEST_TIMEOUT,
                     PessimisticLockResponse {
                         status: "blocked",
                         lock_state: "wait_timeout",
-                        reason: "pessimistic_lock_wait_timeout".to_string(),
+                        reason: timeout_reason.to_string(),
                         lock: Some(existing),
                     },
                 );
@@ -1750,6 +1894,7 @@ fn acquire_pessimistic_lock(
         }
     }
 
+    wait_graph.remove(tx);
     let lock_id = format!(
         "plock-{}",
         PESSIMISTIC_LOCK_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -1781,6 +1926,7 @@ fn acquire_pessimistic_lock(
 
 fn release_pessimistic_lock(
     lock_table: &mut HashMap<String, PessimisticLockRecord>,
+    wait_graph: &mut HashMap<String, String>,
     transaction_id: &str,
     resource: &str,
 ) -> (StatusCode, PessimisticLockResponse) {
@@ -1826,6 +1972,8 @@ fn release_pessimistic_lock(
     }
 
     lock_table.remove(resource_key);
+    cleanup_wait_edges_for_resource(wait_graph, resource_key);
+    wait_graph.remove(tx);
     (
         StatusCode::OK,
         PessimisticLockResponse {
@@ -1835,6 +1983,42 @@ fn release_pessimistic_lock(
             lock: Some(existing),
         },
     )
+}
+
+fn evaluate_deadlock_scan_outcome(
+    wait_graph: &HashMap<String, String>,
+    lock_table: &HashMap<String, PessimisticLockRecord>,
+    waiting_tx: &str,
+    holder_tx: &str,
+) -> DeadlockScanOutcome {
+    let mut visited_txs = HashSet::new();
+    let mut current_holder = holder_tx;
+
+    for _ in 0..DEADLOCK_SCAN_MAX_HOPS {
+        if !visited_txs.insert(current_holder.to_string()) {
+            return DeadlockScanOutcome::NoCycle;
+        }
+        let current_wait_resource = match wait_graph.get(current_holder) {
+            Some(resource) => resource,
+            None => return DeadlockScanOutcome::NoCycle,
+        };
+        let current_blocker = match lock_table.get(current_wait_resource) {
+            Some(lock) => lock,
+            None => return DeadlockScanOutcome::NoCycle,
+        };
+        if current_blocker.transaction_id == waiting_tx {
+            return DeadlockScanOutcome::CycleDetected;
+        }
+        current_holder = current_blocker.transaction_id.as_str();
+    }
+    DeadlockScanOutcome::ScanCapReached
+}
+
+fn cleanup_wait_edges_for_resource(
+    wait_graph: &mut HashMap<String, String>,
+    resource_key: &str,
+) {
+    wait_graph.retain(|_, waiting_resource| waiting_resource != resource_key);
 }
 
 fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryResponse {
@@ -2606,6 +2790,8 @@ mod tests {
             dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
             cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
             pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
+            pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
+            pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -2741,8 +2927,10 @@ mod tests {
     #[test]
     fn ws22_pessimistic_lock_blocks_conflicting_transaction() {
         let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
         let (first_status, first) = acquire_pessimistic_lock(
             &mut lock_table,
+            &mut wait_graph,
             "tx-1",
             "table:orders:row:42",
             "test-owner",
@@ -2755,6 +2943,7 @@ mod tests {
 
         let (conflict_status, conflict) = acquire_pessimistic_lock(
             &mut lock_table,
+            &mut wait_graph,
             "tx-2",
             "table:orders:row:42",
             "test-owner",
@@ -2773,8 +2962,10 @@ mod tests {
     #[test]
     fn ws22_pessimistic_lock_release_requires_owner_transaction() {
         let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
         let _ = acquire_pessimistic_lock(
             &mut lock_table,
+            &mut wait_graph,
             "tx-1",
             "table:inventory:sku:100",
             "test-owner",
@@ -2784,12 +2975,12 @@ mod tests {
         );
 
         let (release_conflict_status, release_conflict) =
-            release_pessimistic_lock(&mut lock_table, "tx-2", "table:inventory:sku:100");
+            release_pessimistic_lock(&mut lock_table, &mut wait_graph, "tx-2", "table:inventory:sku:100");
         assert_eq!(release_conflict_status, StatusCode::CONFLICT);
         assert_eq!(release_conflict.lock_state, "ownership_mismatch");
 
         let (release_ok_status, release_ok) =
-            release_pessimistic_lock(&mut lock_table, "tx-1", "table:inventory:sku:100");
+            release_pessimistic_lock(&mut lock_table, &mut wait_graph, "tx-1", "table:inventory:sku:100");
         assert_eq!(release_ok_status, StatusCode::OK);
         assert_eq!(release_ok.lock_state, "released");
     }
@@ -2797,8 +2988,10 @@ mod tests {
     #[test]
     fn ws22_pessimistic_lock_wait_timeout_returns_request_timeout() {
         let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
         let _ = acquire_pessimistic_lock(
             &mut lock_table,
+            &mut wait_graph,
             "tx-1",
             "table:payments:row:7",
             "test-owner",
@@ -2809,6 +3002,7 @@ mod tests {
 
         let (timeout_status, timeout) = acquire_pessimistic_lock(
             &mut lock_table,
+            &mut wait_graph,
             "tx-2",
             "table:payments:row:7",
             "test-owner",
@@ -2819,6 +3013,350 @@ mod tests {
         assert_eq!(timeout_status, StatusCode::REQUEST_TIMEOUT);
         assert_eq!(timeout.lock_state, "wait_timeout");
         assert_eq!(timeout.reason, "pessimistic_lock_wait_timeout");
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_detects_deadlock_risk_cycle() {
+        let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-a",
+            "table:orders:row:1",
+            "test-owner",
+            30_000,
+            0,
+            13_000,
+        );
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-b",
+            "table:orders:row:2",
+            "test-owner",
+            30_000,
+            0,
+            13_010,
+        );
+
+        let (first_wait_status, first_wait) = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-a",
+            "table:orders:row:2",
+            "test-owner",
+            30_000,
+            2_000,
+            13_020,
+        );
+        assert_eq!(first_wait_status, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(first_wait.lock_state, "wait_timeout");
+
+        let (deadlock_status, deadlock) = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-b",
+            "table:orders:row:1",
+            "test-owner",
+            30_000,
+            2_000,
+            13_030,
+        );
+        assert_eq!(deadlock_status, StatusCode::CONFLICT);
+        assert_eq!(deadlock.lock_state, "deadlock_risk");
+        assert_eq!(deadlock.reason, "pessimistic_lock_deadlock_risk");
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_detects_deadlock_risk_multi_hop_cycle() {
+        let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
+
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-a",
+            "table:orders:row:11",
+            "test-owner",
+            30_000,
+            0,
+            14_000,
+        );
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-b",
+            "table:orders:row:12",
+            "test-owner",
+            30_000,
+            0,
+            14_010,
+        );
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-c",
+            "table:orders:row:13",
+            "test-owner",
+            30_000,
+            0,
+            14_020,
+        );
+
+        let (a_wait_status, a_wait) = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-a",
+            "table:orders:row:12",
+            "test-owner",
+            30_000,
+            2_000,
+            14_030,
+        );
+        assert_eq!(a_wait_status, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(a_wait.lock_state, "wait_timeout");
+
+        let (b_wait_status, b_wait) = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-b",
+            "table:orders:row:13",
+            "test-owner",
+            30_000,
+            2_000,
+            14_040,
+        );
+        assert_eq!(b_wait_status, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(b_wait.lock_state, "wait_timeout");
+
+        let (deadlock_status, deadlock) = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-c",
+            "table:orders:row:11",
+            "test-owner",
+            30_000,
+            2_000,
+            14_050,
+        );
+        assert_eq!(deadlock_status, StatusCode::CONFLICT);
+        assert_eq!(deadlock.lock_state, "deadlock_risk");
+        assert_eq!(deadlock.reason, "pessimistic_lock_deadlock_risk");
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_scan_cap_returns_timeout_diagnostic() {
+        let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
+        let resources: Vec<String> = (0..=DEADLOCK_SCAN_MAX_HOPS)
+            .map(|idx| format!("table:orders:row:{}", 100 + idx))
+            .collect();
+        let tx_ids: Vec<String> = (0..=DEADLOCK_SCAN_MAX_HOPS)
+            .map(|idx| format!("tx-chain-{idx}"))
+            .collect();
+
+        for idx in 0..tx_ids.len() {
+            let _ = acquire_pessimistic_lock(
+                &mut lock_table,
+                &mut wait_graph,
+                &tx_ids[idx],
+                &resources[idx],
+                "test-owner",
+                30_000,
+                0,
+                15_000 + (idx as u128),
+            );
+        }
+
+        for idx in 0..(tx_ids.len() - 1) {
+            let _ = acquire_pessimistic_lock(
+                &mut lock_table,
+                &mut wait_graph,
+                &tx_ids[idx],
+                &resources[idx + 1],
+                "test-owner",
+                30_000,
+                2_000,
+                15_100 + (idx as u128),
+            );
+        }
+
+        let (status, response) = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-requester",
+            &resources[0],
+            "test-owner",
+            30_000,
+            2_000,
+            15_500,
+        );
+        assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(response.lock_state, "wait_timeout");
+        assert_eq!(
+            response.reason,
+            "pessimistic_lock_wait_timeout_scan_cap_reached"
+        );
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_release_cleans_wait_edges_for_resource() {
+        let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-holder",
+            "table:orders:row:301",
+            "test-owner",
+            30_000,
+            0,
+            16_000,
+        );
+
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-waiter",
+            "table:orders:row:301",
+            "test-owner",
+            30_000,
+            2_000,
+            16_010,
+        );
+        assert!(wait_graph.contains_key("tx-waiter"));
+
+        let (release_status, _) = release_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-holder",
+            "table:orders:row:301",
+        );
+        assert_eq!(release_status, StatusCode::OK);
+        assert!(!wait_graph.contains_key("tx-waiter"));
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_expiry_cleans_wait_edges_for_resource() {
+        let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-holder",
+            "table:orders:row:401",
+            "test-owner",
+            1_000,
+            0,
+            17_000,
+        );
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-waiter",
+            "table:orders:row:401",
+            "test-owner",
+            30_000,
+            2_000,
+            17_100,
+        );
+        assert!(wait_graph.contains_key("tx-waiter"));
+
+        let (acquire_status, acquire_result) = acquire_pessimistic_lock(
+            &mut lock_table,
+            &mut wait_graph,
+            "tx-new-holder",
+            "table:orders:row:401",
+            "test-owner",
+            30_000,
+            0,
+            18_200,
+        );
+        assert_eq!(acquire_status, StatusCode::OK);
+        assert_eq!(acquire_result.lock_state, "acquired");
+        assert!(!wait_graph.contains_key("tx-waiter"));
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_contention_metrics_counts_outcomes() {
+        let metrics = PessimisticLockContentionMetrics::new();
+        let mut lock_table = HashMap::new();
+        let mut wait_graph = HashMap::new();
+
+        // Grant a lock -> lock_grants++
+        let (s1, r1) = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, "tx-1", "res:a", "owner", 30_000, 0, 20_000,
+        );
+        assert_eq!(s1, StatusCode::OK);
+        assert!(r1.lock_state == "acquired" || r1.lock_state == "renewed");
+        metrics.lock_grants.fetch_add(1, Ordering::Relaxed);
+
+        // Conflict (no wait_timeout) -> lock_conflicts++
+        let (s2, r2) = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, "tx-2", "res:a", "owner", 30_000, 0, 20_010,
+        );
+        assert_eq!(s2, StatusCode::CONFLICT);
+        assert_eq!(r2.lock_state, "held_by_other_transaction");
+        metrics.lock_conflicts.fetch_add(1, Ordering::Relaxed);
+
+        // Wait timeout -> wait_timeouts++
+        let (s3, r3) = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, "tx-3", "res:a", "owner", 30_000, 2_000, 20_020,
+        );
+        assert_eq!(s3, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(r3.lock_state, "wait_timeout");
+        assert_eq!(r3.reason, "pessimistic_lock_wait_timeout");
+        metrics.wait_timeouts.fetch_add(1, Ordering::Relaxed);
+
+        // Deadlock detection -> deadlock_detections++
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, "tx-d1", "res:d1", "owner", 30_000, 0, 20_100,
+        );
+        metrics.lock_grants.fetch_add(1, Ordering::Relaxed);
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, "tx-d2", "res:d2", "owner", 30_000, 0, 20_110,
+        );
+        metrics.lock_grants.fetch_add(1, Ordering::Relaxed);
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, "tx-d1", "res:d2", "owner", 30_000, 2_000, 20_120,
+        );
+        metrics.wait_timeouts.fetch_add(1, Ordering::Relaxed);
+        let (s4, r4) = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, "tx-d2", "res:d1", "owner", 30_000, 2_000, 20_130,
+        );
+        assert_eq!(s4, StatusCode::CONFLICT);
+        assert_eq!(r4.lock_state, "deadlock_risk");
+        metrics.deadlock_detections.fetch_add(1, Ordering::Relaxed);
+
+        // Release -> lock_releases++
+        let (s5, r5) = release_pessimistic_lock(&mut lock_table, &mut wait_graph, "tx-1", "res:a");
+        assert_eq!(s5, StatusCode::OK);
+        assert_eq!(r5.lock_state, "released");
+        metrics.lock_releases.fetch_add(1, Ordering::Relaxed);
+
+        // Verify metric counts
+        assert_eq!(metrics.lock_grants.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.lock_conflicts.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.wait_timeouts.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.deadlock_detections.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.lock_releases.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.scan_cap_timeouts.load(Ordering::Relaxed), 0);
+
+        // Verify contention ratio: (1 deadlock + 0 scan_cap + 2 wait_timeout + 1 conflict) / (1+0+2+3+1) = 4/7
+        let total = 1 + 0 + 2 + 3 + 1;
+        let contention = 1 + 0 + 2 + 1;
+        let expected_ratio = contention as f64 / total as f64;
+        let actual_ratio = {
+            let d = metrics.deadlock_detections.load(Ordering::Relaxed);
+            let sc = metrics.scan_cap_timeouts.load(Ordering::Relaxed);
+            let wt = metrics.wait_timeouts.load(Ordering::Relaxed);
+            let g = metrics.lock_grants.load(Ordering::Relaxed);
+            let c = metrics.lock_conflicts.load(Ordering::Relaxed);
+            let total = d + sc + wt + g + c;
+            if total > 0 { (d + sc + wt + c) as f64 / total as f64 } else { 0.0 }
+        };
+        assert!((actual_ratio - expected_ratio).abs() < 0.001);
     }
 
     #[test]
