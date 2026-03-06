@@ -21,6 +21,7 @@ use voltnuerongrid_sql::{I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLo
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
+static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 struct AppState {
@@ -36,6 +37,7 @@ struct AppState {
     dr_hook_state_path: Option<String>,
     dr_hook_queue: Arc<Mutex<VecDeque<DrHookScheduledTask>>>,
     cluster_failure_signals: Arc<Mutex<Vec<ClusterFailureSignal>>>,
+    pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -266,6 +268,38 @@ struct SqlTransactionResponse {
     touches_catalog: bool,
     rejected_statement_count: usize,
     elapsed_ms: u128,
+}
+
+#[derive(Deserialize)]
+struct PessimisticLockAcquireRequest {
+    transaction_id: String,
+    resource: String,
+    owner: Option<String>,
+    ttl_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PessimisticLockReleaseRequest {
+    transaction_id: String,
+    resource: String,
+}
+
+#[derive(Clone, Serialize)]
+struct PessimisticLockRecord {
+    lock_id: String,
+    transaction_id: String,
+    resource: String,
+    owner: String,
+    acquired_unix_ms: u128,
+    expires_unix_ms: u128,
+}
+
+#[derive(Serialize)]
+struct PessimisticLockResponse {
+    status: &'static str,
+    lock_state: &'static str,
+    reason: String,
+    lock: Option<PessimisticLockRecord>,
 }
 
 #[derive(Deserialize)]
@@ -652,6 +686,7 @@ async fn main() {
         dr_hook_state_path,
         dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
         cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
+        pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -662,6 +697,14 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/v1/sql/transaction", post(sql_transaction))
+        .route(
+            "/api/v1/sql/locks/pessimistic/acquire",
+            post(sql_pessimistic_lock_acquire),
+        )
+        .route(
+            "/api/v1/sql/locks/pessimistic/release",
+            post(sql_pessimistic_lock_release),
+        )
         .route("/api/v1/sql/analyze", post(sql_analyze))
         .route("/api/v1/sql/route", post(sql_route))
         .route("/api/v1/sql/execute", post(sql_execute))
@@ -719,6 +762,58 @@ async fn sql_transaction(
     Json(req): Json<SqlTransactionRequest>,
 ) -> (StatusCode, Json<SqlTransactionResponse>) {
     let (status, response) = execute_transaction_statements(req.statements);
+    (status, Json(response))
+}
+
+async fn sql_pessimistic_lock_acquire(
+    State(state): State<AppState>,
+    Json(req): Json<PessimisticLockAcquireRequest>,
+) -> (StatusCode, Json<PessimisticLockResponse>) {
+    let now_ms = now_unix_ms();
+    let ttl_ms = req.ttl_ms.unwrap_or(30_000).clamp(1_000, 300_000);
+    let owner = req
+        .owner
+        .unwrap_or_else(|| "runtime-transaction-manager".to_string());
+    let mut lock_table = match state.pessimistic_locks.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PessimisticLockResponse {
+                    status: "error",
+                    lock_state: "failed",
+                    reason: "lock_state_poisoned".to_string(),
+                    lock: None,
+                }),
+            )
+        }
+    };
+
+    let (status, response) =
+        acquire_pessimistic_lock(&mut lock_table, &req.transaction_id, &req.resource, &owner, ttl_ms, now_ms);
+    (status, Json(response))
+}
+
+async fn sql_pessimistic_lock_release(
+    State(state): State<AppState>,
+    Json(req): Json<PessimisticLockReleaseRequest>,
+) -> (StatusCode, Json<PessimisticLockResponse>) {
+    let mut lock_table = match state.pessimistic_locks.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PessimisticLockResponse {
+                    status: "error",
+                    lock_state: "failed",
+                    reason: "lock_state_poisoned".to_string(),
+                    lock: None,
+                }),
+            )
+        }
+    };
+    let (status, response) =
+        release_pessimistic_lock(&mut lock_table, &req.transaction_id, &req.resource);
     (status, Json(response))
 }
 
@@ -1596,6 +1691,131 @@ fn execute_transaction_statements(statements: Vec<String>) -> (StatusCode, SqlTr
     )
 }
 
+fn acquire_pessimistic_lock(
+    lock_table: &mut HashMap<String, PessimisticLockRecord>,
+    transaction_id: &str,
+    resource: &str,
+    owner: &str,
+    ttl_ms: u64,
+    now_ms: u128,
+) -> (StatusCode, PessimisticLockResponse) {
+    let tx = transaction_id.trim();
+    let resource_key = resource.trim();
+    if tx.is_empty() || resource_key.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            PessimisticLockResponse {
+                status: "error",
+                lock_state: "invalid_request",
+                reason: "transaction_id_and_resource_are_required".to_string(),
+                lock: None,
+            },
+        );
+    }
+
+    if let Some(existing) = lock_table.get(resource_key).cloned() {
+        if existing.expires_unix_ms <= now_ms {
+            lock_table.remove(resource_key);
+        } else if existing.transaction_id != tx {
+            return (
+                StatusCode::CONFLICT,
+                PessimisticLockResponse {
+                    status: "blocked",
+                    lock_state: "held_by_other_transaction",
+                    reason: "pessimistic_lock_conflict".to_string(),
+                    lock: Some(existing),
+                },
+            );
+        }
+    }
+
+    let lock_id = format!(
+        "plock-{}",
+        PESSIMISTIC_LOCK_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let lock = PessimisticLockRecord {
+        lock_id,
+        transaction_id: tx.to_string(),
+        resource: resource_key.to_string(),
+        owner: owner.trim().to_string(),
+        acquired_unix_ms: now_ms,
+        expires_unix_ms: now_ms + u128::from(ttl_ms),
+    };
+    let lock_state = if lock_table.contains_key(resource_key) {
+        "renewed"
+    } else {
+        "acquired"
+    };
+    lock_table.insert(resource_key.to_string(), lock.clone());
+    (
+        StatusCode::OK,
+        PessimisticLockResponse {
+            status: "ok",
+            lock_state,
+            reason: "pessimistic_lock_granted".to_string(),
+            lock: Some(lock),
+        },
+    )
+}
+
+fn release_pessimistic_lock(
+    lock_table: &mut HashMap<String, PessimisticLockRecord>,
+    transaction_id: &str,
+    resource: &str,
+) -> (StatusCode, PessimisticLockResponse) {
+    let tx = transaction_id.trim();
+    let resource_key = resource.trim();
+    if tx.is_empty() || resource_key.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            PessimisticLockResponse {
+                status: "error",
+                lock_state: "invalid_request",
+                reason: "transaction_id_and_resource_are_required".to_string(),
+                lock: None,
+            },
+        );
+    }
+
+    let existing = match lock_table.get(resource_key).cloned() {
+        Some(lock) => lock,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                PessimisticLockResponse {
+                    status: "error",
+                    lock_state: "not_found",
+                    reason: "no_lock_for_resource".to_string(),
+                    lock: None,
+                },
+            )
+        }
+    };
+
+    if existing.transaction_id != tx {
+        return (
+            StatusCode::CONFLICT,
+            PessimisticLockResponse {
+                status: "blocked",
+                lock_state: "ownership_mismatch",
+                reason: "lock_owned_by_different_transaction".to_string(),
+                lock: Some(existing),
+            },
+        );
+    }
+
+    lock_table.remove(resource_key);
+    (
+        StatusCode::OK,
+        PessimisticLockResponse {
+            status: "ok",
+            lock_state: "released",
+            reason: "pessimistic_lock_released".to_string(),
+            lock: Some(existing),
+        },
+    )
+}
+
 fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryResponse {
     let started = Instant::now();
     let elapsed = started.elapsed().as_millis();
@@ -2364,6 +2584,7 @@ mod tests {
             dr_hook_state_path: None,
             dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
             cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
+            pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -2494,6 +2715,59 @@ mod tests {
         let policies = udf_guard_policy_contract();
         assert_eq!(policies.len(), 3);
         assert!(policies.iter().all(|p| p.max_input_bytes == 256));
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_blocks_conflicting_transaction() {
+        let mut lock_table = HashMap::new();
+        let (first_status, first) = acquire_pessimistic_lock(
+            &mut lock_table,
+            "tx-1",
+            "table:orders:row:42",
+            "test-owner",
+            30_000,
+            10_000,
+        );
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(first.lock_state, "acquired");
+
+        let (conflict_status, conflict) = acquire_pessimistic_lock(
+            &mut lock_table,
+            "tx-2",
+            "table:orders:row:42",
+            "test-owner",
+            30_000,
+            10_010,
+        );
+        assert_eq!(conflict_status, StatusCode::CONFLICT);
+        assert_eq!(conflict.lock_state, "held_by_other_transaction");
+        assert_eq!(
+            conflict.lock.expect("conflict lock").transaction_id,
+            "tx-1".to_string()
+        );
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_release_requires_owner_transaction() {
+        let mut lock_table = HashMap::new();
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            "tx-1",
+            "table:inventory:sku:100",
+            "test-owner",
+            30_000,
+            11_000,
+        );
+
+        let (release_conflict_status, release_conflict) =
+            release_pessimistic_lock(&mut lock_table, "tx-2", "table:inventory:sku:100");
+        assert_eq!(release_conflict_status, StatusCode::CONFLICT);
+        assert_eq!(release_conflict.lock_state, "ownership_mismatch");
+
+        let (release_ok_status, release_ok) =
+            release_pessimistic_lock(&mut lock_table, "tx-1", "table:inventory:sku:100");
+        assert_eq!(release_ok_status, StatusCode::OK);
+        assert_eq!(release_ok.lock_state, "released");
     }
 
     #[test]
