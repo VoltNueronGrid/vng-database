@@ -1,0 +1,49 @@
+{
+  "gate": "ws1",
+  "status": "passed",
+  "started_at_utc": "2026-03-06T06:40:35.4578855Z",
+  "finished_at_utc": "2026-03-06T06:40:49.6521743Z",
+  "duration_ms": 14194,
+  "packs": [
+    {
+      "pack": "ws1-sql-core-tests",
+      "status": "passed",
+      "detail": "cargo test -p voltnuerongrid-sql"
+    },
+    {
+      "pack": "ws1-udf-contract-smoke",
+      "status": "passed",
+      "detail": "run-ws1-udf-contract-smoke.ps1"
+    },
+    {
+      "pack": "ws1-udf-runtime-scaffold-tests",
+      "status": "passed",
+      "detail": "cargo test -p voltnuerongridd ws1_udf_ -- --nocapture"
+    },
+    {
+      "pack": "ws1-runtime-sql-check",
+      "status": "passed",
+      "detail": "cargo check -p voltnuerongridd"
+    },
+    {
+      "pack": "ws1-udf-coverage-matrix",
+      "status": "passed",
+      "detail": "tests/kpi/scripts/run-ws1-udf-coverage-export.ps1"
+    },
+    {
+      "pack": "ws1-gate-trend-comparison",
+      "status": "passed",
+      "detail": "tests/kpi/scripts/run-ws1-gate-trend-compare.ps1"
+    },
+    {
+      "pack": "ws1-udf-stability-badge",
+      "status": "passed",
+      "detail": "tests/kpi/scripts/run-ws1-udf-stability-badge.ps1"
+    },
+    {
+      "pack": "ws1-release-summary",
+      "status": "passed",
+      "detail": "tests/kpi/scripts/run-ws1-release-summary.ps1"
+    }
+  ]
+}

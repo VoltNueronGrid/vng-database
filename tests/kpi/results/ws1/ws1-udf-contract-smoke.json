@@ -1,0 +1,19 @@
+{
+  "smoke": "ws1-udf-contract",
+  "status": "passed",
+  "sql_lib_path": "crates/voltnuerongrid-sql/src/lib.rs",
+  "commands": [
+    "cargo test -p voltnuerongrid-sql function_registry_supports_polyglot_udf_contract -- --nocapture",
+    "cargo test -p voltnuerongrid-sql classifies_core_statements -- --nocapture"
+  ],
+  "timestamp_utc": "2026-03-06T06:53:07.5628564Z",
+  "checks": {
+    "function_language_rust_declared": true,
+    "function_language_javascript_declared": true,
+    "function_language_python_declared": true,
+    "create_function_classifier_present": true,
+    "polyglot_udf_registry_test_passes": true,
+    "create_function_classification_test_passes": true
+  },
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_sql-ec677f991cc5968a.exe)\n\nrunning 1 test\ntest tests::function_registry_supports_polyglot_udf_contract ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_sql-ec677f991cc5968a.exe)\n\nrunning 1 test\ntest tests::classifies_core_statements ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n"
+}

@@ -1,0 +1,31 @@
+{
+  "gate": "ws8a-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-03-06T02:58:02.0063025Z",
+  "finished_at_utc": "2026-03-06T02:58:12.8238874Z",
+  "duration_ms": 10818,
+  "artifacts": {
+    "ws8a_gate": "tests/kpi/results/ws8a/ws8a-gate-summary.json",
+    "ws8a_release": "tests/kpi/results/gates/ws8a-release-readiness.json",
+    "ws8a_matrix": "tests/kpi/results/ws8a/ws8a-agent-authoring-matrix.json",
+    "ws8a_trend": "tests/kpi/results/ws8a/ws8a-gate-trend-comparison.json",
+    "ws8a_badge": "tests/kpi/results/ws8a/ws8a-agent-stability-badge.json"
+  },
+  "checks": {
+    "ws8a_gate_passed": true,
+    "ws8a_release_summary_passed": true,
+    "ws8a_all_packs_passed": true,
+    "ws8a_controls_all_passed": true,
+    "ws8a_trend_allowed": true,
+    "ws8a_stability_badge_green": true
+  },
+  "runs": [
+    {
+      "pack": "ws8a-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws8a/ws8a-gate-summary.json"
+    }
+  ]
+}

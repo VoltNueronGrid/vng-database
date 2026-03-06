@@ -1,0 +1,27 @@
+{
+  "gate": "ws1a",
+  "status": "passed",
+  "started_at_utc": "2026-03-06T04:43:16.3229729Z",
+  "finished_at_utc": "2026-03-06T04:43:18.2395859Z",
+  "duration_ms": 1917,
+  "packs": [
+    {
+      "pack": "ws1a-legacy-parity",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/parity/legacy-aggregation-parity.json"
+    },
+    {
+      "pack": "ws1a-legacy-gap-report",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/parity/legacy-aggregation-gap-report.json"
+    },
+    {
+      "pack": "ws1a-udf-contract-bridge",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json"
+    }
+  ]
+}

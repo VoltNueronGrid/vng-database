@@ -1,0 +1,29 @@
+{
+  "report": "ws7-plugin-compliance-matrix",
+  "status": "passed",
+  "generated_at_utc": "2026-03-06T05:46:03.1723258Z",
+  "source_summary": "tests/kpi/results/ws7/ws7-gate-summary.json",
+  "total_controls": 3,
+  "passed_controls": 3,
+  "failed_controls": 0,
+  "matrix": [
+    {
+      "control": "plugin_registration_boundary",
+      "evidence_pack": "ws7-plugin-boundary",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws7/plugin-boundary-smoke.json"
+    },
+    {
+      "control": "manifest_integrity_and_revocation",
+      "evidence_pack": "ws7-manifest-integrity",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws7/ws7-manifest-integrity-smoke.json"
+    },
+    {
+      "control": "registration_policy_and_capabilities",
+      "evidence_pack": "ws7-registration-policy",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws7/ws7-registration-policy-smoke.json"
+    }
+  ]
+}

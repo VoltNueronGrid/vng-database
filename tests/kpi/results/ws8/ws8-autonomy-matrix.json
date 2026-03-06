@@ -1,0 +1,41 @@
+{
+  "report": "ws8-autonomous-control-plane-matrix",
+  "status": "passed",
+  "generated_at_utc": "2026-03-06T05:45:38.8253980Z",
+  "source_summary": "tests/kpi/results/ws8/ws8-gate-summary.json",
+  "total_controls": 5,
+  "passed_controls": 5,
+  "failed_controls": 0,
+  "matrix": [
+    {
+      "control": "typed_action_record_baseline",
+      "evidence_pack": "ws8-control-plane",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws8/control-plane-smoke.json"
+    },
+    {
+      "control": "guardrail_policy_and_emergency_stop",
+      "evidence_pack": "ws8-guardrail-policy",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws8/ws8-guardrail-policy-smoke.json"
+    },
+    {
+      "control": "mode_governance_and_blast_radius_policy",
+      "evidence_pack": "ws8-mode-governance",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws8/ws8-mode-governance-smoke.json"
+    },
+    {
+      "control": "audit_trail_linkage",
+      "evidence_pack": "ws8a-audit-trail",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws8a/audit-trail-smoke.json"
+    },
+    {
+      "control": "audit_companion_trace_filter",
+      "evidence_pack": "ws8a-audit-companion",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws8a/audit-companion-smoke.json"
+    }
+  ]
+}

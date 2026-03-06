@@ -1,0 +1,30 @@
+{
+  "smoke": "ws7-registration-policy",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-plugins <registration_policy_tests> -- --nocapture",
+  "started_at_utc": "2026-03-06T05:45:54.7901995Z",
+  "finished_at_utc": "2026-03-06T05:46:03.0771892Z",
+  "duration_ms": 8287,
+  "tests": [
+    {
+      "test": "registers_valid_package",
+      "status": "passed",
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-d47ba42730831ace.exe)\n\nrunning 1 test\ntest tests::registers_valid_package ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n"
+    },
+    {
+      "test": "rejects_package_with_missing_required_fields",
+      "status": "passed",
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-d47ba42730831ace.exe)\n\nrunning 1 test\ntest tests::rejects_package_with_missing_required_fields ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n"
+    },
+    {
+      "test": "rejects_package_when_capability_missing",
+      "status": "passed",
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-d47ba42730831ace.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_capability_missing ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n"
+    },
+    {
+      "test": "rejects_package_when_custom_hook_fails",
+      "status": "passed",
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-d47ba42730831ace.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_custom_hook_fails ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.01s\n"
+    }
+  ]
+}

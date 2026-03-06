@@ -1,0 +1,9 @@
+{
+  "label": "ws8a-agent-stability",
+  "message": "7/7 baseline_established",
+  "color": "green",
+  "status": "passed",
+  "source_summary": "tests/kpi/results/ws8a/ci-ws8a-gate-summary.json",
+  "source_trend": "tests/kpi/results/ws8a/ws8a-gate-trend-comparison.json",
+  "generated_at_utc": "2026-03-06T02:58:00.3489939Z"
+}

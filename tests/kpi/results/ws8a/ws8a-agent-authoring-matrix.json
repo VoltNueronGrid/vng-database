@@ -1,0 +1,29 @@
+{
+  "report": "ws8a-agent-authoring-matrix",
+  "status": "passed",
+  "generated_at_utc": "2026-03-06T02:58:21.9536996Z",
+  "source_summary": "tests/kpi/results/ws8a/ws8a-gate-summary.json",
+  "total_controls": 3,
+  "passed_controls": 3,
+  "failed_controls": 0,
+  "matrix": [
+    {
+      "control": "audit_trail_append_only",
+      "evidence_pack": "ws8a-audit-trail",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws8a/audit-trail-smoke.json"
+    },
+    {
+      "control": "audit_companion_trace_action_filter",
+      "evidence_pack": "ws8a-audit-companion",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws8a/audit-companion-smoke.json"
+    },
+    {
+      "control": "agent_authoring_object_plugin_workflow",
+      "evidence_pack": "ws8a-agent-authoring",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws8a/ws8a-agent-authoring-smoke.json"
+    }
+  ]
+}

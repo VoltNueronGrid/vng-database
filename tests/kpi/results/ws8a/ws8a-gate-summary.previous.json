@@ -1,0 +1,51 @@
+{
+  "gate": "ws8a",
+  "status": "passed",
+  "started_at_utc": "2026-03-06T02:58:02.0820966Z",
+  "finished_at_utc": "2026-03-06T02:58:12.1761599Z",
+  "duration_ms": 10094,
+  "packs": [
+    {
+      "pack": "ws8a-audit-trail",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws8a/audit-trail-smoke.json"
+    },
+    {
+      "pack": "ws8a-audit-companion",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws8a/audit-companion-smoke.json"
+    },
+    {
+      "pack": "ws8a-agent-authoring",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws8a/ws8a-agent-authoring-smoke.json"
+    },
+    {
+      "pack": "ws8a-agent-authoring-matrix",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/scripts/run-ws8a-agent-authoring-matrix-export.ps1"
+    },
+    {
+      "pack": "ws8a-gate-trend-comparison",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/scripts/run-ws8a-gate-trend-compare.ps1"
+    },
+    {
+      "pack": "ws8a-agent-stability-badge",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/scripts/run-ws8a-agent-stability-badge.ps1"
+    },
+    {
+      "pack": "ws8a-release-summary",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/scripts/run-ws8a-release-summary.ps1"
+    }
+  ]
+}

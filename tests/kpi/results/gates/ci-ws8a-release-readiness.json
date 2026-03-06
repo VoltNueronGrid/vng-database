@@ -1,0 +1,31 @@
+{
+  "gate": "ws8a-release-agent-authoring-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R3"
+  ],
+  "scope": [
+    "WS8A",
+    "REQ-30"
+  ],
+  "generated_at_utc": "2026-03-06T02:57:58.4159918Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws8a/ws8a-gate-summary.json",
+    "matrix": "tests/kpi/results/ws8a/ws8a-agent-authoring-matrix.json",
+    "trend": "tests/kpi/results/ws8a/ws8a-gate-trend-comparison.json",
+    "badge": "tests/kpi/results/ws8a/ws8a-agent-stability-badge.json"
+  },
+  "checks": {
+    "ws8a_gate_passed": true,
+    "ws8a_matrix_passed": true,
+    "ws8a_trend_not_regressed": true,
+    "ws8a_badge_passed": true
+  },
+  "highlights": {
+    "pack_count": 3,
+    "controls": 3,
+    "trend_state": "baseline_established",
+    "badge_message": "3/3 baseline_established"
+  }
+}

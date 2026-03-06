@@ -1,0 +1,29 @@
+{
+  "gate": "release-r3-plugin-readiness",
+  "status": "passed",
+  "release_target": "R3",
+  "release_readiness": "ready_for_validation",
+  "scope": [
+    "WS7",
+    "REQ-09",
+    "REQ-26",
+    "WS9A"
+  ],
+  "started_at_utc": "2026-03-06T00:50:01.0975766Z",
+  "finished_at_utc": "2026-03-06T00:50:17.7333788Z",
+  "duration_ms": 16636,
+  "packs": [
+    {
+      "pack": "ws7-closure-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws7/ws7-closure-gate-summary.json"
+    },
+    {
+      "pack": "ws9a-ide-extension-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws9a/ws9a-gate-summary.json"
+    }
+  ]
+}

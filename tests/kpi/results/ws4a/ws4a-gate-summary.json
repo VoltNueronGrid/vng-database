@@ -1,0 +1,21 @@
+{
+  "gate": "ws4a",
+  "status": "passed",
+  "started_at_utc": "2026-03-05T17:43:01.7368703Z",
+  "finished_at_utc": "2026-03-05T17:43:03.4107137Z",
+  "duration_ms": 1674,
+  "packs": [
+    {
+      "pack": "ws4a-streaming-path",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws4a/streaming-event-path-smoke.json"
+    },
+    {
+      "pack": "ws4a-replay-cursor",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws4a/replay-cursor-smoke.json"
+    }
+  ]
+}

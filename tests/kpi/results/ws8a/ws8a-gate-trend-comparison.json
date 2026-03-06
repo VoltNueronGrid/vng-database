@@ -1,0 +1,17 @@
+{
+  "report": "ws8a-gate-trend-comparison",
+  "status": "passed",
+  "trend_state": "stable",
+  "generated_at_utc": "2026-03-06T02:58:22.0098828Z",
+  "current_summary": "tests/kpi/results/ws8a/ws8a-gate-summary.json",
+  "prior_summary": "tests/kpi/results/ws8a/ws8a-gate-summary.previous.json",
+  "gate_status": {
+    "before": "passed",
+    "after": "passed"
+  },
+  "duration_ms": {
+    "before": 10094,
+    "after": 7489,
+    "delta": -2605
+  }
+}

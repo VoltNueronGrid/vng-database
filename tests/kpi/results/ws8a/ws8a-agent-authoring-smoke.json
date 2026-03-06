@@ -1,0 +1,19 @@
+{
+  "smoke": "ws8a-agent-authoring-workflow",
+  "status": "passed",
+  "runtime_path": "services/voltnuerongridd/src/main.rs",
+  "commands": [
+    "cargo test -p voltnuerongridd append_action_record_writes_to_history -- --nocapture",
+    "cargo test -p voltnuerongrid-plugins registers_valid_package -- --nocapture",
+    "cargo test -p voltnuerongrid-plugins rejects_package_when_custom_hook_fails -- --nocapture"
+  ],
+  "timestamp_utc": "2026-03-06T02:58:21.8410591Z",
+  "checks": {
+    "schema_change_guardrail_supervised": true,
+    "plugin_install_guardrail_supervised": true,
+    "action_record_history_test": true,
+    "plugin_authoring_registers_valid_package": true,
+    "plugin_authoring_guardrail_hook_rejects_invalid_owner": true
+  },
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 1 test\ntest tests::append_action_record_writes_to_history ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-d47ba42730831ace.exe)\n\nrunning 1 test\ntest tests::registers_valid_package ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_plugins-d47ba42730831ace.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_custom_hook_fails ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s\n"
+}

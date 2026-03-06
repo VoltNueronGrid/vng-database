@@ -1,0 +1,14 @@
+{
+  "smoke": "ws1a-udf-contract-bridge",
+  "status": "passed",
+  "commands": [
+    "cargo test -p voltnuerongrid-sql p2_stub_hooks_cover_expected_aggregations -- --nocapture",
+    "cargo test -p voltnuerongrid-sql function_registry_supports_polyglot_udf_contract -- --nocapture"
+  ],
+  "timestamp_utc": "2026-03-06T05:01:00.0792549Z",
+  "checks": {
+    "ws1a_p2_stub_hook_test_passes": true,
+    "ws1_polyglot_udf_contract_test_passes": true
+  },
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_sql-ec677f991cc5968a.exe)\n\nrunning 1 test\ntest tests::p2_stub_hooks_cover_expected_aggregations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_sql-ec677f991cc5968a.exe)\n\nrunning 1 test\ntest tests::function_registry_supports_polyglot_udf_contract ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n"
+}

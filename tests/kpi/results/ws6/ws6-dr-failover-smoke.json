@@ -1,0 +1,7 @@
+{
+  "smoke": "ws6-dr-failover-path",
+  "status": "passed",
+  "timestamp_utc": "2026-03-06T00:35:27.2098546Z",
+  "command": "cargo test -p voltnuerongridd ws12_dr_hook_executes_failover_when_not_dry_run -- --nocapture",
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 1 test\ntest tests::ws12_dr_hook_executes_failover_when_not_dry_run ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.00s\n"
+}

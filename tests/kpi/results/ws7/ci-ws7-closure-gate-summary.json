@@ -1,0 +1,31 @@
+{
+  "gate": "ws7-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-03-06T00:49:43.1959426Z",
+  "finished_at_utc": "2026-03-06T00:50:01.0722249Z",
+  "duration_ms": 17876,
+  "artifacts": {
+    "ws7_gate": "tests/kpi/results/ws7/ws7-gate-summary.json",
+    "ws7_release": "tests/kpi/results/gates/ws7-release-readiness.json",
+    "ws7_compliance_matrix": "tests/kpi/results/ws7/ws7-compliance-matrix.json",
+    "ws7_trend": "tests/kpi/results/ws7/ws7-gate-trend-comparison.json",
+    "ws7_badge": "tests/kpi/results/ws7/ws7-plugin-stability-badge.json"
+  },
+  "checks": {
+    "ws7_gate_passed": true,
+    "ws7_release_summary_passed": true,
+    "ws7_all_packs_passed": true,
+    "ws7_compliance_controls_all_passed": true,
+    "ws7_trend_allowed": true,
+    "ws7_stability_badge_green": true
+  },
+  "runs": [
+    {
+      "pack": "ws7-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws7/ws7-gate-summary.json"
+    }
+  ]
+}

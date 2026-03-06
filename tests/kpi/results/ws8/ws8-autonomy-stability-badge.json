@@ -1,0 +1,9 @@
+{
+  "label": "ws8-autonomy-stability",
+  "message": "5/5 stable",
+  "color": "green",
+  "status": "passed",
+  "source_summary": "tests/kpi/results/ws8/ws8-gate-summary.json",
+  "source_trend": "tests/kpi/results/ws8/ws8-gate-trend-comparison.json",
+  "generated_at_utc": "2026-03-06T05:45:38.9821141Z"
+}

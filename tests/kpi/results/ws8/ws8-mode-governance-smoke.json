@@ -1,0 +1,14 @@
+{
+  "smoke": "ws8-mode-governance",
+  "status": "passed",
+  "runtime_path": "services/voltnuerongridd/src/main.rs",
+  "command": "cargo test -p voltnuerongridd ws12_dr_hook_denies_when_mode_below_policy -- --nocapture",
+  "timestamp_utc": "2026-03-06T05:45:27.9962693Z",
+  "checks": {
+    "dr_hook_denies_when_mode_below_policy_test": true,
+    "autonomous_mode_disabled_path_present": true,
+    "deny_mode_policy_decision_present": true,
+    "fast_failover_requires_autonomous_mode": true
+  },
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.03s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 1 test\ntest tests::ws12_dr_hook_denies_when_mode_below_policy ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.00s\n"
+}

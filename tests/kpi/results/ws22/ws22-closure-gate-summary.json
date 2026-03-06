@@ -1,0 +1,25 @@
+{
+  "gate": "ws22-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-03-06T06:53:13.5186949Z",
+  "finished_at_utc": "2026-03-06T06:53:16.9030811Z",
+  "duration_ms": 3384,
+  "artifacts": {
+    "ws22_gate": "tests/kpi/results/ws22/ws22-gate-summary.json",
+    "ws22_smoke": "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json"
+  },
+  "checks": {
+    "ws22_gate_passed": true,
+    "ws22_smoke_passed": true,
+    "ws22_contract_checks_all_passed": true
+  },
+  "runs": [
+    {
+      "pack": "ws22-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws22/ws22-gate-summary.json"
+    }
+  ]
+}

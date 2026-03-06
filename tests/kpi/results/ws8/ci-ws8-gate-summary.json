@@ -1,0 +1,49 @@
+{
+  "gate": "ws8-autonomous-control-plane",
+  "status": "passed",
+  "started_at_utc": "2026-03-06T01:27:13.8354899Z",
+  "finished_at_utc": "2026-03-06T01:27:25.8573068Z",
+  "duration_ms": 12022,
+  "packs": [
+    {
+      "pack": "ws8-control-plane",
+      "script": "tests/kpi/scripts/run-ws8-control-plane-smoke.ps1",
+      "status": "passed",
+      "started_at_utc": "2026-03-06T01:27:13.8379505Z",
+      "finished_at_utc": "2026-03-06T01:27:17.4206435Z",
+      "duration_ms": 3583
+    },
+    {
+      "pack": "ws8-guardrail-policy",
+      "script": "tests/kpi/scripts/run-ws8-guardrail-policy-smoke.ps1",
+      "status": "passed",
+      "started_at_utc": "2026-03-06T01:27:17.4274930Z",
+      "finished_at_utc": "2026-03-06T01:27:19.1799007Z",
+      "duration_ms": 1752
+    },
+    {
+      "pack": "ws8-mode-governance",
+      "script": "tests/kpi/scripts/run-ws8-mode-governance-smoke.ps1",
+      "status": "passed",
+      "started_at_utc": "2026-03-06T01:27:19.1804069Z",
+      "finished_at_utc": "2026-03-06T01:27:20.8506954Z",
+      "duration_ms": 1670
+    },
+    {
+      "pack": "ws8a-audit-trail",
+      "script": "tests/kpi/scripts/run-ws8a-audit-smoke.ps1",
+      "status": "passed",
+      "started_at_utc": "2026-03-06T01:27:20.8522562Z",
+      "finished_at_utc": "2026-03-06T01:27:24.4079107Z",
+      "duration_ms": 3556
+    },
+    {
+      "pack": "ws8a-audit-companion",
+      "script": "tests/kpi/scripts/run-ws8a-audit-companion-smoke.ps1",
+      "status": "passed",
+      "started_at_utc": "2026-03-06T01:27:24.4082902Z",
+      "finished_at_utc": "2026-03-06T01:27:25.8510813Z",
+      "duration_ms": 1443
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "report": "ws1-udf-coverage-matrix",
+  "status": "passed",
+  "generated_at_utc": "2026-03-06T06:53:13.0522102Z",
+  "source_summary": "tests/kpi/results/ws1/ws1-gate-summary.json",
+  "total_controls": 4,
+  "passed_controls": 4,
+  "failed_controls": 0,
+  "matrix": [
+    {
+      "control": "polyglot_contract_declarations",
+      "source": "ws1-udf-contract-smoke",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws1/ws1-udf-contract-smoke.json"
+    },
+    {
+      "control": "runtime_polyglot_execute_path",
+      "source": "sql-execute-udf-smoke",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws1/sql-execute-udf-smoke.json"
+    },
+    {
+      "control": "runtime_guardrail_rejection",
+      "source": "sql-execute-udf-smoke",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws1/sql-execute-udf-smoke.json"
+    },
+    {
+      "control": "ws1_gate_runtime_test_pack",
+      "source": "ws1-gate-summary",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws1/ws1-gate-summary.json"
+    }
+  ]
+}

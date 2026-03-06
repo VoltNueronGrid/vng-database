@@ -1,0 +1,30 @@
+{
+  "gate": "release-r2-failover-readiness",
+  "status": "passed",
+  "release_target": "R2",
+  "release_readiness": "ready_for_validation",
+  "scope": [
+    "WS6",
+    "WS12",
+    "WS13",
+    "WS14",
+    "REQ-17"
+  ],
+  "started_at_utc": "2026-03-06T00:35:22.0367671Z",
+  "finished_at_utc": "2026-03-06T00:35:58.4953711Z",
+  "duration_ms": 36459,
+  "packs": [
+    {
+      "pack": "ws6-closure-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws6/ws6-closure-gate-summary.json"
+    },
+    {
+      "pack": "release-ops-resilience-cluster",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/gates/release-ops-resilience-readiness.json"
+    }
+  ]
+}

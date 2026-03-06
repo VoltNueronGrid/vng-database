@@ -1,0 +1,32 @@
+{
+  "gate": "ws6-release-failover-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R2"
+  ],
+  "scope": [
+    "WS6",
+    "REQ-17"
+  ],
+  "generated_at_utc": "2026-03-06T00:35:53.4835421Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws6/ws6-gate-summary.json",
+    "chaos_fault_matrix": "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json",
+    "trend_comparison": "tests/kpi/results/ws6/ws6-gate-trend-comparison.json",
+    "stability_badge": "tests/kpi/results/ws6/ws6-failover-stability-badge.json"
+  },
+  "checks": {
+    "ws6_gate_passed": true,
+    "chaos_fault_matrix_passed": true,
+    "trend_not_regressed": true,
+    "stability_badge_passed": true
+  },
+  "highlights": {
+    "pack_count": 9,
+    "chaos_fault_modes": 5,
+    "chaos_passed_modes": 5,
+    "trend_state": "stable",
+    "badge_message": "9/9 stable"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "smoke": "ws6-multi-node-handoff-matrix",
+  "status": "passed",
+  "timestamp_utc": "2026-03-06T00:35:28.9128519Z",
+  "command": "cargo test -p voltnuerongridd failover_rotate_leader_ -- --nocapture",
+  "matrix": [
+    {
+      "from": "node-1",
+      "to": "node-2",
+      "expected": "handoff_success"
+    },
+    {
+      "from": "node-2",
+      "to": "node-3",
+      "expected": "handoff_success"
+    },
+    {
+      "from": "node-3",
+      "to": "node-1",
+      "expected": "handoff_success"
+    },
+    {
+      "from": "node-2",
+      "to": "blank_request",
+      "expected": "fallback_to_current_node"
+    }
+  ],
+  "checks": {
+    "leader_rotation_test_pack_passed": true,
+    "scenario_count": 4
+  },
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.00s\n"
+}

@@ -1,0 +1,49 @@
+{
+  "smoke": "ws6-failover-flap-resistance",
+  "status": "passed",
+  "timestamp_utc": "2026-03-06T00:35:47.9419064Z",
+  "command": "cargo test -p voltnuerongridd failover_rotate_leader_ -- --nocapture",
+  "cycles": 5,
+  "cycle_max_ms": 6000,
+  "latency_envelope": {
+    "p95_cycle_ms": 2388,
+    "max_cycle_ms_observed": 2556.0
+  },
+  "cycle_results": [
+    {
+      "cycle": 1,
+      "status": "passed",
+      "duration_ms": 1782,
+      "max_cycle_ms": 6000,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+    },
+    {
+      "cycle": 2,
+      "status": "passed",
+      "duration_ms": 1745,
+      "max_cycle_ms": 6000,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+    },
+    {
+      "cycle": 3,
+      "status": "passed",
+      "duration_ms": 1883,
+      "max_cycle_ms": 6000,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+    },
+    {
+      "cycle": 4,
+      "status": "passed",
+      "duration_ms": 2388,
+      "max_cycle_ms": 6000,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.78s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+    },
+    {
+      "cycle": 5,
+      "status": "passed",
+      "duration_ms": 2556,
+      "max_cycle_ms": 6000,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.78s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+    }
+  ]
+}

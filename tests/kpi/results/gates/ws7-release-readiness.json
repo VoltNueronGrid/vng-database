@@ -1,0 +1,32 @@
+{
+  "gate": "ws7-release-plugin-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R3"
+  ],
+  "scope": [
+    "WS7",
+    "REQ-09",
+    "REQ-26"
+  ],
+  "generated_at_utc": "2026-03-06T05:46:03.4132040Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws7/ws7-gate-summary.json",
+    "compliance_matrix": "tests/kpi/results/ws7/ws7-compliance-matrix.json",
+    "trend_comparison": "tests/kpi/results/ws7/ws7-gate-trend-comparison.json",
+    "stability_badge": "tests/kpi/results/ws7/ws7-plugin-stability-badge.json"
+  },
+  "checks": {
+    "ws7_gate_passed": true,
+    "ws7_compliance_matrix_passed": true,
+    "ws7_trend_not_regressed": true,
+    "ws7_badge_passed": true
+  },
+  "highlights": {
+    "pack_count": 3,
+    "compliance_controls": 3,
+    "trend_state": "stable",
+    "badge_message": "3/3 stable"
+  }
+}

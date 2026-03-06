@@ -1,0 +1,15 @@
+{
+  "smoke": "ws22-pessimistic-lock-baseline",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongridd ws22_; runtime contract checks for pessimistic lock APIs",
+  "contract_checks": {
+    "acquire_route_present": true,
+    "release_route_present": true,
+    "acquire_logic_present": true,
+    "release_logic_present": true
+  },
+  "started_at_utc": "2026-03-06T06:53:13.6665313Z",
+  "finished_at_utc": "2026-03-06T06:53:16.6301341Z",
+  "duration_ms": 2964,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.03s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::ws22_pessimistic_lock_release_requires_owner_transaction ... ok\ntest tests::ws22_pessimistic_lock_blocks_conflicting_transaction ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s\n"
+}
