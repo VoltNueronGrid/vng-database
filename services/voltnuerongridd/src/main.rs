@@ -276,6 +276,7 @@ struct PessimisticLockAcquireRequest {
     resource: String,
     owner: Option<String>,
     ttl_ms: Option<u64>,
+    wait_timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -790,7 +791,15 @@ async fn sql_pessimistic_lock_acquire(
     };
 
     let (status, response) =
-        acquire_pessimistic_lock(&mut lock_table, &req.transaction_id, &req.resource, &owner, ttl_ms, now_ms);
+        acquire_pessimistic_lock(
+            &mut lock_table,
+            &req.transaction_id,
+            &req.resource,
+            &owner,
+            ttl_ms,
+            req.wait_timeout_ms.unwrap_or(0),
+            now_ms,
+        );
     (status, Json(response))
 }
 
@@ -1697,6 +1706,7 @@ fn acquire_pessimistic_lock(
     resource: &str,
     owner: &str,
     ttl_ms: u64,
+    wait_timeout_ms: u64,
     now_ms: u128,
 ) -> (StatusCode, PessimisticLockResponse) {
     let tx = transaction_id.trim();
@@ -1717,6 +1727,17 @@ fn acquire_pessimistic_lock(
         if existing.expires_unix_ms <= now_ms {
             lock_table.remove(resource_key);
         } else if existing.transaction_id != tx {
+            if wait_timeout_ms > 0 {
+                return (
+                    StatusCode::REQUEST_TIMEOUT,
+                    PessimisticLockResponse {
+                        status: "blocked",
+                        lock_state: "wait_timeout",
+                        reason: "pessimistic_lock_wait_timeout".to_string(),
+                        lock: Some(existing),
+                    },
+                );
+            }
             return (
                 StatusCode::CONFLICT,
                 PessimisticLockResponse {
@@ -2726,6 +2747,7 @@ mod tests {
             "table:orders:row:42",
             "test-owner",
             30_000,
+            0,
             10_000,
         );
         assert_eq!(first_status, StatusCode::OK);
@@ -2737,6 +2759,7 @@ mod tests {
             "table:orders:row:42",
             "test-owner",
             30_000,
+            0,
             10_010,
         );
         assert_eq!(conflict_status, StatusCode::CONFLICT);
@@ -2756,6 +2779,7 @@ mod tests {
             "table:inventory:sku:100",
             "test-owner",
             30_000,
+            0,
             11_000,
         );
 
@@ -2768,6 +2792,33 @@ mod tests {
             release_pessimistic_lock(&mut lock_table, "tx-1", "table:inventory:sku:100");
         assert_eq!(release_ok_status, StatusCode::OK);
         assert_eq!(release_ok.lock_state, "released");
+    }
+
+    #[test]
+    fn ws22_pessimistic_lock_wait_timeout_returns_request_timeout() {
+        let mut lock_table = HashMap::new();
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table,
+            "tx-1",
+            "table:payments:row:7",
+            "test-owner",
+            30_000,
+            0,
+            12_000,
+        );
+
+        let (timeout_status, timeout) = acquire_pessimistic_lock(
+            &mut lock_table,
+            "tx-2",
+            "table:payments:row:7",
+            "test-owner",
+            30_000,
+            2_000,
+            12_050,
+        );
+        assert_eq!(timeout_status, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(timeout.lock_state, "wait_timeout");
+        assert_eq!(timeout.reason, "pessimistic_lock_wait_timeout");
     }
 
     #[test]
