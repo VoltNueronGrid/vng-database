@@ -41,15 +41,15 @@
 
 | Req ID | Requirement Area | Primary Epic(s) | Status | Validation Evidence |
 |---|---|---|---|---|
-| REQ-01 | ANSI SQL + AI chat/extract/ingest/export | Epic 1, Epic 8 | In Progress | SQL analyzer baseline in `crates/voltnuerongrid-sql` + runtime analyze API smoke (`tests/kpi/results/20260305-ws1/sql-analyze-smoke.json`) |
+| REQ-01 | ANSI SQL + AI chat/extract/ingest/export | Epic 1, Epic 8 | In Progress | SQL analyzer baseline in `crates/voltnuerongrid-sql` + runtime analyze API smoke (`tests/kpi/results/20260305-ws1/sql-analyze-smoke.json`) + WS1 gate orchestrator evidence (`tests/kpi/results/ws1/ws1-gate-summary.json`) |
 | REQ-02 | DB/table/view/materialized view/function lifecycle | Epic 1 | In Progress | Statement classifier includes create/alter/drop/view/function lifecycle categories |
-| REQ-03 | Rust/JS/Python function support | Epic 1 | Not Started | UDF runtime tests |
+| REQ-03 | Rust/JS/Python function support | Epic 1 | Ready for Validation | WS1 runtime UDF scaffold now exposes explicit function-catalog contract, per-language guard-policy contract, and statement-level execution-plan routing evidence via `/api/v1/sql/execute`; closure/release linkage now includes WS1 closure gate + R1 SQL/UDF gate + R3 UDF runtime gate (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`, `tests/kpi/results/gates/release-r1-sql-udf-readiness.json`, `tests/kpi/results/gates/release-r3-udf-runtime-readiness.json`) in addition to contract/runtime smoke evidence (`tests/kpi/results/ws1/ws1-udf-contract-smoke.json`, `tests/kpi/results/ws1/sql-execute-udf-smoke.json`, `tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json`) |
 | REQ-04 | HA/FT/elasticity/i18n/UTF-8 | Epic 6, Epic 11, Epic 12 | In Progress | WS12 reliability contracts and WS13/WS14 operational hardening now aggregate under Ops/Resilience release-readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
-| REQ-05 | Separate compute and data files | Epic 2, Epic 6 | In Progress | WS2 durability contract scaffold + validation smoke (`tests/kpi/results/ws2/store-durability-smoke.json`) |
-| REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Epic 4, Epic 4A, Epic 7 | Not Started | Connector/format test matrix |
+| REQ-05 | Separate compute and data files | Epic 2, Epic 6 | In Progress | WS2 durability contract scaffold + validation smoke (`tests/kpi/results/ws2/store-durability-smoke.json`) + WS2/WS2A gate summaries (`tests/kpi/results/ws2/ws2-gate-summary.json`, `tests/kpi/results/ws2a/ws2a-gate-summary.json`) |
+| REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Epic 4, Epic 4A, Epic 7 | In Progress | WS4/WS4A ingest and streaming scaffolds with gate summaries (`tests/kpi/results/ws4/ws4-gate-summary.json`, `tests/kpi/results/ws4a/ws4a-gate-summary.json`) |
 | REQ-07 | Multithreaded high-speed import | Epic 4 | Not Started | Ingest throughput benchmark |
 | REQ-08 | Local + cloud SaaS operation | Epic 13 | Not Started | Local/cloud deployment smoke tests |
-| REQ-09 | Extensible plugin ecosystem | Epic 7 | Not Started | Plugin SDK conformance suite |
+| REQ-09 | Extensible plugin ecosystem | Epic 7 | Ready for Validation | WS7 closure hardening includes plugin boundary/integrity/policy gates, compliance matrix, trend comparator, stability badge, WS7 release summary, closure gate, and R3 plugin release gate (`tests/kpi/results/ws7/ws7-gate-summary.json`, `tests/kpi/results/ws7/ws7-compliance-matrix.json`, `tests/kpi/results/ws7/ws7-gate-trend-comparison.json`, `tests/kpi/results/ws7/ws7-plugin-stability-badge.json`, `tests/kpi/results/gates/ws7-release-readiness.json`, `tests/kpi/results/ws7/ws7-closure-gate-summary.json`, `tests/kpi/results/gates/release-r3-plugin-readiness.json`) |
 | REQ-10 | Trillion-row scale + high-speed retrieval | Epic 2, Epic 3, Epic 6 | Not Started | Scale benchmark report |
 | REQ-11 | Indexes + constraints | Epic 2, Epic 15 | Not Started | Constraint/index test suite |
 | REQ-12 | Seeded functions + plan-plat parity | Epic 1, Epic 1A | In Progress | P0/P1/P2 parity gap report with P2 stub closures (`tests/kpi/results/parity/legacy-aggregation-gap-report.json`) |
@@ -57,8 +57,8 @@
 | REQ-14 | UI + engine separation | Epic 9 | In Progress | Studio API contract checks now validate endpoint/header/type coverage + contract-script execution with WS9 smoke/gate evidence (`tests/kpi/results/ws9/studio-smoke.json`, `tests/kpi/results/ws9/ws9-gate-summary.json`) and combined DX/API release-readiness summary (`tests/kpi/results/gates/release-dx-api-readiness.json`) |
 | REQ-15 | Driver support (multi-language) | Epic 10 | In Progress | Rust driver baseline + JSON/YAML/properties routing contract parse coverage + WS10 smoke/gate evidence (`tests/kpi/results/ws10/driver-smoke.json`, `tests/kpi/results/ws10/ws10-gate-summary.json`) + combined DX/API release-readiness summary (`tests/kpi/results/gates/release-dx-api-readiness.json`) |
 | REQ-16 | SSL + encryption/decryption | Epic 5 | In Progress | Security contract now enforces TLS/mTLS + encryption-at-rest + KMS key reference constraints across JSON/YAML/properties with WS5 smoke/gate evidence (`tests/kpi/results/ws5/operator-auth-smoke.json`, `tests/kpi/results/ws5/ws5-gate-summary.json`) + combined DX/API release-readiness summary (`tests/kpi/results/gates/release-dx-api-readiness.json`) |
-| REQ-17 | Distributed failover + zero data loss | Epic 6, Epic 12 | Not Started | RTO/RPO + sync profile tests |
-| REQ-18 | Stream in/out + events for debug/audit | Epic 4A, Epic 8A | Not Started | Event replay + schema tests |
+| REQ-17 | Distributed failover + zero data loss | Epic 6, Epic 12 | Ready for Validation | WS6 closure hardening now includes closure gate + R2 failover release gate (`tests/kpi/results/ws6/ws6-closure-gate-summary.json`, `tests/kpi/results/gates/release-r2-failover-readiness.json`) in addition to WS6 release summary and CI badge row (`tests/kpi/results/gates/ws6-release-readiness.json`, `tests/kpi/results/gates/ci-ws6-release-readiness.json`, `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json`) |
+| REQ-18 | Stream in/out + events for debug/audit | Epic 4A, Epic 8A | In Progress | WS4A streaming + replay cursor scaffolds with gate summary evidence (`tests/kpi/results/ws4a/ws4a-gate-summary.json`) |
 | REQ-19 | Blazing ingest/update/read at scale | Epic 3, Epic 4, Epic 6 | Not Started | KPI benchmark gates |
 | REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Epic 13 | In Progress | WS13 multi-cloud profile gates + Ops/Resilience release-readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | REQ-21 | Any-number-user concurrency | Epic 3, Epic 10, Epic 12 | Not Started | Concurrency stress tests |
@@ -66,12 +66,12 @@
 | REQ-23 | ACID transactions | Epic 1, Epic 2, Epic 3 | In Progress | Transaction endpoint now classifies and validates statements before commit path |
 | REQ-24 | Config via properties/YAML/JSON | Epic 14 | In Progress | WS14 schema/conformance gates + Ops/Resilience release-readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | REQ-25 | Native connection + pooling | Epic 10, Epic 14 | In Progress | Driver routing contract enforces pool min/max + timeout constraints with cross-format contract checks in WS10 smoke/gate (`tests/kpi/results/ws10/ws10-gate-summary.json`) |
-| REQ-26 | Plugin model for streaming sources/sinks | Epic 4A, Epic 7 | Not Started | Connector plugin tests |
+| REQ-26 | Plugin model for streaming sources/sinks | Epic 4A, Epic 7 | In Progress | WS7 plugin registration boundary + signed manifest policy/revocation checks + closure/release gate evidence (`tests/kpi/results/ws7/ws7-gate-summary.json`, `tests/kpi/results/gates/ws7-release-readiness.json`) |
 | REQ-27 | Native cache engine (Redis-like compat) | Epic 3, Epic 14 | Not Started | Cache failover/invalidation tests |
 | REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Epic 9A | In Progress | Shared IDE contract + provider manifests validated via WS9A smoke/gate evidence (`tests/kpi/results/ws9a/ide-contract-smoke.json`, `tests/kpi/results/ws9a/ws9a-gate-summary.json`) |
-| REQ-29 | Fully autonomous operations | Epic 8, Epic 14 | Not Started | Autonomous mode validation |
-| REQ-30 | AI agent authoring for objects/plugins | Epic 8, Epic 7 | Not Started | Guardrailed agent workflow tests |
-| REQ-31 | HTAP (OLTP + OLAP) extreme performance | Epic 2, Epic 3 | Not Started | Mixed-workload KPI benchmarks |
+| REQ-29 | Fully autonomous operations | Epic 8, Epic 14 | Ready for Validation | WS8 closure hardening includes autonomous control-plane gate, guardrail policy smoke, audit linkage packs, autonomy matrix, trend comparator, stability badge, WS8 release summary, closure gate, and R3 autonomous release gate (`tests/kpi/results/ws8/ws8-gate-summary.json`, `tests/kpi/results/ws8/ws8-autonomy-matrix.json`, `tests/kpi/results/ws8/ws8-gate-trend-comparison.json`, `tests/kpi/results/ws8/ws8-autonomy-stability-badge.json`, `tests/kpi/results/gates/ws8-release-readiness.json`, `tests/kpi/results/ws8/ws8-closure-gate-summary.json`, `tests/kpi/results/gates/release-r3-autonomous-readiness.json`) |
+| REQ-30 | AI agent authoring for objects/plugins | Epic 8, Epic 7 | Ready for Validation | WS8A closure hardening includes agent authoring workflow smoke (object + plugin controls), WS8A matrix/trend/badge artifacts, WS8A release summary, WS8A closure gate, and R3 agent-authoring release gate (`tests/kpi/results/ws8a/ws8a-gate-summary.json`, `tests/kpi/results/ws8a/ws8a-agent-authoring-smoke.json`, `tests/kpi/results/ws8a/ws8a-agent-authoring-matrix.json`, `tests/kpi/results/ws8a/ws8a-gate-trend-comparison.json`, `tests/kpi/results/ws8a/ws8a-agent-stability-badge.json`, `tests/kpi/results/gates/ws8a-release-readiness.json`, `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`, `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`) |
+| REQ-31 | HTAP (OLTP + OLAP) extreme performance | Epic 2, Epic 3 | In Progress | WS3 performance hardening adds HTAP target-contract smoke, weighted performance scoring, trend comparator, stability badge, and WS3 release summary evidence (`tests/kpi/results/ws3/ws3-htap-target-contract-smoke.json`, `tests/kpi/results/ws3/ws3-performance-score.json`, `tests/kpi/results/ws3/ws3-gate-trend-comparison.json`, `tests/kpi/results/ws3/ws3-performance-stability-badge.json`, `tests/kpi/results/gates/ws3-release-readiness.json`) |
 
 ---
 
@@ -80,18 +80,18 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies |
 |---|---|---|---|---|---|
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts + SQL analyze runtime smoke) |
-| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online) |
-| WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | In Progress | WS1 (bucketed manifests + P2 stub implementations + gap report outputs in place) |
-| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | In Progress | WS0 (durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged) |
-| WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | In Progress | WS2 (row-sync origin scaffold + smoke evidence captured) |
-| WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | In Progress | WS2 (route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + `run-ws3-query-routing-smoke.ps1`) |
-| WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | In Progress | WS2 (ingestion connector/registry scaffold + WS4 smoke harness) |
-| WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | In Progress | WS4 (source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + WS4A smoke harnesses) |
+| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online; `/api/v1/sql/execute` now includes UDF runtime scaffold with explicit function catalog contract, per-language guard policies, and statement-level execution-plan routing evidence for Rust/JS/Python execution; gate orchestrator `run-ws1-gate.ps1` -> `tests/kpi/results/ws1/ws1-gate-summary.json`; UDF contract pack `run-ws1-udf-contract-smoke.ps1` -> `tests/kpi/results/ws1/ws1-udf-contract-smoke.json`; runtime UDF API smoke `run-sql-execute-udf-smoke.ps1` -> `tests/kpi/results/ws1/sql-execute-udf-smoke.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | In Progress | WS1 (bucketed manifests + P2 stub implementations + gap report outputs in place; gate orchestrator `run-ws1a-gate.ps1` -> `tests/kpi/results/ws1a/ws1a-gate-summary.json`; UDF bridge pack `run-ws1a-udf-contract-bridge-smoke.ps1` -> `tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | In Progress | WS0 (durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged; gate orchestrator `run-ws2-gate.ps1` -> `tests/kpi/results/ws2/ws2-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | In Progress | WS2 (row-sync origin scaffold + smoke evidence captured; gate orchestrator `run-ws2a-gate.ps1` -> `tests/kpi/results/ws2a/ws2a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | In Progress | WS2 (route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + gate orchestrator `run-ws3-gate.ps1` -> `tests/kpi/results/ws3/ws3-gate-summary.json`; performance target-contract/score/trend/badge/release artifacts via `run-ws3-htap-target-contract-smoke.ps1`, `run-ws3-performance-score.ps1`, `run-ws3-gate-trend-compare.ps1`, `run-ws3-performance-stability-badge.ps1`, `run-ws3-release-summary.ps1` -> `tests/kpi/results/gates/ws3-release-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | In Progress | WS2 (ingestion connector/registry scaffold + gate orchestrator `run-ws4-gate.ps1` -> `tests/kpi/results/ws4/ws4-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | In Progress | WS4 (source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + gate orchestrator `run-ws4a-gate.ps1` -> `tests/kpi/results/ws4a/ws4a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | Ready for Validation | WS0 (operator admin-key auth gate scaffolded for autonomous control endpoints + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json`; release-facing CI gate summary + badge artifacts `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
-| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | In Progress | WS2, WS3 (failover leader-state scaffold + authenticated failover simulation endpoint + WS6 smoke harness) |
-| WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | In Progress | WS1, WS4A (signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 smoke harness) |
-| WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | In Progress | WS1, WS6 (typed autonomous action execution records + guardrail decision trace IDs + audit linkage + WS8 smoke harness) |
-| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | In Progress | WS4A, WS5 (audit event contract + append-only sink + runtime emission + companion query/export filters for trace/action + WS8A smoke harnesses) |
+| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | Ready for Validation | WS2, WS3 (failover leader-state scaffold + authenticated failover simulation endpoint + WS6 deep hardening packs for multi-node handoff matrix, replication-lag failure/reconcile scenarios, RTO/RPO threshold score, and chaos-style node-loss/rejoin + flap-resistance + reconcile latency envelopes + post-gate exports for chaos fault-injection matrix, gate trend comparator, failover stability badge, single release summary, closure gate `run-ws6-closure-gate.ps1` -> `tests/kpi/results/ws6/ws6-closure-gate-summary.json`, and R2 release gate `run-release-r2-failover-gate.ps1` -> `tests/kpi/results/gates/release-r2-failover-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | Ready for Validation | WS1, WS4A (signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 extended gate orchestrator `run-ws7-gate.ps1` -> `tests/kpi/results/ws7/ws7-gate-summary.json` with compliance matrix/trend/badge/release summary (`tests/kpi/results/ws7/ws7-compliance-matrix.json`, `tests/kpi/results/ws7/ws7-gate-trend-comparison.json`, `tests/kpi/results/ws7/ws7-plugin-stability-badge.json`, `tests/kpi/results/gates/ws7-release-readiness.json`), closure gate `run-ws7-closure-gate.ps1` -> `tests/kpi/results/ws7/ws7-closure-gate-summary.json`, and R3 linkage gate `run-release-r3-plugin-gate.ps1` -> `tests/kpi/results/gates/release-r3-plugin-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | Ready for Validation | WS1, WS6 (typed autonomous action execution records + guardrail decision trace IDs + mode-governance/blast-radius policy-deny evidence via `run-ws8-mode-governance-smoke.ps1` + audit linkage with WS8 gate orchestrator `run-ws8-gate.ps1` -> `tests/kpi/results/ws8/ws8-gate-summary.json`, post-gate autonomy matrix/trend/badge/release summary (`tests/kpi/results/ws8/ws8-autonomy-matrix.json`, `tests/kpi/results/ws8/ws8-gate-trend-comparison.json`, `tests/kpi/results/ws8/ws8-autonomy-stability-badge.json`, `tests/kpi/results/gates/ws8-release-readiness.json`), closure gate `run-ws8-closure-gate.ps1` -> `tests/kpi/results/ws8/ws8-closure-gate-summary.json`, and R3 linkage gate `run-release-r3-autonomous-gate.ps1` -> `tests/kpi/results/gates/release-r3-autonomous-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | Ready for Validation | WS4A, WS5 (audit event contract + append-only sink + runtime emission + companion query/export filters for trace/action + AI agent authoring/object-plugin workflow evidence via `run-ws8a-agent-authoring-smoke.ps1`; WS8A gate orchestrator `run-ws8a-gate.ps1` -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`, post-gate matrix/trend/badge/release summary (`tests/kpi/results/ws8a/ws8a-agent-authoring-matrix.json`, `tests/kpi/results/ws8a/ws8a-gate-trend-comparison.json`, `tests/kpi/results/ws8a/ws8a-agent-stability-badge.json`, `tests/kpi/results/gates/ws8a-release-readiness.json`), closure gate `run-ws8a-closure-gate.ps1` -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`, and R3 linkage gate `run-release-r3-agent-authoring-gate.ps1` -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS9 | Epic 9 | Studio UI | UX Team | Ready for Validation | WS1, WS3 (Studio API client contracts + endpoint/header/type checks + contract script execution via WS9 smoke harness + gate orchestrator `run-ws9-gate.ps1` -> `tests/kpi/results/ws9/ws9-gate-summary.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS9A | Epic 9A | IDE extension suite | DX Team | Ready for Validation | WS1, WS10 (shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness + gate orchestrator `run-ws9a-gate.ps1` -> `tests/kpi/results/ws9a/ws9a-gate-summary.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | Ready for Validation | WS1, WS6 (Rust driver request builder + session/admin/operator headers + JSON/properties/YAML `DriverRoutingConfigContract` parsing/validation + WS10 smoke harness + gate orchestrator `run-ws10-gate.ps1` -> `tests/kpi/results/ws10/ws10-gate-summary.json`; combined DX/API cluster gate `run-release-dx-api-gate.ps1` -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml`) |
@@ -107,9 +107,9 @@
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | In Progress | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) |
-| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | In Progress | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | In Progress | Autonomous governance + audit evidence + plugin cert + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | In Progress | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) + WS1 UDF closure posture (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`) + release R1 SQL/UDF gate (`tests/kpi/results/gates/release-r1-sql-udf-readiness.json`) |
+| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | In Progress | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`) |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | In Progress | Autonomous governance + audit evidence + plugin cert + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS3 performance evidence (`tests/kpi/results/gates/ws3-release-readiness.json`) + WS7 release summary (`tests/kpi/results/gates/ws7-release-readiness.json`) + WS8 release summary (`tests/kpi/results/gates/ws8-release-readiness.json`) + WS8A release summary (`tests/kpi/results/gates/ws8a-release-readiness.json`) + release R3 plugin gate (`tests/kpi/results/gates/release-r3-plugin-readiness.json`) + release R3 autonomous gate (`tests/kpi/results/gates/release-r3-autonomous-readiness.json`) + release R3 agent authoring gate (`tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`) + release R3 UDF runtime gate (`tests/kpi/results/gates/release-r3-udf-runtime-readiness.json`) |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Not Started | RTO/RPO game-day success + global ops sign-off |
 
 ---
@@ -119,6 +119,100 @@
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
 | WS5 Security Gate | Epic 5 (Auth/RBAC/TLS/TDE/KMS) | `tests/kpi/results/ws5/ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-badge.json` |
+
+---
+
+## 5.2) Release-Facing WS6 Gate Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
+|---|---|---|---|---|
+| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss) | `tests/kpi/results/gates/ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
+
+---
+
+## 5.3) WS6 Closure and R2 Linkage Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact |
+|---|---|---|---|
+| WS6 Closure Gate | WS6 validation posture check | `tests/kpi/results/ws6/ws6-closure-gate-summary.json` | `tests/kpi/results/ws6/ci-ws6-closure-gate-summary.json` |
+| Release R2 Failover Gate | R2 failover release-readiness linkage (`WS6` + Ops/Resilience cluster) | `tests/kpi/results/gates/release-r2-failover-readiness.json` | `tests/kpi/results/gates/ci-release-r2-failover-readiness.json` |
+
+---
+
+## 5.4) Release-Facing WS7 Gate Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
+|---|---|---|---|---|
+| WS7 Plugin Resilience Gate | Epic 7 + REQ-09 (Plugin registration boundary, signed manifest policy, revocation controls) | `tests/kpi/results/gates/ws7-release-readiness.json` | `tests/kpi/results/gates/ci-ws7-release-readiness.json` | `tests/kpi/results/gates/ci-ws7-plugin-stability-badge.json` |
+
+---
+
+## 5.5) WS7 Closure and R3 Linkage Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact |
+|---|---|---|---|
+| WS7 Closure Gate | WS7 validation posture check | `tests/kpi/results/ws7/ws7-closure-gate-summary.json` | `tests/kpi/results/ws7/ci-ws7-closure-gate-summary.json` |
+| Release R3 Plugin Gate | R3 plugin release-readiness linkage (`WS7` + `WS9A`) | `tests/kpi/results/gates/release-r3-plugin-readiness.json` | `tests/kpi/results/gates/ci-release-r3-plugin-readiness.json` |
+
+---
+
+## 5.6) Release-Facing WS8 Gate Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
+|---|---|---|---|---|
+| WS8 Autonomous Control-Plane Gate | Epic 8 + REQ-29 (autonomous action governance, guardrail policy, emergency-stop controls, audit linkage) | `tests/kpi/results/gates/ws8-release-readiness.json` | `tests/kpi/results/gates/ci-ws8-release-readiness.json` | `tests/kpi/results/gates/ci-ws8-autonomy-stability-badge.json` |
+
+---
+
+## 5.7) WS8 Closure and R3 Linkage Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact |
+|---|---|---|---|
+| WS8 Closure Gate | WS8 validation posture check | `tests/kpi/results/ws8/ws8-closure-gate-summary.json` | `tests/kpi/results/ws8/ci-ws8-closure-gate-summary.json` |
+| Release R3 Autonomous Gate | R3 autonomous release-readiness linkage (`WS8` + `WS7`) | `tests/kpi/results/gates/release-r3-autonomous-readiness.json` | `tests/kpi/results/gates/ci-release-r3-autonomous-readiness.json` |
+
+---
+
+## 5.8) Release-Facing WS8A Gate Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
+|---|---|---|---|---|
+| WS8A Agent Authoring Gate | Epic 8A + REQ-30 (audit companion flows + AI agent object/plugin authoring workflow guardrails) | `tests/kpi/results/gates/ws8a-release-readiness.json` | `tests/kpi/results/gates/ci-ws8a-release-readiness.json` | `tests/kpi/results/gates/ci-ws8a-agent-stability-badge.json` |
+
+---
+
+## 5.9) WS8A Closure and R3 Linkage Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact |
+|---|---|---|---|
+| WS8A Closure Gate | WS8A validation posture check | `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json` | `tests/kpi/results/ws8a/ci-ws8a-closure-gate-summary.json` |
+| Release R3 Agent Authoring Gate | R3 agent-authoring release-readiness linkage (`WS8A` + `WS8` + `WS7`) | `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json` | `tests/kpi/results/gates/ci-release-r3-agent-authoring-readiness.json` |
+
+---
+
+## 5.10) WS3 Performance Evidence (REQ-31 Progress)
+
+| Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
+|---|---|---|---|---|
+| WS3 HTAP Performance Gate | Epic 3 + REQ-31 (HTAP throughput target-contract parity + weighted performance score + trend stability) | `tests/kpi/results/gates/ws3-release-readiness.json` | `tests/kpi/results/gates/ci-ws3-release-readiness.json` | `tests/kpi/results/gates/ci-ws3-performance-stability-badge.json` |
+
+---
+
+## 5.11) WS1 UDF Runtime Evidence (REQ-03 Progress)
+
+| Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
+|---|---|---|---|---|
+| WS1 UDF Runtime Gate | Epic 1 + REQ-03 (polyglot UDF execution + function catalog contract + per-language guard policies + execution-plan routing evidence) | `tests/kpi/results/gates/ws1-release-readiness.json` | `tests/kpi/results/gates/ci-ws1-release-readiness.json` | `tests/kpi/results/gates/ci-ws1-udf-stability-badge.json` |
+
+---
+
+## 5.12) WS1 Closure and R1/R3 Linkage Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact |
+|---|---|---|---|
+| WS1 Closure Gate | WS1 UDF runtime validation posture check (`REQ-03`) | `tests/kpi/results/ws1/ws1-closure-gate-summary.json` | `tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json` |
+| Release R1 SQL/UDF Gate | R1 release-readiness linkage (`WS1` + `REQ-03` + R1 prerequisite checklist) | `tests/kpi/results/gates/release-r1-sql-udf-readiness.json` | `tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json` |
+| Release R3 UDF Runtime Gate | R3 release-readiness linkage (`WS1` + `REQ-03` + autonomous R3 baseline) | `tests/kpi/results/gates/release-r3-udf-runtime-readiness.json` | `tests/kpi/results/gates/ci-release-r3-udf-runtime-readiness.json` |
 
 ---
 
@@ -235,21 +329,23 @@ A tracker row moves to **Done** only when:
 |---|---|---|---|
 | PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | In Progress |
 | WS0 governance and CI | Platform + Program Governance | SRE | In Progress |
-| WS1 SQL core | SQL Engine Team | Query/Runtime Team | Not Started |
-| WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Not Started |
-| WS3 query routing and execution | Query/Runtime Team | Storage Team | Not Started |
-| WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Not Started |
+| WS1 SQL core | SQL Engine Team | Query/Runtime Team | In Progress |
+| WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | In Progress |
+| WS3 query routing and execution | Query/Runtime Team | Storage Team | In Progress |
+| WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | In Progress |
 | WS5 security and crypto | Security Team | Platform Team | Ready for Validation |
-| WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Not Started |
+| WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Ready for Validation |
 | WS9 Studio UI API contract | UX Team | Runtime Team, Platform Team | Ready for Validation |
 | WS9A IDE extension contract | DX Team | Integrations Team, UX Team | Ready for Validation |
 | WS10 driver and pooling contract | Integrations Team | Platform Team, Security Team | Ready for Validation |
 | Release DX/API contract cluster gate (WS5/WS9/WS9A/WS10) | Platform + Program Governance | Security Team, UX Team, DX Team, Integrations Team | In Progress |
 | WS11 internationalization and UTF-8 | Platform + UX Team | Runtime Team | Ready for Validation |
-| WS8 autonomous control plane | AI Platform Team | Security Team, Runtime Team | In Progress |
+| WS8 autonomous control plane | AI Platform Team | Security Team, Runtime Team | Ready for Validation |
+| WS8A audit + AI agent authoring companion | Audit/Compliance Team | AI Platform Team, Extensibility Team, Runtime Team | Ready for Validation |
 | WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Ready for Validation |
 | WS13 multi-cloud deployment profiles | Platform/SRE | SRE Team, Security Team | Ready for Validation |
 | WS14 config contracts + tuning playbooks | Platform + SRE + Security | Integrations Team, Security Team | Ready for Validation |
 | Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | In Progress |
+| WS7 plugin framework + connector pack | Extensibility Team | Ingestion Team, Security Team | Ready for Validation |
 | WS15 competitive feature adoption track | Architecture + Query Team | AI Platform Team, Integrations Team | Ready for Validation |
 

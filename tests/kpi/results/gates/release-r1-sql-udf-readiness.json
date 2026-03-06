@@ -1,0 +1,29 @@
+{
+  "gate": "release-r1-sql-udf-readiness",
+  "status": "passed",
+  "release_target": "R1",
+  "release_readiness": "ready_for_validation",
+  "scope": [
+    "WS1",
+    "REQ-03",
+    "PR-004",
+    "PR-007"
+  ],
+  "started_at_utc": "2026-03-06T05:44:28.5013103Z",
+  "finished_at_utc": "2026-03-06T05:44:41.8091678Z",
+  "duration_ms": 13308,
+  "packs": [
+    {
+      "pack": "r1-baseline-checklist",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/gates/r1-gate-check.json"
+    },
+    {
+      "pack": "ws1-closure-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws1/ws1-closure-gate-summary.json"
+    }
+  ]
+}

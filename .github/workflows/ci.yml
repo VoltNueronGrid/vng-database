@@ -35,8 +35,15 @@ jobs:
             kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          sleep 5
+          for _ in {1..30}; do
+            if curl -fsS "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS "http://127.0.0.1:8080/health" >/dev/null
           pwsh ./tests/kpi/scripts/run-sql-analyze-smoke.ps1 -BaseUrl "http://127.0.0.1:8080" -OutputPath "./tests/kpi/results/ws1/ci-sql-analyze-smoke.json"
+          pwsh ./tests/kpi/scripts/run-sql-execute-udf-smoke.ps1 -BaseUrl "http://127.0.0.1:8080" -OutputPath "./tests/kpi/results/ws1/ci-sql-execute-udf-smoke.json"
 
       - name: Run phase-3 bootstrap in deferred-safe mode
         shell: pwsh
@@ -86,6 +93,118 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws15-gate.ps1 -OutputPath "./tests/kpi/results/ws15/ci-ws15-gate-summary.json"
 
+      - name: Run WS1 SQL core gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws1-gate.ps1 -OutputPath "./tests/kpi/results/ws1/ci-ws1-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws1-release-readiness.json"
+
+      - name: Build WS1 UDF stability badge artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws1-udf-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws1/ci-ws1-gate-summary.json" -TrendPath "./tests/kpi/results/ws1/ws1-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws1-udf-stability-badge.json"
+
+      - name: Run WS1 closure gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws1-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json"
+
+      - name: Run release R1 SQL/UDF readiness gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-release-r1-sql-udf-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json"
+
+      - name: Run WS1A parity gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws1a-gate.ps1 -OutputPath "./tests/kpi/results/ws1a/ci-ws1a-gate-summary.json"
+
+      - name: Run WS2 storage durability gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws2-gate.ps1 -OutputPath "./tests/kpi/results/ws2/ci-ws2-gate-summary.json"
+
+      - name: Run WS2A row-store sync-origin gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws2a-gate.ps1 -OutputPath "./tests/kpi/results/ws2a/ci-ws2a-gate-summary.json"
+
+      - name: Run WS3 query routing gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws3-gate.ps1 -OutputPath "./tests/kpi/results/ws3/ci-ws3-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws3-release-readiness.json"
+
+      - name: Build WS3 performance stability badge artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws3-performance-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws3/ci-ws3-gate-summary.json" -TrendPath "./tests/kpi/results/ws3/ws3-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws3-performance-stability-badge.json"
+
+      - name: Run WS4 ingest gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws4-gate.ps1 -OutputPath "./tests/kpi/results/ws4/ci-ws4-gate-summary.json"
+
+      - name: Run WS4A streaming/eventing gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws4a-gate.ps1 -OutputPath "./tests/kpi/results/ws4a/ci-ws4a-gate-summary.json"
+
+      - name: Run WS6 distributed failover gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws6-gate.ps1 -OutputPath "./tests/kpi/results/ws6/ci-ws6-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws6-release-readiness.json"
+
+      - name: Build WS6 failover stability badge artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws6-failover-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws6/ci-ws6-gate-summary.json" -TrendPath "./tests/kpi/results/ws6/ws6-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws6-failover-stability-badge.json"
+
+      - name: Run WS6 closure gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws6-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws6/ci-ws6-closure-gate-summary.json"
+
+      - name: Run release R2 failover readiness gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-release-r2-failover-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-r2-failover-readiness.json"
+
+      - name: Run WS7 plugin gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws7-gate.ps1 -OutputPath "./tests/kpi/results/ws7/ci-ws7-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws7-release-readiness.json"
+
+      - name: Build WS7 plugin stability badge artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws7-plugin-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws7/ci-ws7-gate-summary.json" -TrendPath "./tests/kpi/results/ws7/ws7-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws7-plugin-stability-badge.json"
+
+      - name: Run WS7 closure gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws7-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws7/ci-ws7-closure-gate-summary.json"
+
+      - name: Run WS8 autonomous control-plane gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws8-gate.ps1 -OutputPath "./tests/kpi/results/ws8/ci-ws8-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws8-release-readiness.json"
+
+      - name: Build WS8 autonomy stability badge artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws8-autonomy-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws8/ci-ws8-gate-summary.json" -TrendPath "./tests/kpi/results/ws8/ws8-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws8-autonomy-stability-badge.json"
+
+      - name: Run WS8 closure gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws8-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws8/ci-ws8-closure-gate-summary.json"
+
+      - name: Run WS8A agent authoring gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws8a-gate.ps1 -OutputPath "./tests/kpi/results/ws8a/ci-ws8a-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws8a-release-readiness.json"
+
+      - name: Build WS8A agent stability badge artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws8a-agent-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws8a/ci-ws8a-gate-summary.json" -TrendPath "./tests/kpi/results/ws8a/ws8a-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws8a-agent-stability-badge.json"
+
+      - name: Run WS8A closure gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws8a-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws8a/ci-ws8a-closure-gate-summary.json"
+
+      - name: Run release R3 agent authoring readiness gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-release-r3-agent-authoring-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-r3-agent-authoring-readiness.json"
+
+      - name: Run release R3 autonomous readiness gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-release-r3-autonomous-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-r3-autonomous-readiness.json"
+
+      - name: Run release R3 UDF runtime readiness gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-release-r3-udf-runtime-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-r3-udf-runtime-readiness.json"
+
+      - name: Run release R3 plugin readiness gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-release-r3-plugin-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-r3-plugin-readiness.json"
+
       - name: Upload gate artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -93,6 +212,7 @@ jobs:
           path: |
             tests/kpi/results/gates/ci-r1-gate-check.json
             tests/kpi/results/ws1/ci-sql-analyze-smoke.json
+            tests/kpi/results/ws1/ci-sql-execute-udf-smoke.json
             tests/kpi/results/ws13/ci-ws13-gate-summary.json
             tests/kpi/results/ws14/ci-ws14-gate-summary.json
             tests/kpi/results/gates/ci-ws5-gate-summary.json
@@ -104,3 +224,66 @@ jobs:
             tests/kpi/results/ws10/ci-ws10-gate-summary.json
             tests/kpi/results/ws11/ci-ws11-gate-summary.json
             tests/kpi/results/ws15/ci-ws15-gate-summary.json
+            tests/kpi/results/ws1/ci-ws1-gate-summary.json
+            tests/kpi/results/ws1/ws1-udf-contract-smoke.json
+            tests/kpi/results/ws1/ws1-udf-coverage-matrix.json
+            tests/kpi/results/ws1/ws1-gate-trend-comparison.json
+            tests/kpi/results/ws1/ws1-udf-stability-badge.json
+            tests/kpi/results/gates/ci-ws1-release-readiness.json
+            tests/kpi/results/gates/ci-ws1-udf-stability-badge.json
+            tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json
+            tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json
+            tests/kpi/results/ws1a/ci-ws1a-gate-summary.json
+            tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json
+            tests/kpi/results/ws2/ci-ws2-gate-summary.json
+            tests/kpi/results/ws2a/ci-ws2a-gate-summary.json
+            tests/kpi/results/ws3/ci-ws3-gate-summary.json
+            tests/kpi/results/ws3/ws3-htap-target-contract-smoke.json
+            tests/kpi/results/ws3/ws3-performance-score.json
+            tests/kpi/results/ws3/ws3-gate-trend-comparison.json
+            tests/kpi/results/ws3/ws3-performance-stability-badge.json
+            tests/kpi/results/gates/ci-ws3-release-readiness.json
+            tests/kpi/results/gates/ci-ws3-performance-stability-badge.json
+            tests/kpi/results/ws4/ci-ws4-gate-summary.json
+            tests/kpi/results/ws4a/ci-ws4a-gate-summary.json
+            tests/kpi/results/ws6/ci-ws6-gate-summary.json
+            tests/kpi/results/ws6/ws6-handoff-matrix-smoke.json
+            tests/kpi/results/ws6/ws6-replication-lag-scenarios-smoke.json
+            tests/kpi/results/ws6/ws6-rto-rpo-threshold-score.json
+            tests/kpi/results/ws6/ws6-node-loss-rejoin-smoke.json
+            tests/kpi/results/ws6/ws6-failover-flap-resistance-smoke.json
+            tests/kpi/results/ws6/ws6-reconcile-latency-envelope-smoke.json
+            tests/kpi/results/ws6/ws6-chaos-fault-matrix.json
+            tests/kpi/results/ws6/ws6-gate-trend-comparison.json
+            tests/kpi/results/ws6/ws6-failover-stability-badge.json
+            tests/kpi/results/gates/ci-ws6-release-readiness.json
+            tests/kpi/results/gates/ci-ws6-failover-stability-badge.json
+            tests/kpi/results/ws6/ci-ws6-closure-gate-summary.json
+            tests/kpi/results/gates/ci-release-r2-failover-readiness.json
+            tests/kpi/results/ws7/ci-ws7-gate-summary.json
+            tests/kpi/results/ws7/ws7-compliance-matrix.json
+            tests/kpi/results/ws7/ws7-gate-trend-comparison.json
+            tests/kpi/results/ws7/ws7-plugin-stability-badge.json
+            tests/kpi/results/gates/ci-ws7-release-readiness.json
+            tests/kpi/results/gates/ci-ws7-plugin-stability-badge.json
+            tests/kpi/results/ws7/ci-ws7-closure-gate-summary.json
+            tests/kpi/results/ws8/ci-ws8-gate-summary.json
+            tests/kpi/results/ws8/ws8-mode-governance-smoke.json
+            tests/kpi/results/ws8/ws8-autonomy-matrix.json
+            tests/kpi/results/ws8/ws8-gate-trend-comparison.json
+            tests/kpi/results/ws8/ws8-autonomy-stability-badge.json
+            tests/kpi/results/gates/ci-ws8-release-readiness.json
+            tests/kpi/results/gates/ci-ws8-autonomy-stability-badge.json
+            tests/kpi/results/ws8/ci-ws8-closure-gate-summary.json
+            tests/kpi/results/ws8a/ci-ws8a-gate-summary.json
+            tests/kpi/results/ws8a/ws8a-agent-authoring-smoke.json
+            tests/kpi/results/ws8a/ws8a-agent-authoring-matrix.json
+            tests/kpi/results/ws8a/ws8a-gate-trend-comparison.json
+            tests/kpi/results/ws8a/ws8a-agent-stability-badge.json
+            tests/kpi/results/gates/ci-ws8a-release-readiness.json
+            tests/kpi/results/gates/ci-ws8a-agent-stability-badge.json
+            tests/kpi/results/ws8a/ci-ws8a-closure-gate-summary.json
+            tests/kpi/results/gates/ci-release-r3-agent-authoring-readiness.json
+            tests/kpi/results/gates/ci-release-r3-autonomous-readiness.json
+            tests/kpi/results/gates/ci-release-r3-udf-runtime-readiness.json
+            tests/kpi/results/gates/ci-release-r3-plugin-readiness.json
