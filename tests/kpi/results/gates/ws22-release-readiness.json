@@ -1,0 +1,36 @@
+{
+  "gate": "ws22-release-lock-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R1"
+  ],
+  "scope": [
+    "WS22",
+    "REQ-22"
+  ],
+  "generated_at_utc": "2026-03-06T06:53:16.8627316Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws22/ws22-gate-summary.json",
+    "smoke": "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json",
+    "trend": "tests/kpi/results/ws22/ws22-gate-trend-comparison.json",
+    "badge": "tests/kpi/results/ws22/ws22-pessimistic-lock-stability-badge.json"
+  },
+  "checks": {
+    "ws22_gate_passed": true,
+    "ws22_smoke_passed": true,
+    "ws22_trend_not_regressed": true,
+    "ws22_badge_passed": true
+  },
+  "highlights": {
+    "pack_count": 1,
+    "trend_state": "stable",
+    "badge_message": "1/1 stable",
+    "contract_checks": {
+      "acquire_route_present": true,
+      "release_route_present": true,
+      "acquire_logic_present": true,
+      "release_logic_present": true
+    }
+  }
+}

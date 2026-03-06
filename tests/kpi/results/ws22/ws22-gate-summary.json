@@ -1,0 +1,33 @@
+{
+  "gate": "ws22",
+  "status": "passed",
+  "started_at_utc": "2026-03-06T06:53:13.6105130Z",
+  "finished_at_utc": "2026-03-06T06:53:16.6396110Z",
+  "duration_ms": 3029,
+  "packs": [
+    {
+      "pack": "ws22-pessimistic-lock-smoke",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json"
+    },
+    {
+      "pack": "ws22-gate-trend-comparison",
+      "status": "passed",
+      "detail": "tests/kpi/scripts/run-ws22-gate-trend-compare.ps1",
+      "artifact": "tests/kpi/results/ws22/ws22-gate-trend-comparison.json"
+    },
+    {
+      "pack": "ws22-lock-stability-badge",
+      "status": "passed",
+      "detail": "tests/kpi/scripts/run-ws22-pessimistic-lock-stability-badge.ps1",
+      "artifact": "tests/kpi/results/ws22/ws22-pessimistic-lock-stability-badge.json"
+    },
+    {
+      "pack": "ws22-release-summary",
+      "status": "passed",
+      "detail": "tests/kpi/scripts/run-ws22-release-summary.ps1",
+      "artifact": "tests/kpi/results/gates/ws22-release-readiness.json"
+    }
+  ]
+}

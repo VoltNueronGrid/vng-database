@@ -31,7 +31,7 @@ Initial KPI coverage:
 - `scripts/run-ws1-release-summary.ps1` - WS1 release-facing UDF readiness summary (single artifact from WS1 summary + coverage + trend + badge)
 - `scripts/run-ws1-gate.ps1` - WS1 gate orchestrator (SQL core + UDF contract/runtime packs + coverage/trend/badge/release summary)
 - `scripts/run-ws1-closure-gate.ps1` - WS1 closure gate (validation-posture check from WS1 gate + UDF runtime/coverage/trend/badge/release artifacts)
-- `scripts/run-release-r1-sql-udf-gate.ps1` - R1 release SQL/UDF readiness linkage gate (R1 checklist + WS1 closure posture)
+- `scripts/run-release-r1-sql-udf-gate.ps1` - R1 release SQL/UDF/locking readiness linkage gate (R1 checklist + WS1 closure + WS22 closure posture)
 - `scripts/run-release-r3-udf-runtime-gate.ps1` - R3 release UDF runtime readiness linkage gate (WS1 closure + R3 autonomous baseline)
 - `scripts/run-legacy-aggregation-parity.ps1` - WS1A legacy aggregation parity harness
 - `scripts/run-legacy-aggregation-gap-report.ps1` - WS1A bucketed P0/P1/P2 gap report generator
@@ -117,6 +117,12 @@ Initial KPI coverage:
 - `scripts/run-release-ops-resilience-gate.ps1` - Combined Ops/Resilience cluster gate (WS12 + WS13 + WS14) with R2/R3 release-readiness summary artifact
 - `scripts/run-ws11-i18n-smoke.ps1` - WS11 i18n/UTF-8 smoke (locale parsing + fallback policy checks)
 - `scripts/run-ws11-gate.ps1` - WS11 gate orchestrator (runs i18n smoke and emits one gate summary artifact)
+- `scripts/run-ws22-pessimistic-lock-smoke.ps1` - WS22 pessimistic-lock baseline smoke (lock acquire/release route + conflict/ownership contract checks)
+- `scripts/run-ws22-gate-trend-compare.ps1` - WS22 post-gate artifact export (current vs prior gate trend comparator)
+- `scripts/run-ws22-pessimistic-lock-stability-badge.ps1` - WS22 post-gate artifact export (pessimistic-lock stability badge JSON)
+- `scripts/run-ws22-release-summary.ps1` - WS22 release-facing lock readiness summary (single artifact from WS22 summary + smoke + trend + badge)
+- `scripts/run-ws22-gate.ps1` - WS22 gate orchestrator (smoke + trend + stability badge + release summary)
+- `scripts/run-ws22-closure-gate.ps1` - WS22 closure gate (validation posture checks over WS22 gate + lock contract evidence)
 - `scripts/run-ws12-reliability-smoke.ps1` - WS12 reliability/SRE baseline smoke (health + rate-limit + failure-budget alerts + DR hook persistence/scheduler/policy/retry-plan + failure signal reconciliation + gate evaluation/export contracts)
 - `scripts/run-ws13-multicloud-profile-smoke.ps1` - WS13 multi-cloud deployment profile baseline smoke (AWS/Azure/GCP profile contracts + KPI cloud config alignment)
 - `scripts/run-ws13-overlay-schema-smoke.ps1` - WS13 cloud overlay/schema validation smoke (single-node/multi-node overlays + provider Helm value contracts)

@@ -1,0 +1,9 @@
+{
+  "label": "ws22-lock-stability",
+  "message": "1/1 stable",
+  "color": "green",
+  "status": "passed",
+  "source_summary": "tests/kpi/results/ws22/ws22-gate-summary.json",
+  "source_trend": "tests/kpi/results/ws22/ws22-gate-trend-comparison.json",
+  "generated_at_utc": "2026-03-06T06:53:16.7779012Z"
+}

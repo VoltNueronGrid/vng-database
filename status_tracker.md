@@ -62,7 +62,7 @@
 | REQ-19 | Blazing ingest/update/read at scale | Epic 3, Epic 4, Epic 6 | Not Started | KPI benchmark gates |
 | REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Epic 13 | In Progress | WS13 multi-cloud profile gates + Ops/Resilience release-readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | REQ-21 | Any-number-user concurrency | Epic 3, Epic 10, Epic 12 | Not Started | Concurrency stress tests |
-| REQ-22 | Pessimistic locking | Epic 1, Epic 3 | In Progress | Runtime pessimistic-lock scaffold endpoints (`/api/v1/sql/locks/pessimistic/acquire`, `/api/v1/sql/locks/pessimistic/release`) with conflict/ownership enforcement and WS22 unit evidence (`cargo test -p voltnuerongridd ws22_`) |
+| REQ-22 | Pessimistic locking | Epic 1, Epic 3 | Ready for Validation | Runtime pessimistic-lock scaffold endpoints (`/api/v1/sql/locks/pessimistic/acquire`, `/api/v1/sql/locks/pessimistic/release`) with conflict/ownership enforcement now include WS22 smoke + gate + trend + stability badge + release summary + closure + R1 linkage evidence (`tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json`, `tests/kpi/results/ws22/ws22-gate-summary.json`, `tests/kpi/results/ws22/ws22-gate-trend-comparison.json`, `tests/kpi/results/ws22/ws22-pessimistic-lock-stability-badge.json`, `tests/kpi/results/gates/ws22-release-readiness.json`, `tests/kpi/results/ws22/ws22-closure-gate-summary.json`, `tests/kpi/results/gates/release-r1-sql-udf-readiness.json`) and unit evidence (`cargo test -p voltnuerongridd ws22_`) |
 | REQ-23 | ACID transactions | Epic 1, Epic 2, Epic 3 | In Progress | Transaction endpoint now classifies and validates statements before commit path |
 | REQ-24 | Config via properties/YAML/JSON | Epic 14 | In Progress | WS14 schema/conformance gates + Ops/Resilience release-readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) |
 | REQ-25 | Native connection + pooling | Epic 10, Epic 14 | In Progress | Driver routing contract enforces pool min/max + timeout constraints with cross-format contract checks in WS10 smoke/gate (`tests/kpi/results/ws10/ws10-gate-summary.json`) |
@@ -80,7 +80,7 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies |
 |---|---|---|---|---|---|
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts + SQL analyze runtime smoke) |
-| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online; `/api/v1/sql/execute` now includes UDF runtime scaffold with explicit function catalog contract, per-language guard policies, and statement-level execution-plan routing evidence for Rust/JS/Python execution; pessimistic-lock baseline scaffold added via `/api/v1/sql/locks/pessimistic/acquire` and `/api/v1/sql/locks/pessimistic/release` with conflict/ownership unit tests `ws22_*`; gate orchestrator `run-ws1-gate.ps1` -> `tests/kpi/results/ws1/ws1-gate-summary.json`; UDF contract pack `run-ws1-udf-contract-smoke.ps1` -> `tests/kpi/results/ws1/ws1-udf-contract-smoke.json`; runtime UDF API smoke `run-sql-execute-udf-smoke.ps1` -> `tests/kpi/results/ws1/sql-execute-udf-smoke.json`; workflow wiring in `.github/workflows/ci.yml`) |
+| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | In Progress | WS0 (runtime integration underway; `/api/v1/sql/analyze` online; `/api/v1/sql/execute` now includes UDF runtime scaffold with explicit function catalog contract, per-language guard policies, and statement-level execution-plan routing evidence for Rust/JS/Python execution; pessimistic-lock baseline scaffold added via `/api/v1/sql/locks/pessimistic/acquire` and `/api/v1/sql/locks/pessimistic/release` with conflict/ownership unit tests `ws22_*` + WS22 smoke/gate/closure scripts (`run-ws22-pessimistic-lock-smoke.ps1`, `run-ws22-gate.ps1`, `run-ws22-closure-gate.ps1`) -> `tests/kpi/results/ws22/ws22-closure-gate-summary.json`; gate orchestrator `run-ws1-gate.ps1` -> `tests/kpi/results/ws1/ws1-gate-summary.json`; UDF contract pack `run-ws1-udf-contract-smoke.ps1` -> `tests/kpi/results/ws1/ws1-udf-contract-smoke.json`; runtime UDF API smoke `run-sql-execute-udf-smoke.ps1` -> `tests/kpi/results/ws1/sql-execute-udf-smoke.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | In Progress | WS1 (bucketed manifests + P2 stub implementations + gap report outputs in place; gate orchestrator `run-ws1a-gate.ps1` -> `tests/kpi/results/ws1a/ws1a-gate-summary.json`; UDF bridge pack `run-ws1a-udf-contract-bridge-smoke.ps1` -> `tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | In Progress | WS0 (durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged; gate orchestrator `run-ws2-gate.ps1` -> `tests/kpi/results/ws2/ws2-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | In Progress | WS2 (row-sync origin scaffold + smoke evidence captured; gate orchestrator `run-ws2a-gate.ps1` -> `tests/kpi/results/ws2a/ws2a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml`) |
@@ -107,7 +107,7 @@
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | In Progress | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) + WS1 UDF closure posture (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`) + release R1 SQL/UDF gate (`tests/kpi/results/gates/release-r1-sql-udf-readiness.json`) |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | In Progress | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) + WS1 UDF closure posture (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`) + WS22 locking closure posture (`tests/kpi/results/ws22/ws22-closure-gate-summary.json`) + release R1 SQL/UDF/locking gate (`tests/kpi/results/gates/release-r1-sql-udf-readiness.json`) |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | In Progress | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`) |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | In Progress | Autonomous governance + audit evidence + plugin cert + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS3 performance evidence (`tests/kpi/results/gates/ws3-release-readiness.json`) + WS7 release summary (`tests/kpi/results/gates/ws7-release-readiness.json`) + WS8 release summary (`tests/kpi/results/gates/ws8-release-readiness.json`) + WS8A release summary (`tests/kpi/results/gates/ws8a-release-readiness.json`) + release R3 plugin gate (`tests/kpi/results/gates/release-r3-plugin-readiness.json`) + release R3 autonomous gate (`tests/kpi/results/gates/release-r3-autonomous-readiness.json`) + release R3 agent authoring gate (`tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`) + release R3 UDF runtime gate (`tests/kpi/results/gates/release-r3-udf-runtime-readiness.json`) |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Not Started | RTO/RPO game-day success + global ops sign-off |
@@ -213,6 +213,31 @@
 | WS1 Closure Gate | WS1 UDF runtime validation posture check (`REQ-03`) | `tests/kpi/results/ws1/ws1-closure-gate-summary.json` | `tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json` |
 | Release R1 SQL/UDF Gate | R1 release-readiness linkage (`WS1` + `REQ-03` + R1 prerequisite checklist) | `tests/kpi/results/gates/release-r1-sql-udf-readiness.json` | `tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json` |
 | Release R3 UDF Runtime Gate | R3 release-readiness linkage (`WS1` + `REQ-03` + autonomous R3 baseline) | `tests/kpi/results/gates/release-r3-udf-runtime-readiness.json` | `tests/kpi/results/gates/ci-release-r3-udf-runtime-readiness.json` |
+
+---
+
+## 5.13) WS22 Pessimistic Locking Evidence (REQ-22 Progress)
+
+| Gate | Scope | Status Source | CI Summary Artifact |
+|---|---|---|---|
+| WS22 Pessimistic Locking Gate | Epic 1 + REQ-22 (pessimistic lock acquire/release contracts + conflict/ownership enforcement posture) | `tests/kpi/results/ws22/ws22-gate-summary.json` | `tests/kpi/results/ws22/ci-ws22-gate-summary.json` |
+
+---
+
+## 5.14) WS22 Closure and R1 Linkage Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact |
+|---|---|---|---|
+| WS22 Closure Gate | WS22 validation posture check (`REQ-22`) | `tests/kpi/results/ws22/ws22-closure-gate-summary.json` | `tests/kpi/results/ws22/ci-ws22-closure-gate-summary.json` |
+| Release R1 SQL/UDF/locking Gate | R1 release-readiness linkage (`WS1` + `WS22` + `REQ-03` + `REQ-22` + R1 prerequisite checklist) | `tests/kpi/results/gates/release-r1-sql-udf-readiness.json` | `tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json` |
+
+---
+
+## 5.15) Release-Facing WS22 Gate Evidence
+
+| Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
+|---|---|---|---|---|
+| WS22 Pessimistic Lock Resilience Gate | Epic 1 + REQ-22 (pessimistic lock contracts + conflict/ownership + trend stability) | `tests/kpi/results/gates/ws22-release-readiness.json` | `tests/kpi/results/gates/ci-ws22-release-readiness.json` | `tests/kpi/results/gates/ci-ws22-pessimistic-lock-stability-badge.json` |
 
 ---
 

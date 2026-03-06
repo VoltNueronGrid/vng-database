@@ -89,6 +89,18 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws11-gate.ps1 -OutputPath "./tests/kpi/results/ws11/ci-ws11-gate-summary.json"
 
+      - name: Run WS22 pessimistic locking gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws22-gate.ps1 -OutputPath "./tests/kpi/results/ws22/ci-ws22-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws22-release-readiness.json"
+
+      - name: Build WS22 pessimistic-lock stability badge artifact
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws22-pessimistic-lock-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws22/ci-ws22-gate-summary.json" -TrendPath "./tests/kpi/results/ws22/ws22-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws22-pessimistic-lock-stability-badge.json"
+
+      - name: Run WS22 closure gate
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-ws22-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws22/ci-ws22-closure-gate-summary.json"
+
       - name: Run WS15 competitive adoption gate
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws15-gate.ps1 -OutputPath "./tests/kpi/results/ws15/ci-ws15-gate-summary.json"
@@ -105,7 +117,7 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws1-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json"
 
-      - name: Run release R1 SQL/UDF readiness gate
+      - name: Run release R1 SQL/UDF/locking readiness gate
         shell: pwsh
         run: ./tests/kpi/scripts/run-release-r1-sql-udf-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json"
 
@@ -223,6 +235,13 @@ jobs:
             tests/kpi/results/gates/ci-release-ops-resilience-readiness.json
             tests/kpi/results/ws10/ci-ws10-gate-summary.json
             tests/kpi/results/ws11/ci-ws11-gate-summary.json
+            tests/kpi/results/ws22/ci-ws22-gate-summary.json
+            tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json
+            tests/kpi/results/ws22/ws22-gate-trend-comparison.json
+            tests/kpi/results/ws22/ws22-pessimistic-lock-stability-badge.json
+            tests/kpi/results/gates/ci-ws22-release-readiness.json
+            tests/kpi/results/gates/ci-ws22-pessimistic-lock-stability-badge.json
+            tests/kpi/results/ws22/ci-ws22-closure-gate-summary.json
             tests/kpi/results/ws15/ci-ws15-gate-summary.json
             tests/kpi/results/ws1/ci-ws1-gate-summary.json
             tests/kpi/results/ws1/ws1-udf-contract-smoke.json
