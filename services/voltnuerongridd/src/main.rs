@@ -17,6 +17,9 @@ use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale};
+use voltnuerongrid_store::constraints::ConstraintManager;
+use voltnuerongrid_store::index::IndexManager;
+use voltnuerongrid_ingest::IngestionConnector;
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -71,6 +74,10 @@ struct AppState {
     pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
     pessimistic_lock_waits: Arc<Mutex<HashMap<String, String>>>,
     pessimistic_lock_metrics: PessimisticLockContentionMetrics,
+    index_manager: Arc<Mutex<IndexManager>>,
+    constraint_manager: Arc<Mutex<ConstraintManager>>,
+    ingest_csv_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
+    ingest_json_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -346,6 +353,133 @@ struct PessimisticLockContentionMetricsResponse {
     lock_conflicts: u64,
     lock_releases: u64,
     contention_ratio: f64,
+}
+
+// ── WS2 Index + Constraint types ───────────────────────────────────
+
+#[derive(Deserialize)]
+struct CreateIndexRequest {
+    name: String,
+    table: String,
+    column: String,
+    unique: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct CreateIndexResponse {
+    status: &'static str,
+    index_name: String,
+    table: String,
+    column: String,
+    unique: bool,
+}
+
+#[derive(Deserialize)]
+struct DropIndexRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct DropIndexResponse {
+    status: &'static str,
+    dropped: String,
+}
+
+#[derive(Serialize)]
+struct IndexListEntry {
+    name: String,
+    table: String,
+    column: String,
+    kind: String,
+    unique: bool,
+}
+
+#[derive(Serialize)]
+struct ListIndexesResponse {
+    status: &'static str,
+    indexes: Vec<IndexListEntry>,
+}
+
+#[derive(Deserialize)]
+struct IndexLookupRequest {
+    index_name: String,
+    value: String,
+}
+
+#[derive(Serialize)]
+struct IndexLookupResponse {
+    status: &'static str,
+    index_name: String,
+    value: String,
+    row_keys: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AddConstraintRequest {
+    name: String,
+    table: String,
+    column: String,
+    kind: String,
+}
+
+#[derive(Serialize)]
+struct AddConstraintResponse {
+    status: &'static str,
+    constraint_name: String,
+    table: String,
+    column: String,
+    kind: String,
+}
+
+#[derive(Deserialize)]
+struct ValidateConstraintRequest {
+    table: String,
+    column: String,
+    value: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ValidateConstraintResponse {
+    status: &'static str,
+    valid: bool,
+    violation: Option<String>,
+}
+
+// ── WS4 Ingest types ──────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct IngestCsvRequest {
+    connector_id: String,
+    csv_data: String,
+}
+
+#[derive(Serialize)]
+struct IngestCsvResponse {
+    status: &'static str,
+    connector_id: String,
+    records_parsed: usize,
+}
+
+#[derive(Deserialize)]
+struct IngestJsonRequest {
+    connector_id: String,
+    key_field: String,
+    ndjson_data: String,
+}
+
+#[derive(Serialize)]
+struct IngestJsonResponse {
+    status: &'static str,
+    connector_id: String,
+    records_parsed: usize,
+}
+
+#[derive(Serialize)]
+struct IngestStatusResponse {
+    status: &'static str,
+    csv_connectors: usize,
+    json_connectors: usize,
+    total_records_loaded: usize,
 }
 
 #[derive(Deserialize)]
@@ -735,6 +869,10 @@ async fn main() {
         pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
         pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
         pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
+        index_manager: Arc::new(Mutex::new(IndexManager::new())),
+        constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
+        ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
+        ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -793,6 +931,23 @@ async fn main() {
             "/api/v1/autonomous/actions/authorize",
             post(authorize_autonomous_action),
         )
+        // WS2 Index + Constraint endpoints
+        .route("/api/v1/store/indexes", get(store_list_indexes))
+        .route("/api/v1/store/indexes/create", post(store_create_index))
+        .route("/api/v1/store/indexes/drop", post(store_drop_index))
+        .route("/api/v1/store/indexes/lookup", post(store_index_lookup))
+        .route(
+            "/api/v1/store/constraints/add",
+            post(store_add_constraint),
+        )
+        .route(
+            "/api/v1/store/constraints/validate",
+            post(store_validate_constraint),
+        )
+        // WS4 Ingest endpoints
+        .route("/api/v1/ingest/csv", post(ingest_csv))
+        .route("/api/v1/ingest/json", post(ingest_json))
+        .route("/api/v1/ingest/status", get(ingest_status))
         .with_state(state);
 
     println!("voltnuerongridd listening on {}", addr);
@@ -2770,6 +2925,230 @@ fn build_authorize_action_response(
     )
 }
 
+// ── WS2 Index + Constraint handlers ────────────────────────────────
+
+async fn store_list_indexes(
+    State(state): State<AppState>,
+) -> Json<ListIndexesResponse> {
+    let mgr = state.index_manager.lock().expect("index lock");
+    let indexes = mgr
+        .list_indexes()
+        .iter()
+        .map(|d| IndexListEntry {
+            name: d.name.clone(),
+            table: d.table.clone(),
+            column: d.column.clone(),
+            kind: format!("{:?}", d.kind),
+            unique: d.unique,
+        })
+        .collect();
+    Json(ListIndexesResponse {
+        status: "ok",
+        indexes,
+    })
+}
+
+async fn store_create_index(
+    State(state): State<AppState>,
+    Json(req): Json<CreateIndexRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use voltnuerongrid_store::index::{IndexDescriptor, IndexKind};
+    let unique = req.unique.unwrap_or(false);
+    let descriptor = IndexDescriptor {
+        name: req.name.clone(),
+        table: req.table.clone(),
+        column: req.column.clone(),
+        kind: IndexKind::BTree,
+        unique,
+    };
+    let mut mgr = state.index_manager.lock().expect("index lock");
+    match mgr.create_index(descriptor) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::to_value(CreateIndexResponse {
+                status: "created",
+                index_name: req.name,
+                table: req.table,
+                column: req.column,
+                unique,
+            }).expect("json")),
+        ),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "status": "error", "reason": e.to_string() })),
+        ),
+    }
+}
+
+async fn store_drop_index(
+    State(state): State<AppState>,
+    Json(req): Json<DropIndexRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let mut mgr = state.index_manager.lock().expect("index lock");
+    match mgr.drop_index(&req.name) {
+        Ok(_desc) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(DropIndexResponse {
+                status: "dropped",
+                dropped: req.name,
+            }).expect("json")),
+        ),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "status": "error", "reason": e.to_string() })),
+        ),
+    }
+}
+
+async fn store_index_lookup(
+    State(state): State<AppState>,
+    Json(req): Json<IndexLookupRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let mgr = state.index_manager.lock().expect("index lock");
+    match mgr.get(&req.index_name) {
+        Some(idx) => {
+            let row_keys: Vec<String> = idx.lookup(&req.value).iter().map(|s| s.to_string()).collect();
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(IndexLookupResponse {
+                    status: "ok",
+                    index_name: req.index_name,
+                    value: req.value,
+                    row_keys,
+                }).expect("json")),
+            )
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "status": "error", "reason": format!("index '{}' not found", req.index_name) })),
+        ),
+    }
+}
+
+async fn store_add_constraint(
+    State(state): State<AppState>,
+    Json(req): Json<AddConstraintRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
+    let kind = match req.kind.to_ascii_lowercase().as_str() {
+        "primary_key" | "pk" => ConstraintKind::PrimaryKey,
+        "unique" => ConstraintKind::Unique,
+        "not_null" => ConstraintKind::NotNull,
+        "foreign_key" | "fk" => ConstraintKind::ForeignKey,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "status": "error", "reason": format!("unknown constraint kind: {other}") })),
+            );
+        }
+    };
+    let descriptor = ConstraintDescriptor {
+        name: req.name.clone(),
+        table: req.table.clone(),
+        column: req.column.clone(),
+        kind,
+    };
+    let mut mgr = state.constraint_manager.lock().expect("constraint lock");
+    match mgr.add_constraint(descriptor) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::to_value(AddConstraintResponse {
+                status: "created",
+                constraint_name: req.name,
+                table: req.table,
+                column: req.column,
+                kind: req.kind,
+            }).expect("json")),
+        ),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "status": "error", "reason": e.to_string() })),
+        ),
+    }
+}
+
+async fn store_validate_constraint(
+    State(state): State<AppState>,
+    Json(req): Json<ValidateConstraintRequest>,
+) -> Json<ValidateConstraintResponse> {
+    let mgr = state.constraint_manager.lock().expect("constraint lock");
+    match mgr.validate(&req.table, &req.column, req.value.as_deref()) {
+        Ok(()) => Json(ValidateConstraintResponse {
+            status: "ok",
+            valid: true,
+            violation: None,
+        }),
+        Err(v) => Json(ValidateConstraintResponse {
+            status: "ok",
+            valid: false,
+            violation: Some(v.to_string()),
+        }),
+    }
+}
+
+// ── WS4 Ingest handlers ───────────────────────────────────────────
+
+async fn ingest_csv(
+    State(state): State<AppState>,
+    Json(req): Json<IngestCsvRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use voltnuerongrid_ingest::csv::CsvConnector;
+    let mut conn = CsvConnector::new(&req.connector_id, &req.connector_id);
+    let count = conn.load_csv(&req.csv_data);
+    let records = conn.read_batch(usize::MAX);
+    state
+        .ingest_csv_records
+        .lock()
+        .expect("csv lock")
+        .insert(req.connector_id.clone(), records);
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(IngestCsvResponse {
+            status: "ok",
+            connector_id: req.connector_id,
+            records_parsed: count,
+        }).expect("json")),
+    )
+}
+
+async fn ingest_json(
+    State(state): State<AppState>,
+    Json(req): Json<IngestJsonRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use voltnuerongrid_ingest::json::JsonConnector;
+    let mut conn = JsonConnector::new(&req.connector_id, &req.connector_id, &req.key_field);
+    let count = conn.load_ndjson(&req.ndjson_data);
+    let records = conn.read_batch(usize::MAX);
+    state
+        .ingest_json_records
+        .lock()
+        .expect("json lock")
+        .insert(req.connector_id.clone(), records);
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(IngestJsonResponse {
+            status: "ok",
+            connector_id: req.connector_id,
+            records_parsed: count,
+        }).expect("json")),
+    )
+}
+
+async fn ingest_status(
+    State(state): State<AppState>,
+) -> Json<IngestStatusResponse> {
+    let csv_map = state.ingest_csv_records.lock().expect("csv lock");
+    let json_map = state.ingest_json_records.lock().expect("json lock");
+    let csv_total: usize = csv_map.values().map(|v| v.len()).sum();
+    let json_total: usize = json_map.values().map(|v| v.len()).sum();
+    Json(IngestStatusResponse {
+        status: "ok",
+        csv_connectors: csv_map.len(),
+        json_connectors: json_map.len(),
+        total_records_loaded: csv_total + json_total,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2792,6 +3171,10 @@ mod tests {
             pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
+            index_manager: Arc::new(Mutex::new(IndexManager::new())),
+            constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
+            ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -3598,5 +3981,176 @@ mod tests {
         let exists = output.exists();
         let _ = fs::remove_file(output);
         assert!(exists);
+    }
+
+    // ── WS2 Index + Constraint tests ───────────────────────────────
+
+    #[test]
+    fn ws2_index_create_lookup_drop_lifecycle() {
+        use voltnuerongrid_store::index::{IndexDescriptor, IndexKind};
+
+        let state = state_with_key(None);
+        {
+            let mut mgr = state.index_manager.lock().expect("lock");
+            mgr.create_index(IndexDescriptor {
+                name: "idx_orders_customer".to_string(),
+                table: "orders".to_string(),
+                column: "customer_id".to_string(),
+                kind: IndexKind::BTree,
+                unique: false,
+            })
+            .expect("create index");
+
+            let idx = mgr.get_mut("idx_orders_customer").expect("get idx");
+            idx.insert("C100", "row-1").expect("insert");
+            idx.insert("C100", "row-2").expect("insert");
+            idx.insert("C200", "row-3").expect("insert");
+        }
+        {
+            let mgr = state.index_manager.lock().expect("lock");
+            let idx = mgr.get("idx_orders_customer").expect("get idx");
+            assert_eq!(idx.lookup("C100").len(), 2);
+            assert_eq!(idx.lookup("C200").len(), 1);
+            assert!(idx.lookup("C999").is_empty());
+            assert_eq!(mgr.index_count(), 1);
+        }
+        {
+            let mut mgr = state.index_manager.lock().expect("lock");
+            let dropped = mgr.drop_index("idx_orders_customer").expect("drop");
+            assert_eq!(dropped.name, "idx_orders_customer");
+            assert_eq!(mgr.index_count(), 0);
+        }
+    }
+
+    #[test]
+    fn ws2_unique_index_rejects_duplicate_via_appstate() {
+        use voltnuerongrid_store::index::{IndexDescriptor, IndexKind, IndexError};
+
+        let state = state_with_key(None);
+        let mut mgr = state.index_manager.lock().expect("lock");
+        mgr.create_index(IndexDescriptor {
+            name: "idx_pk".to_string(),
+            table: "users".to_string(),
+            column: "id".to_string(),
+            kind: IndexKind::BTree,
+            unique: true,
+        })
+        .expect("create");
+        let idx = mgr.get_mut("idx_pk").expect("get");
+        idx.insert("1", "row-1").expect("first insert ok");
+        let err = idx.insert("1", "row-2").unwrap_err();
+        assert!(matches!(err, IndexError::UniqueViolation { .. }));
+    }
+
+    #[test]
+    fn ws2_constraint_pk_not_null_via_appstate() {
+        use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
+
+        let state = state_with_key(None);
+        let mut mgr = state.constraint_manager.lock().expect("lock");
+        mgr.add_constraint(ConstraintDescriptor {
+            name: "pk_users".to_string(),
+            table: "users".to_string(),
+            column: "id".to_string(),
+            kind: ConstraintKind::PrimaryKey,
+        })
+        .expect("add pk");
+        mgr.add_constraint(ConstraintDescriptor {
+            name: "nn_name".to_string(),
+            table: "users".to_string(),
+            column: "name".to_string(),
+            kind: ConstraintKind::NotNull,
+        })
+        .expect("add nn");
+
+        // Valid insert
+        mgr.validate("users", "id", Some("1")).expect("pk valid");
+        mgr.record_committed_value("users", "id", "1");
+
+        // PK duplicate rejected
+        assert!(mgr.validate("users", "id", Some("1")).is_err());
+
+        // PK null rejected
+        assert!(mgr.validate("users", "id", None).is_err());
+
+        // NOT NULL rejected
+        assert!(mgr.validate("users", "name", None).is_err());
+
+        // NOT NULL accepted
+        mgr.validate("users", "name", Some("Alice")).expect("nn valid");
+    }
+
+    // ── WS4 Ingest tests ──────────────────────────────────────────
+
+    #[test]
+    fn ws4_csv_ingest_via_appstate() {
+        use voltnuerongrid_ingest::csv::CsvConnector;
+
+        let state = state_with_key(None);
+        let csv = "id,name,region\n1,Alice,us-east\n2,Bob,eu-west\n";
+        let mut conn = CsvConnector::new("csv-orders", "CSV Orders");
+        let count = conn.load_csv(csv);
+        assert_eq!(count, 2);
+
+        let records = conn.read_batch(usize::MAX);
+        state
+            .ingest_csv_records
+            .lock()
+            .expect("lock")
+            .insert("csv-orders".to_string(), records);
+
+        let map = state.ingest_csv_records.lock().expect("lock");
+        assert_eq!(map.get("csv-orders").expect("get").len(), 2);
+    }
+
+    #[test]
+    fn ws4_json_ingest_via_appstate() {
+        use voltnuerongrid_ingest::json::JsonConnector;
+
+        let state = state_with_key(None);
+        let ndjson = "{\"id\":\"1\",\"name\":\"Alice\"}\n{\"id\":\"2\",\"name\":\"Bob\"}\n";
+        let mut conn = JsonConnector::new("json-users", "JSON Users", "id");
+        let count = conn.load_ndjson(ndjson);
+        assert_eq!(count, 2);
+
+        let records = conn.read_batch(usize::MAX);
+        state
+            .ingest_json_records
+            .lock()
+            .expect("lock")
+            .insert("json-users".to_string(), records);
+
+        let map = state.ingest_json_records.lock().expect("lock");
+        assert_eq!(map.get("json-users").expect("get").len(), 2);
+    }
+
+    #[test]
+    fn ws4_ingest_status_counts_loaded_records() {
+        use voltnuerongrid_ingest::csv::CsvConnector;
+        use voltnuerongrid_ingest::json::JsonConnector;
+
+        let state = state_with_key(None);
+
+        let mut csv_conn = CsvConnector::new("c1", "C1");
+        csv_conn.load_csv("id,v\n1,a\n2,b\n");
+        state
+            .ingest_csv_records
+            .lock()
+            .expect("lock")
+            .insert("c1".to_string(), csv_conn.read_batch(usize::MAX));
+
+        let mut json_conn = JsonConnector::new("j1", "J1", "id");
+        json_conn.load_ndjson("{\"id\":\"x\"}\n");
+        state
+            .ingest_json_records
+            .lock()
+            .expect("lock")
+            .insert("j1".to_string(), json_conn.read_batch(usize::MAX));
+
+        let csv_map = state.ingest_csv_records.lock().expect("lock");
+        let json_map = state.ingest_json_records.lock().expect("lock");
+        let csv_total: usize = csv_map.values().map(|v| v.len()).sum();
+        let json_total: usize = json_map.values().map(|v| v.len()).sum();
+        assert_eq!(csv_total + json_total, 3);
     }
 }

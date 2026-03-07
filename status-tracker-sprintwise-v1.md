@@ -56,7 +56,7 @@
 | REQ-08 | Local + cloud SaaS operation | Sprint 8 | Epic 13 | ⬜ Not Started |
 | REQ-09 | Extensible plugin ecosystem | Sprint 6 | Epic 7 | 🟡 Ready for Validation |
 | REQ-10 | Trillion-row scale + high-speed retrieval | Sprint 2, Sprint 5 | Epic 2, Epic 3, Epic 6 | ⬜ Not Started |
-| REQ-11 | Indexes + constraints | Sprint 1 | Epic 2, Epic 15 | ⬜ Not Started |
+| REQ-11 | Indexes + constraints | Sprint 1 | Epic 2, Epic 15 | 🔵 In Progress |
 | REQ-12 | Seeded functions + plan-plat parity | Sprint 1, Sprint 2 | Epic 1, Epic 1A | 🔵 In Progress |
 | REQ-13 | Multi-user roles and privileges | Sprint 4 | Epic 5 | ⬜ Not Started |
 | REQ-14 | UI + engine separation | Sprint 7 | Epic 9 | 🔵 In Progress |
@@ -67,7 +67,7 @@
 | REQ-19 | Blazing ingest/update/read at scale | Sprint 2, Sprint 3, Sprint 5 | Epic 3, Epic 4, Epic 6 | ⬜ Not Started |
 | REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Sprint 8 | Epic 13 | 🔵 In Progress |
 | REQ-21 | Any-number-user concurrency | Sprint 2, Sprint 5, Sprint 7 | Epic 3, Epic 10, Epic 12 | ⬜ Not Started |
-| REQ-22 | Pessimistic locking | Sprint 3 | Epic 1, Epic 3 | 🔵 In Progress |
+| REQ-22 | Pessimistic locking | Sprint 3 | Epic 1, Epic 3 | ✅ Done |
 | REQ-23 | ACID transactions | Sprint 1, Sprint 2 | Epic 1, Epic 2, Epic 3 | 🔵 In Progress |
 | REQ-24 | Config via properties/YAML/JSON | Sprint 8 | Epic 14 | 🔵 In Progress |
 | REQ-25 | Native connection + pooling | Sprint 7, Sprint 8 | Epic 10, Epic 14 | 🔵 In Progress |
@@ -202,7 +202,7 @@
 | WS22 | (Epic 1 sub) | Pessimistic locking baseline | SQL Engine Team | 🔵 In Progress | WS1 | Runtime pessimistic-lock scaffold endpoints (`/api/v1/sql/locks/pessimistic/acquire`, `/api/v1/sql/locks/pessimistic/release`) with conflict/ownership enforcement + lock contention metrics endpoint (`/api/v1/sql/locks/pessimistic/metrics`) exposing deadlock-detection vs cap-hit-timeout counts + contention ratio for trend artifacts + WS22 smoke/gate posture evidence (`tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json`, `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json`, `tests/kpi/results/ws22/ws22-gate-summary.json`) and unit evidence (`cargo test -p voltnuerongridd ws22_`) |
 
 ### Requirements Covered
-- REQ-06 (CSV/Parquet/JSON/Excel + enterprise ingest) — WS4 ingest scaffold with gate summary
+- REQ-06 (CSV/Parquet/JSON/Excel + enterprise ingest) — WS4 ingest scaffold + CSV/JSON parser connectors with runtime endpoints and gate summary
 - REQ-07 (Multithreaded high-speed import) — ⬜ Not Started: Ingest throughput benchmark pending
 - REQ-19 (Blazing ingest/update/read at scale) — ⬜ Not Started: KPI benchmark gates pending
 - REQ-22 (Pessimistic locking) — WS22 runtime scaffold with conflict/ownership enforcement + contention metrics endpoint for trend analysis
@@ -222,6 +222,20 @@
 |---|---|---|---|
 | WS22 Pessimistic Locking Gate | Epic 1 + REQ-22 (pessimistic lock acquire/release contracts + conflict/ownership + contention metrics posture) | `tests/kpi/results/ws22/ws22-gate-summary.json` | `tests/kpi/results/ws22/ci-ws22-gate-summary.json` |
 | WS22 Lock Contention Metrics | Epic 1 + REQ-22 (deadlock-detection vs cap-hit-timeout vs wait-timeout vs grant vs conflict vs release counts + contention ratio) | `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json` | (included in ws22-gate-summary) |
+
+### Gate Evidence — WS2 Index + Constraint Engine (REQ-11)
+
+| Gate | Scope | Status Source |
+|---|---|---|
+| WS2 Index/Constraint Smoke | Epic 2 + REQ-11 (B-tree index engine + constraint validator with PK/Unique/NotNull + runtime endpoints) | `tests/kpi/results/ws2/ws2-index-constraint-smoke.json` |
+| WS2 Gate Summary | Epic 2 (store durability + WAL + checkpoint + index/constraint) | `tests/kpi/results/ws2/ws2-gate-summary.json` |
+
+### Gate Evidence — WS4 Ingest Parsers (REQ-06)
+
+| Gate | Scope | Status Source |
+|---|---|---|
+| WS4 Ingest Parser Smoke | Epic 4 + REQ-06 (CSV + JSON/NDJSON connectors + runtime ingest endpoints) | `tests/kpi/results/ws4/ws4-ingest-parser-smoke.json` |
+| WS4 Gate Summary | Epic 4 (ingest plugin scaffold + CSV/JSON parsers) | `tests/kpi/results/ws4/ws4-gate-summary.json` |
 
 ---
 
@@ -528,7 +542,7 @@
 ### Requirements Covered (Not Started — pending in this sprint)
 - REQ-08 (Local + cloud SaaS operation) — ⬜ Not Started: Full local/cloud SaaS smoke tests
 - REQ-10 (Trillion-row scale retrieval) — ⬜ Not Started: Scale benchmark report
-- REQ-11 (Indexes + constraints) — ⬜ Not Started: Constraint/index test suite
+- REQ-11 (Indexes + constraints) — 🔵 In Progress: B-tree index engine (IndexManager, BTreeIndex with create/drop/lookup/range_scan + unique enforcement) and constraint validator (ConstraintManager with PK/Unique/NotNull) in voltnuerongrid-store crate + runtime endpoints + smoke/gate evidence
 - REQ-21 (Any-number-user concurrency) — ⬜ Not Started: Concurrency stress tests
 
 ### Sprint 11 Deliverables

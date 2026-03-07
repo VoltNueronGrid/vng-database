@@ -728,6 +728,7 @@ dependencies = [
  "voltnuerongrid-audit",
  "voltnuerongrid-core",
  "voltnuerongrid-exec",
+ "voltnuerongrid-ingest",
  "voltnuerongrid-sql",
  "voltnuerongrid-store",
 ]

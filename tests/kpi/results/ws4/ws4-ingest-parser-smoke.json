@@ -1,0 +1,75 @@
+{
+  "smoke": "ws4-ingest-parser-scaffold",
+  "status": "passed",
+  "started_at_utc": "2026-03-06T15:34:12.7793267Z",
+  "finished_at_utc": "2026-03-06T15:34:12.7981730Z",
+  "duration_ms": 19,
+  "total_checks": 16,
+  "passed_checks": 16,
+  "checks": [
+    {
+      "check": "csv_connector_struct_exists",
+      "status": "passed"
+    },
+    {
+      "check": "csv_connector_implements_trait",
+      "status": "passed"
+    },
+    {
+      "check": "csv_load_method_exists",
+      "status": "passed"
+    },
+    {
+      "check": "json_connector_struct_exists",
+      "status": "passed"
+    },
+    {
+      "check": "json_connector_implements_trait",
+      "status": "passed"
+    },
+    {
+      "check": "json_load_method_exists",
+      "status": "passed"
+    },
+    {
+      "check": "lib_exports_csv_module",
+      "status": "passed"
+    },
+    {
+      "check": "lib_exports_json_module",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_format_csv_variant",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_format_json_variant",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_csv_route_exists",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_json_route_exists",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_status_route_exists",
+      "status": "passed"
+    },
+    {
+      "check": "ws4_csv_ingest_test_exists",
+      "status": "passed"
+    },
+    {
+      "check": "ws4_json_ingest_test_exists",
+      "status": "passed"
+    },
+    {
+      "check": "ws4_ingest_status_test_exists",
+      "status": "passed"
+    }
+  ]
+}

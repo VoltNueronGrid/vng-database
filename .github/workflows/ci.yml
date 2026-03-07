@@ -256,6 +256,7 @@ jobs:
             tests/kpi/results/ws1a/ci-ws1a-gate-summary.json
             tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json
             tests/kpi/results/ws2/ci-ws2-gate-summary.json
+            tests/kpi/results/ws2/ws2-index-constraint-smoke.json
             tests/kpi/results/ws2a/ci-ws2a-gate-summary.json
             tests/kpi/results/ws3/ci-ws3-gate-summary.json
             tests/kpi/results/ws3/ws3-htap-target-contract-smoke.json
@@ -265,6 +266,7 @@ jobs:
             tests/kpi/results/gates/ci-ws3-release-readiness.json
             tests/kpi/results/gates/ci-ws3-performance-stability-badge.json
             tests/kpi/results/ws4/ci-ws4-gate-summary.json
+            tests/kpi/results/ws4/ws4-ingest-parser-smoke.json
             tests/kpi/results/ws4a/ci-ws4a-gate-summary.json
             tests/kpi/results/ws6/ci-ws6-gate-summary.json
             tests/kpi/results/ws6/ws6-handoff-matrix-smoke.json

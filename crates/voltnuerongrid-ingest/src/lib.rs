@@ -2,6 +2,9 @@
 
 pub const CRATE_NAME: &str = "voltnuerongrid-ingest";
 
+pub mod csv;
+pub mod json;
+
 use std::collections::HashMap;
 use voltnuerongrid_store::wal_adapter::WalAdapter;
 use voltnuerongrid_store::WalRecord;

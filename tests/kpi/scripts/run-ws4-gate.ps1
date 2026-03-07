@@ -18,20 +18,22 @@ $start = Get-Date
 $runs = @()
 $status = "passed"
 
-$packStatus = "passed"
-$detail = "ok"
-try {
-  $global:LASTEXITCODE = 0
-  & "tests/kpi/scripts/run-ws4-ingest-plugin-smoke.ps1" -OutputPath "tests/kpi/results/ws4/ingest-plugin-smoke.json" 2>&1 | Out-Null
-  if (-not $?) { $packStatus = "failed"; $detail = "script_invocation_failed" }
-  elseif ($global:LASTEXITCODE -ne 0) { $packStatus = "failed"; $detail = "exit_code=$global:LASTEXITCODE" }
-} catch { $packStatus = "failed"; $detail = $_.Exception.Message }
-if ($packStatus -ne "passed") { $status = "failed" }
-$runs += [ordered]@{
-  pack = "ws4-ingest-plugin"
-  status = $packStatus
-  detail = $detail
-  artifact = "tests/kpi/results/ws4/ingest-plugin-smoke.json"
+$packs = @(
+  @{ Name = "ws4-ingest-plugin"; Script = "tests/kpi/scripts/run-ws4-ingest-plugin-smoke.ps1"; Artifact = "tests/kpi/results/ws4/ingest-plugin-smoke.json" },
+  @{ Name = "ws4-ingest-parser"; Script = "tests/kpi/scripts/run-ws4-ingest-parser-smoke.ps1"; Artifact = "tests/kpi/results/ws4/ws4-ingest-parser-smoke.json" }
+)
+
+foreach ($pack in $packs) {
+  $packStatus = "passed"
+  $detail = "ok"
+  try {
+    $global:LASTEXITCODE = 0
+    & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
+    if (-not $?) { $packStatus = "failed"; $detail = "script_invocation_failed" }
+    elseif ($global:LASTEXITCODE -ne 0) { $packStatus = "failed"; $detail = "exit_code=$global:LASTEXITCODE" }
+  } catch { $packStatus = "failed"; $detail = $_.Exception.Message }
+  if ($packStatus -ne "passed") { $status = "failed" }
+  $runs += [ordered]@{ pack = $pack.Name; status = $packStatus; detail = $detail; artifact = $pack.Artifact }
 }
 
 $finished = Get-Date

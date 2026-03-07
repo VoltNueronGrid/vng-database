@@ -1,15 +1,21 @@
 {
   "gate": "ws4",
   "status": "passed",
-  "started_at_utc": "2026-03-05T17:43:00.3105979Z",
-  "finished_at_utc": "2026-03-05T17:43:01.7160691Z",
-  "duration_ms": 1405,
+  "started_at_utc": "2026-03-06T15:34:11.3227956Z",
+  "finished_at_utc": "2026-03-06T15:34:12.8175246Z",
+  "duration_ms": 1495,
   "packs": [
     {
       "pack": "ws4-ingest-plugin",
       "status": "passed",
       "detail": "ok",
       "artifact": "tests/kpi/results/ws4/ingest-plugin-smoke.json"
+    },
+    {
+      "pack": "ws4-ingest-parser",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws4/ws4-ingest-parser-smoke.json"
     }
   ]
 }

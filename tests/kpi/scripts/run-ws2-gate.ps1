@@ -21,7 +21,8 @@ $status = "passed"
 $packs = @(
   @{ Name = "ws2-store-durability"; Script = "tests/kpi/scripts/run-store-durability-smoke.ps1"; Artifact = "tests/kpi/results/ws2/store-durability-smoke.json" },
   @{ Name = "ws2-disk-wal"; Script = "tests/kpi/scripts/run-ws2-disk-wal-smoke.ps1"; Artifact = "tests/kpi/results/ws2/disk-wal-adapter-smoke.json" },
-  @{ Name = "ws2-checkpoint-restart"; Script = "tests/kpi/scripts/run-ws2-checkpoint-restart-smoke.ps1"; Artifact = "tests/kpi/results/ws2/ws2-checkpoint-restart-smoke.json" }
+  @{ Name = "ws2-checkpoint-restart"; Script = "tests/kpi/scripts/run-ws2-checkpoint-restart-smoke.ps1"; Artifact = "tests/kpi/results/ws2/ws2-checkpoint-restart-smoke.json" },
+  @{ Name = "ws2-index-constraint"; Script = "tests/kpi/scripts/run-ws2-index-constraint-smoke.ps1"; Artifact = "tests/kpi/results/ws2/ws2-index-constraint-smoke.json" }
 )
 
 foreach ($pack in $packs) {

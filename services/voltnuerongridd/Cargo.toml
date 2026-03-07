@@ -16,3 +16,4 @@ voltnuerongrid-ai = { path = "../../crates/voltnuerongrid-ai" }
 voltnuerongrid-exec = { path = "../../crates/voltnuerongrid-exec" }
 voltnuerongrid-sql = { path = "../../crates/voltnuerongrid-sql" }
 voltnuerongrid-store = { path = "../../crates/voltnuerongrid-store" }
+voltnuerongrid-ingest = { path = "../../crates/voltnuerongrid-ingest" }

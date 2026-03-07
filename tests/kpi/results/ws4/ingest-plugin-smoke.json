@@ -2,8 +2,8 @@
   "smoke": "ws4-ingest-plugin-scaffold",
   "status": "passed",
   "command": "cargo test -p voltnuerongrid-ingest",
-  "started_at_utc": "2026-03-05T17:43:00.3253555Z",
-  "finished_at_utc": "2026-03-05T17:43:01.7127225Z",
-  "duration_ms": 1387,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-6c4559b058af068f.exe)\n\nrunning 6 tests\ntest tests::appends_replayable_event_envelopes ... ok\ntest tests::persists_and_loads_cursor_in_memory ... ok\ntest tests::registers_connector_and_reads_batch ... ok\ntest tests::replays_from_persisted_cursor_checkpoint ... ok\ntest tests::streams_from_source_and_replays_to_sink ... ok\ntest tests::persists_and_loads_cursor_in_wal_adapter ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n   Doc-tests voltnuerongrid_ingest\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-03-06T15:34:11.3676921Z",
+  "finished_at_utc": "2026-03-06T15:34:12.6912577Z",
+  "duration_ms": 1324,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-6c4559b058af068f.exe)\n\nrunning 17 tests\ntest csv::tests::descriptor_reflects_csv_format ... ok\ntest csv::tests::handles_empty_input ... ok\ntest csv::tests::parses_simple_csv ... ok\ntest csv::tests::read_batch_respects_max ... ok\ntest csv::tests::skips_empty_lines ... ok\ntest json::tests::descriptor_reflects_json_format ... ok\ntest json::tests::handles_empty_input ... ok\ntest json::tests::parses_ndjson_with_string_keys ... ok\ntest json::tests::parses_numeric_key_values ... ok\ntest json::tests::read_batch_respects_max ... ok\ntest json::tests::skips_lines_missing_key_field ... ok\ntest tests::appends_replayable_event_envelopes ... ok\ntest tests::persists_and_loads_cursor_in_memory ... ok\ntest tests::registers_connector_and_reads_batch ... ok\ntest tests::replays_from_persisted_cursor_checkpoint ... ok\ntest tests::streams_from_source_and_replays_to_sink ... ok"
 }
