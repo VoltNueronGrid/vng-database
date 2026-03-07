@@ -9,7 +9,7 @@
     "WS6",
     "REQ-17"
   ],
-  "generated_at_utc": "2026-03-06T00:35:53.4835421Z",
+  "generated_at_utc": "2026-03-07T02:19:09.5343966Z",
   "sources": {
     "summary": "tests/kpi/results/ws6/ws6-gate-summary.json",
     "chaos_fault_matrix": "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json",

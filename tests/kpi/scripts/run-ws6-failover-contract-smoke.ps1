@@ -21,10 +21,13 @@ $checks = [ordered]@{
   failover_rto_target_declared = ($runtimeRaw -match 'rto_seconds_target:\s*30')
   failover_rpo_target_declared = ($runtimeRaw -match 'rpo_data_loss_rows_target:\s*0')
   failover_requires_operator_auth = ($runtimeRaw -match 'require_operator_auth\(&headers,\s*&state\)\?;')
+  failover_response_includes_handoff_report = ($runtimeRaw -match 'handoff_report:\s*FailoverHandoffReportResponse')
+  failover_runtime_builds_handoff_report = ($runtimeRaw -match 'build_failover_handoff_report\(')
+  failover_uses_replication_transport = ($runtimeRaw -match 'replication_transport')
 }
 
 $global:LASTEXITCODE = 0
-$testOutput = & cargo test -p voltnuerongridd failover_rotate_leader -- --nocapture 2>&1
+$testOutput = & cargo test -p voltnuerongridd failover_ -- --nocapture 2>&1
 $testExit = $LASTEXITCODE
 $checks.failover_rotation_tests_pass = ($? -and $testExit -eq 0)
 
@@ -38,7 +41,7 @@ $result = [ordered]@{
   status = $status
   timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
   runtime_path = $RuntimePath
-  command = "cargo test -p voltnuerongridd failover_rotate_leader -- --nocapture"
+  command = "cargo test -p voltnuerongridd failover_ -- --nocapture"
   checks = $checks
   output_excerpt = (($testOutput | Select-Object -First 20) -join "`n")
 }

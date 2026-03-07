@@ -11,17 +11,19 @@ if ($outputDir -and !(Test-Path $outputDir)) {
   New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 }
 
-$command = "cargo test -p voltnuerongridd failover_rotate_leader_ -- --nocapture"
+$command = "cargo test -p voltnuerongridd failover_ -- --nocapture"
 $global:LASTEXITCODE = 0
-$testOutput = & cargo test -p voltnuerongridd failover_rotate_leader_ -- --nocapture 2>&1
+$testOutput = & cargo test -p voltnuerongridd failover_ -- --nocapture 2>&1
 $exitCode = $LASTEXITCODE
 $testsPassed = ($? -and $exitCode -eq 0)
 
 $matrix = @(
-  [ordered]@{ from = "node-1"; to = "node-2"; expected = "handoff_success" },
-  [ordered]@{ from = "node-2"; to = "node-3"; expected = "handoff_success" },
-  [ordered]@{ from = "node-3"; to = "node-1"; expected = "handoff_success" },
-  [ordered]@{ from = "node-2"; to = "blank_request"; expected = "fallback_to_current_node" }
+  [ordered]@{ from = "node-1"; to = "node-2"; expected = "handoff_success"; evidence = "leader_rotation" },
+  [ordered]@{ from = "node-2"; to = "node-3"; expected = "handoff_success"; evidence = "leader_rotation" },
+  [ordered]@{ from = "node-3"; to = "node-1"; expected = "handoff_success"; evidence = "leader_rotation" },
+  [ordered]@{ from = "node-2"; to = "blank_request"; expected = "fallback_to_current_node"; evidence = "blank_request_fallback" },
+  [ordered]@{ from = "node-1"; to = "node-2"; expected = "handoff_applied"; evidence = "runtime_handoff_report" },
+  [ordered]@{ from = "node-1"; to = "node-2"; expected = "handoff_gap_detected"; evidence = "runtime_handoff_gap_detection" }
 )
 
 $result = [ordered]@{

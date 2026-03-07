@@ -2,6 +2,8 @@
 
 pub const CRATE_NAME: &str = "voltnuerongrid-auth";
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,6 +16,83 @@ pub struct SecurityConfigContract {
     pub kms_key_ref_env: String,
     pub allowed_operator_roles: Vec<String>,
     pub token_ttl_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivilegeAction {
+    Read,
+    Write,
+    Execute,
+    Manage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceGrant {
+    pub resource: String,
+    pub scopes: Vec<String>,
+    pub actions: Vec<PrivilegeAction>,
+}
+
+impl ResourceGrant {
+    pub fn allows(&self, resource: &str, scope: &str, action: PrivilegeAction) -> bool {
+        self.resource.eq_ignore_ascii_case(resource)
+            && self.actions.contains(&action)
+            && self.scopes.iter().any(|allowed| scope_matches(allowed, scope))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RbacPrivilegeMatrix {
+    pub grants_by_role: BTreeMap<String, Vec<ResourceGrant>>,
+}
+
+impl RbacPrivilegeMatrix {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn grant_role(&mut self, role: &str, grant: ResourceGrant) {
+        self.grants_by_role
+            .entry(role.trim().to_ascii_lowercase())
+            .or_default()
+            .push(grant);
+    }
+
+    pub fn grants_for_role(&self, role: &str) -> &[ResourceGrant] {
+        self.grants_by_role
+            .get(&role.trim().to_ascii_lowercase())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn allows(
+        &self,
+        role: &str,
+        resource: &str,
+        scope: &str,
+        action: PrivilegeAction,
+    ) -> bool {
+        self.grants_for_role(role)
+            .iter()
+            .any(|grant| grant.allows(resource, scope, action))
+    }
+}
+
+fn scope_matches(allowed_scope: &str, requested_scope: &str) -> bool {
+    let allowed_scope = allowed_scope.trim();
+    let requested_scope = requested_scope.trim();
+    if allowed_scope == "*" {
+        return true;
+    }
+    if let Some(prefix) = allowed_scope.strip_suffix("/*") {
+        return requested_scope == prefix
+            || requested_scope
+                .strip_prefix(prefix)
+                .map(|suffix| suffix.starts_with('/'))
+                .unwrap_or(false);
+    }
+    allowed_scope.eq_ignore_ascii_case(requested_scope)
 }
 
 impl SecurityConfigContract {
@@ -204,5 +283,57 @@ token_ttl_seconds: 300
         }"#;
         let err = SecurityConfigContract::from_json_str(json).expect_err("must reject");
         assert!(err.contains("kms_key_ref_env"));
+    }
+
+    #[test]
+    fn ws5_rbac_privilege_matrix_allows_exact_resource_scope() {
+        let mut matrix = RbacPrivilegeMatrix::new();
+        matrix.grant_role(
+            "sre",
+            ResourceGrant {
+                resource: "cluster.failover".to_string(),
+                scopes: vec!["cluster".to_string()],
+                actions: vec![PrivilegeAction::Execute],
+            },
+        );
+
+        assert!(matrix.allows(
+            "sre",
+            "cluster.failover",
+            "cluster",
+            PrivilegeAction::Execute,
+        ));
+        assert!(!matrix.allows(
+            "sre",
+            "cluster.failover",
+            "cluster",
+            PrivilegeAction::Read,
+        ));
+    }
+
+    #[test]
+    fn ws5_rbac_privilege_matrix_allows_wildcard_scopes() {
+        let mut matrix = RbacPrivilegeMatrix::new();
+        matrix.grant_role(
+            "security",
+            ResourceGrant {
+                resource: "observability.audit".to_string(),
+                scopes: vec!["audit/*".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+
+        assert!(matrix.allows(
+            "security",
+            "observability.audit",
+            "audit/events",
+            PrivilegeAction::Read,
+        ));
+        assert!(!matrix.allows(
+            "security",
+            "observability.audit",
+            "autonomous/actions",
+            PrivilegeAction::Read,
+        ));
     }
 }

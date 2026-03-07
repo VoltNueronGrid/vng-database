@@ -133,6 +133,10 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws2a-gate.ps1 -OutputPath "./tests/kpi/results/ws2a/ci-ws2a-gate-summary.json"
 
+      - name: Run H-02 multi-node handoff matrix
+        shell: pwsh
+        run: ./tests/kpi/scripts/run-h02-multi-node-handoff-matrix.ps1 -OutputPath "./tests/kpi/results/h02/h02-multi-node-handoff-matrix.json"
+
       - name: Run WS3 query routing gate
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws3-gate.ps1 -OutputPath "./tests/kpi/results/ws3/ci-ws3-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws3-release-readiness.json"
@@ -258,6 +262,7 @@ jobs:
             tests/kpi/results/ws2/ci-ws2-gate-summary.json
             tests/kpi/results/ws2/ws2-index-constraint-smoke.json
             tests/kpi/results/ws2a/ci-ws2a-gate-summary.json
+            tests/kpi/results/h02/h02-multi-node-handoff-matrix.json
             tests/kpi/results/ws3/ci-ws3-gate-summary.json
             tests/kpi/results/ws3/ws3-htap-target-contract-smoke.json
             tests/kpi/results/ws3/ws3-performance-score.json

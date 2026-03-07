@@ -13,10 +13,14 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use voltnuerongrid_auth::{PrivilegeAction, RbacPrivilegeMatrix, ResourceGrant};
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale};
+use voltnuerongrid_store::htap_sync::{
+    InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
+};
 use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_ingest::IngestionConnector;
@@ -26,6 +30,13 @@ static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
 static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
 const DEADLOCK_SCAN_MAX_HOPS: usize = 8;
+
+const CONTROL_PLANE_OPERATOR_ROLES: [OperatorRole; 4] = [
+    OperatorRole::Dba,
+    OperatorRole::Sre,
+    OperatorRole::Security,
+    OperatorRole::AiOperator,
+];
 
 #[derive(Clone)]
 struct PessimisticLockContentionMetrics {
@@ -62,6 +73,9 @@ struct AppState {
     node_id: String,
     cluster_mode: String,
     admin_api_key: Option<String>,
+    allowed_operator_roles: Arc<HashSet<OperatorRole>>,
+    operator_role_bindings: Arc<HashMap<String, OperatorRole>>,
+    rbac_privilege_matrix: Arc<RbacPrivilegeMatrix>,
     leader_node_id: Arc<Mutex<String>>,
     audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
     action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
@@ -71,6 +85,9 @@ struct AppState {
     dr_hook_state_path: Option<String>,
     dr_hook_queue: Arc<Mutex<VecDeque<DrHookScheduledTask>>>,
     cluster_failure_signals: Arc<Mutex<Vec<ClusterFailureSignal>>>,
+    sync_origin: Arc<Mutex<RowStoreSyncOrigin>>,
+    replication_transport: Arc<Mutex<InMemoryReplicationTransport>>,
+    replica_replay_states: Arc<Mutex<HashMap<String, ReplicaReplayState>>>,
     pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
     pessimistic_lock_waits: Arc<Mutex<HashMap<String, String>>>,
     pessimistic_lock_metrics: PessimisticLockContentionMetrics,
@@ -90,6 +107,41 @@ enum AutonomousMode {
     Advisory,
     Supervised,
     Autonomous,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum OperatorRole {
+    Dba,
+    Sre,
+    Security,
+    AiOperator,
+}
+
+impl OperatorRole {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "dba" | "admin" => Some(Self::Dba),
+            "sre" => Some(Self::Sre),
+            "security" | "secops" => Some(Self::Security),
+            "ai_operator" | "ai-operator" | "autonomous" => Some(Self::AiOperator),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dba => "dba",
+            Self::Sre => "sre",
+            Self::Security => "security",
+            Self::AiOperator => "ai_operator",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OperatorIdentity {
+    operator_id: String,
+    role: OperatorRole,
 }
 
 impl AutonomousMode {
@@ -131,6 +183,240 @@ impl AtomicEmergencyStop {
     fn set(&self, value: bool) {
         self.enabled.store(value, Ordering::SeqCst);
     }
+}
+
+fn default_allowed_operator_roles() -> HashSet<OperatorRole> {
+    CONTROL_PLANE_OPERATOR_ROLES.into_iter().collect()
+}
+
+fn default_operator_role_bindings() -> HashMap<String, OperatorRole> {
+    HashMap::from([
+        ("platform-admin".to_string(), OperatorRole::Dba),
+        ("admin".to_string(), OperatorRole::Dba),
+        ("automation".to_string(), OperatorRole::Sre),
+        ("auto_sre".to_string(), OperatorRole::Sre),
+        ("security-bot".to_string(), OperatorRole::Security),
+        ("autopilot".to_string(), OperatorRole::AiOperator),
+    ])
+}
+
+fn load_allowed_operator_roles() -> HashSet<OperatorRole> {
+    let parsed = env::var("VNG_ALLOWED_OPERATOR_ROLES")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(OperatorRole::parse)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+
+    if parsed.is_empty() {
+        default_allowed_operator_roles()
+    } else {
+        parsed
+    }
+}
+
+fn load_operator_role_bindings(
+    allowed_roles: &HashSet<OperatorRole>,
+) -> HashMap<String, OperatorRole> {
+    let parsed = env::var("VNG_OPERATOR_ROLE_BINDINGS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(|pair| {
+                    let (operator_id, role) = pair.split_once('=')?;
+                    let operator_id = operator_id.trim();
+                    let role = OperatorRole::parse(role.trim())?;
+                    if operator_id.is_empty() || !allowed_roles.contains(&role) {
+                        return None;
+                    }
+                    Some((operator_id.to_string(), role))
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    if parsed.is_empty() {
+        default_operator_role_bindings()
+            .into_iter()
+            .filter(|(_, role)| allowed_roles.contains(role))
+            .collect()
+    } else {
+        parsed
+    }
+}
+
+fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
+    let mut matrix = RbacPrivilegeMatrix::new();
+
+    for role in [OperatorRole::Dba] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "cluster.failover".to_string(),
+                scopes: vec!["cluster".to_string()],
+                actions: vec![
+                    PrivilegeAction::Read,
+                    PrivilegeAction::Execute,
+                    PrivilegeAction::Manage,
+                ],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "cluster.sre".to_string(),
+                scopes: vec!["sre/*".to_string()],
+                actions: vec![
+                    PrivilegeAction::Read,
+                    PrivilegeAction::Execute,
+                    PrivilegeAction::Manage,
+                ],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "cluster.dr_hooks".to_string(),
+                scopes: vec!["dr_hooks/*".to_string()],
+                actions: vec![
+                    PrivilegeAction::Read,
+                    PrivilegeAction::Execute,
+                    PrivilegeAction::Manage,
+                ],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "storage.catalog".to_string(),
+                scopes: vec!["store/*".to_string()],
+                actions: vec![
+                    PrivilegeAction::Read,
+                    PrivilegeAction::Write,
+                    PrivilegeAction::Manage,
+                ],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "ingest.connectors".to_string(),
+                scopes: vec!["ingest/*".to_string()],
+                actions: vec![
+                    PrivilegeAction::Read,
+                    PrivilegeAction::Write,
+                    PrivilegeAction::Manage,
+                ],
+            },
+        );
+    }
+
+    for role in [OperatorRole::Dba, OperatorRole::Sre] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "observability.audit".to_string(),
+                scopes: vec!["audit/*".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+    }
+
+    for role in [OperatorRole::Dba, OperatorRole::Sre, OperatorRole::Security] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "cluster.sre".to_string(),
+                scopes: vec!["sre/reliability", "sre/failure_budget", "sre/gate"].into_iter().map(String::from).collect(),
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+    }
+
+    for role in [OperatorRole::Dba, OperatorRole::Sre] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "cluster.failover".to_string(),
+                scopes: vec!["cluster".to_string()],
+                actions: vec![PrivilegeAction::Read, PrivilegeAction::Execute],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "cluster.dr_hooks".to_string(),
+                scopes: vec!["dr_hooks/*".to_string()],
+                actions: vec![PrivilegeAction::Read, PrivilegeAction::Execute],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "cluster.sre".to_string(),
+                scopes: vec!["sre/*".to_string()],
+                actions: vec![PrivilegeAction::Read, PrivilegeAction::Execute],
+            },
+        );
+    }
+
+    for role in [OperatorRole::Dba, OperatorRole::Security, OperatorRole::AiOperator] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "autonomous.guardrails".to_string(),
+                scopes: vec!["autonomous/*".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+    }
+
+    for role in [OperatorRole::Dba, OperatorRole::Security] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "autonomous.guardrails".to_string(),
+                scopes: vec!["autonomous/emergency_stop".to_string()],
+                actions: vec![PrivilegeAction::Manage],
+            },
+        );
+    }
+
+    for role in [OperatorRole::Dba, OperatorRole::AiOperator] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "autonomous.actions".to_string(),
+                scopes: vec!["autonomous/actions".to_string()],
+                actions: vec![PrivilegeAction::Execute],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "observability.autonomous_records".to_string(),
+                scopes: vec!["autonomous/records".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+    }
+
+    for role in [OperatorRole::Dba, OperatorRole::Security] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "observability.audit".to_string(),
+                scopes: vec!["audit/*".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+    }
+
+    matrix
 }
 
 #[derive(Clone, Serialize)]
@@ -180,7 +466,7 @@ struct AuthorizeActionResponse {
     trace_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct AuthErrorResponse {
     status: &'static str,
     reason: String,
@@ -519,6 +805,26 @@ struct FailoverSimulateResponse {
     new_leader_node_id: String,
     reason: String,
     requested_by: String,
+    handoff_report: FailoverHandoffReportResponse,
+}
+
+#[derive(Serialize)]
+struct FailoverHandoffGapResponse {
+    expected: u64,
+    actual: u64,
+}
+
+#[derive(Serialize)]
+struct FailoverHandoffReportResponse {
+    handoff_state: &'static str,
+    source_node_id: String,
+    target_node_id: String,
+    last_applied_sequence_before: u64,
+    last_applied_sequence_after: u64,
+    replay_batch_size: usize,
+    applied_count: usize,
+    gap_count: usize,
+    gaps: Vec<FailoverHandoffGapResponse>,
 }
 
 #[derive(Deserialize)]
@@ -676,6 +982,14 @@ struct DrHookPolicyContract {
 #[derive(Clone, Serialize, Deserialize)]
 struct DrHookPolicyStateSnapshot {
     hooks: HashMap<String, DrHookRuntimeState>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct DrHookPolicyStateEnvelope {
+    schema_version: u32,
+    written_unix_ms: u128,
+    checksum_hex: String,
+    snapshot: DrHookPolicyStateSnapshot,
 }
 
 #[derive(Deserialize)]
@@ -849,6 +1163,9 @@ async fn main() {
         .filter(|value| !value.is_empty())
         .or_else(|| Some("state/dr-hook-runtime.json".to_string()));
     let loaded_policy_state = load_dr_hook_policy_state(dr_hook_state_path.as_deref());
+    let allowed_operator_roles = Arc::new(load_allowed_operator_roles());
+    let operator_role_bindings = Arc::new(load_operator_role_bindings(&allowed_operator_roles));
+    let rbac_privilege_matrix = Arc::new(default_rbac_privilege_matrix());
     let addr: SocketAddr = http_bind
         .parse()
         .unwrap_or_else(|_| "127.0.0.1:8080".parse().expect("fallback socket parse"));
@@ -857,6 +1174,9 @@ async fn main() {
         node_id,
         cluster_mode,
         admin_api_key,
+        allowed_operator_roles,
+        operator_role_bindings,
+        rbac_privilege_matrix,
         leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
         audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
         action_records: Arc::new(Mutex::new(Vec::new())),
@@ -866,6 +1186,9 @@ async fn main() {
         dr_hook_state_path,
         dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
         cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
+        sync_origin: Arc::new(Mutex::new(RowStoreSyncOrigin::new())),
+        replication_transport: Arc::new(Mutex::new(InMemoryReplicationTransport::new())),
+        replica_replay_states: Arc::new(Mutex::new(HashMap::new())),
         pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
         pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
         pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
@@ -1283,18 +1606,77 @@ async fn failover_simulate(
     Json(req): Json<FailoverSimulateRequest>,
 ) -> Result<Json<FailoverSimulateResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.failover",
+        "cluster",
+        PrivilegeAction::Execute,
+    )?;
     let (previous_leader_node_id, new_leader_node_id) =
         rotate_leader(&state.leader_node_id, &req.new_leader_node_id, &state.node_id);
+    record_transport_mutation(
+        &state,
+        &previous_leader_node_id,
+        &new_leader_node_id,
+        "failover_control_plane",
+        "cluster_failover",
+        &format!("{}->{}:prepare", previous_leader_node_id, new_leader_node_id),
+        MutationOp::Insert,
+        json!({
+            "event": "leader_handoff_prepare",
+            "source_node_id": previous_leader_node_id,
+            "target_node_id": new_leader_node_id,
+            "requested_by": operator.operator_id.as_str(),
+            "operator_role": operator.role.as_str(),
+            "reason": req
+                .reason
+                .clone()
+                .unwrap_or_else(|| "manual_failover_simulation".to_string()),
+            "transport": "control_plane"
+        }),
+    );
+    record_transport_mutation(
+        &state,
+        &previous_leader_node_id,
+        &new_leader_node_id,
+        "failover_control_plane",
+        "cluster_failover",
+        &format!("{}->{}:commit", previous_leader_node_id, new_leader_node_id),
+        MutationOp::Update,
+        json!({
+            "event": "leader_handoff_commit",
+            "source_node_id": previous_leader_node_id,
+            "target_node_id": new_leader_node_id,
+            "requested_by": operator.operator_id.as_str(),
+            "operator_role": operator.role.as_str(),
+            "reason": req
+                .reason
+                .clone()
+                .unwrap_or_else(|| "manual_failover_simulation".to_string()),
+            "transport": "control_plane"
+        }),
+    );
+    let handoff_report = build_failover_handoff_report(
+        &state,
+        &previous_leader_node_id,
+        &new_leader_node_id,
+    );
     append_audit_event(
         &state,
         AuditEventKind::Failover,
-        req.requested_by.as_deref().unwrap_or("unknown"),
+        &operator.operator_id,
         "failover_simulate",
         "ok",
         &json!({
             "previous_leader_node_id": previous_leader_node_id.clone(),
             "new_leader_node_id": new_leader_node_id.clone(),
-            "reason": req.reason.clone().unwrap_or_else(|| "manual_failover_simulation".to_string())
+            "operator_role": operator.role.as_str(),
+            "reason": req.reason.clone().unwrap_or_else(|| "manual_failover_simulation".to_string()),
+            "handoff_state": handoff_report.handoff_state,
+            "replay_batch_size": handoff_report.replay_batch_size,
+            "applied_count": handoff_report.applied_count,
+            "gap_count": handoff_report.gap_count
         })
         .to_string(),
     );
@@ -1306,6 +1688,7 @@ async fn failover_simulate(
             .reason
             .unwrap_or_else(|| "manual_failover_simulation".to_string()),
         requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
+        handoff_report,
     }))
 }
 
@@ -1314,6 +1697,13 @@ async fn sre_reliability_status(
     headers: HeaderMap,
 ) -> Result<Json<SreReliabilityStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/reliability",
+        PrivilegeAction::Read,
+    )?;
     Ok(Json(SreReliabilityStatusResponse {
         status: "ok",
         service_health: "healthy",
@@ -1328,6 +1718,13 @@ async fn sre_rate_limit_check(
     Json(req): Json<RateLimitCheckRequest>,
 ) -> Result<Json<RateLimitCheckResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/rate_limit",
+        PrivilegeAction::Execute,
+    )?;
     let requested_units = req.requested_units.unwrap_or(1).max(1);
     let (allowed, remaining_units, reason) = evaluate_rate_limit(
         req.current_minute_count,
@@ -1338,10 +1735,7 @@ async fn sre_rate_limit_check(
     append_audit_event(
         &state,
         AuditEventKind::Security,
-        headers
-            .get("x-vng-operator-id")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("unknown"),
+        &operator.operator_id,
         "sre_rate_limit_check",
         if allowed { "allow" } else { "deny" },
         &json!({
@@ -1366,6 +1760,13 @@ async fn sre_failure_budget_alerts(
     Query(query): Query<FailureBudgetAlertQuery>,
 ) -> Result<Json<FailureBudgetAlertResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/failure_budget",
+        PrivilegeAction::Read,
+    )?;
     let consumed_percent = query.consumed_percent.unwrap_or(12.5).clamp(0.0, 100.0);
     let burn_rate = query.burn_rate.unwrap_or((consumed_percent / 10.0).max(0.1));
     let alert = evaluate_failure_budget_alert(consumed_percent, burn_rate);
@@ -1377,6 +1778,13 @@ async fn sre_dr_hook_policy(
     headers: HeaderMap,
 ) -> Result<Json<DrHookPolicyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.dr_hooks",
+        "dr_hooks/policy",
+        PrivilegeAction::Read,
+    )?;
     let tracked_hooks = state
         .dr_hook_policy_state
         .lock()
@@ -1403,6 +1811,13 @@ async fn sre_dr_hook_retry_plan(
     Query(query): Query<DrHookRetryPlanQuery>,
 ) -> Result<Json<DrHookRetryPlanResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.dr_hooks",
+        "dr_hooks/retry_plan",
+        PrivilegeAction::Read,
+    )?;
     let policy = state.dr_hook_policy_config.as_ref();
     let attempts = query.attempts.unwrap_or(5).clamp(1, 10);
     let hook = query.hook.trim().to_ascii_lowercase();
@@ -1435,10 +1850,14 @@ async fn sre_dr_hook_schedule(
     Json(req): Json<DrHookScheduleRequest>,
 ) -> Result<Json<DrHookScheduleResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let requested_by = headers
-        .get("x-vng-operator-id")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown");
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.dr_hooks",
+        "dr_hooks/schedule",
+        PrivilegeAction::Execute,
+    )?;
+    let requested_by = operator.operator_id.as_str();
     let task = enqueue_dr_hook_task(
         &state,
         &req.hook,
@@ -1475,10 +1894,14 @@ async fn sre_dr_hook_trigger(
     Json(req): Json<DrHookTriggerRequest>,
 ) -> Result<Json<DrHookTriggerResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let requested_by = headers
-        .get("x-vng-operator-id")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown");
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.dr_hooks",
+        "dr_hooks/trigger",
+        PrivilegeAction::Execute,
+    )?;
+    let requested_by = operator.operator_id.as_str();
     let execution = execute_dr_hook(
         &state,
         &req.hook,
@@ -1516,6 +1939,13 @@ async fn sre_dr_hook_status(
     Query(query): Query<DrHookStatusQuery>,
 ) -> Result<Json<DrHookStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.dr_hooks",
+        "dr_hooks/status",
+        PrivilegeAction::Read,
+    )?;
     let max_items = query.max_items.unwrap_or(50).min(500);
     let records = latest_dr_hook_records(&state, max_items);
     Ok(Json(DrHookStatusResponse {
@@ -1531,6 +1961,13 @@ async fn sre_failure_signal(
     Json(req): Json<FailureSignalRequest>,
 ) -> Result<Json<FailureSignalResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/failure_signal",
+        PrivilegeAction::Execute,
+    )?;
     let signal = ClusterFailureSignal {
         signal_id: format!("sig-{}", DR_HOOK_COUNTER.fetch_add(1, Ordering::Relaxed)),
         node_id: req.node_id.trim().to_string(),
@@ -1551,14 +1988,27 @@ async fn sre_failure_signal(
     if let Ok(mut signals) = state.cluster_failure_signals.lock() {
         signals.push(signal.clone());
     }
-    let operator = headers
-        .get("x-vng-operator-id")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown");
+    record_transport_mutation(
+        &state,
+        &state.node_id,
+        "*",
+        "failure_signal",
+        "cluster_failure_signal",
+        &signal.signal_id,
+        MutationOp::Insert,
+        json!({
+            "signal_id": signal.signal_id,
+            "node_id": signal.node_id,
+            "transport": signal.transport,
+            "failure_type": signal.failure_type,
+            "severity": signal.severity,
+            "observed_by": operator.operator_id.as_str(),
+        }),
+    );
     append_audit_event(
         &state,
         AuditEventKind::Failover,
-        operator,
+        &operator.operator_id,
         "sre_failure_signal",
         "observed",
         &json!({
@@ -1599,10 +2049,13 @@ async fn sre_failure_reconcile(
     Json(req): Json<FailureReconcileRequest>,
 ) -> Result<Json<FailureReconcileResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let operator = headers
-        .get("x-vng-operator-id")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown");
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/failure_reconcile",
+        PrivilegeAction::Execute,
+    )?;
     let mut resolved_count = 0usize;
     let now = now_unix_ms();
     let selected_ids = req.signal_ids.unwrap_or_default();
@@ -1619,7 +2072,7 @@ async fn sre_failure_reconcile(
             };
             if targeted {
                 signal.resolved = true;
-                signal.resolved_by = Some(operator.to_string());
+                signal.resolved_by = Some(operator.operator_id.clone());
                 signal.resolved_unix_ms = Some(now);
                 signal.resolution_note = req.note.clone();
                 resolved_count += 1;
@@ -1636,10 +2089,27 @@ async fn sre_failure_reconcile(
                 .count()
         })
         .unwrap_or(usize::MAX);
+    if resolved_count > 0 {
+        record_transport_mutation(
+            &state,
+            &state.node_id,
+            "*",
+            "failure_reconcile",
+            "cluster_failure_signal",
+            &format!("reconcile-{now}"),
+            MutationOp::Update,
+            json!({
+                "resolved_count": resolved_count,
+                "resolved_by": operator.operator_id.as_str(),
+                "resolve_all_critical": resolve_all_critical,
+                "unresolved_critical_count": unresolved_critical_count,
+            }),
+        );
+    }
     append_audit_event(
         &state,
         AuditEventKind::Failover,
-        operator,
+        &operator.operator_id,
         "sre_failure_reconcile",
         "ok",
         &json!({
@@ -1661,6 +2131,13 @@ async fn sre_gate_evaluate(
     headers: HeaderMap,
 ) -> Result<Json<SreGateEvaluationResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/gate",
+        PrivilegeAction::Read,
+    )?;
     Ok(Json(build_sre_gate_evaluation(&state)))
 }
 
@@ -1670,6 +2147,13 @@ async fn sre_gate_export(
     Json(req): Json<SreGateExportRequest>,
 ) -> Result<Json<SreGateExportResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/gate",
+        PrivilegeAction::Manage,
+    )?;
     let evaluation = build_sre_gate_evaluation(&state);
     let output_path = req
         .output_path
@@ -1688,6 +2172,13 @@ async fn audit_events(
     Query(query): Query<AuditEventsQuery>,
 ) -> Result<Json<AuditEventsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "observability.audit",
+        "audit/events",
+        PrivilegeAction::Read,
+    )?;
     let max_items = query.max_items.unwrap_or(100).min(1_000);
     let events = state
         .audit_sink
@@ -1707,6 +2198,13 @@ async fn autonomous_action_records(
     Query(query): Query<AutonomousActionRecordsQuery>,
 ) -> Result<Json<AutonomousActionRecordsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "observability.autonomous_records",
+        "autonomous/records",
+        PrivilegeAction::Read,
+    )?;
     let max_items = query.max_items.unwrap_or(100).min(1_000);
     let records = latest_action_records(&state, max_items);
     Ok(Json(AutonomousActionRecordsResponse {
@@ -1736,6 +2234,13 @@ async fn autonomous_guardrails(
     headers: HeaderMap,
 ) -> Result<Json<AutonomousGuardrailsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "autonomous.guardrails",
+        "autonomous/guardrails",
+        PrivilegeAction::Read,
+    )?;
     Ok(Json(AutonomousGuardrailsResponse {
         status: "ok",
         autonomous_mode: state.autonomous_mode,
@@ -1750,12 +2255,19 @@ async fn autonomous_emergency_stop(
     Json(req): Json<EmergencyStopRequest>,
 ) -> Result<Json<EmergencyStopResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "autonomous.guardrails",
+        "autonomous/emergency_stop",
+        PrivilegeAction::Manage,
+    )?;
     state.emergency_stop.set(req.enabled);
     let reason = req
         .reason
         .clone()
         .unwrap_or_else(|| "manual_control_plane_request".to_string());
-    let requested_by = req.requested_by.clone().unwrap_or_else(|| "unknown".to_string());
+    let requested_by = req.requested_by.clone().unwrap_or(operator.operator_id);
     append_audit_event(
         &state,
         AuditEventKind::Security,
@@ -1782,12 +2294,15 @@ async fn authorize_autonomous_action(
     Json(req): Json<AuthorizeActionRequest>,
 ) -> Result<(StatusCode, Json<AuthorizeActionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "autonomous.actions",
+        "autonomous/actions",
+        PrivilegeAction::Execute,
+    )?;
     let requested_scope = req.scope.unwrap_or_else(|| "cluster".to_string());
-    let requested_by = headers
-        .get("x-vng-operator-id")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
+    let requested_by = operator.operator_id;
     let action = req.action;
     let trace_id = next_action_trace_id();
     if state.emergency_stop.get() {
@@ -2439,19 +2954,68 @@ fn build_retry_plan(policy: &DrHookPolicyConfig, attempts: u32) -> Vec<DrHookRet
         .collect()
 }
 
+fn dr_hook_policy_backup_path(path: &str) -> String {
+    format!("{path}.bak")
+}
+
+fn compute_dr_hook_policy_checksum(snapshot: &DrHookPolicyStateSnapshot) -> String {
+    // Canonicalize hook ordering before hashing so checksum is stable.
+    let ordered_hooks: std::collections::BTreeMap<String, DrHookRuntimeState> = snapshot
+        .hooks
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    let encoded = serde_json::to_vec(&ordered_hooks).unwrap_or_default();
+    // FNV-1a 64-bit checksum: lightweight corruption guard for persisted state.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in encoded {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn decode_dr_hook_policy_state(contents: &str) -> Option<DrHookPolicyState> {
+    if let Ok(envelope) = serde_json::from_str::<DrHookPolicyStateEnvelope>(contents) {
+        if envelope.schema_version == 1 {
+            let expected = compute_dr_hook_policy_checksum(&envelope.snapshot);
+            if envelope.checksum_hex.eq_ignore_ascii_case(&expected) {
+                return Some(DrHookPolicyState {
+                    hooks: envelope.snapshot.hooks,
+                });
+            }
+            return None;
+        }
+    }
+
+    // Backward compatibility: support pre-envelope snapshot files.
+    serde_json::from_str::<DrHookPolicyStateSnapshot>(contents)
+        .map(|snapshot| DrHookPolicyState {
+            hooks: snapshot.hooks,
+        })
+        .ok()
+}
+
 fn load_dr_hook_policy_state(path: Option<&str>) -> DrHookPolicyState {
     let Some(path_value) = path else {
         return DrHookPolicyState::default();
     };
-    let read = fs::read_to_string(path_value);
-    match read {
-        Ok(contents) => serde_json::from_str::<DrHookPolicyStateSnapshot>(&contents)
-            .map(|snapshot| DrHookPolicyState {
-                hooks: snapshot.hooks,
-            })
-            .unwrap_or_default(),
-        Err(_) => DrHookPolicyState::default(),
+
+    if let Ok(contents) = fs::read_to_string(path_value) {
+        if let Some(state) = decode_dr_hook_policy_state(&contents) {
+            return state;
+        }
     }
+
+    let backup_path = dr_hook_policy_backup_path(path_value);
+    if let Ok(contents) = fs::read_to_string(backup_path) {
+        if let Some(state) = decode_dr_hook_policy_state(&contents) {
+            return state;
+        }
+    }
+
+    DrHookPolicyState::default()
 }
 
 fn persist_dr_hook_policy_state(state: &AppState) {
@@ -2469,8 +3033,26 @@ fn persist_dr_hook_policy_state(state: &AppState) {
             let _ = fs::create_dir_all(parent);
         }
     }
-    if let Ok(encoded) = serde_json::to_string_pretty(&snapshot) {
-        let _ = fs::write(path_value, encoded);
+    let envelope = DrHookPolicyStateEnvelope {
+        schema_version: 1,
+        written_unix_ms: now_unix_ms(),
+        checksum_hex: compute_dr_hook_policy_checksum(&snapshot),
+        snapshot,
+    };
+
+    if let Ok(encoded) = serde_json::to_string_pretty(&envelope) {
+        let path = std::path::Path::new(path_value);
+        if path.exists() {
+            let backup_path = dr_hook_policy_backup_path(path_value);
+            let _ = fs::copy(path_value, backup_path);
+        }
+
+        let temp_path = format!("{path_value}.tmp");
+        if fs::write(&temp_path, encoded).is_ok() {
+            let _ = fs::remove_file(path_value);
+            let _ = fs::rename(&temp_path, path_value);
+            let _ = fs::remove_file(&temp_path);
+        }
     }
 }
 
@@ -2494,6 +3076,23 @@ fn enqueue_dr_hook_task(
     if let Ok(mut queue) = state.dr_hook_queue.lock() {
         queue.push_back(task.clone());
     }
+    record_transport_mutation(
+        state,
+        &state.node_id,
+        "*",
+        "scheduler_queue",
+        "dr_hook_queue",
+        &task.task_id,
+        MutationOp::Insert,
+        json!({
+            "hook": task.hook,
+            "scope": task.scope,
+            "dry_run": task.dry_run,
+            "requested_by": task.requested_by,
+            "reason": task.reason,
+            "transport": "scheduler_queue"
+        }),
+    );
     task
 }
 
@@ -2682,6 +3281,40 @@ fn execute_dr_hook(
                     } else {
                         let (previous, current) =
                             rotate_leader(&state.leader_node_id, "node-dr-failover", &state.node_id);
+                        record_transport_mutation(
+                            state,
+                            &previous,
+                            &current,
+                            "dr_hook_failover",
+                            "cluster_failover",
+                            &format!("{}->{}:prepare", previous, current),
+                            MutationOp::Insert,
+                            json!({
+                                "event": "leader_handoff_prepare",
+                                "source_node_id": previous,
+                                "target_node_id": current,
+                                "requested_by": "auto_sre",
+                                "hook": "failover_drill",
+                                "transport": "dr_hook"
+                            }),
+                        );
+                        record_transport_mutation(
+                            state,
+                            &previous,
+                            &current,
+                            "dr_hook_failover",
+                            "cluster_failover",
+                            &format!("{}->{}:commit", previous, current),
+                            MutationOp::Update,
+                            json!({
+                                "event": "leader_handoff_commit",
+                                "source_node_id": previous,
+                                "target_node_id": current,
+                                "requested_by": "auto_sre",
+                                "hook": "failover_drill",
+                                "transport": "dr_hook"
+                            }),
+                        );
                         (
                             "executed",
                             format!(
@@ -2733,6 +3366,28 @@ fn execute_dr_hook(
         retry_attempt,
         details,
     };
+    record_transport_mutation(
+        state,
+        &state.node_id,
+        "*",
+        "scheduler_execute",
+        "dr_hook_execution",
+        &record.execution_id,
+        if record.status == "executed" || record.status == "simulated" {
+            MutationOp::Update
+        } else {
+            MutationOp::Insert
+        },
+        json!({
+            "hook": record.hook,
+            "scope": record.scope,
+            "status": record.status,
+            "dry_run": record.dry_run,
+            "policy_decision": record.policy_decision,
+            "retry_attempt": record.retry_attempt,
+            "transport": "scheduler_execute"
+        }),
+    );
     append_dr_hook_record(state, record.clone());
     persist_dr_hook_policy_state(state);
     record
@@ -2797,6 +3452,126 @@ fn rotate_leader(
     }
 }
 
+fn record_transport_mutation(
+    state: &AppState,
+    source_node_id: &str,
+    target_node_id: &str,
+    transport: &str,
+    table: &str,
+    primary_key: &str,
+    op: MutationOp,
+    payload: serde_json::Value,
+) -> Option<u64> {
+    let Ok(mut transport_state) = state.replication_transport.lock() else {
+        return None;
+    };
+    let encoded = serde_json::to_string(&payload).ok()?;
+    Some(
+        transport_state
+            .publish(
+                source_node_id,
+                target_node_id,
+                transport,
+                table,
+                primary_key,
+                &encoded,
+                op,
+            )
+            .mutation
+            .sequence,
+    )
+}
+
+fn build_failover_handoff_report(
+    state: &AppState,
+    source_node_id: &str,
+    target_node_id: &str,
+) -> FailoverHandoffReportResponse {
+    let mut replicas = match state.replica_replay_states.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return FailoverHandoffReportResponse {
+                handoff_state: "replica_state_lock_error",
+                source_node_id: source_node_id.to_string(),
+                target_node_id: target_node_id.to_string(),
+                last_applied_sequence_before: 0,
+                last_applied_sequence_after: 0,
+                replay_batch_size: 0,
+                applied_count: 0,
+                gap_count: 0,
+                gaps: Vec::new(),
+            }
+        }
+    };
+
+    let replica = replicas
+        .entry(target_node_id.to_string())
+        .or_insert_with(|| ReplicaReplayState::new(target_node_id));
+    let last_applied_sequence_before = replica.last_applied_sequence;
+    let batch = match state.replication_transport.lock() {
+        Ok(transport) => transport.export_for_target_since(
+            target_node_id,
+            last_applied_sequence_before,
+            64,
+        ),
+        Err(_) => {
+            return FailoverHandoffReportResponse {
+                handoff_state: "replication_transport_lock_error",
+                source_node_id: source_node_id.to_string(),
+                target_node_id: target_node_id.to_string(),
+                last_applied_sequence_before,
+                last_applied_sequence_after: last_applied_sequence_before,
+                replay_batch_size: 0,
+                applied_count: 0,
+                gap_count: 0,
+                gaps: Vec::new(),
+            }
+        }
+    };
+    let batch = if batch.is_empty() {
+        match state.sync_origin.lock() {
+            Ok(origin) => replica.build_failover_handoff_batch(&origin, 64),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        batch
+    };
+    if batch.is_empty() {
+        return FailoverHandoffReportResponse {
+            handoff_state: "no_transport_updates",
+            source_node_id: source_node_id.to_string(),
+            target_node_id: target_node_id.to_string(),
+            last_applied_sequence_before,
+            last_applied_sequence_after: last_applied_sequence_before,
+            replay_batch_size: 0,
+            applied_count: 0,
+            gap_count: 0,
+            gaps: Vec::new(),
+        };
+    };
+    let replay_batch_size = batch.len();
+    let report = replica.apply_batch(&batch);
+
+    FailoverHandoffReportResponse {
+        handoff_state: if report.gaps.is_empty() { "handoff_applied" } else { "handoff_gap_detected" },
+        source_node_id: source_node_id.to_string(),
+        target_node_id: target_node_id.to_string(),
+        last_applied_sequence_before,
+        last_applied_sequence_after: report.last_applied_sequence,
+        replay_batch_size,
+        applied_count: report.applied_count,
+        gap_count: report.gaps.len(),
+        gaps: report
+            .gaps
+            .into_iter()
+            .map(|gap| FailoverHandoffGapResponse {
+                expected: gap.expected,
+                actual: gap.actual,
+            })
+            .collect(),
+    }
+}
+
 fn require_operator_auth(
     headers: &HeaderMap,
     state: &AppState,
@@ -2810,21 +3585,96 @@ fn require_operator_auth(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
 
-    if provided == required_key {
-        Ok(())
-    } else {
-        let locale = locale_from_headers(headers);
-        let localized = I18nCatalog::message(locale, "missing_or_invalid_admin_key");
-        Err((
-            StatusCode::UNAUTHORIZED,
-            Json(AuthErrorResponse {
-                status: "unauthorized",
-                reason: "missing_or_invalid_admin_key".to_string(),
-                locale: locale.as_str().to_string(),
-                localized_message: localized.message.to_string(),
-            }),
-        ))
+    if provided != required_key {
+        return Err(auth_error(headers, "missing_or_invalid_admin_key"));
     }
+
+    let operator = operator_identity_from_headers(headers, state)
+        .ok_or_else(|| auth_error(headers, "missing_or_invalid_operator_identity"))?;
+    if !state.allowed_operator_roles.contains(&operator.role) {
+        return Err(auth_error(headers, "operator_role_not_allowed"));
+    }
+    if !CONTROL_PLANE_OPERATOR_ROLES.contains(&operator.role) {
+        return Err(auth_error(headers, "operator_role_not_authorized"));
+    }
+
+    Ok(())
+}
+
+fn require_operator_privilege(
+    headers: &HeaderMap,
+    state: &AppState,
+    resource: &str,
+    scope: &str,
+    action: PrivilegeAction,
+) -> Result<OperatorIdentity, (StatusCode, Json<AuthErrorResponse>)> {
+    let operator = operator_identity_from_headers(headers, state)
+        .ok_or_else(|| auth_error(headers, "missing_or_invalid_operator_identity"))?;
+    if state
+        .rbac_privilege_matrix
+        .allows(operator.role.as_str(), resource, scope, action)
+    {
+        Ok(operator)
+    } else {
+        Err(forbidden_error(headers, "insufficient_privilege"))
+    }
+}
+
+fn operator_identity_from_headers(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Option<OperatorIdentity> {
+    let operator_id = headers
+        .get("x-vng-operator-id")
+        .and_then(|value| value.to_str().ok())?
+        .trim();
+    if operator_id.is_empty() {
+        return None;
+    }
+    let role = state.operator_role_bindings.get(operator_id).copied()?;
+    Some(OperatorIdentity {
+        operator_id: operator_id.to_string(),
+        role,
+    })
+}
+
+fn auth_error(
+    headers: &HeaderMap,
+    reason: &str,
+) -> (StatusCode, Json<AuthErrorResponse>) {
+    let locale = locale_from_headers(headers);
+    let message_key = if reason == "missing_or_invalid_admin_key" {
+        "missing_or_invalid_admin_key"
+    } else {
+        "unauthorized"
+    };
+    let localized = I18nCatalog::message(locale, message_key);
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(AuthErrorResponse {
+            status: "unauthorized",
+            reason: reason.to_string(),
+            locale: locale.as_str().to_string(),
+            localized_message: localized.message.to_string(),
+        }),
+    )
+}
+
+fn forbidden_error(
+    headers: &HeaderMap,
+    reason: &str,
+) -> (StatusCode, Json<AuthErrorResponse>) {
+    let locale = locale_from_headers(headers);
+    let localized = I18nCatalog::message(locale, "unauthorized");
+    (
+        StatusCode::FORBIDDEN,
+        Json(AuthErrorResponse {
+            status: "forbidden",
+            reason: reason.to_string(),
+            locale: locale.as_str().to_string(),
+            localized_message: localized.message.to_string(),
+        }),
+    )
 }
 
 fn locale_from_headers(headers: &HeaderMap) -> SupportedLocale {
@@ -3154,11 +4004,24 @@ mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
+    fn operator_headers(admin_key: &str, operator_id: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-vng-admin-key", HeaderValue::from_str(admin_key).expect("admin key"));
+        headers.insert(
+            "x-vng-operator-id",
+            HeaderValue::from_str(operator_id).expect("operator id"),
+        );
+        headers
+    }
+
     fn state_with_key(key: Option<&str>) -> AppState {
         AppState {
             node_id: "node-1".to_string(),
             cluster_mode: "single".to_string(),
             admin_api_key: key.map(|v| v.to_string()),
+            allowed_operator_roles: Arc::new(default_allowed_operator_roles()),
+            operator_role_bindings: Arc::new(default_operator_role_bindings()),
+            rbac_privilege_matrix: Arc::new(default_rbac_privilege_matrix()),
             leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
             action_records: Arc::new(Mutex::new(Vec::new())),
@@ -3168,6 +4031,9 @@ mod tests {
             dr_hook_state_path: None,
             dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
             cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
+            sync_origin: Arc::new(Mutex::new(RowStoreSyncOrigin::new())),
+            replication_transport: Arc::new(Mutex::new(InMemoryReplicationTransport::new())),
+            replica_replay_states: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
@@ -3199,9 +4065,75 @@ mod tests {
     #[test]
     fn operator_auth_accepts_request_with_matching_admin_key() {
         let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
+        assert!(require_operator_auth(&headers, &state).is_ok());
+    }
+
+    #[test]
+    fn operator_auth_rejects_request_without_operator_identity_when_key_matches() {
+        let state = state_with_key(Some("secret"));
         let mut headers = HeaderMap::new();
         headers.insert("x-vng-admin-key", HeaderValue::from_static("secret"));
-        assert!(require_operator_auth(&headers, &state).is_ok());
+        let auth = require_operator_auth(&headers, &state).expect_err("missing operator");
+        assert_eq!(auth.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(auth.1.reason, "missing_or_invalid_operator_identity");
+    }
+
+    #[test]
+    fn operator_auth_rejects_unknown_operator_identity() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "rogue-operator");
+        let auth = require_operator_auth(&headers, &state).expect_err("unknown operator");
+        assert_eq!(auth.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(auth.1.reason, "missing_or_invalid_operator_identity");
+    }
+
+    #[test]
+    fn operator_auth_denies_security_role_from_failover_execution() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "security-bot");
+        let auth = require_operator_auth(&headers, &state);
+        assert!(auth.is_ok());
+        let privilege = require_operator_privilege(
+            &headers,
+            &state,
+            "cluster.failover",
+            "cluster",
+            PrivilegeAction::Execute,
+        )
+        .expect_err("security role should not execute failover");
+        assert_eq!(privilege.0, StatusCode::FORBIDDEN);
+        assert_eq!(privilege.1.reason, "insufficient_privilege");
+    }
+
+    #[test]
+    fn operator_auth_allows_ai_operator_for_autonomous_actions() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "autopilot");
+        let identity = require_operator_privilege(
+            &headers,
+            &state,
+            "autonomous.actions",
+            "autonomous/actions",
+            PrivilegeAction::Execute,
+        )
+        .expect("ai operator should be allowed");
+        assert_eq!(identity.role, OperatorRole::AiOperator);
+    }
+
+    #[test]
+    fn operator_auth_allows_dba_for_storage_catalog_management() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
+        let identity = require_operator_privilege(
+            &headers,
+            &state,
+            "storage.catalog",
+            "store/indexes",
+            PrivilegeAction::Manage,
+        )
+        .expect("dba should manage storage catalog");
+        assert_eq!(identity.role, OperatorRole::Dba);
     }
 
     #[test]
@@ -3218,6 +4150,101 @@ mod tests {
         let leader = Arc::new(Mutex::new("node-1".to_string()));
         let (_, current) = rotate_leader(&leader, "   ", "node-1");
         assert_eq!(current, "node-1");
+    }
+
+    #[test]
+    fn failover_handoff_report_replays_only_unapplied_sequences_for_new_leader() {
+        let state = state_with_key(None);
+        {
+            let mut origin = state.sync_origin.lock().expect("origin lock");
+            origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+            origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+            origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+            origin.append("orders", "4", "{\"amount\":110}", MutationOp::Update);
+        }
+        {
+            let origin = state.sync_origin.lock().expect("origin lock");
+            let mut replicas = state.replica_replay_states.lock().expect("replica lock");
+            let replica = replicas
+                .entry("node-2".to_string())
+                .or_insert_with(|| ReplicaReplayState::new("node-2"));
+            let initial = origin.export_since(0, 2);
+            let report = replica.apply_batch(&initial);
+            assert_eq!(report.applied_count, 2);
+        }
+
+        let handoff = build_failover_handoff_report(&state, "node-1", "node-2");
+        assert_eq!(handoff.handoff_state, "handoff_applied");
+        assert_eq!(handoff.last_applied_sequence_before, 2);
+        assert_eq!(handoff.last_applied_sequence_after, 4);
+        assert_eq!(handoff.replay_batch_size, 2);
+        assert_eq!(handoff.applied_count, 2);
+        assert_eq!(handoff.gap_count, 0);
+    }
+
+    #[test]
+    fn failover_handoff_report_returns_empty_when_no_transport_state_exists() {
+        let state = state_with_key(None);
+        let handoff = build_failover_handoff_report(&state, "node-1", "node-2");
+        assert_eq!(handoff.handoff_state, "no_transport_updates");
+        assert_eq!(handoff.replay_batch_size, 0);
+        assert_eq!(handoff.applied_count, 0);
+    }
+
+    #[test]
+    fn failover_transport_mutations_feed_runtime_handoff_report() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "automation");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(failover_simulate(
+                State(state.clone()),
+                headers,
+                Json(FailoverSimulateRequest {
+                    new_leader_node_id: "node-2".to_string(),
+                    reason: Some("unit_test_failover".to_string()),
+                    requested_by: Some("ignored-body-operator".to_string()),
+                }),
+            ))
+            .expect("failover response");
+
+        assert_eq!(response.0.handoff_report.handoff_state, "handoff_applied");
+        assert_eq!(response.0.handoff_report.replay_batch_size, 2);
+        assert_eq!(response.0.handoff_report.applied_count, 2);
+    }
+
+    #[test]
+    fn failover_handoff_report_detects_gap_for_target_leader() {
+        let state = state_with_key(None);
+        {
+            let mut origin = state.sync_origin.lock().expect("origin lock");
+            origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+            origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+            origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+            origin.append("orders", "4", "{\"amount\":110}", MutationOp::Update);
+            origin.remove_sequence_for_fault_injection(3);
+        }
+        {
+            let origin = state.sync_origin.lock().expect("origin lock");
+            let mut replicas = state.replica_replay_states.lock().expect("replica lock");
+            let replica = replicas
+                .entry("node-2".to_string())
+                .or_insert_with(|| ReplicaReplayState::new("node-2"));
+            let initial = origin.export_since(0, 2);
+            let report = replica.apply_batch(&initial);
+            assert_eq!(report.applied_count, 2);
+        }
+
+        let handoff = build_failover_handoff_report(&state, "node-1", "node-2");
+        assert_eq!(handoff.handoff_state, "handoff_gap_detected");
+        assert_eq!(handoff.last_applied_sequence_before, 2);
+        assert_eq!(handoff.last_applied_sequence_after, 2);
+        assert_eq!(handoff.replay_batch_size, 1);
+        assert_eq!(handoff.applied_count, 0);
+        assert_eq!(handoff.gap_count, 1);
+        assert_eq!(handoff.gaps[0].expected, 3);
+        assert_eq!(handoff.gaps[0].actual, 4);
     }
 
     #[test]
@@ -3862,6 +4889,54 @@ mod tests {
         let _ = execute_dr_hook(&state, "failover_drill", Some("cluster"), true);
         let loaded = load_dr_hook_policy_state(state.dr_hook_state_path.as_deref());
         assert!(loaded.hooks.contains_key("failover_drill"));
+        let persisted = fs::read_to_string(&temp).expect("state file readable");
+        assert!(persisted.contains("\"schema_version\": 1"));
+        assert!(persisted.contains("\"checksum_hex\""));
+        let _ = fs::remove_file(temp);
+    }
+
+    #[test]
+    fn ws12_policy_state_falls_back_to_backup_when_primary_corrupted() {
+        let temp = std::env::temp_dir().join(format!("vng-ws12-corrupt-{}.json", now_unix_ms()));
+        let temp_str = temp.to_string_lossy().to_string();
+        let backup = format!("{temp_str}.bak");
+
+        let state = AppState {
+            dr_hook_state_path: Some(temp_str.clone()),
+            ..state_with_key(None)
+        };
+
+        let _ = execute_dr_hook(&state, "failover_drill", Some("cluster"), true);
+        // Trigger a second persist so backup file is created.
+        let _ = execute_dr_hook(&state, "replay_checkpoint_verify", Some("cluster"), true);
+
+        fs::write(&temp, "{not valid json").expect("corrupt primary");
+        let loaded = load_dr_hook_policy_state(Some(&temp_str));
+        assert!(loaded.hooks.contains_key("failover_drill"));
+
+        let _ = fs::remove_file(temp);
+        let _ = fs::remove_file(backup);
+    }
+
+    #[test]
+    fn ws12_policy_state_loads_legacy_snapshot_format() {
+        let temp = std::env::temp_dir().join(format!("vng-ws12-legacy-{}.json", now_unix_ms()));
+        let mut hooks = HashMap::new();
+        hooks.insert(
+            "failover_drill".to_string(),
+            DrHookRuntimeState {
+                last_attempt_unix_ms: 123,
+                consecutive_failures: 1,
+                last_status: "success".to_string(),
+            },
+        );
+        let legacy = DrHookPolicyStateSnapshot { hooks };
+        let encoded = serde_json::to_string_pretty(&legacy).expect("encode legacy");
+        fs::write(&temp, encoded).expect("write legacy");
+
+        let loaded = load_dr_hook_policy_state(Some(temp.to_string_lossy().as_ref()));
+        assert!(loaded.hooks.contains_key("failover_drill"));
+
         let _ = fs::remove_file(temp);
     }
 

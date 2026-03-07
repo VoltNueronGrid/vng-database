@@ -1,0 +1,205 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Validate voltnuerongridd auth+failover",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"operator_auth",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Validate operator auth tests",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"operator_auth",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Validate operator auth tests v2",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"operator_auth",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Validate failover tests",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"failover_",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS5 operator auth smoke",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws5-operator-auth-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS6 failover contract smoke",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws6-failover-contract-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS6 handoff matrix smoke",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws6-handoff-matrix-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Validate auth RBAC tests",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongrid-auth",
+				"ws5_",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Validate store transport tests",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongrid-store",
+				"multi_node_",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Validate service operator auth",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"operator_auth",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Validate service failover",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"failover_",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS5 operator auth smoke updated",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws5-operator-auth-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS6 failover contract smoke updated",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws6-failover-contract-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS6 handoff matrix smoke updated",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws6-handoff-matrix-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		}
+	]
+}

@@ -1,6 +1,7 @@
 param(
   [string]$BaseUrl = "http://127.0.0.1:8080",
   [string]$AdminApiKey = "",
+  [string]$OperatorId = "platform-admin",
   [string]$OutputPath = "tests/kpi/results/autonomous-guardrail-smoke.json"
 )
 
@@ -17,6 +18,7 @@ function Invoke-JsonPost {
   $headers = @{}
   if (-not [string]::IsNullOrWhiteSpace($AdminApiKey)) {
     $headers["x-vng-admin-key"] = $AdminApiKey
+    $headers["x-vng-operator-id"] = $OperatorId
   }
   return Invoke-RestMethod -Method Post -Uri $Uri -Body $json -ContentType "application/json" -Headers $headers -TimeoutSec 15
 }
@@ -32,6 +34,7 @@ try {
   $getHeaders = @{}
   if (-not [string]::IsNullOrWhiteSpace($AdminApiKey)) {
     $getHeaders["x-vng-admin-key"] = $AdminApiKey
+    $getHeaders["x-vng-operator-id"] = $OperatorId
   }
   $guardrails = Invoke-RestMethod -Method Get -Uri "$BaseUrl/api/v1/autonomous/guardrails" -Headers $getHeaders -TimeoutSec 15
   $result.checks += @{

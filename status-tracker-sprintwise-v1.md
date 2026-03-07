@@ -58,7 +58,7 @@
 | REQ-10 | Trillion-row scale + high-speed retrieval | Sprint 2, Sprint 5 | Epic 2, Epic 3, Epic 6 | ⬜ Not Started |
 | REQ-11 | Indexes + constraints | Sprint 1 | Epic 2, Epic 15 | 🔵 In Progress |
 | REQ-12 | Seeded functions + plan-plat parity | Sprint 1, Sprint 2 | Epic 1, Epic 1A | 🔵 In Progress |
-| REQ-13 | Multi-user roles and privileges | Sprint 4 | Epic 5 | ⬜ Not Started |
+| REQ-13 | Multi-user roles and privileges | Sprint 4 | Epic 5 | 🔵 In Progress |
 | REQ-14 | UI + engine separation | Sprint 7 | Epic 9 | 🔵 In Progress |
 | REQ-15 | Driver support (multi-language) | Sprint 7 | Epic 10 | 🔵 In Progress |
 | REQ-16 | SSL + encryption/decryption | Sprint 4 | Epic 5 | 🔵 In Progress |
@@ -250,10 +250,10 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | 🔵 In Progress | WS4 | Source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + gate orchestrator `run-ws4a-gate.ps1` -> `tests/kpi/results/ws4a/ws4a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | 🟡 Ready for Validation | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json`; release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | 🟡 Ready for Validation | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous handlers + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json`; release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
-- REQ-13 (Multi-user roles and privileges) — ⬜ Not Started: Full RBAC matrix tests pending
+- REQ-13 (Multi-user roles and privileges) — 🔵 In Progress: Shared RBAC privilege matrix + resource-scoped operator grants enforced in runtime; broader user/tenant hierarchy still pending
 - REQ-16 (SSL + encryption/decryption) — Security contract enforces TLS/mTLS + encryption-at-rest + KMS constraints
 - REQ-18 (Stream in/out + events for debug/audit) — WS4A streaming + replay cursor scaffolds with gate summary
 - REQ-26 (Plugin model for streaming sources/sinks) — WS4A + WS7 linkage in progress
@@ -264,6 +264,7 @@
 - [ ] WS4A: Full streaming runtime with production replay semantics
 - [x] WS5: TLS/mTLS + encryption-at-rest/KMS security contract checks
 - [x] WS5: Operator admin-key auth gate for autonomous endpoints
+- [x] WS5: Operator-scoped RBAC privilege matrix baseline (REQ-13)
 - [ ] WS5: Full RBAC role matrix validation (REQ-13)
 
 ### Gate Evidence — WS5 Security
@@ -284,12 +285,12 @@
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | 🟡 Ready for Validation | WS2, WS3 | Failover leader-state scaffold + authenticated failover simulation + deep hardening packs (multi-node handoff matrix, replication-lag failure/reconcile, RTO/RPO threshold score, chaos node-loss/rejoin, flap-resistance, reconcile latency envelopes); post-gate exports for chaos fault-injection matrix, gate trend comparator, failover stability badge, release summary; closure gate `run-ws6-closure-gate.ps1` -> `tests/kpi/results/ws6/ws6-closure-gate-summary.json`; R2 release gate `run-release-r2-failover-gate.ps1` -> `tests/kpi/results/gates/release-r2-failover-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | 🟡 Ready for Validation | WS2, WS3 | Failover leader-state scaffold + authenticated failover simulation now emits runtime handoff-report evidence (replay batch size, applied count, gap detection) from explicit multi-node replication transport events consumed by failover/DR/SRE runtime paths instead of seeded scaffold data + deep hardening packs (multi-node handoff matrix, replication-lag failure/reconcile, RTO/RPO threshold score, chaos node-loss/rejoin, flap-resistance, reconcile latency envelopes); post-gate exports for chaos fault-injection matrix, gate trend comparator, failover stability badge, release summary; closure gate `run-ws6-closure-gate.ps1` -> `tests/kpi/results/ws6/ws6-closure-gate-summary.json`; R2 release gate `run-release-r2-failover-gate.ps1` -> `tests/kpi/results/gates/release-r2-failover-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-04 (HA/FT/elasticity) — WS6 failover + anti-SPOF + chaos hardening packs
 - REQ-05 (Separate compute/data) — Distributed storage separation in WS6 cluster topology
-- REQ-17 (Distributed failover + zero data loss) — 🟡 Ready for Validation: WS6 closure + R2 failover release gate evidence
+- REQ-17 (Distributed failover + zero data loss) — 🟡 Ready for Validation: WS6 closure + R2 failover release gate evidence + runtime handoff-report failover contract smoke now backed by explicit multi-node replication transport events
 - REQ-10 (Trillion-row scale retrieval) — ⬜ Not Started: Scale benchmark report pending
 - REQ-19 (Blazing performance at scale) — ⬜ Not Started: KPI benchmark gates pending
 - REQ-21 (Any-number-user concurrency) — ⬜ Not Started: Concurrency stress tests pending
@@ -476,8 +477,8 @@
 
 | ID | Hardening Item | Owner | Priority | Status | Completion | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|---|
-| H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 65% | Added operator auth gate (`VNG_ADMIN_API_KEY` + `x-vng-admin-key`) for autonomous control endpoints, plus runtime tests and WS5 smoke harness | Policy persistence and full RBAC integration pending | Integrate policy persistence + role-based operator identity beyond shared admin key |
-| H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | 🔵 In Progress | 65% | Added restart/replay integrity tests + matrix harness artifact `tests/kpi/results/h02/h02-restart-replay-matrix.json`; matrix now includes persisted WAL recovery signal | Distributed sync transport and full replay semantics not yet implemented | Extend matrix to multi-node transport replay and failover handoff |
+| H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 92% | Added operator auth gate (`VNG_ADMIN_API_KEY` + `x-vng-admin-key`) for autonomous control endpoints, then layered registered operator identity + role binding enforcement via `x-vng-operator-id` plus a shared resource-scoped RBAC privilege matrix; retained versioned/checksummed DR policy-state persistence envelope with corruption fallback to `.bak` and legacy snapshot compatibility tests (`ws12_`) | Full RBAC integration pending | Extend operator-scoped RBAC into broader user/tenant privilege hierarchies |
+| H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | 🔵 In Progress | 95% | Added restart/replay integrity tests + matrix harness artifact `tests/kpi/results/h02/h02-restart-replay-matrix.json`; matrix now includes persisted WAL recovery signal plus multi-node replay/failover handoff matrix artifact `tests/kpi/results/h02/h02-multi-node-handoff-matrix.json`, and WS6 runtime now consumes explicit multi-node replication transport events for handoff replay | Full distributed transport runtime and leader-election integration not yet implemented | Replace in-memory transport with real network transport while preserving replay contract |
 | H-03 | Control-plane resilience hardening | Distributed Systems | P0 | 🔵 In Progress | 15% | Control-plane clustering requirement and SPOF closure criteria documented | Cluster runtime implementation pending | Control-plane chaos test plan v1 |
 | H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | 🔵 In Progress | 20% | Outbox and replay durability controls defined in architecture | Event bus/outbox services pending | Exactly-once replay test harness draft |
 
@@ -486,8 +487,13 @@
 - [x] WS15: Gate orchestrator + CI wiring
 - [x] H-01: Operator auth gate + runtime tests + WS5 smoke harness (65%)
 - [x] H-02: Restart/replay integrity tests + WAL recovery signal (65%)
-- [ ] H-01: Policy persistence + full RBAC integration
-- [ ] H-02: Multi-node transport replay + failover handoff
+- [x] H-01: Policy persistence hardening (versioned/checksummed envelope + backup fallback + compatibility tests)
+- [x] H-01: Resource-scoped operator RBAC grants
+- [x] H-01: Role-based operator identity beyond shared admin key
+- [ ] H-01: Full RBAC integration
+- [x] H-02: Multi-node transport replay + failover handoff matrix
+- [x] H-02: WS6 live transport-fed handoff runtime wiring
+- [x] H-02: Explicit multi-node replication transport abstraction
 - [ ] H-03: Control-plane chaos test plan v1 (15%)
 - [ ] H-04: Exactly-once replay test harness draft (20%)
 

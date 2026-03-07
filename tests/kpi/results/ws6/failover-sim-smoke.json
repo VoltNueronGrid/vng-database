@@ -2,8 +2,8 @@
   "smoke": "ws6-failover-simulation",
   "status": "passed",
   "command": "cargo test -p voltnuerongridd failover_rotate_leader",
-  "started_at_utc": "2026-03-06T00:35:22.1099572Z",
-  "finished_at_utc": "2026-03-06T00:35:23.7941695Z",
-  "duration_ms": 1684,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-03-07T02:18:42.5352635Z",
+  "finished_at_utc": "2026-03-07T02:18:44.0022511Z",
+  "duration_ms": 1467,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-454173c58e939023.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.00s\n"
 }

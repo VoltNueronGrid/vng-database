@@ -726,6 +726,7 @@ dependencies = [
  "tokio",
  "voltnuerongrid-ai",
  "voltnuerongrid-audit",
+ "voltnuerongrid-auth",
  "voltnuerongrid-core",
  "voltnuerongrid-exec",
  "voltnuerongrid-ingest",

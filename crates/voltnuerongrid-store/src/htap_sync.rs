@@ -46,6 +46,155 @@ pub struct OutOfOrderSequence {
     pub current: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicaReplayState {
+    pub node_id: String,
+    pub last_applied_sequence: u64,
+    pub applied: Vec<RowMutation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicaReplayReport {
+    pub applied_count: usize,
+    pub last_applied_sequence: u64,
+    pub gaps: Vec<SequenceGap>,
+    pub duplicates: Vec<DuplicateSequence>,
+    pub out_of_order: Vec<OutOfOrderSequence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicationTransportEvent {
+    pub transport_sequence: u64,
+    pub source_node_id: String,
+    pub target_node_id: String,
+    pub transport: String,
+    pub mutation: RowMutation,
+}
+
+#[derive(Debug, Default)]
+pub struct InMemoryReplicationTransport {
+    next_transport_sequence: u64,
+    next_mutation_sequence: u64,
+    events: Vec<ReplicationTransportEvent>,
+}
+
+impl InMemoryReplicationTransport {
+    pub fn new() -> Self {
+        Self {
+            next_transport_sequence: 1,
+            next_mutation_sequence: 1,
+            events: Vec::new(),
+        }
+    }
+
+    pub fn publish(
+        &mut self,
+        source_node_id: &str,
+        target_node_id: &str,
+        transport: &str,
+        table: &str,
+        primary_key: &str,
+        payload_json: &str,
+        op: MutationOp,
+    ) -> ReplicationTransportEvent {
+        let event = ReplicationTransportEvent {
+            transport_sequence: self.next_transport_sequence,
+            source_node_id: source_node_id.to_string(),
+            target_node_id: target_node_id.to_string(),
+            transport: transport.to_string(),
+            mutation: RowMutation {
+                sequence: self.next_mutation_sequence,
+                table: table.to_string(),
+                primary_key: primary_key.to_string(),
+                payload_json: payload_json.to_string(),
+                op,
+            },
+        };
+        self.next_transport_sequence += 1;
+        self.next_mutation_sequence += 1;
+        self.events.push(event.clone());
+        event
+    }
+
+    pub fn export_for_target_since(
+        &self,
+        target_node_id: &str,
+        last_mutation_sequence: u64,
+        max_items: usize,
+    ) -> Vec<RowMutation> {
+        self.events
+            .iter()
+            .filter(|event| {
+                (event.target_node_id == target_node_id || event.target_node_id == "*")
+                    && event.mutation.sequence > last_mutation_sequence
+            })
+            .take(max_items)
+            .map(|event| event.mutation.clone())
+            .collect()
+    }
+
+    pub fn pending_for_target(&self, target_node_id: &str) -> usize {
+        self.events
+            .iter()
+            .filter(|event| event.target_node_id == target_node_id || event.target_node_id == "*")
+            .count()
+    }
+}
+
+impl ReplicaReplayState {
+    pub fn new(node_id: &str) -> Self {
+        Self {
+            node_id: node_id.to_string(),
+            last_applied_sequence: 0,
+            applied: Vec::new(),
+        }
+    }
+
+    pub fn apply_batch(&mut self, batch: &[RowMutation]) -> ReplicaReplayReport {
+        let mut gaps = Vec::new();
+        if let Some(first) = batch.first() {
+            let expected = self.last_applied_sequence + 1;
+            if first.sequence != expected {
+                gaps.push(SequenceGap {
+                    expected,
+                    actual: first.sequence,
+                });
+            }
+        }
+
+        gaps.extend(RowStoreSyncOrigin::detect_sequence_gaps(batch));
+        let duplicates = RowStoreSyncOrigin::detect_duplicate_sequences(batch);
+        let out_of_order = RowStoreSyncOrigin::detect_out_of_order(batch);
+
+        let applied_count = if gaps.is_empty() && duplicates.is_empty() && out_of_order.is_empty() {
+            let count = batch.len();
+            self.applied.extend(batch.iter().cloned());
+            if let Some(last) = batch.last() {
+                self.last_applied_sequence = last.sequence;
+            }
+            count
+        } else {
+            0
+        };
+
+        ReplicaReplayReport {
+            applied_count,
+            last_applied_sequence: self.last_applied_sequence,
+            gaps,
+            duplicates,
+            out_of_order,
+        }
+    }
+
+    pub fn build_failover_handoff_batch(
+        &self,
+        origin: &RowStoreSyncOrigin,
+        max_items: usize,
+    ) -> Vec<RowMutation> {
+        origin.export_since(self.last_applied_sequence, max_items)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct RowStoreSyncOrigin {
     next_sequence: u64,
@@ -83,6 +232,15 @@ impl RowStoreSyncOrigin {
 
     pub fn export_batch(&self, max_items: usize) -> Vec<RowMutation> {
         self.pending.iter().take(max_items).cloned().collect()
+    }
+
+    pub fn export_since(&self, last_sequence: u64, max_items: usize) -> Vec<RowMutation> {
+        self.pending
+            .iter()
+            .filter(|mutation| mutation.sequence > last_sequence)
+            .take(max_items)
+            .cloned()
+            .collect()
     }
 
     pub fn ack_through(&mut self, sequence: u64) {
@@ -304,5 +462,140 @@ mod tests {
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].expected, 2);
         assert_eq!(gaps[0].actual, 3);
+    }
+
+    #[test]
+    fn multi_node_replica_replay_applies_contiguous_transport_batch() {
+        let mut origin = RowStoreSyncOrigin::new();
+        origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+
+        let mut replica = ReplicaReplayState::new("node-b");
+        let batch = origin.export_since(0, 10);
+        let report = replica.apply_batch(&batch);
+
+        assert_eq!(report.applied_count, 3);
+        assert_eq!(report.last_applied_sequence, 3);
+        assert!(report.gaps.is_empty());
+        assert!(report.duplicates.is_empty());
+        assert!(report.out_of_order.is_empty());
+        assert_eq!(replica.applied.len(), 3);
+    }
+
+    #[test]
+    fn multi_node_failover_handoff_replays_only_unapplied_mutations() {
+        let mut origin = RowStoreSyncOrigin::new();
+        origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+        origin.append("orders", "4", "{\"amount\":110}", MutationOp::Update);
+
+        let mut replica = ReplicaReplayState::new("node-b");
+        let initial_report = replica.apply_batch(&origin.export_since(0, 2));
+        assert_eq!(initial_report.applied_count, 2);
+        assert_eq!(replica.last_applied_sequence, 2);
+
+        let handoff_batch = replica.build_failover_handoff_batch(&origin, 10);
+        assert_eq!(handoff_batch.len(), 2);
+        assert_eq!(handoff_batch[0].sequence, 3);
+        assert_eq!(handoff_batch[1].sequence, 4);
+
+        let handoff_report = replica.apply_batch(&handoff_batch);
+        assert_eq!(handoff_report.applied_count, 2);
+        assert_eq!(handoff_report.last_applied_sequence, 4);
+        assert!(handoff_report.gaps.is_empty());
+    }
+
+    #[test]
+    fn multi_node_failover_handoff_reports_gap_when_transport_drops_sequence() {
+        let mut origin = RowStoreSyncOrigin::new();
+        origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
+        origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
+        origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
+        origin.append("orders", "4", "{\"amount\":110}", MutationOp::Update);
+
+        let mut replica = ReplicaReplayState::new("node-b");
+        let initial_report = replica.apply_batch(&origin.export_since(0, 2));
+        assert_eq!(initial_report.applied_count, 2);
+
+        let mut handoff_batch = replica.build_failover_handoff_batch(&origin, 10);
+        handoff_batch.retain(|mutation| mutation.sequence != 3);
+        let report = replica.apply_batch(&handoff_batch);
+
+        assert_eq!(report.applied_count, 0);
+        assert_eq!(report.gaps.len(), 1);
+        assert_eq!(report.gaps[0].expected, 3);
+        assert_eq!(report.gaps[0].actual, 4);
+        assert_eq!(replica.last_applied_sequence, 2);
+    }
+
+    #[test]
+    fn multi_node_replication_transport_exports_only_targeted_events() {
+        let mut transport = InMemoryReplicationTransport::new();
+        transport.publish(
+            "node-a",
+            "node-b",
+            "raft",
+            "orders",
+            "1",
+            "{\"amount\":100}",
+            MutationOp::Insert,
+        );
+        transport.publish(
+            "node-a",
+            "node-c",
+            "raft",
+            "orders",
+            "2",
+            "{\"amount\":110}",
+            MutationOp::Insert,
+        );
+        transport.publish(
+            "node-a",
+            "*",
+            "raft",
+            "orders",
+            "3",
+            "{\"amount\":120}",
+            MutationOp::Update,
+        );
+
+        let node_b = transport.export_for_target_since("node-b", 0, 10);
+        assert_eq!(node_b.len(), 2);
+        assert_eq!(node_b[0].sequence, 1);
+        assert_eq!(node_b[1].sequence, 3);
+
+        let node_c = transport.export_for_target_since("node-c", 0, 10);
+        assert_eq!(node_c.len(), 2);
+        assert_eq!(node_c[0].sequence, 2);
+        assert_eq!(node_c[1].sequence, 3);
+    }
+
+    #[test]
+    fn multi_node_replication_transport_respects_last_applied_sequence() {
+        let mut transport = InMemoryReplicationTransport::new();
+        transport.publish(
+            "node-a",
+            "node-b",
+            "raft",
+            "orders",
+            "1",
+            "{\"amount\":100}",
+            MutationOp::Insert,
+        );
+        transport.publish(
+            "node-a",
+            "node-b",
+            "raft",
+            "orders",
+            "2",
+            "{\"amount\":110}",
+            MutationOp::Update,
+        );
+
+        let replay = transport.export_for_target_since("node-b", 1, 10);
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].sequence, 2);
     }
 }
