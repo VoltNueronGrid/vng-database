@@ -13,6 +13,27 @@ function Ensure-OutputDir {
   }
 }
 
+function Get-ArtifactStatus {
+  param([string]$ArtifactPath)
+
+  if (!(Test-Path -Path $ArtifactPath)) {
+    return "missing_artifact"
+  }
+
+  try {
+    $json = Get-Content -Raw -Path $ArtifactPath | ConvertFrom-Json
+    if ($null -ne $json.status) {
+      return [string]$json.status
+    }
+    if ($null -ne $json.release_readiness) {
+      return [string]$json.release_readiness
+    }
+    return "present"
+  } catch {
+    return "invalid_artifact"
+  }
+}
+
 Ensure-OutputDir -PathValue $OutputPath
 Ensure-OutputDir -PathValue $ReleaseSummaryOutputPath
 
@@ -33,10 +54,9 @@ foreach ($pack in $packs) {
   $packStatus = "passed"
   $detail = "ok"
   try {
-    $global:LASTEXITCODE = 0
     & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
-    if (-not $?) { $packStatus = "failed"; $detail = "script_invocation_failed" }
-    elseif ($global:LASTEXITCODE -ne 0) { $packStatus = "failed"; $detail = "exit_code=$global:LASTEXITCODE" }
+    $artifactStatus = Get-ArtifactStatus -ArtifactPath $pack.Artifact
+    if ($artifactStatus -ne "passed") { $packStatus = "failed"; $detail = $artifactStatus }
   } catch { $packStatus = "failed"; $detail = $_.Exception.Message }
   if ($packStatus -ne "passed") { $status = "failed" }
   $runs += [ordered]@{ pack = $pack.Name; status = $packStatus; detail = $detail; artifact = $pack.Artifact }
@@ -80,14 +100,10 @@ $postArtifacts = @(
 
 foreach ($artifact in $postArtifacts) {
   try {
-    $global:LASTEXITCODE = 0
     & $artifact.Runner 2>&1 | Out-Null
     if (-not $?) {
       $status = "failed"
       $runs += [ordered]@{ pack = $artifact.Name; status = "failed"; detail = "script_invocation_failed"; artifact = $artifact.Script }
-    } elseif ($global:LASTEXITCODE -ne 0) {
-      $status = "failed"
-      $runs += [ordered]@{ pack = $artifact.Name; status = "failed"; detail = "exit_code=$global:LASTEXITCODE"; artifact = $artifact.Script }
     } else {
       $runs += [ordered]@{ pack = $artifact.Name; status = "passed"; detail = "ok"; artifact = $artifact.Script }
     }

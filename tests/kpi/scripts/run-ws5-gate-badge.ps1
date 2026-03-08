@@ -21,10 +21,22 @@ if (!(Test-Path -Path $SummaryPath)) {
 
 $summary = Get-Content -Raw -Path $SummaryPath | ConvertFrom-Json
 $status = [string]$summary.status
+$packs = @($summary.packs)
+$runtimePack = @($packs | Where-Object { $_.pack -eq "ws5-tenant-audit-runtime" }) | Select-Object -First 1
+$passedCount = @($packs | Where-Object { $_.status -eq "passed" }).Count
+$totalCount = $packs.Count
 
 $badge = [ordered]@{
-  label = "ws5-security-gate"
-  message = $status
+  label = if ($null -ne $runtimePack) { "ws5-security-runtime" } else { "ws5-security-gate" }
+  message = if ($totalCount -gt 0) {
+    if ($null -ne $runtimePack) {
+      "$passedCount/$totalCount $status + tenant-audit"
+    } else {
+      "$passedCount/$totalCount $status"
+    }
+  } else {
+    $status
+  }
   color = if ($status -eq "passed") { "green" } else { "red" }
   source_summary = $SummaryPath
   generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")

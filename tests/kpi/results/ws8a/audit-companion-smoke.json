@@ -1,11 +1,11 @@
 {
-  "smoke": "ws8a-audit-companion-flow",
-  "status": "passed",
-  "command": "cargo run -p voltnuerongrid-audit-companion -- --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json",
-  "report_path": "tests/kpi/results/ws8a/audit-companion-report.json",
-  "started_at_utc": "2026-03-06T05:45:35.4610741Z",
-  "finished_at_utc": "2026-03-06T05:45:38.7371282Z",
-  "duration_ms": 3276,
-  "validation_ok": true,
-  "output_excerpt": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.59s\n     Running `target\\debug\\voltnuerongrid-audit-companion.exe --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json`\naudit companion report written: tests/kpi/results/ws8a/audit-companion-report.json"
+    "smoke":  "ws8a-audit-companion-flow",
+    "status":  "passed",
+    "command":  "cargo run -p voltnuerongrid-audit-companion -- --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json",
+    "report_path":  "tests/kpi/results/ws8a/audit-companion-report.json",
+    "started_at_utc":  "2026-03-08T08:28:12.5622228Z",
+    "finished_at_utc":  "2026-03-08T08:28:14.6568103Z",
+    "duration_ms":  2095,
+    "validation_ok":  true,
+    "output_excerpt":  "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running `target\\debug\\voltnuerongrid-audit-companion.exe --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json`\naudit companion report written: tests/kpi/results/ws8a/audit-companion-report.json\n"
 }

@@ -1,5 +1,7 @@
 param(
-  [string]$OutputPath = "tests/kpi/results/ws5/ws5-gate-summary.json"
+  [string]$OutputPath = "tests/kpi/results/ws5/ws5-gate-summary.json",
+  [string]$BaseUrl = "http://127.0.0.1:8080",
+  [switch]$IncludeRuntimeSmokes
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,12 +28,24 @@ $packs = @(
   }
 )
 
+if ($IncludeRuntimeSmokes) {
+  $packs += @{
+    Name = "ws5-tenant-audit-runtime"
+    Script = "tests/kpi/scripts/run-ws5-tenant-audit-runtime-smoke.ps1"
+    Artifact = "tests/kpi/results/ws5/tenant-audit-runtime-smoke.json"
+  }
+}
+
 foreach ($pack in $packs) {
   $packStatus = "passed"
   $detail = "ok"
   try {
     $global:LASTEXITCODE = 0
-    & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
+    if ($pack.Name -eq "ws5-tenant-audit-runtime") {
+      & $pack.Script -BaseUrl $BaseUrl -OutputPath $pack.Artifact 2>&1 | Out-Null
+    } else {
+      & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
+    }
     if (-not $?) {
       $packStatus = "failed"
       $detail = "script_invocation_failed"
@@ -70,3 +84,4 @@ Write-Host "WS5 gate summary: $OutputPath ($status)"
 if ($status -ne "passed") {
   exit 1
 }
+

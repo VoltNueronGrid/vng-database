@@ -1,6 +1,7 @@
 param(
   [string]$OutputPath = "tests/kpi/results/ws1/ws1-gate-summary.json",
-  [string]$ReleaseSummaryOutputPath = "tests/kpi/results/gates/ws1-release-readiness.json"
+  [string]$ReleaseSummaryOutputPath = "tests/kpi/results/gates/ws1-release-readiness.json",
+  [string]$BaseUrl = "http://127.0.0.1:8080"
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,24 +35,91 @@ function Add-Run {
   }
 }
 
-try {
-  $global:LASTEXITCODE = 0
-  & cargo test -p voltnuerongrid-sql 2>&1 | Out-Null
-  Add-Run -Name "ws1-sql-core-tests" -Ok ($? -and $global:LASTEXITCODE -eq 0) -Detail "cargo test -p voltnuerongrid-sql"
+function Get-OutputText {
+  param([object[]]$Lines)
+  return ((@($Lines) | ForEach-Object { "$_" }) -join "`n")
+}
+
+function Invoke-CargoPack {
+  param(
+    [string[]]$Arguments,
+    [ValidateSet("cargo-test", "cargo-check")]
+    [string]$Mode,
+    [string]$DefaultDetail
+  )
+
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+      $commandText = "cargo " + (($Arguments | ForEach-Object {
+        if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+      }) -join " ")
+      $redirectedCommand = "$commandText > `"$tempFile`" 2>&1"
+      $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $redirectedCommand -Wait -PassThru -NoNewWindow
+      $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+    } finally {
+      if (Test-Path -Path $tempFile) {
+        Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+      }
+    }
+  $ok = $false
+
+  if ($Mode -eq "cargo-test") {
+    $ok = ($text -match "test result: ok\." -and $text -notmatch "test result: FAILED" -and $text -notmatch "(?m)^error:")
+  } else {
+    $ok = ($text -match "Finished" -and $text -notmatch "(?m)^error:")
+  }
+
+  $detail = if ($ok) { $DefaultDetail } else { (($text -split "`n") | Select-Object -First 5) -join "`n" }
+  return [pscustomobject]@{
+    Ok = $ok
+    Detail = $detail
+  }
+}
+
+function Invoke-ScriptPack {
+  param(
+    [scriptblock]$Runner,
+    [string]$DefaultDetail
+  )
 
   $global:LASTEXITCODE = 0
-  & "tests/kpi/scripts/run-ws1-udf-contract-smoke.ps1" -OutputPath "tests/kpi/results/ws1/ws1-udf-contract-smoke.json" 2>&1 | Out-Null
-  Add-Run -Name "ws1-udf-contract-smoke" -Ok ($? -and $global:LASTEXITCODE -eq 0) -Detail "run-ws1-udf-contract-smoke.ps1"
+  try {
+    & $Runner
+    $ok = ($? -and $global:LASTEXITCODE -eq 0)
+    return [pscustomobject]@{
+      Ok = $ok
+      Detail = if ($ok) { $DefaultDetail } else { $DefaultDetail }
+    }
+  } catch {
+    return [pscustomobject]@{
+      Ok = $false
+      Detail = $_.Exception.Message
+    }
+  }
+}
 
-  $global:LASTEXITCODE = 0
-  & cargo test -p voltnuerongridd ws1_udf_ -- --nocapture 2>&1 | Out-Null
-  Add-Run -Name "ws1-udf-runtime-scaffold-tests" -Ok ($? -and $global:LASTEXITCODE -eq 0) -Detail "cargo test -p voltnuerongridd ws1_udf_ -- --nocapture"
+$packs = @(
+  @{ Name = "ws1-sql-core-tests"; Type = "cargo-test"; Detail = "cargo test -p voltnuerongrid-sql"; Arguments = @("test", "-p", "voltnuerongrid-sql") },
+  @{ Name = "ws1-udf-contract-smoke"; Type = "script"; Detail = "run-ws1-udf-contract-smoke.ps1"; Runner = { & "tests/kpi/scripts/run-ws1-udf-contract-smoke.ps1" -OutputPath "tests/kpi/results/ws1/ws1-udf-contract-smoke.json" } },
+  @{ Name = "ws1-udf-runtime-scaffold-tests"; Type = "cargo-test"; Detail = "cargo test -p voltnuerongridd ws1_udf_ -- --nocapture"; Arguments = @("test", "-p", "voltnuerongridd", "ws1_udf_", "--", "--nocapture") },
+  @{ Name = "ws1-runtime-sql-check"; Type = "cargo-check"; Detail = "cargo check -p voltnuerongridd"; Arguments = @("check", "-p", "voltnuerongridd") },
+  @{ Name = "ws1-sql-analyze-runtime-smoke"; Type = "script"; Detail = "run-sql-analyze-smoke.ps1"; Runner = { & "tests/kpi/scripts/run-sql-analyze-smoke.ps1" -BaseUrl $BaseUrl -OutputPath "tests/kpi/results/20260305-ws1/sql-analyze-smoke.json" } },
+  @{ Name = "ws1-sql-route-runtime-smoke"; Type = "script"; Detail = "run-sql-route-smoke.ps1"; Runner = { & "tests/kpi/scripts/run-sql-route-smoke.ps1" -BaseUrl $BaseUrl -OutputPath "tests/kpi/results/ws1/sql-route-smoke.json" } },
+  @{ Name = "ws1-sql-execute-runtime-smoke"; Type = "script"; Detail = "run-sql-execute-udf-smoke.ps1"; Runner = { & "tests/kpi/scripts/run-sql-execute-udf-smoke.ps1" -BaseUrl $BaseUrl -OutputPath "tests/kpi/results/ws1/sql-execute-udf-smoke.json" } },
+  @{ Name = "ws1-sql-transaction-runtime-smoke"; Type = "script"; Detail = "run-sql-transaction-smoke.ps1"; Runner = { & "tests/kpi/scripts/run-sql-transaction-smoke.ps1" -BaseUrl $BaseUrl -OutputPath "tests/kpi/results/ws1/sql-transaction-smoke.json" } }
+)
 
-  $global:LASTEXITCODE = 0
-  & cargo check -p voltnuerongridd 2>&1 | Out-Null
-  Add-Run -Name "ws1-runtime-sql-check" -Ok ($? -and $global:LASTEXITCODE -eq 0) -Detail "cargo check -p voltnuerongridd"
-} catch {
-  Add-Run -Name "ws1-gate-exception" -Ok $false -Detail $_.Exception.Message
+foreach ($pack in $packs) {
+  try {
+    if ($pack.Type -eq "cargo-test" -or $pack.Type -eq "cargo-check") {
+      $result = Invoke-CargoPack -Arguments $pack.Arguments -Mode $pack.Type -DefaultDetail $pack.Detail
+    } else {
+      $result = Invoke-ScriptPack -Runner $pack.Runner -DefaultDetail $pack.Detail
+    }
+    Add-Run -Name $pack.Name -Ok $result.Ok -Detail $result.Detail
+  } catch {
+    Add-Run -Name $pack.Name -Ok $false -Detail $_.Exception.Message
+  }
 }
 
 $finished = Get-Date

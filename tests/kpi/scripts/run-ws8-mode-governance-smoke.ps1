@@ -16,9 +16,31 @@ function Ensure-OutputDir {
 Ensure-OutputDir -PathValue $OutputPath
 $runtimeRaw = Get-Content -Raw -Path $RuntimePath
 
-$global:LASTEXITCODE = 0
-$testOutput = & cargo test -p voltnuerongridd ws12_dr_hook_denies_when_mode_below_policy -- --nocapture 2>&1
-$modePolicyTestPassed = ($? -and $LASTEXITCODE -eq 0)
+function Invoke-CargoTestCapture {
+  param([string[]]$Arguments)
+
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $commandText = "cargo " + (($Arguments | ForEach-Object {
+      if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+    }) -join " ")
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "$commandText > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
+    $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+    $ok = ($text -match "test result: ok\." -and $text -notmatch "test result: FAILED" -and $text -notmatch "(?m)^error:")
+    return [pscustomobject]@{
+      Ok = $ok
+      Text = $text
+      ExitCode = $process.ExitCode
+    }
+  } finally {
+    if (Test-Path -Path $tempFile) {
+      Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+$testOutput = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongridd", "ws12_dr_hook_denies_when_mode_below_policy", "--", "--nocapture")
+$modePolicyTestPassed = $testOutput.Ok
 
 $checks = [ordered]@{
   dr_hook_denies_when_mode_below_policy_test = $modePolicyTestPassed
@@ -35,7 +57,7 @@ $artifact = [ordered]@{
   command = "cargo test -p voltnuerongridd ws12_dr_hook_denies_when_mode_below_policy -- --nocapture"
   timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
   checks = $checks
-  output_excerpt = (($testOutput | Select-Object -First 20) -join "`n")
+  output_excerpt = (($testOutput.Text -split "`n" | Select-Object -First 20) -join "`n")
 }
 
 $artifact | ConvertTo-Json -Depth 10 | Set-Content -Path $OutputPath

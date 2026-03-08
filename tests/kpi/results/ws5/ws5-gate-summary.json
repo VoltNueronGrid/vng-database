@@ -1,15 +1,21 @@
 {
-  "gate": "ws5",
-  "status": "passed",
-  "started_at_utc": "2026-03-05T17:35:00.3152915Z",
-  "finished_at_utc": "2026-03-05T17:35:04.1354642Z",
-  "duration_ms": 3820,
-  "packs": [
-    {
-      "pack": "ws5-security-smoke",
-      "status": "passed",
-      "detail": "ok",
-      "artifact": "tests/kpi/results/ws5/operator-auth-smoke.json"
-    }
-  ]
+    "gate":  "ws5",
+    "status":  "passed",
+    "started_at_utc":  "2026-03-08T06:16:42.8342269Z",
+    "finished_at_utc":  "2026-03-08T06:16:53.6163493Z",
+    "duration_ms":  10782,
+    "packs":  [
+                  {
+                      "pack":  "ws5-security-smoke",
+                      "status":  "passed",
+                      "detail":  "ok",
+                      "artifact":  "tests/kpi/results/ws5/operator-auth-smoke.json"
+                  },
+                  {
+                      "pack":  "ws5-tenant-audit-runtime",
+                      "status":  "passed",
+                      "detail":  "ok",
+                      "artifact":  "tests/kpi/results/ws5/tenant-audit-runtime-smoke.json"
+                  }
+              ]
 }

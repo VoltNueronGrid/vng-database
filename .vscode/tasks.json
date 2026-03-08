@@ -530,6 +530,38 @@
 				"--nocapture"
 			],
 			"isBackground": false
+		},
+		{
+			"label": "run-voltnuerongridd-18081",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/c",
+				"set VNG_HTTP_BIND=127.0.0.1:18081 && cargo run -p voltnuerongridd"
+			],
+			"isBackground": true
+		},
+		{
+			"label": "run-voltnuerongridd-18081-task",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/c",
+				"set VNG_HTTP_BIND=127.0.0.1:18081 && cargo run -p voltnuerongridd"
+			],
+			"isBackground": true,
+			"group": "build"
+		},
+		{
+			"label": "run-voltnuerongridd-18081-task",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/c",
+				"set VNG_HTTP_BIND=127.0.0.1:18081 && cargo run -p voltnuerongridd"
+			],
+			"isBackground": true,
+			"group": "build"
 		}
 	]
 }

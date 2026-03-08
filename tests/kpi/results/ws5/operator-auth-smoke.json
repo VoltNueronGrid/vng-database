@@ -1,20 +1,20 @@
 {
-  "smoke": "ws5-operator-auth-baseline",
-  "status": "passed",
-  "command": "cargo test -p voltnuerongridd operator_auth; cargo test -p voltnuerongrid-auth validates_security_config; cargo test -p voltnuerongrid-auth ws5_; security contract checks (json/yaml/properties)",
-  "security_contract_checks": {
-    "json_tls": true,
-    "json_encryption": true,
-    "json_kms": true,
-    "yaml_tls": true,
-    "yaml_encryption": true,
-    "yaml_kms": true,
-    "properties_tls": true,
-    "properties_encryption": true,
-    "properties_kms": true
-  },
-  "started_at_utc": "2026-03-07T03:20:34.5145800Z",
-  "finished_at_utc": "2026-03-07T03:21:04.1021142Z",
-  "duration_ms": 29588,
-  "output_excerpt": "   Compiling voltnuerongrid-store v0.1.0 (D:\\by\\polap-db\\crates\\voltnuerongrid-store)\n   Compiling voltnuerongrid-auth v0.1.0 (D:\\by\\polap-db\\crates\\voltnuerongrid-auth)\n   Compiling voltnuerongrid-ingest v0.1.0 (D:\\by\\polap-db\\crates\\voltnuerongrid-ingest)\n   Compiling voltnuerongridd v0.1.0 (D:\\by\\polap-db\\services\\voltnuerongridd)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.61s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 8 tests\ntest tests::operator_auth_allows_ai_operator_for_autonomous_actions ... ok\ntest tests::operator_auth_allows_dba_for_storage_catalog_management ... ok\ntest tests::operator_auth_accepts_request_with_matching_admin_key ... ok\ntest tests::operator_auth_allows_request_when_admin_key_not_configured ... ok\ntest tests::operator_auth_denies_security_role_from_failover_execution ... ok\ntest tests::operator_auth_rejects_request_with_missing_key_when_configured ... ok\ntest tests::operator_auth_rejects_request_without_operator_identity_when_key_matches ... ok\ntest tests::operator_auth_rejects_unknown_operator_identity ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.01s\n\n   Compiling voltnuerongrid-auth v0.1.0 (D:\\by\\polap-db\\crates\\voltnuerongrid-auth)"
+    "smoke":  "ws5-operator-auth-baseline",
+    "status":  "passed",
+    "command":  "cargo test -p voltnuerongridd operator_auth; cargo test -p voltnuerongrid-auth validates_security_config; cargo test -p voltnuerongrid-auth ws5_; security contract checks (json/yaml/properties)",
+    "security_contract_checks":  {
+                                     "json_tls":  true,
+                                     "json_encryption":  true,
+                                     "json_kms":  true,
+                                     "yaml_tls":  true,
+                                     "yaml_encryption":  true,
+                                     "yaml_kms":  true,
+                                     "properties_tls":  true,
+                                     "properties_encryption":  true,
+                                     "properties_kms":  true
+                                 },
+    "started_at_utc":  "2026-03-08T06:16:42.9371208Z",
+    "finished_at_utc":  "2026-03-08T06:16:51.9800346Z",
+    "duration_ms":  9043,
+    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.06s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 10 tests\ntest tests::operator_auth_allows_request_when_admin_key_not_configured ... ok\ntest tests::operator_auth_accepts_request_with_matching_admin_key ... ok\ntest tests::operator_auth_allows_dba_for_ingest_write ... ok\ntest tests::operator_auth_allows_dba_for_storage_catalog_management ... ok\ntest tests::operator_auth_allows_ai_operator_for_autonomous_actions ... ok\ntest tests::operator_auth_denies_ai_operator_from_storage_catalog_management ... ok\ntest tests::operator_auth_denies_security_role_from_failover_execution ... ok\ntest tests::operator_auth_rejects_request_with_missing_key_when_configured ... ok\ntest tests::operator_auth_rejects_request_without_operator_identity_when_key_matches ... ok\ntest tests::operator_auth_rejects_unknown_operator_identity ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.02s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-060fb2b15e8f54f7.exe)\n\nrunning 3 tests\ntest tests::validates_security_config_from_json ... ok\ntest tests::validates_security_config_from_properties ... ok\ntest tests::ws5_validates_security_config_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-060fb2b15e8f54f7.exe)\n\nrunning 5 tests\ntest tests::ws5_rbac_privilege_matrix_allows_exact_resource_scope ... ok\ntest tests::ws5_rbac_privilege_matrix_allows_tenant_scope_templates ... ok\ntest tests::ws5_rbac_privilege_matrix_allows_wildcard_scopes ... ok\ntest tests::ws5_rejects_missing_kms_when_encryption_required ... ok\ntest tests::ws5_validates_security_config_from_yaml ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.02s\n\n"
 }

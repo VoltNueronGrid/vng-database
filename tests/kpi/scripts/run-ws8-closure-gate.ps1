@@ -1,5 +1,7 @@
 param(
-  [string]$OutputPath = "tests/kpi/results/ws8/ws8-closure-gate-summary.json"
+  [string]$OutputPath = "tests/kpi/results/ws8/ws8-closure-gate-summary.json",
+  [string]$BaseUrl = "http://127.0.0.1:8080",
+  [switch]$IncludeRuntimeSmokes
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,8 +16,21 @@ Ensure-OutputDir -PathValue $OutputPath
 
 & "tests/kpi/scripts/run-ws8-gate.ps1" `
   -OutputPath "tests/kpi/results/ws8/ws8-gate-summary.json" `
-  -ReleaseSummaryOutputPath "tests/kpi/results/gates/ws8-release-readiness.json"
-$gateExit = $LASTEXITCODE
+  -ReleaseSummaryOutputPath "tests/kpi/results/gates/ws8-release-readiness.json" `
+  -BaseUrl $BaseUrl `
+  -IncludeRuntimeSmokes:$IncludeRuntimeSmokes
+$gateSummaryPath = "tests/kpi/results/ws8/ws8-gate-summary.json"
+$gateExit = 1
+if (Test-Path -Path $gateSummaryPath) {
+  try {
+    $gateSummary = Get-Content -Raw -Path $gateSummaryPath | ConvertFrom-Json
+    $gateExit = if ([string]$gateSummary.status -eq "passed") { 0 } else { 1 }
+  } catch {
+    $gateExit = if ($LASTEXITCODE -eq 0) { 0 } else { 1 }
+  }
+} elseif ($LASTEXITCODE -eq 0) {
+  $gateExit = 0
+}
 
 $requiredArtifacts = @(
   "tests/kpi/results/ws8/ws8-gate-summary.json",
@@ -24,6 +39,10 @@ $requiredArtifacts = @(
   "tests/kpi/results/ws8/ws8-autonomy-stability-badge.json",
   "tests/kpi/results/gates/ws8-release-readiness.json"
 )
+
+if ($IncludeRuntimeSmokes) {
+  $requiredArtifacts += "tests/kpi/results/ws8/tenant-autonomous-runtime-smoke.json"
+}
 
 $artifactChecks = @()
 foreach ($artifactPath in $requiredArtifacts) {

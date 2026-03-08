@@ -14,6 +14,29 @@ function Ensure-OutputDir {
 
 Ensure-OutputDir -PathValue $OutputPath
 
+function Invoke-CargoTestCapture {
+  param([string[]]$Arguments)
+
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $commandText = "cargo " + (($Arguments | ForEach-Object {
+      if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+    }) -join " ")
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "$commandText > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
+    $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+    $ok = ($text -match "test result: ok\." -and $text -notmatch "test result: FAILED" -and $text -notmatch "(?m)^error:")
+    return [pscustomobject]@{
+      Ok = $ok
+      Text = $text
+      ExitCode = $process.ExitCode
+    }
+  } finally {
+    if (Test-Path -Path $tempFile) {
+      Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 $start = Get-Date
 $command = "cargo test -p voltnuerongridd operator_auth; cargo test -p voltnuerongrid-auth validates_security_config; cargo test -p voltnuerongrid-auth ws5_; security contract checks (json/yaml/properties)"
 $outputLines = @()
@@ -31,13 +54,10 @@ $securityContractChecks = [ordered]@{
 }
 
 try {
-  $first = & cargo test -p voltnuerongridd operator_auth 2>&1
-  $firstExit = $LASTEXITCODE
-  $second = & cargo test -p voltnuerongrid-auth validates_security_config 2>&1
-  $secondExit = $LASTEXITCODE
-  $third = & cargo test -p voltnuerongrid-auth ws5_ 2>&1
-  $thirdExit = $LASTEXITCODE
-  $outputLines = @($first + $second + $third)
+  $first = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongridd", "operator_auth")
+  $second = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongrid-auth", "validates_security_config")
+  $third = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongrid-auth", "ws5_")
+  $outputLines = @($first.Text + $second.Text + $third.Text)
 
   $jsonRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/security-control-config.json"
   $yamlRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/security-control-config.yaml"
@@ -65,7 +85,7 @@ try {
     $securityContractChecks.properties_kms
   ) { 0 } else { 1 }
 
-  $exitCode = if ($firstExit -eq 0 -and $secondExit -eq 0 -and $thirdExit -eq 0 -and $contractExit -eq 0) { 0 } else { 1 }
+  $exitCode = if ($first.Ok -and $second.Ok -and $third.Ok -and $contractExit -eq 0) { 0 } else { 1 }
 } catch {
   $outputLines += $_.Exception.Message
   $exitCode = 1

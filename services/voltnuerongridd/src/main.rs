@@ -236,6 +236,20 @@ fn default_tenant_user_bindings() -> HashMap<String, TenantUserBinding> {
                 role: "tenant_admin".to_string(),
             },
         ),
+        (
+            "analyst-globex".to_string(),
+            TenantUserBinding {
+                tenant_id: "globex".to_string(),
+                role: "tenant_analyst".to_string(),
+            },
+        ),
+        (
+            "admin-globex".to_string(),
+            TenantUserBinding {
+                tenant_id: "globex".to_string(),
+                role: "tenant_admin".to_string(),
+            },
+        ),
     ])
 }
 
@@ -379,7 +393,47 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                 actions: vec![PrivilegeAction::Read, PrivilegeAction::Write],
             },
         );
+        matrix.grant_role(
+            role,
+            ResourceGrant {
+                resource: "storage.catalog".to_string(),
+                scopes: vec![
+                    "tenants/{tenant}/store/indexes".to_string(),
+                    "tenants/{tenant}/store/indexes/lookup".to_string(),
+                    "tenants/{tenant}/store/constraints/validate".to_string(),
+                ],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+        matrix.grant_role(
+            role,
+            ResourceGrant {
+                resource: "observability.audit".to_string(),
+                scopes: vec!["tenants/{tenant}/audit/events".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+        matrix.grant_role(
+            role,
+            ResourceGrant {
+                resource: "observability.autonomous_records".to_string(),
+                scopes: vec!["tenants/{tenant}/autonomous/records".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
     }
+
+    matrix.grant_role(
+        "tenant_admin",
+        ResourceGrant {
+            resource: "storage.catalog".to_string(),
+            scopes: vec![
+                "tenants/{tenant}/store/indexes".to_string(),
+                "tenants/{tenant}/store/constraints".to_string(),
+            ],
+            actions: vec![PrivilegeAction::Manage],
+        },
+    );
 
     for role in [OperatorRole::Dba, OperatorRole::Sre] {
         matrix.grant_role(
@@ -1361,8 +1415,27 @@ async fn sql_transaction(
     headers: HeaderMap,
     Json(req): Json<SqlTransactionRequest>,
 ) -> Result<(StatusCode, Json<SqlTransactionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_privilege(&headers, &state, PrivilegeAction::Execute, "sql/transaction")?;
+    let principal = require_sql_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Execute,
+        "sql/transaction",
+    )?;
     let (status, response) = execute_transaction_statements(req.statements);
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Sql,
+        &principal,
+        "sql_transaction",
+        if status == StatusCode::OK { "ok" } else { "error" },
+        json!({
+            "route_scope": "sql/transaction",
+            "statements_executed": response.statements_executed,
+            "requires_transaction": response.requires_transaction,
+            "touches_catalog": response.touches_catalog,
+            "rejected_statement_count": response.rejected_statement_count,
+        }),
+    );
     Ok((status, Json(response)))
 }
 
@@ -1498,7 +1571,7 @@ async fn sql_analyze(
     headers: HeaderMap,
     Json(req): Json<SqlAnalyzeRequest>,
 ) -> Result<Json<SqlAnalyzeResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_privilege(&headers, &state, PrivilegeAction::Read, "sql/analyze")?;
+    let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/analyze")?;
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
     let mut rejected = 0usize;
     let mut statements = Vec::with_capacity(parsed.len());
@@ -1517,12 +1590,25 @@ async fn sql_analyze(
         });
     }
 
-    Ok(Json(SqlAnalyzeResponse {
+    let response = SqlAnalyzeResponse {
         status: "ok",
         total_statements: statements.len(),
         rejected_statements: rejected,
         statements,
-    }))
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Sql,
+        &principal,
+        "sql_analyze",
+        "ok",
+        json!({
+            "route_scope": "sql/analyze",
+            "total_statements": response.total_statements,
+            "rejected_statements": response.rejected_statements,
+        }),
+    );
+    Ok(Json(response))
 }
 
 async fn sql_route(
@@ -1530,9 +1616,9 @@ async fn sql_route(
     headers: HeaderMap,
     Json(req): Json<SqlRouteRequest>,
 ) -> Result<Json<SqlRouteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_privilege(&headers, &state, PrivilegeAction::Read, "sql/route")?;
+    let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/route")?;
     let decision = HtapQueryRouter::route_batch(&req.sql_batch);
-    Ok(Json(SqlRouteResponse {
+    let response = SqlRouteResponse {
         status: "ok",
         route_path: route_path_name(decision.path).to_string(),
         reason: decision.reason,
@@ -1544,7 +1630,21 @@ async fn sql_route(
                 path: route_path_name(s.path).to_string(),
             })
             .collect(),
-    }))
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Sql,
+        &principal,
+        "sql_route",
+        "ok",
+        json!({
+            "route_scope": "sql/route",
+            "route_path": response.route_path,
+            "statement_count": response.statements.len(),
+            "reason": response.reason,
+        }),
+    );
+    Ok(Json(response))
 }
 
 async fn sql_execute(
@@ -1552,7 +1652,12 @@ async fn sql_execute(
     headers: HeaderMap,
     Json(req): Json<SqlExecuteRequest>,
 ) -> Result<(StatusCode, Json<SqlExecuteResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_privilege(&headers, &state, PrivilegeAction::Execute, "sql/execute")?;
+    let principal = require_sql_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Execute,
+        "sql/execute",
+    )?;
     let decision = HtapQueryRouter::route_batch(&req.sql_batch);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
     let udf_function_catalog = udf_function_catalog_contract();
@@ -1563,6 +1668,20 @@ async fn sql_execute(
     let udf_results = match udf_execution {
         Ok(results) => results,
         Err(reason) => {
+            append_runtime_audit_event(
+                &state,
+                AuditEventKind::Sql,
+                &principal,
+                "sql_execute",
+                "blocked",
+                json!({
+                    "route_scope": "sql/execute",
+                    "route_path": route_path_name(decision.path),
+                    "reason": reason,
+                    "rejected_statement_count": parsed.len(),
+                    "udf_guardrail_status": "blocked",
+                }),
+            );
             return Ok((
                 StatusCode::BAD_REQUEST,
                 Json(SqlExecuteResponse {
@@ -1583,6 +1702,19 @@ async fn sql_execute(
     };
 
     if matches!(decision.path, QueryPath::Unknown) {
+        append_runtime_audit_event(
+            &state,
+            AuditEventKind::Sql,
+            &principal,
+            "sql_execute",
+            "error",
+            json!({
+                "route_scope": "sql/execute",
+                "route_path": "unknown",
+                "reason": decision.reason,
+                "rejected_statement_count": parsed.len(),
+            }),
+        );
         return Ok((
             StatusCode::BAD_REQUEST,
             Json(SqlExecuteResponse {
@@ -1620,6 +1752,20 @@ async fn sql_execute(
         let (status, response) = execute_transaction_statements(transaction_statements);
         rejected_statement_count += response.rejected_statement_count;
         if status != StatusCode::OK {
+            append_runtime_audit_event(
+                &state,
+                AuditEventKind::Sql,
+                &principal,
+                "sql_execute",
+                "error",
+                json!({
+                    "route_scope": "sql/execute",
+                    "route_path": route_path_name(decision.path),
+                    "reason": decision.reason,
+                    "rejected_statement_count": rejected_statement_count,
+                    "transaction_status": response.status,
+                }),
+            );
             return Ok((
                 status,
                 Json(SqlExecuteResponse {
@@ -1645,25 +1791,40 @@ async fn sql_execute(
         olap = Some(execute_olap_query(query, req.max_rows));
     }
 
+    let response = SqlExecuteResponse {
+        status: "ok",
+        route_path: route_path_name(decision.path).to_string(),
+        reason: decision.reason,
+        transaction,
+        olap,
+        rejected_statement_count,
+        udf_results: if udf_results.is_empty() {
+            None
+        } else {
+            Some(udf_results)
+        },
+        udf_guardrail_status: Some("passed".to_string()),
+        udf_function_catalog,
+        udf_guard_policies,
+        udf_execution_plan,
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Sql,
+        &principal,
+        "sql_execute",
+        "ok",
+        json!({
+            "route_scope": "sql/execute",
+            "route_path": response.route_path,
+            "reason": response.reason,
+            "rejected_statement_count": response.rejected_statement_count,
+            "udf_guardrail_status": response.udf_guardrail_status,
+        }),
+    );
     Ok((
         StatusCode::OK,
-        Json(SqlExecuteResponse {
-            status: "ok",
-            route_path: route_path_name(decision.path).to_string(),
-            reason: decision.reason,
-            transaction,
-            olap,
-            rejected_statement_count,
-            udf_results: if udf_results.is_empty() {
-                None
-            } else {
-                Some(udf_results)
-            },
-            udf_guardrail_status: Some("passed".to_string()),
-            udf_function_catalog,
-            udf_guard_policies,
-            udf_execution_plan,
-        }),
+        Json(response),
     ))
 }
 
@@ -2257,13 +2418,11 @@ async fn audit_events(
     headers: HeaderMap,
     Query(query): Query<AuditEventsQuery>,
 ) -> Result<Json<AuditEventsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
+    let principal = require_audit_runtime_principal(
         &headers,
         &state,
-        "observability.audit",
-        "audit/events",
         PrivilegeAction::Read,
+        "audit/events",
     )?;
     let max_items = query.max_items.unwrap_or(100).min(1_000);
     let events = state
@@ -2271,6 +2430,7 @@ async fn audit_events(
         .lock()
         .map(|sink| sink.latest(max_items))
         .unwrap_or_default();
+    let events = filter_audit_events_for_principal(events, &principal);
     Ok(Json(AuditEventsResponse {
         status: "ok",
         total_events: events.len(),
@@ -2283,16 +2443,14 @@ async fn autonomous_action_records(
     headers: HeaderMap,
     Query(query): Query<AutonomousActionRecordsQuery>,
 ) -> Result<Json<AutonomousActionRecordsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
+    let principal = require_autonomous_records_runtime_principal(
         &headers,
         &state,
-        "observability.autonomous_records",
-        "autonomous/records",
         PrivilegeAction::Read,
+        "autonomous/records",
     )?;
     let max_items = query.max_items.unwrap_or(100).min(1_000);
-    let records = latest_action_records(&state, max_items);
+    let records = filter_action_records_for_principal(latest_action_records(&state, max_items), &principal);
     Ok(Json(AutonomousActionRecordsResponse {
         status: "ok",
         total_records: records.len(),
@@ -3706,26 +3864,13 @@ fn require_operator_privilege(
     }
 }
 
-fn require_sql_runtime_privilege(
+fn require_sql_runtime_principal(
     headers: &HeaderMap,
     state: &AppState,
     action: PrivilegeAction,
     sql_scope: &str,
-) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_runtime_principal(headers, state, "sql.runtime", sql_scope, action)?;
-    let user = match principal {
-        RuntimeAccessPrincipal::Operator(_) => return Ok(()),
-        RuntimeAccessPrincipal::TenantUser(user) => user,
-    };
-    let expected_scope = format!("tenants/{}/{}", user.tenant_id, sql_scope);
-    if state
-        .rbac_privilege_matrix
-        .allows(user.role.as_str(), "sql.runtime", &expected_scope, action)
-    {
-        Ok(())
-    } else {
-        Err(forbidden_error(headers, "insufficient_privilege"))
-    }
+) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
+    require_runtime_principal(headers, state, "sql.runtime", sql_scope, action)
 }
 
 fn require_ingest_runtime_privilege(
@@ -3735,6 +3880,39 @@ fn require_ingest_runtime_privilege(
     ingest_scope: &str,
 ) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
     require_runtime_principal(headers, state, "ingest.connectors", ingest_scope, action)
+}
+
+fn require_store_runtime_principal(
+    headers: &HeaderMap,
+    state: &AppState,
+    action: PrivilegeAction,
+    store_scope: &str,
+) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
+    require_runtime_principal(headers, state, "storage.catalog", store_scope, action)
+}
+
+fn require_audit_runtime_principal(
+    headers: &HeaderMap,
+    state: &AppState,
+    action: PrivilegeAction,
+    audit_scope: &str,
+) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
+    require_runtime_principal(headers, state, "observability.audit", audit_scope, action)
+}
+
+fn require_autonomous_records_runtime_principal(
+    headers: &HeaderMap,
+    state: &AppState,
+    action: PrivilegeAction,
+    records_scope: &str,
+) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
+    require_runtime_principal(
+        headers,
+        state,
+        "observability.autonomous_records",
+        records_scope,
+        action,
+    )
 }
 
 fn require_runtime_principal(
@@ -3753,8 +3931,37 @@ fn require_runtime_principal(
         return Ok(RuntimeAccessPrincipal::Operator(operator));
     }
 
-    let user = require_tenant_user_privilege(headers, state, action, scope)?;
+    let user = require_tenant_user_privilege(headers, state, resource, scope, action)?;
     Ok(RuntimeAccessPrincipal::TenantUser(user))
+}
+
+fn tenant_scoped_scope(tenant_id: &str, scope: &str) -> String {
+    format!("tenants/{tenant_id}/{}", scope.trim_start_matches('/'))
+}
+
+fn store_table_matches_tenant_namespace(table: &str, tenant_id: &str) -> bool {
+    let normalized_table = table.trim().to_ascii_lowercase();
+    let normalized_tenant = tenant_id.trim().to_ascii_lowercase();
+    normalized_table.starts_with(&format!("tenant/{normalized_tenant}/"))
+        || normalized_table.starts_with(&format!("tenant_{normalized_tenant}_"))
+        || normalized_table.starts_with(&format!("{normalized_tenant}."))
+}
+
+fn ensure_store_table_access(
+    principal: &RuntimeAccessPrincipal,
+    headers: &HeaderMap,
+    table: &str,
+) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
+    match principal {
+        RuntimeAccessPrincipal::Operator(_) => Ok(()),
+        RuntimeAccessPrincipal::TenantUser(user) => {
+            if store_table_matches_tenant_namespace(table, &user.tenant_id) {
+                Ok(())
+            } else {
+                Err(forbidden_error(headers, "insufficient_privilege"))
+            }
+        }
+    }
 }
 
 fn ingest_scope_for_connector(connector_id: &str, format: &str) -> String {
@@ -3788,11 +3995,21 @@ fn count_tenant_ingest_records<T>(records: &HashMap<String, Vec<T>>, tenant_id: 
 fn require_tenant_user_privilege(
     headers: &HeaderMap,
     state: &AppState,
-    _action: PrivilegeAction,
-    _sql_scope: &str,
+    resource: &str,
+    scope: &str,
+    action: PrivilegeAction,
 ) -> Result<TenantUserIdentity, (StatusCode, Json<AuthErrorResponse>)> {
-    tenant_user_identity_from_headers(headers, state)
-        .ok_or_else(|| auth_error(headers, "missing_or_invalid_user_identity"))
+    let user = tenant_user_identity_from_headers(headers, state)
+        .ok_or_else(|| auth_error(headers, "missing_or_invalid_user_identity"))?;
+    let expected_scope = tenant_scoped_scope(&user.tenant_id, scope);
+    if state
+        .rbac_privilege_matrix
+        .allows(user.role.as_str(), resource, &expected_scope, action)
+    {
+        Ok(user)
+    } else {
+        Err(forbidden_error(headers, "insufficient_privilege"))
+    }
 }
 
 fn operator_identity_from_headers(
@@ -3900,9 +4117,87 @@ fn append_audit_event(
     }
 }
 
+fn append_runtime_audit_event(
+    state: &AppState,
+    kind: AuditEventKind,
+    principal: &RuntimeAccessPrincipal,
+    action: &str,
+    outcome: &str,
+    details: serde_json::Value,
+) {
+    let actor = match principal {
+        RuntimeAccessPrincipal::Operator(operator) => operator.operator_id.as_str(),
+        RuntimeAccessPrincipal::TenantUser(user) => user.user_id.as_str(),
+    };
+    let mut payload = match details {
+        serde_json::Value::Object(map) => map,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("details".to_string(), other);
+            map
+        }
+    };
+    match principal {
+        RuntimeAccessPrincipal::Operator(operator) => {
+            payload.insert("actor_type".to_string(), json!("operator"));
+            payload.insert("operator_id".to_string(), json!(operator.operator_id));
+            payload.insert("operator_role".to_string(), json!(operator.role.as_str()));
+        }
+        RuntimeAccessPrincipal::TenantUser(user) => {
+            payload.insert("actor_type".to_string(), json!("tenant_user"));
+            payload.insert("tenant_id".to_string(), json!(user.tenant_id));
+            payload.insert("user_id".to_string(), json!(user.user_id));
+            payload.insert("user_role".to_string(), json!(user.role));
+        }
+    }
+    append_audit_event(
+        state,
+        kind,
+        actor,
+        action,
+        outcome,
+        &serde_json::Value::Object(payload).to_string(),
+    );
+}
+
+fn audit_event_matches_tenant(event: &AuditEvent, tenant_id: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(&event.details_json)
+        .ok()
+        .and_then(|value| value.get("tenant_id").and_then(|v| v.as_str()).map(str::to_string))
+        .map(|value| value.eq_ignore_ascii_case(tenant_id))
+        .unwrap_or(false)
+}
+
+fn filter_audit_events_for_principal(
+    events: Vec<AuditEvent>,
+    principal: &RuntimeAccessPrincipal,
+) -> Vec<AuditEvent> {
+    match principal {
+        RuntimeAccessPrincipal::Operator(_) => events,
+        RuntimeAccessPrincipal::TenantUser(user) => events
+            .into_iter()
+            .filter(|event| audit_event_matches_tenant(event, &user.tenant_id))
+            .collect(),
+    }
+}
+
 fn next_action_trace_id() -> String {
     let id = ACTION_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("atrace-{id}")
+}
+
+fn tenant_id_from_scoped_path(scope: &str) -> Option<String> {
+    let mut segments = scope.trim().trim_start_matches('/').split('/');
+    let prefix = segments.next()?;
+    if !prefix.eq_ignore_ascii_case("tenants") {
+        return None;
+    }
+    let tenant_id = segments.next()?.trim();
+    if tenant_id.is_empty() {
+        None
+    } else {
+        Some(tenant_id.to_string())
+    }
 }
 
 fn latest_action_records(state: &AppState, max_items: usize) -> Vec<AutonomousActionExecutionRecord> {
@@ -3922,6 +4217,34 @@ fn append_action_record(state: &AppState, record: AutonomousActionExecutionRecor
     }
 }
 
+fn autonomous_action_record_matches_tenant(
+    record: &AutonomousActionExecutionRecord,
+    tenant_id: &str,
+) -> bool {
+    record
+        .tenant_id
+        .as_deref()
+        .map(|value| value.eq_ignore_ascii_case(tenant_id))
+        .or_else(|| {
+            tenant_id_from_scoped_path(&record.scope)
+                .map(|value| value.eq_ignore_ascii_case(tenant_id))
+        })
+        .unwrap_or(false)
+}
+
+fn filter_action_records_for_principal(
+    records: Vec<AutonomousActionExecutionRecord>,
+    principal: &RuntimeAccessPrincipal,
+) -> Vec<AutonomousActionExecutionRecord> {
+    match principal {
+        RuntimeAccessPrincipal::Operator(_) => records,
+        RuntimeAccessPrincipal::TenantUser(user) => records
+            .into_iter()
+            .filter(|record| autonomous_action_record_matches_tenant(record, &user.tenant_id))
+            .collect(),
+    }
+}
+
 fn build_authorize_action_response(
     state: &AppState,
     status_code: StatusCode,
@@ -3933,6 +4256,7 @@ fn build_authorize_action_response(
     requested_by: &str,
     typed_decision: AutonomousActionDecision,
 ) -> (StatusCode, Json<AuthorizeActionResponse>) {
+    let tenant_id = tenant_id_from_scoped_path(requested_scope);
     let record = AutonomousActionExecutionRecord::new(
         trace_id.to_string(),
         action,
@@ -3940,22 +4264,25 @@ fn build_authorize_action_response(
         requested_by,
         typed_decision,
         &reason,
-    );
+    )
+    .with_tenant_id(tenant_id.as_deref());
     append_action_record(state, record);
+    let mut details = serde_json::Map::new();
+    details.insert("trace_id".to_string(), json!(trace_id));
+    details.insert("action".to_string(), json!(action));
+    details.insert("requested_scope".to_string(), json!(requested_scope));
+    details.insert("decision".to_string(), json!(decision));
+    details.insert("reason".to_string(), json!(reason.clone()));
+    if let Some(tenant_id) = tenant_id.as_ref() {
+        details.insert("tenant_id".to_string(), json!(tenant_id));
+    }
     append_audit_event(
         state,
         AuditEventKind::Autonomous,
         requested_by,
         "autonomous_action_authorize",
         decision,
-        &json!({
-            "trace_id": trace_id,
-            "action": action,
-            "requested_scope": requested_scope,
-            "decision": decision,
-            "reason": reason.clone(),
-        })
-        .to_string(),
+        &serde_json::Value::Object(details).to_string(),
     );
     (
         status_code,
@@ -3982,18 +4309,22 @@ async fn store_list_indexes(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ListIndexesResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
+    let principal = require_store_runtime_principal(
         &headers,
         &state,
-        "storage.catalog",
-        "store/indexes",
         PrivilegeAction::Read,
+        "store/indexes",
     )?;
     let mgr = state.index_manager.lock().expect("index lock");
     let indexes = mgr
         .list_indexes()
         .iter()
+        .filter(|descriptor| match &principal {
+            RuntimeAccessPrincipal::Operator(_) => true,
+            RuntimeAccessPrincipal::TenantUser(user) => {
+                store_table_matches_tenant_namespace(&descriptor.table, &user.tenant_id)
+            }
+        })
         .map(|d| IndexListEntry {
             name: d.name.clone(),
             table: d.table.clone(),
@@ -4002,10 +4333,22 @@ async fn store_list_indexes(
             unique: d.unique,
         })
         .collect();
-    Ok(Json(ListIndexesResponse {
+    let response = ListIndexesResponse {
         status: "ok",
         indexes,
-    }))
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Storage,
+        &principal,
+        "store_list_indexes",
+        "ok",
+        json!({
+            "route_scope": "store/indexes",
+            "visible_index_count": response.indexes.len(),
+        }),
+    );
+    Ok(Json(response))
 }
 
 async fn store_create_index(
@@ -4013,14 +4356,13 @@ async fn store_create_index(
     headers: HeaderMap,
     Json(req): Json<CreateIndexRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
+    let principal = require_store_runtime_principal(
         &headers,
         &state,
-        "storage.catalog",
-        "store/indexes",
         PrivilegeAction::Manage,
+        "store/indexes",
     )?;
+    ensure_store_table_access(&principal, &headers, &req.table)?;
     use voltnuerongrid_store::index::{IndexDescriptor, IndexKind};
     let unique = req.unique.unwrap_or(false);
     let descriptor = IndexDescriptor {
@@ -4032,16 +4374,33 @@ async fn store_create_index(
     };
     let mut mgr = state.index_manager.lock().expect("index lock");
     Ok(match mgr.create_index(descriptor) {
-        Ok(()) => (
-            StatusCode::CREATED,
-            Json(serde_json::to_value(CreateIndexResponse {
+        Ok(()) => {
+            let response = CreateIndexResponse {
                 status: "created",
                 index_name: req.name,
                 table: req.table,
                 column: req.column,
                 unique,
-            }).expect("json")),
-        ),
+            };
+            append_runtime_audit_event(
+                &state,
+                AuditEventKind::Storage,
+                &principal,
+                "store_create_index",
+                "ok",
+                json!({
+                    "route_scope": "store/indexes/create",
+                    "index_name": response.index_name,
+                    "table": response.table,
+                    "column": response.column,
+                    "unique": response.unique,
+                }),
+            );
+            (
+                StatusCode::CREATED,
+                Json(serde_json::to_value(response).expect("json")),
+            )
+        }
         Err(e) => (
             StatusCode::CONFLICT,
             Json(json!({ "status": "error", "reason": e.to_string() })),
@@ -4054,26 +4413,49 @@ async fn store_drop_index(
     headers: HeaderMap,
     Json(req): Json<DropIndexRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
+    let principal = require_store_runtime_principal(
         &headers,
         &state,
-        "storage.catalog",
-        "store/indexes",
         PrivilegeAction::Manage,
+        "store/indexes",
     )?;
     let mut mgr = state.index_manager.lock().expect("index lock");
-    Ok(match mgr.drop_index(&req.name) {
-        Ok(_desc) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(DropIndexResponse {
-                status: "dropped",
-                dropped: req.name,
-            }).expect("json")),
-        ),
-        Err(e) => (
+    Ok(match mgr.get(&req.name) {
+        Some(idx) => {
+            ensure_store_table_access(&principal, &headers, &idx.descriptor().table)?;
+            match mgr.drop_index(&req.name) {
+                Ok(desc) => {
+                    let response = DropIndexResponse {
+                        status: "dropped",
+                        dropped: req.name,
+                    };
+                    append_runtime_audit_event(
+                        &state,
+                        AuditEventKind::Storage,
+                        &principal,
+                        "store_drop_index",
+                        "ok",
+                        json!({
+                            "route_scope": "store/indexes/drop",
+                            "index_name": response.dropped,
+                            "table": desc.table,
+                            "column": desc.column,
+                        }),
+                    );
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::to_value(response).expect("json")),
+                    )
+                }
+                Err(e) => (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "status": "error", "reason": e.to_string() })),
+                ),
+            }
+        }
+        None => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "status": "error", "reason": e.to_string() })),
+            Json(json!({ "status": "error", "reason": format!("index '{}' not found", req.name) })),
         ),
     })
 }
@@ -4083,26 +4465,40 @@ async fn store_index_lookup(
     headers: HeaderMap,
     Json(req): Json<IndexLookupRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
+    let principal = require_store_runtime_principal(
         &headers,
         &state,
-        "storage.catalog",
-        "store/indexes",
         PrivilegeAction::Read,
+        "store/indexes/lookup",
     )?;
     let mgr = state.index_manager.lock().expect("index lock");
     Ok(match mgr.get(&req.index_name) {
         Some(idx) => {
+            ensure_store_table_access(&principal, &headers, &idx.descriptor().table)?;
             let row_keys: Vec<String> = idx.lookup(&req.value).iter().map(|s| s.to_string()).collect();
+            let response = IndexLookupResponse {
+                status: "ok",
+                index_name: req.index_name,
+                value: req.value,
+                row_keys,
+            };
+            append_runtime_audit_event(
+                &state,
+                AuditEventKind::Storage,
+                &principal,
+                "store_index_lookup",
+                "ok",
+                json!({
+                    "route_scope": "store/indexes/lookup",
+                    "index_name": response.index_name,
+                    "value": response.value,
+                    "row_key_count": response.row_keys.len(),
+                    "table": idx.descriptor().table,
+                }),
+            );
             (
                 StatusCode::OK,
-                Json(serde_json::to_value(IndexLookupResponse {
-                    status: "ok",
-                    index_name: req.index_name,
-                    value: req.value,
-                    row_keys,
-                }).expect("json")),
+                Json(serde_json::to_value(response).expect("json")),
             )
         }
         None => (
@@ -4117,14 +4513,13 @@ async fn store_add_constraint(
     headers: HeaderMap,
     Json(req): Json<AddConstraintRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
+    let principal = require_store_runtime_principal(
         &headers,
         &state,
-        "storage.catalog",
-        "store/constraints",
         PrivilegeAction::Manage,
+        "store/constraints",
     )?;
+    ensure_store_table_access(&principal, &headers, &req.table)?;
     use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
     let kind = match req.kind.to_ascii_lowercase().as_str() {
         "primary_key" | "pk" => ConstraintKind::PrimaryKey,
@@ -4146,16 +4541,33 @@ async fn store_add_constraint(
     };
     let mut mgr = state.constraint_manager.lock().expect("constraint lock");
     Ok(match mgr.add_constraint(descriptor) {
-        Ok(()) => (
-            StatusCode::CREATED,
-            Json(serde_json::to_value(AddConstraintResponse {
+        Ok(()) => {
+            let response = AddConstraintResponse {
                 status: "created",
                 constraint_name: req.name,
                 table: req.table,
                 column: req.column,
                 kind: req.kind,
-            }).expect("json")),
-        ),
+            };
+            append_runtime_audit_event(
+                &state,
+                AuditEventKind::Storage,
+                &principal,
+                "store_add_constraint",
+                "ok",
+                json!({
+                    "route_scope": "store/constraints/add",
+                    "constraint_name": response.constraint_name,
+                    "table": response.table,
+                    "column": response.column,
+                    "kind": response.kind,
+                }),
+            );
+            (
+                StatusCode::CREATED,
+                Json(serde_json::to_value(response).expect("json")),
+            )
+        }
         Err(e) => (
             StatusCode::CONFLICT,
             Json(json!({ "status": "error", "reason": e.to_string() })),
@@ -4168,26 +4580,58 @@ async fn store_validate_constraint(
     headers: HeaderMap,
     Json(req): Json<ValidateConstraintRequest>,
 ) -> Result<Json<ValidateConstraintResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
+    let principal = require_store_runtime_principal(
         &headers,
         &state,
-        "storage.catalog",
-        "store/constraints",
         PrivilegeAction::Read,
+        "store/constraints/validate",
     )?;
+    ensure_store_table_access(&principal, &headers, &req.table)?;
     let mgr = state.constraint_manager.lock().expect("constraint lock");
     Ok(match mgr.validate(&req.table, &req.column, req.value.as_deref()) {
-        Ok(()) => Json(ValidateConstraintResponse {
-            status: "ok",
-            valid: true,
-            violation: None,
-        }),
-        Err(v) => Json(ValidateConstraintResponse {
-            status: "ok",
-            valid: false,
-            violation: Some(v.to_string()),
-        }),
+        Ok(()) => {
+            let response = ValidateConstraintResponse {
+                status: "ok",
+                valid: true,
+                violation: None,
+            };
+            append_runtime_audit_event(
+                &state,
+                AuditEventKind::Storage,
+                &principal,
+                "store_validate_constraint",
+                "ok",
+                json!({
+                    "route_scope": "store/constraints/validate",
+                    "table": req.table,
+                    "column": req.column,
+                    "valid": response.valid,
+                }),
+            );
+            Json(response)
+        }
+        Err(v) => {
+            let violation = v.to_string();
+            append_runtime_audit_event(
+                &state,
+                AuditEventKind::Storage,
+                &principal,
+                "store_validate_constraint",
+                "ok",
+                json!({
+                    "route_scope": "store/constraints/validate",
+                    "table": req.table,
+                    "column": req.column,
+                    "valid": false,
+                    "violation": violation,
+                }),
+            );
+            Json(ValidateConstraintResponse {
+                status: "ok",
+                valid: false,
+                violation: Some(violation),
+            })
+        }
     })
 }
 
@@ -4214,13 +4658,26 @@ async fn ingest_csv(
         .lock()
         .expect("csv lock")
         .insert(storage_key, records);
+    let response = IngestCsvResponse {
+        status: "ok",
+        connector_id: req.connector_id,
+        records_parsed: count,
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Ingest,
+        &principal,
+        "ingest_csv",
+        "ok",
+        json!({
+            "route_scope": "ingest/connectors/csv",
+            "connector_id": response.connector_id,
+            "records_parsed": response.records_parsed,
+        }),
+    );
     Ok((
         StatusCode::OK,
-        Json(serde_json::to_value(IngestCsvResponse {
-            status: "ok",
-            connector_id: req.connector_id,
-            records_parsed: count,
-        }).expect("json")),
+        Json(serde_json::to_value(response).expect("json")),
     ))
 }
 
@@ -4245,13 +4702,27 @@ async fn ingest_json(
         .lock()
         .expect("json lock")
         .insert(storage_key, records);
+    let response = IngestJsonResponse {
+        status: "ok",
+        connector_id: req.connector_id,
+        records_parsed: count,
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Ingest,
+        &principal,
+        "ingest_json",
+        "ok",
+        json!({
+            "route_scope": "ingest/connectors/json",
+            "connector_id": response.connector_id,
+            "records_parsed": response.records_parsed,
+            "key_field": req.key_field,
+        }),
+    );
     Ok((
         StatusCode::OK,
-        Json(serde_json::to_value(IngestJsonResponse {
-            status: "ok",
-            connector_id: req.connector_id,
-            records_parsed: count,
-        }).expect("json")),
+        Json(serde_json::to_value(response).expect("json")),
     ))
 }
 
@@ -4285,12 +4756,26 @@ async fn ingest_status(
             count_tenant_ingest_records(&json_map, &user.tenant_id)
         }
     };
-    Ok(Json(IngestStatusResponse {
+    let response = IngestStatusResponse {
         status: "ok",
         csv_connectors,
         json_connectors,
         total_records_loaded: csv_total + json_total,
-    }))
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Ingest,
+        &principal,
+        "ingest_status",
+        "ok",
+        json!({
+            "route_scope": "ingest/status",
+            "csv_connectors": response.csv_connectors,
+            "json_connectors": response.json_connectors,
+            "total_records_loaded": response.total_records_loaded,
+        }),
+    );
+    Ok(Json(response))
 }
 
 #[cfg(test)]
@@ -4476,7 +4961,7 @@ mod tests {
     fn sql_runtime_allows_tenant_analyst_for_analyze() {
         let state = state_with_key(None);
         let headers = tenant_user_headers("analyst-acme", "acme");
-        assert!(require_sql_runtime_privilege(
+        assert!(require_sql_runtime_principal(
             &headers,
             &state,
             PrivilegeAction::Read,
@@ -4489,7 +4974,7 @@ mod tests {
     fn sql_runtime_denies_cross_tenant_user_scope() {
         let state = state_with_key(None);
         let headers = tenant_user_headers("analyst-acme", "globex");
-        let auth = require_sql_runtime_privilege(
+        let auth = require_sql_runtime_principal(
             &headers,
             &state,
             PrivilegeAction::Read,
@@ -4504,13 +4989,65 @@ mod tests {
     fn sql_runtime_allows_operator_dba_for_execute() {
         let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "platform-admin");
-        assert!(require_sql_runtime_privilege(
+        assert!(require_sql_runtime_principal(
             &headers,
             &state,
             PrivilegeAction::Execute,
             "sql/execute",
         )
         .is_ok());
+    }
+
+    #[test]
+    fn store_create_index_appends_tenant_storage_audit_event() {
+        let state = state_with_key(None);
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(store_create_index(
+                State(state.clone()),
+                tenant_user_headers("admin-acme", "acme"),
+                Json(CreateIndexRequest {
+                    name: "idx_audit_acme".to_string(),
+                    table: "tenant/acme/orders".to_string(),
+                    column: "customer_id".to_string(),
+                    unique: Some(false),
+                }),
+            ))
+            .expect("tenant admin should create audited index");
+
+        assert_eq!(response.0, StatusCode::CREATED);
+        let events = state.audit_sink.lock().expect("audit lock").latest(1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AuditEventKind::Storage);
+        assert_eq!(events[0].actor, "admin-acme");
+        assert!(events[0].details_json.contains("\"tenant_id\":\"acme\""));
+        assert!(events[0].details_json.contains("store/indexes/create"));
+    }
+
+    #[test]
+    fn ingest_csv_appends_tenant_ingest_audit_event() {
+        let state = state_with_key(None);
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(ingest_csv(
+                State(state.clone()),
+                tenant_user_headers("admin-acme", "acme"),
+                Json(IngestCsvRequest {
+                    connector_id: "orders-csv".to_string(),
+                    csv_data: "id,amount\n1,42\n".to_string(),
+                }),
+            ))
+            .expect("tenant admin should ingest csv");
+
+        assert_eq!(response.0, StatusCode::OK);
+        let events = state.audit_sink.lock().expect("audit lock").latest(1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AuditEventKind::Ingest);
+        assert_eq!(events[0].actor, "admin-acme");
+        assert!(events[0].details_json.contains("\"tenant_id\":\"acme\""));
+        assert!(events[0].details_json.contains("orders-csv"));
     }
 
     #[test]
@@ -4593,6 +5130,324 @@ mod tests {
         .expect("tenant user should read ingest status");
         assert!(matches!(write, RuntimeAccessPrincipal::TenantUser(_)));
         assert!(matches!(read, RuntimeAccessPrincipal::TenantUser(_)));
+    }
+
+    #[test]
+    fn ingest_runtime_denies_tenant_role_without_grant() {
+        let mut bindings = default_tenant_user_bindings();
+        bindings.insert(
+            "viewer-acme".to_string(),
+            TenantUserBinding {
+                tenant_id: "acme".to_string(),
+                role: "tenant_viewer".to_string(),
+            },
+        );
+        let state = AppState {
+            tenant_user_bindings: Arc::new(bindings),
+            ..state_with_key(None)
+        };
+        let headers = tenant_user_headers("viewer-acme", "acme");
+
+        let auth = require_ingest_runtime_privilege(
+            &headers,
+            &state,
+            PrivilegeAction::Write,
+            "ingest/connectors/orders-csv/csv",
+        )
+        .expect_err("tenant_viewer should not write ingest");
+
+        assert_eq!(auth.0, StatusCode::FORBIDDEN);
+        assert_eq!(auth.1.reason, "insufficient_privilege");
+    }
+
+    #[test]
+    fn audit_runtime_allows_tenant_analyst_read_scope() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+
+        let principal = require_audit_runtime_principal(
+            &headers,
+            &state,
+            PrivilegeAction::Read,
+            "audit/events",
+        )
+        .expect("tenant analyst should read tenant audit scope");
+
+        assert!(matches!(principal, RuntimeAccessPrincipal::TenantUser(_)));
+    }
+
+    #[test]
+    fn audit_events_filters_to_tenant_scope() {
+        let state = state_with_key(None);
+        append_runtime_audit_event(
+            &state,
+            AuditEventKind::Sql,
+            &RuntimeAccessPrincipal::TenantUser(TenantUserIdentity {
+                user_id: "analyst-acme".to_string(),
+                tenant_id: "acme".to_string(),
+                role: "tenant_analyst".to_string(),
+            }),
+            "sql_route",
+            "ok",
+            json!({ "route_scope": "sql/route" }),
+        );
+        append_runtime_audit_event(
+            &state,
+            AuditEventKind::Sql,
+            &RuntimeAccessPrincipal::TenantUser(TenantUserIdentity {
+                user_id: "analyst-globex".to_string(),
+                tenant_id: "globex".to_string(),
+                role: "tenant_analyst".to_string(),
+            }),
+            "sql_route",
+            "ok",
+            json!({ "route_scope": "sql/route" }),
+        );
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let response = runtime
+            .block_on(audit_events(
+                State(state),
+                tenant_user_headers("analyst-acme", "acme"),
+                Query(AuditEventsQuery { max_items: Some(10) }),
+            ))
+            .expect("tenant audit response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.total_events, 1);
+        assert_eq!(response.events[0].actor, "analyst-acme");
+        assert!(response.events[0].details_json.contains("\"tenant_id\":\"acme\""));
+    }
+
+    #[test]
+    fn store_list_indexes_filters_to_tenant_namespace() {
+        use voltnuerongrid_store::index::{IndexDescriptor, IndexKind};
+
+        let state = state_with_key(None);
+        {
+            let mut mgr = state.index_manager.lock().expect("index lock");
+            mgr.create_index(IndexDescriptor {
+                name: "idx_acme_orders".to_string(),
+                table: "tenant/acme/orders".to_string(),
+                column: "customer_id".to_string(),
+                kind: IndexKind::BTree,
+                unique: false,
+            })
+            .expect("create acme index");
+            mgr.create_index(IndexDescriptor {
+                name: "idx_globex_orders".to_string(),
+                table: "tenant/globex/orders".to_string(),
+                column: "customer_id".to_string(),
+                kind: IndexKind::BTree,
+                unique: false,
+            })
+            .expect("create globex index");
+        }
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let response = runtime
+            .block_on(store_list_indexes(
+                State(state),
+                tenant_user_headers("analyst-acme", "acme"),
+            ))
+            .expect("tenant store list response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.indexes.len(), 1);
+        assert_eq!(response.indexes[0].name, "idx_acme_orders");
+    }
+
+    #[test]
+    fn store_index_lookup_denies_cross_tenant_index_lookup() {
+        use voltnuerongrid_store::index::{IndexDescriptor, IndexKind};
+
+        let state = state_with_key(None);
+        {
+            let mut mgr = state.index_manager.lock().expect("index lock");
+            mgr.create_index(IndexDescriptor {
+                name: "idx_globex_orders".to_string(),
+                table: "tenant/globex/orders".to_string(),
+                column: "customer_id".to_string(),
+                kind: IndexKind::BTree,
+                unique: false,
+            })
+            .expect("create globex index");
+            mgr.get_mut("idx_globex_orders")
+                .expect("lookup mutable index")
+                .insert("C100", "row-1")
+                .expect("seed index row");
+        }
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let auth = runtime
+            .block_on(store_index_lookup(
+                State(state),
+                tenant_user_headers("analyst-acme", "acme"),
+                Json(IndexLookupRequest {
+                    index_name: "idx_globex_orders".to_string(),
+                    value: "C100".to_string(),
+                }),
+            ))
+            .expect_err("cross-tenant index lookup should be rejected");
+
+        assert_eq!(auth.0, StatusCode::FORBIDDEN);
+        assert_eq!(auth.1.reason, "insufficient_privilege");
+    }
+
+    #[test]
+    fn store_validate_constraint_accepts_tenant_scoped_table() {
+        use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
+
+        let state = state_with_key(None);
+        state
+            .constraint_manager
+            .lock()
+            .expect("constraint lock")
+            .add_constraint(ConstraintDescriptor {
+                name: "tenant_acme_pk".to_string(),
+                table: "tenant/acme/orders".to_string(),
+                column: "id".to_string(),
+                kind: ConstraintKind::PrimaryKey,
+            })
+            .expect("add tenant constraint");
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let response = runtime
+            .block_on(store_validate_constraint(
+                State(state),
+                tenant_user_headers("analyst-acme", "acme"),
+                Json(ValidateConstraintRequest {
+                    table: "tenant/acme/orders".to_string(),
+                    column: "id".to_string(),
+                    value: Some("ord-1".to_string()),
+                }),
+            ))
+            .expect("tenant constraint validate response");
+
+        assert_eq!(response.status, "ok");
+        assert!(response.valid);
+        assert!(response.violation.is_none());
+    }
+
+    #[test]
+    fn store_create_index_accepts_tenant_admin_for_tenant_table() {
+        let state = state_with_key(None);
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(store_create_index(
+                State(state.clone()),
+                tenant_user_headers("admin-acme", "acme"),
+                Json(CreateIndexRequest {
+                    name: "idx_acme_orders_admin".to_string(),
+                    table: "tenant/acme/orders".to_string(),
+                    column: "customer_id".to_string(),
+                    unique: Some(false),
+                }),
+            ))
+            .expect("tenant admin should create index");
+
+        assert_eq!(response.0, StatusCode::CREATED);
+        let mgr = state.index_manager.lock().expect("index lock");
+        assert!(mgr.get("idx_acme_orders_admin").is_some());
+    }
+
+    #[test]
+    fn store_create_index_denies_tenant_admin_for_cross_tenant_table() {
+        let state = state_with_key(None);
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let auth = runtime
+            .block_on(store_create_index(
+                State(state),
+                tenant_user_headers("admin-acme", "acme"),
+                Json(CreateIndexRequest {
+                    name: "idx_globex_orders_admin".to_string(),
+                    table: "tenant/globex/orders".to_string(),
+                    column: "customer_id".to_string(),
+                    unique: Some(false),
+                }),
+            ))
+            .expect_err("tenant admin should not manage cross-tenant table");
+
+        assert_eq!(auth.0, StatusCode::FORBIDDEN);
+        assert_eq!(auth.1.reason, "insufficient_privilege");
+    }
+
+    #[test]
+    fn store_create_index_denies_tenant_analyst_manage_scope() {
+        let state = state_with_key(None);
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let auth = runtime
+            .block_on(store_create_index(
+                State(state),
+                tenant_user_headers("analyst-acme", "acme"),
+                Json(CreateIndexRequest {
+                    name: "idx_acme_orders_analyst".to_string(),
+                    table: "tenant/acme/orders".to_string(),
+                    column: "customer_id".to_string(),
+                    unique: Some(false),
+                }),
+            ))
+            .expect_err("tenant analyst should not manage store catalog");
+
+        assert_eq!(auth.0, StatusCode::FORBIDDEN);
+        assert_eq!(auth.1.reason, "insufficient_privilege");
+    }
+
+    #[test]
+    fn store_add_constraint_accepts_tenant_admin_for_tenant_table() {
+        let state = state_with_key(None);
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(store_add_constraint(
+                State(state),
+                tenant_user_headers("admin-acme", "acme"),
+                Json(AddConstraintRequest {
+                    name: "tenant_acme_orders_pk".to_string(),
+                    table: "tenant/acme/orders".to_string(),
+                    column: "id".to_string(),
+                    kind: "primary_key".to_string(),
+                }),
+            ))
+            .expect("tenant admin should add constraint");
+
+        assert_eq!(response.0, StatusCode::CREATED);
+    }
+
+    #[test]
+    fn store_drop_index_accepts_tenant_admin_for_tenant_table() {
+        use voltnuerongrid_store::index::{IndexDescriptor, IndexKind};
+
+        let state = state_with_key(None);
+        {
+            let mut mgr = state.index_manager.lock().expect("index lock");
+            mgr.create_index(IndexDescriptor {
+                name: "idx_acme_drop".to_string(),
+                table: "tenant/acme/orders".to_string(),
+                column: "customer_id".to_string(),
+                kind: IndexKind::BTree,
+                unique: false,
+            })
+            .expect("seed tenant index");
+        }
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(store_drop_index(
+                State(state.clone()),
+                tenant_user_headers("admin-acme", "acme"),
+                Json(DropIndexRequest {
+                    name: "idx_acme_drop".to_string(),
+                }),
+            ))
+            .expect("tenant admin should drop own index");
+
+        assert_eq!(response.0, StatusCode::OK);
+        let mgr = state.index_manager.lock().expect("index lock");
+        assert!(mgr.get("idx_acme_drop").is_none());
     }
 
     #[test]
@@ -4785,6 +5640,92 @@ mod tests {
         let records = latest_action_records(&state, 10);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].trace_id, "atrace-test");
+    }
+
+    #[test]
+    fn autonomous_records_runtime_allows_tenant_analyst_read_scope() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+
+        let principal = require_autonomous_records_runtime_principal(
+            &headers,
+            &state,
+            PrivilegeAction::Read,
+            "autonomous/records",
+        )
+        .expect("tenant analyst should read tenant autonomous records scope");
+
+        assert!(matches!(principal, RuntimeAccessPrincipal::TenantUser(_)));
+    }
+
+    #[test]
+    fn autonomous_action_records_filter_to_tenant_scope() {
+        let state = state_with_key(None);
+        append_action_record(
+            &state,
+            AutonomousActionExecutionRecord::new(
+                "atrace-acme".to_string(),
+                "rebalance_cache",
+                "tenants/acme/autonomous/records",
+                "platform-admin",
+                AutonomousActionDecision::Allow,
+                "tenant scoped",
+            )
+            .with_tenant_id(Some("acme")),
+        );
+        append_action_record(
+            &state,
+            AutonomousActionExecutionRecord::new(
+                "atrace-globex".to_string(),
+                "rebalance_cache",
+                "tenants/globex/autonomous/records",
+                "platform-admin",
+                AutonomousActionDecision::Allow,
+                "tenant scoped",
+            )
+            .with_tenant_id(Some("globex")),
+        );
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let response = runtime
+            .block_on(autonomous_action_records(
+                State(state),
+                tenant_user_headers("analyst-acme", "acme"),
+                Query(AutonomousActionRecordsQuery { max_items: Some(10) }),
+            ))
+            .expect("tenant autonomous records response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.total_records, 1);
+        assert_eq!(response.records[0].trace_id, "atrace-acme");
+        assert_eq!(response.records[0].tenant_id.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn authorize_action_response_tags_tenant_scope_record_and_audit() {
+        let state = state_with_key(None);
+
+        let response = build_authorize_action_response(
+            &state,
+            StatusCode::OK,
+            "rebalance_cache",
+            "tenants/acme/autonomous/records",
+            "allow",
+            "tenant scope allowed".to_string(),
+            "atrace-tenant",
+            "platform-admin",
+            AutonomousActionDecision::Allow,
+        );
+
+        assert_eq!(response.0, StatusCode::OK);
+        let records = latest_action_records(&state, 10);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tenant_id.as_deref(), Some("acme"));
+
+        let events = state.audit_sink.lock().expect("audit lock").latest(1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AuditEventKind::Autonomous);
+        assert!(events[0].details_json.contains("\"tenant_id\":\"acme\""));
     }
 
     #[test]

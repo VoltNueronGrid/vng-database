@@ -1,9 +1,9 @@
 {
-  "smoke": "ws8-control-plane-baseline",
-  "status": "passed",
-  "command": "cargo test -p voltnuerongrid-ai; cargo test -p voltnuerongridd append_action_record",
-  "started_at_utc": "2026-03-06T05:45:14.6682960Z",
-  "finished_at_utc": "2026-03-06T05:45:21.8721623Z",
-  "duration_ms": 7204,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.78s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ai-b483cf9d88b7b981.exe)\n\nrunning 1 test\ntest tests::creates_typed_execution_record ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_ai\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.82s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 1 test\ntest tests::append_action_record_writes_to_history ... ok\n"
+    "smoke":  "ws8-control-plane-baseline",
+    "status":  "passed",
+    "command":  "cargo test -p voltnuerongrid-ai; cargo test -p voltnuerongridd append_action_record",
+    "started_at_utc":  "2026-03-08T08:27:59.2545268Z",
+    "finished_at_utc":  "2026-03-08T08:28:03.7124678Z",
+    "duration_ms":  4458,
+    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ai-b483cf9d88b7b981.exe)\n\nrunning 2 tests\ntest tests::creates_typed_execution_record ... ok\ntest tests::record_can_be_tagged_to_tenant_scope ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_ai\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::append_action_record_writes_to_history ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.00s\n\n"
 }

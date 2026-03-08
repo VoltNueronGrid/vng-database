@@ -14,18 +14,39 @@ function Ensure-OutputDir {
 
 Ensure-OutputDir -PathValue $OutputPath
 
+function Invoke-CargoTestCapture {
+  param([string[]]$Arguments)
+
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $commandText = "cargo " + (($Arguments | ForEach-Object {
+      if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+    }) -join " ")
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "$commandText > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
+    $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+    $ok = ($text -match "test result: ok\." -and $text -notmatch "test result: FAILED" -and $text -notmatch "(?m)^error:")
+    return [pscustomobject]@{
+      Ok = $ok
+      Text = $text
+      ExitCode = $process.ExitCode
+    }
+  } finally {
+    if (Test-Path -Path $tempFile) {
+      Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 $start = Get-Date
 $command = "cargo test -p voltnuerongrid-audit; cargo test -p voltnuerongridd audit_append_event"
 $outputLines = @()
 $exitCode = 1
 
 try {
-  $first = & cargo test -p voltnuerongrid-audit 2>&1
-  $firstExit = $LASTEXITCODE
-  $second = & cargo test -p voltnuerongridd audit_append_event 2>&1
-  $secondExit = $LASTEXITCODE
-  $outputLines = @($first + $second)
-  $exitCode = if ($firstExit -eq 0 -and $secondExit -eq 0) { 0 } else { 1 }
+  $first = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongrid-audit")
+  $second = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongridd", "audit_append_event")
+  $outputLines = @($first.Text + $second.Text)
+  $exitCode = if ($first.Ok -and $second.Ok) { 0 } else { 1 }
 } catch {
   $outputLines += $_.Exception.Message
   $exitCode = 1

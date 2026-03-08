@@ -16,6 +16,29 @@ function Ensure-OutputDir {
 Ensure-OutputDir -PathValue $OutputPath
 if (!(Test-Path -Path $SqlLibPath)) { throw "SQL library file not found at $SqlLibPath" }
 
+function Invoke-CargoTestCapture {
+  param([string[]]$Arguments)
+
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $commandText = "cargo " + (($Arguments | ForEach-Object {
+      if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+    }) -join " ")
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "$commandText > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
+    $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+    $ok = ($text -match "test result: ok\." -and $text -notmatch "test result: FAILED" -and $text -notmatch "(?m)^error:")
+    return [pscustomobject]@{
+      Ok = $ok
+      Text = $text
+      ExitCode = $process.ExitCode
+    }
+  } finally {
+    if (Test-Path -Path $tempFile) {
+      Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 $content = Get-Content -Raw -Path $SqlLibPath
 $checks = [ordered]@{
   function_language_rust_declared = ($content -match 'FunctionLanguage\s*\{[\s\S]*Rust')
@@ -25,15 +48,13 @@ $checks = [ordered]@{
 }
 
 $output = @()
-$global:LASTEXITCODE = 0
-$testOutput = & cargo test -p voltnuerongrid-sql function_registry_supports_polyglot_udf_contract -- --nocapture 2>&1
-$output += $testOutput
-$checks.polyglot_udf_registry_test_passes = ($? -and $LASTEXITCODE -eq 0)
+$testOutput = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongrid-sql", "function_registry_supports_polyglot_udf_contract", "--", "--nocapture")
+$output += $testOutput.Text
+$checks.polyglot_udf_registry_test_passes = $testOutput.Ok
 
-$global:LASTEXITCODE = 0
-$classifyOutput = & cargo test -p voltnuerongrid-sql classifies_core_statements -- --nocapture 2>&1
-$output += $classifyOutput
-$checks.create_function_classification_test_passes = ($? -and $LASTEXITCODE -eq 0)
+$classifyOutput = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongrid-sql", "classifies_core_statements", "--", "--nocapture")
+$output += $classifyOutput.Text
+$checks.create_function_classification_test_passes = $classifyOutput.Ok
 
 $status = if ((@($checks.Values | Where-Object { $_ -eq $false }).Count) -eq 0) { "passed" } else { "failed" }
 $artifact = [ordered]@{

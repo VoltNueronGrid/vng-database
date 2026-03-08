@@ -1,0 +1,262 @@
+﻿{
+    "smoke":  "ws8-tenant-autonomous-runtime",
+    "status":  "passed",
+    "base_url":  "http://127.0.0.1:18082",
+    "operator_id":  "platform-admin",
+    "tenant_id":  "acme",
+    "tenant_user_id":  "analyst-acme",
+    "other_tenant_id":  "globex",
+    "other_tenant_user_id":  "analyst-globex",
+    "timestamp_utc":  "2026-03-08T08:28:14.9539296Z",
+    "checks":  {
+                   "records_require_auth_headers":  true,
+                   "tenant_authorize_request_allowed":  true,
+                   "other_tenant_authorize_request_allowed":  true,
+                   "operator_records_status_ok":  true,
+                   "operator_records_include_both_trace_ids":  true,
+                   "tenant_records_status_ok":  true,
+                   "tenant_records_include_own_trace":  true,
+                   "tenant_records_exclude_other_trace":  true,
+                   "tenant_records_only_include_own_tenant_id":  true,
+                   "other_tenant_records_status_ok":  true,
+                   "other_tenant_records_include_own_trace":  true,
+                   "other_tenant_records_exclude_first_tenant_trace":  true,
+                   "other_tenant_records_only_include_own_tenant_id":  true
+               },
+    "authorize_responses":  {
+                                "tenant":  {
+                                               "status":  "ok",
+                                               "action":  "performance_tune",
+                                               "requested_scope":  "tenants/acme/autonomous/records",
+                                               "decision":  "allow",
+                                               "reason":  "mode Supervised satisfies required mode Advisory",
+                                               "trace_id":  "atrace-13"
+                                           },
+                                "other_tenant":  {
+                                                     "status":  "ok",
+                                                     "action":  "performance_tune",
+                                                     "requested_scope":  "tenants/globex/autonomous/records",
+                                                     "decision":  "allow",
+                                                     "reason":  "mode Supervised satisfies required mode Advisory",
+                                                     "trace_id":  "atrace-14"
+                                                 }
+                            },
+    "operator_records":  {
+                             "status":  "ok",
+                             "total_records":  10,
+                             "records":  [
+                                             {
+                                                 "trace_id":  "atrace-5",
+                                                 "occurred_epoch_ms":  1772958313286,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/acme/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "acme",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-6",
+                                                 "occurred_epoch_ms":  1772958313340,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/globex/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "globex",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-7",
+                                                 "occurred_epoch_ms":  1772958381328,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/acme/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "acme",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-8",
+                                                 "occurred_epoch_ms":  1772958381361,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/globex/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "globex",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-9",
+                                                 "occurred_epoch_ms":  1772958398322,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/acme/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "acme",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-10",
+                                                 "occurred_epoch_ms":  1772958398364,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/globex/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "globex",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-11",
+                                                 "occurred_epoch_ms":  1772958419330,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/acme/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "acme",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-12",
+                                                 "occurred_epoch_ms":  1772958419363,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/globex/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "globex",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-13",
+                                                 "occurred_epoch_ms":  1772958494797,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/acme/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "acme",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             },
+                                             {
+                                                 "trace_id":  "atrace-14",
+                                                 "occurred_epoch_ms":  1772958494832,
+                                                 "action":  "performance_tune",
+                                                 "scope":  "tenants/globex/autonomous/records",
+                                                 "requested_by":  "platform-admin",
+                                                 "tenant_id":  "globex",
+                                                 "decision":  "allow",
+                                                 "reason":  "mode Supervised satisfies required mode Advisory"
+                                             }
+                                         ]
+                         },
+    "tenant_records":  {
+                           "status":  "ok",
+                           "total_records":  5,
+                           "records":  [
+                                           {
+                                               "trace_id":  "atrace-5",
+                                               "occurred_epoch_ms":  1772958313286,
+                                               "action":  "performance_tune",
+                                               "scope":  "tenants/acme/autonomous/records",
+                                               "requested_by":  "platform-admin",
+                                               "tenant_id":  "acme",
+                                               "decision":  "allow",
+                                               "reason":  "mode Supervised satisfies required mode Advisory"
+                                           },
+                                           {
+                                               "trace_id":  "atrace-7",
+                                               "occurred_epoch_ms":  1772958381328,
+                                               "action":  "performance_tune",
+                                               "scope":  "tenants/acme/autonomous/records",
+                                               "requested_by":  "platform-admin",
+                                               "tenant_id":  "acme",
+                                               "decision":  "allow",
+                                               "reason":  "mode Supervised satisfies required mode Advisory"
+                                           },
+                                           {
+                                               "trace_id":  "atrace-9",
+                                               "occurred_epoch_ms":  1772958398322,
+                                               "action":  "performance_tune",
+                                               "scope":  "tenants/acme/autonomous/records",
+                                               "requested_by":  "platform-admin",
+                                               "tenant_id":  "acme",
+                                               "decision":  "allow",
+                                               "reason":  "mode Supervised satisfies required mode Advisory"
+                                           },
+                                           {
+                                               "trace_id":  "atrace-11",
+                                               "occurred_epoch_ms":  1772958419330,
+                                               "action":  "performance_tune",
+                                               "scope":  "tenants/acme/autonomous/records",
+                                               "requested_by":  "platform-admin",
+                                               "tenant_id":  "acme",
+                                               "decision":  "allow",
+                                               "reason":  "mode Supervised satisfies required mode Advisory"
+                                           },
+                                           {
+                                               "trace_id":  "atrace-13",
+                                               "occurred_epoch_ms":  1772958494797,
+                                               "action":  "performance_tune",
+                                               "scope":  "tenants/acme/autonomous/records",
+                                               "requested_by":  "platform-admin",
+                                               "tenant_id":  "acme",
+                                               "decision":  "allow",
+                                               "reason":  "mode Supervised satisfies required mode Advisory"
+                                           }
+                                       ]
+                       },
+    "other_tenant_records":  {
+                                 "status":  "ok",
+                                 "total_records":  5,
+                                 "records":  [
+                                                 {
+                                                     "trace_id":  "atrace-6",
+                                                     "occurred_epoch_ms":  1772958313340,
+                                                     "action":  "performance_tune",
+                                                     "scope":  "tenants/globex/autonomous/records",
+                                                     "requested_by":  "platform-admin",
+                                                     "tenant_id":  "globex",
+                                                     "decision":  "allow",
+                                                     "reason":  "mode Supervised satisfies required mode Advisory"
+                                                 },
+                                                 {
+                                                     "trace_id":  "atrace-8",
+                                                     "occurred_epoch_ms":  1772958381361,
+                                                     "action":  "performance_tune",
+                                                     "scope":  "tenants/globex/autonomous/records",
+                                                     "requested_by":  "platform-admin",
+                                                     "tenant_id":  "globex",
+                                                     "decision":  "allow",
+                                                     "reason":  "mode Supervised satisfies required mode Advisory"
+                                                 },
+                                                 {
+                                                     "trace_id":  "atrace-10",
+                                                     "occurred_epoch_ms":  1772958398364,
+                                                     "action":  "performance_tune",
+                                                     "scope":  "tenants/globex/autonomous/records",
+                                                     "requested_by":  "platform-admin",
+                                                     "tenant_id":  "globex",
+                                                     "decision":  "allow",
+                                                     "reason":  "mode Supervised satisfies required mode Advisory"
+                                                 },
+                                                 {
+                                                     "trace_id":  "atrace-12",
+                                                     "occurred_epoch_ms":  1772958419363,
+                                                     "action":  "performance_tune",
+                                                     "scope":  "tenants/globex/autonomous/records",
+                                                     "requested_by":  "platform-admin",
+                                                     "tenant_id":  "globex",
+                                                     "decision":  "allow",
+                                                     "reason":  "mode Supervised satisfies required mode Advisory"
+                                                 },
+                                                 {
+                                                     "trace_id":  "atrace-14",
+                                                     "occurred_epoch_ms":  1772958494832,
+                                                     "action":  "performance_tune",
+                                                     "scope":  "tenants/globex/autonomous/records",
+                                                     "requested_by":  "platform-admin",
+                                                     "tenant_id":  "globex",
+                                                     "decision":  "allow",
+                                                     "reason":  "mode Supervised satisfies required mode Advisory"
+                                                 }
+                                             ]
+                             }
+}

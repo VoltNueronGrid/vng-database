@@ -1,87 +1,99 @@
 {
-  "smoke": "ws2-index-constraint-scaffold",
-  "status": "passed",
-  "started_at_utc": "2026-03-07T06:50:17.2466313Z",
-  "finished_at_utc": "2026-03-07T06:50:17.2951954Z",
-  "duration_ms": 49,
-  "total_checks": 19,
-  "passed_checks": 19,
-  "checks": [
-    {
-      "check": "index_manager_struct_exists",
-      "status": "passed"
-    },
-    {
-      "check": "btree_index_struct_exists",
-      "status": "passed"
-    },
-    {
-      "check": "index_descriptor_struct_exists",
-      "status": "passed"
-    },
-    {
-      "check": "create_index_method_exists",
-      "status": "passed"
-    },
-    {
-      "check": "drop_index_method_exists",
-      "status": "passed"
-    },
-    {
-      "check": "lookup_method_exists",
-      "status": "passed"
-    },
-    {
-      "check": "range_scan_method_exists",
-      "status": "passed"
-    },
-    {
-      "check": "unique_violation_error_exists",
-      "status": "passed"
-    },
-    {
-      "check": "constraint_manager_struct_exists",
-      "status": "passed"
-    },
-    {
-      "check": "constraint_kind_primary_key",
-      "status": "passed"
-    },
-    {
-      "check": "constraint_kind_unique",
-      "status": "passed"
-    },
-    {
-      "check": "constraint_kind_not_null",
-      "status": "passed"
-    },
-    {
-      "check": "constraint_validate_method_exists",
-      "status": "passed"
-    },
-    {
-      "check": "record_committed_value_method_exists",
-      "status": "passed"
-    },
-    {
-      "check": "store_indexes_route_exists",
-      "status": "passed"
-    },
-    {
-      "check": "store_constraints_route_exists",
-      "status": "passed"
-    },
-    {
-      "check": "store_handlers_require_rbac",
-      "status": "passed"
-    },
-    {
-      "check": "ws2_index_unit_test_exists",
-      "status": "passed"
-    },
-    {
-      "check": "ws2_constraint_unit_test_exists",
-      "status": "passed"
-    }
-  ]
+    "smoke":  "ws2-index-constraint-scaffold",
+    "status":  "passed",
+    "started_at_utc":  "2026-03-08T04:53:03.4351431Z",
+    "finished_at_utc":  "2026-03-08T04:53:03.4404853Z",
+    "duration_ms":  5,
+    "total_checks":  22,
+    "passed_checks":  22,
+    "checks":  [
+                   {
+                       "check":  "index_manager_struct_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "btree_index_struct_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "index_descriptor_struct_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "create_index_method_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "drop_index_method_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "lookup_method_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "range_scan_method_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "unique_violation_error_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "constraint_manager_struct_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "constraint_kind_primary_key",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "constraint_kind_unique",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "constraint_kind_not_null",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "constraint_validate_method_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "record_committed_value_method_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "store_indexes_route_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "store_constraints_route_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "store_handlers_require_runtime_rbac",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "tenant_store_grants_exist",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "ws2_index_unit_test_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "ws2_constraint_unit_test_exists",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "tenant_store_tests_exist",
+                       "status":  "passed"
+                   },
+                   {
+                       "check":  "tenant_constraint_scope_enforced",
+                       "status":  "passed"
+                   }
+               ]
 }

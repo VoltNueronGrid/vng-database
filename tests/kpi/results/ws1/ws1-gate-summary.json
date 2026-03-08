@@ -1,9 +1,9 @@
 {
   "gate": "ws1",
-  "status": "passed",
-  "started_at_utc": "2026-03-06T06:53:01.0707069Z",
-  "finished_at_utc": "2026-03-06T06:53:11.9366944Z",
-  "duration_ms": 10866,
+  "status": "failed",
+  "started_at_utc": "2026-03-08T08:47:01.5754655Z",
+  "finished_at_utc": "2026-03-08T08:47:13.9193582Z",
+  "duration_ms": 12344,
   "packs": [
     {
       "pack": "ws1-sql-core-tests",
@@ -26,6 +26,26 @@
       "detail": "cargo check -p voltnuerongridd"
     },
     {
+      "pack": "ws1-sql-analyze-runtime-smoke",
+      "status": "failed",
+      "detail": "Method invocation failed because [System.Net.Http.HttpResponseMessage] does not contain a method named 'GetResponseStream'."
+    },
+    {
+      "pack": "ws1-sql-route-runtime-smoke",
+      "status": "failed",
+      "detail": "Method invocation failed because [System.Net.Http.HttpResponseMessage] does not contain a method named 'GetResponseStream'."
+    },
+    {
+      "pack": "ws1-sql-execute-runtime-smoke",
+      "status": "failed",
+      "detail": "Method invocation failed because [System.Net.Http.HttpResponseMessage] does not contain a method named 'GetResponseStream'."
+    },
+    {
+      "pack": "ws1-sql-transaction-runtime-smoke",
+      "status": "failed",
+      "detail": "Method invocation failed because [System.Net.Http.HttpResponseMessage] does not contain a method named 'GetResponseStream'."
+    },
+    {
       "pack": "ws1-udf-coverage-matrix",
       "status": "passed",
       "detail": "tests/kpi/scripts/run-ws1-udf-coverage-export.ps1"
@@ -42,7 +62,7 @@
     },
     {
       "pack": "ws1-release-summary",
-      "status": "passed",
+      "status": "failed",
       "detail": "tests/kpi/scripts/run-ws1-release-summary.ps1"
     }
   ]

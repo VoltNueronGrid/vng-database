@@ -1,16 +1,16 @@
 {
-  "smoke": "ws8-guardrail-policy",
-  "status": "passed",
-  "runtime_path": "services/voltnuerongridd/src/main.rs",
-  "command": "cargo test -p voltnuerongridd action_trace_id_is_generated -- --nocapture",
-  "timestamp_utc": "2026-03-06T05:45:24.6447107Z",
-  "checks": {
-    "autonomous_guardrails_route": true,
-    "autonomous_emergency_stop_route": true,
-    "autonomous_authorize_route": true,
-    "emergency_stop_enforced": true,
-    "guardrail_rules_present": true,
-    "trace_id_generation_test": true
-  },
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4efcc8821d309b91.exe)\n\nrunning 1 test\ntest tests::action_trace_id_is_generated ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.00s\n"
+    "smoke":  "ws8-guardrail-policy",
+    "status":  "passed",
+    "runtime_path":  "services/voltnuerongridd/src/main.rs",
+    "command":  "cargo test -p voltnuerongridd action_trace_id_is_generated -- --nocapture",
+    "timestamp_utc":  "2026-03-08T08:28:06.0480130Z",
+    "checks":  {
+                   "autonomous_guardrails_route":  true,
+                   "autonomous_emergency_stop_route":  true,
+                   "autonomous_authorize_route":  true,
+                   "emergency_stop_enforced":  true,
+                   "guardrail_rules_present":  true,
+                   "trace_id_generation_test":  true
+               },
+    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::action_trace_id_is_generated ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.00s\n\n"
 }

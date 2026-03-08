@@ -1,0 +1,27 @@
+﻿{
+    "smoke":  "sql-transaction-runtime",
+    "status":  "passed",
+    "base_url":  "http://127.0.0.1:18080",
+    "tenant_id":  "acme",
+    "user_id":  "analyst-acme",
+    "timestamp_utc":  "2026-03-08T04:54:24.7514687Z",
+    "checks":  {
+                   "transaction_requires_user_headers":  true,
+                   "transaction_status_committed":  true,
+                   "transaction_id_present":  true,
+                   "transaction_statement_count":  true,
+                   "transaction_rejected_count_zero":  true,
+                   "invalid_transaction_returns_bad_request":  true,
+                   "invalid_transaction_request_rejected":  true
+               },
+    "committed_response":  {
+                               "status":  "committed",
+                               "transaction_id":  "tx-8",
+                               "statements_executed":  2,
+                               "requires_transaction":  false,
+                               "touches_catalog":  false,
+                               "rejected_statement_count":  0,
+                               "elapsed_ms":  0
+                           },
+    "invalid_response":  null
+}

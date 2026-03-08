@@ -17,6 +17,7 @@ if (!(Test-Path -Path $SummaryPath)) { throw "WS8 gate summary not found at $Sum
 $summary = Get-Content -Raw -Path $SummaryPath | ConvertFrom-Json
 $packByName = @{}
 foreach ($pack in $summary.packs) { $packByName[[string]$pack.pack] = [string]$pack.status }
+$runtimePackPresent = $packByName.ContainsKey("ws8-tenant-autonomous-runtime")
 
 $matrix = @(
   [ordered]@{ control = "typed_action_record_baseline"; evidence_pack = "ws8-control-plane"; status = $packByName["ws8-control-plane"]; artifact = "tests/kpi/results/ws8/control-plane-smoke.json" },
@@ -26,6 +27,10 @@ $matrix = @(
   [ordered]@{ control = "audit_companion_trace_filter"; evidence_pack = "ws8a-audit-companion"; status = $packByName["ws8a-audit-companion"]; artifact = "tests/kpi/results/ws8a/audit-companion-smoke.json" }
 )
 
+if ($runtimePackPresent) {
+  $matrix += [ordered]@{ control = "tenant_filtered_autonomous_record_runtime"; evidence_pack = "ws8-tenant-autonomous-runtime"; status = $packByName["ws8-tenant-autonomous-runtime"]; artifact = "tests/kpi/results/ws8/tenant-autonomous-runtime-smoke.json" }
+}
+
 $failed = @($matrix | Where-Object { $_.status -ne "passed" })
 $status = if ($failed.Count -eq 0) { "passed" } else { "failed" }
 $artifact = [ordered]@{
@@ -33,6 +38,7 @@ $artifact = [ordered]@{
   status = $status
   generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
   source_summary = $SummaryPath
+  runtime_pack_included = $runtimePackPresent
   total_controls = $matrix.Count
   passed_controls = ($matrix | Where-Object { $_.status -eq "passed" }).Count
   failed_controls = $failed.Count

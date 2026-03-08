@@ -87,17 +87,29 @@ $checks += [ordered]@{ check = "store_indexes_route_exists"; status = $c15 }
 $c16 = if ($mainSrc -match "/api/v1/store/constraints") { "passed" } else { "failed" }
 $checks += [ordered]@{ check = "store_constraints_route_exists"; status = $c16 }
 
-# 17. Store handlers require operator auth
-$c17 = if ($mainSrc -match 'async fn store_list_indexes[\s\S]*?require_operator_auth\(&headers,\s*&state\)\?;' -and $mainSrc -match 'async fn store_create_index[\s\S]*?require_operator_privilege\([\s\S]*?"storage\.catalog"[\s\S]*?"store/indexes"') { "passed" } else { "failed" }
-$checks += [ordered]@{ check = "store_handlers_require_rbac"; status = $c17 }
+# 17. Store handlers route through shared runtime RBAC and preserve operator-managed writes
+$c17 = if ($mainSrc -match "fn require_store_runtime_principal" -and $mainSrc -match "async fn store_list_indexes[\s\S]*?require_store_runtime_principal" -and $mainSrc -match "async fn store_create_index[\s\S]*?require_operator_privilege") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "store_handlers_require_runtime_rbac"; status = $c17 }
 
-# 18. ws2_index unit test exists
-$c18 = if ($mainSrc -match "ws2_index_create_lookup_drop_lifecycle") { "passed" } else { "failed" }
-$checks += [ordered]@{ check = "ws2_index_unit_test_exists"; status = $c18 }
+# 18. Tenant store grants exist in the default RBAC matrix
+$c18 = if ($mainSrc -match "tenants/\{tenant\}/store/indexes" -and $mainSrc -match "tenants/\{tenant\}/store/constraints/validate") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "tenant_store_grants_exist"; status = $c18 }
 
-# 19. ws2_constraint unit test exists
-$c19 = if ($mainSrc -match "ws2_constraint_pk_not_null_via_appstate") { "passed" } else { "failed" }
-$checks += [ordered]@{ check = "ws2_constraint_unit_test_exists"; status = $c19 }
+# 19. ws2_index unit test exists
+$c19 = if ($mainSrc -match "ws2_index_create_lookup_drop_lifecycle") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ws2_index_unit_test_exists"; status = $c19 }
+
+# 20. ws2_constraint unit test exists
+$c20 = if ($mainSrc -match "ws2_constraint_pk_not_null_via_appstate") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ws2_constraint_unit_test_exists"; status = $c20 }
+
+# 21. tenant-scoped WS2 metadata tests exist
+$c21 = if ($mainSrc -match "store_list_indexes_filters_to_tenant_namespace" -and $mainSrc -match "store_index_lookup_denies_cross_tenant_index_lookup") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "tenant_store_tests_exist"; status = $c21 }
+
+# 22. constraint validation enforces tenant-scoped reads
+$c22 = if ($mainSrc -match "store_validate_constraint_accepts_tenant_scoped_table" -and $mainSrc -match "ensure_store_table_access") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "tenant_constraint_scope_enforced"; status = $c22 }
 
 foreach ($c in $checks) {
   if ($c.status -ne "passed") { $status = "failed" }
@@ -116,5 +128,5 @@ $artifact = [ordered]@{
 }
 
 $artifact | ConvertTo-Json -Depth 8 | Set-Content -Path $OutputPath
-Write-Host "WS2 index/constraint smoke: $OutputPath ($status) — $($checks.Count) checks"
+Write-Host "WS2 index/constraint smoke: $OutputPath ($status) - $($checks.Count) checks"
 if ($status -ne "passed") { exit 1 }

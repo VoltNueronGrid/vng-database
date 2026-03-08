@@ -1,0 +1,97 @@
+﻿{
+    "smoke":  "ws5-tenant-audit-runtime",
+    "status":  "passed",
+    "base_url":  "http://127.0.0.1:18081",
+    "tenant_id":  "acme",
+    "admin_user_id":  "admin-acme",
+    "tenant_user_id":  "analyst-acme",
+    "other_tenant_id":  "globex",
+    "other_tenant_user_id":  "analyst-globex",
+    "timestamp_utc":  "2026-03-08T06:16:53.5952736Z",
+    "checks":  {
+                   "audit_requires_user_headers":  true,
+                   "tenant_route_generates_event":  true,
+                   "tenant_store_generates_event":  true,
+                   "tenant_ingest_generates_event":  true,
+                   "other_tenant_route_generates_event":  true,
+                   "tenant_audit_status_ok":  true,
+                   "tenant_audit_has_events":  true,
+                   "tenant_audit_contains_tenant_actor":  true,
+                   "tenant_audit_contains_tenant_id":  true,
+                   "tenant_audit_contains_storage_action":  true,
+                   "tenant_audit_contains_ingest_action":  true,
+                   "tenant_audit_excludes_other_tenant_actor":  true,
+                   "tenant_audit_excludes_other_tenant_id":  true
+               },
+    "generated_actions":  {
+                              "sql_route":  {
+                                                "status":  "ok",
+                                                "route_path":  "hybrid",
+                                                "reason":  "mixed transactional and analytical workload",
+                                                "statements":  [
+                                                                   {
+                                                                       "statement":  "BEGIN",
+                                                                       "path":  "oltp"
+                                                                   },
+                                                                   {
+                                                                       "statement":  "SELECT region, SUM(amount) FROM orders GROUP BY region",
+                                                                       "path":  "olap"
+                                                                   }
+                                                               ]
+                                            },
+                              "store_create_index":  {
+                                                         "column":  "customer_id",
+                                                         "index_name":  "idx_acme_audit_1772950612",
+                                                         "status":  "created",
+                                                         "table":  "tenant/acme/orders",
+                                                         "unique":  false
+                                                     },
+                              "ingest_csv":  {
+                                                 "connector_id":  "orders-csv-1772950612",
+                                                 "records_parsed":  1,
+                                                 "status":  "ok"
+                                             }
+                          },
+    "audit_response":  {
+                           "status":  "ok",
+                           "total_events":  4,
+                           "events":  [
+                                          {
+                                              "event_id":  1,
+                                              "occurred_epoch_ms":  1772950553691,
+                                              "actor":  "analyst-acme",
+                                              "action":  "sql_route",
+                                              "kind":  "sql",
+                                              "outcome":  "ok",
+                                              "details_json":  "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}"
+                                          },
+                                          {
+                                              "event_id":  3,
+                                              "occurred_epoch_ms":  1772950613176,
+                                              "actor":  "analyst-acme",
+                                              "action":  "sql_route",
+                                              "kind":  "sql",
+                                              "outcome":  "ok",
+                                              "details_json":  "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}"
+                                          },
+                                          {
+                                              "event_id":  4,
+                                              "occurred_epoch_ms":  1772950613272,
+                                              "actor":  "admin-acme",
+                                              "action":  "store_create_index",
+                                              "kind":  "storage",
+                                              "outcome":  "ok",
+                                              "details_json":  "{\"actor_type\":\"tenant_user\",\"column\":\"customer_id\",\"index_name\":\"idx_acme_audit_1772950612\",\"route_scope\":\"store/indexes/create\",\"table\":\"tenant/acme/orders\",\"tenant_id\":\"acme\",\"unique\":false,\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}"
+                                          },
+                                          {
+                                              "event_id":  5,
+                                              "occurred_epoch_ms":  1772950613320,
+                                              "actor":  "admin-acme",
+                                              "action":  "ingest_csv",
+                                              "kind":  "ingest",
+                                              "outcome":  "ok",
+                                              "details_json":  "{\"actor_type\":\"tenant_user\",\"connector_id\":\"orders-csv-1772950612\",\"records_parsed\":1,\"route_scope\":\"ingest/connectors/csv\",\"tenant_id\":\"acme\",\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}"
+                                          }
+                                      ]
+                       }
+}

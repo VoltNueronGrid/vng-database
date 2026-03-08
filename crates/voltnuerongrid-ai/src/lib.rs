@@ -21,6 +21,8 @@ pub struct AutonomousActionExecutionRecord {
     pub action: String,
     pub scope: String,
     pub requested_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
     pub decision: AutonomousActionDecision,
     pub reason: String,
 }
@@ -40,9 +42,15 @@ impl AutonomousActionExecutionRecord {
             action: action.to_string(),
             scope: scope.to_string(),
             requested_by: requested_by.to_string(),
+            tenant_id: None,
             decision,
             reason: reason.to_string(),
         }
+    }
+
+    pub fn with_tenant_id(mut self, tenant_id: Option<&str>) -> Self {
+        self.tenant_id = tenant_id.map(|value| value.to_string());
+        self
     }
 }
 
@@ -70,5 +78,21 @@ mod tests {
         assert_eq!(record.trace_id, "trace-1");
         assert_eq!(record.action, "schema_change");
         assert_eq!(record.decision, AutonomousActionDecision::Allow);
+        assert!(record.tenant_id.is_none());
+    }
+
+    #[test]
+    fn record_can_be_tagged_to_tenant_scope() {
+        let record = AutonomousActionExecutionRecord::new(
+            "trace-2".to_string(),
+            "optimize_partition",
+            "tenants/acme/autonomous/records",
+            "platform-admin",
+            AutonomousActionDecision::Allow,
+            "policy satisfied",
+        )
+        .with_tenant_id(Some("acme"));
+
+        assert_eq!(record.tenant_id.as_deref(), Some("acme"));
     }
 }

@@ -16,6 +16,29 @@ function Ensure-OutputDir {
 Ensure-OutputDir -PathValue $OutputPath
 Ensure-OutputDir -PathValue $ReportPath
 
+function Invoke-CargoRunCapture {
+  param([string[]]$Arguments)
+
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $commandText = "cargo " + (($Arguments | ForEach-Object {
+      if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+    }) -join " ")
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "$commandText > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
+    $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+    $ok = ($process.ExitCode -eq 0 -and $text -notmatch "(?m)^error:")
+    return [pscustomobject]@{
+      Ok = $ok
+      Text = $text
+      ExitCode = $process.ExitCode
+    }
+  } finally {
+    if (Test-Path -Path $tempFile) {
+      Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 $start = Get-Date
 $command = "cargo run -p voltnuerongrid-audit-companion -- --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out $ReportPath"
 $outputLines = @()
@@ -23,8 +46,9 @@ $exitCode = 1
 $validationOk = $false
 
 try {
-  $outputLines = & cargo run -p voltnuerongrid-audit-companion -- --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out $ReportPath 2>&1
-  $exitCode = $LASTEXITCODE
+  $run = Invoke-CargoRunCapture -Arguments @("run", "-p", "voltnuerongrid-audit-companion", "--", "--audit-file", "tests/kpi/fixtures/ws8a/audit-events-sample.json", "--action-file", "tests/kpi/fixtures/ws8/control-plane-records-sample.json", "--trace-id", "atrace-101", "--action", "autonomous_action_authorize", "--out", $ReportPath)
+  $outputLines = @($run.Text)
+  $exitCode = if ($run.Ok) { 0 } else { 1 }
   if ($exitCode -eq 0 -and (Test-Path $ReportPath)) {
     $report = Get-Content -Raw -Path $ReportPath | ConvertFrom-Json
     $validationOk = (

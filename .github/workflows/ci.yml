@@ -58,8 +58,25 @@ jobs:
         run: ./tests/kpi/scripts/run-ws14-gate.ps1 -OutputPath "./tests/kpi/results/ws14/ci-ws14-gate-summary.json"
 
       - name: Run WS5 security gate
-        shell: pwsh
-        run: ./tests/kpi/scripts/run-ws5-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-ws5-gate-summary.json"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p voltnuerongridd > /tmp/voltnuerongridd-ws5.log 2>&1 &
+          RUNTIME_PID=$!
+          cleanup() {
+            kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for _ in {1..30}; do
+            STATUS_CODE=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/api/v1/audit/events?max_items=1" || true)
+            if [[ "${STATUS_CODE}" == "401" || "${STATUS_CODE}" == "200" ]]; then
+              break
+            fi
+            sleep 2
+          done
+          STATUS_CODE=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/api/v1/audit/events?max_items=1")
+          [[ "${STATUS_CODE}" == "401" || "${STATUS_CODE}" == "200" ]]
+          pwsh ./tests/kpi/scripts/run-ws5-gate.ps1 -IncludeRuntimeSmokes -BaseUrl "http://127.0.0.1:8080" -OutputPath "./tests/kpi/results/gates/ci-ws5-gate-summary.json"
 
       - name: Build WS5 gate badge artifact
         shell: pwsh
@@ -75,7 +92,7 @@ jobs:
 
       - name: Run release DX/API contract cluster gate
         shell: pwsh
-        run: ./tests/kpi/scripts/run-release-dx-api-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-dx-api-readiness.json"
+        run: ./tests/kpi/scripts/run-release-dx-api-gate.ps1 -OutputPath "./tests/kpi/results/gates/ci-release-dx-api-readiness.json" -Ws5SummaryPath "./tests/kpi/results/gates/ci-ws5-gate-summary.json"
 
       - name: Run release Ops/Resilience cluster gate
         shell: pwsh
@@ -182,16 +199,50 @@ jobs:
         run: ./tests/kpi/scripts/run-ws7-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws7/ci-ws7-closure-gate-summary.json"
 
       - name: Run WS8 autonomous control-plane gate
-        shell: pwsh
-        run: ./tests/kpi/scripts/run-ws8-gate.ps1 -OutputPath "./tests/kpi/results/ws8/ci-ws8-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws8-release-readiness.json"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p voltnuerongridd > /tmp/voltnuerongridd-ws8.log 2>&1 &
+          RUNTIME_PID=$!
+          cleanup() {
+            kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for _ in {1..30}; do
+            STATUS_CODE=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/api/v1/autonomous/actions/records?max_items=1" || true)
+            if [[ "${STATUS_CODE}" == "401" || "${STATUS_CODE}" == "200" ]]; then
+              break
+            fi
+            sleep 2
+          done
+          STATUS_CODE=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/api/v1/autonomous/actions/records?max_items=1")
+          [[ "${STATUS_CODE}" == "401" || "${STATUS_CODE}" == "200" ]]
+          pwsh ./tests/kpi/scripts/run-ws8-gate.ps1 -IncludeRuntimeSmokes -BaseUrl "http://127.0.0.1:8080" -OutputPath "./tests/kpi/results/ws8/ci-ws8-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws8-release-readiness.json"
 
       - name: Build WS8 autonomy stability badge artifact
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws8-autonomy-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws8/ci-ws8-gate-summary.json" -TrendPath "./tests/kpi/results/ws8/ws8-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws8-autonomy-stability-badge.json"
 
       - name: Run WS8 closure gate
-        shell: pwsh
-        run: ./tests/kpi/scripts/run-ws8-closure-gate.ps1 -OutputPath "./tests/kpi/results/ws8/ci-ws8-closure-gate-summary.json"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p voltnuerongridd > /tmp/voltnuerongridd-ws8-closure.log 2>&1 &
+          RUNTIME_PID=$!
+          cleanup() {
+            kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for _ in {1..30}; do
+            STATUS_CODE=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/api/v1/autonomous/actions/records?max_items=1" || true)
+            if [[ "${STATUS_CODE}" == "401" || "${STATUS_CODE}" == "200" ]]; then
+              break
+            fi
+            sleep 2
+          done
+          STATUS_CODE=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/api/v1/autonomous/actions/records?max_items=1")
+          [[ "${STATUS_CODE}" == "401" || "${STATUS_CODE}" == "200" ]]
+          pwsh ./tests/kpi/scripts/run-ws8-closure-gate.ps1 -IncludeRuntimeSmokes -BaseUrl "http://127.0.0.1:8080" -OutputPath "./tests/kpi/results/ws8/ci-ws8-closure-gate-summary.json"
 
       - name: Run WS8A agent authoring gate
         shell: pwsh
@@ -233,6 +284,7 @@ jobs:
             tests/kpi/results/ws14/ci-ws14-gate-summary.json
             tests/kpi/results/gates/ci-ws5-gate-summary.json
             tests/kpi/results/gates/ci-ws5-gate-badge.json
+            tests/kpi/results/ws5/tenant-audit-runtime-smoke.json
             tests/kpi/results/ws9/ci-ws9-gate-summary.json
             tests/kpi/results/ws9a/ci-ws9a-gate-summary.json
             tests/kpi/results/gates/ci-release-dx-api-readiness.json
@@ -296,6 +348,7 @@ jobs:
             tests/kpi/results/ws7/ci-ws7-closure-gate-summary.json
             tests/kpi/results/ws8/ci-ws8-gate-summary.json
             tests/kpi/results/ws8/ws8-mode-governance-smoke.json
+            tests/kpi/results/ws8/tenant-autonomous-runtime-smoke.json
             tests/kpi/results/ws8/ws8-autonomy-matrix.json
             tests/kpi/results/ws8/ws8-gate-trend-comparison.json
             tests/kpi/results/ws8/ws8-autonomy-stability-badge.json

@@ -10,8 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub enum AuditEventKind {
     Autonomous,
     Failover,
+    Ingest,
     Security,
     Sql,
+    Storage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

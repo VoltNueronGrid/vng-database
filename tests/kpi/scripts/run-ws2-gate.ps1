@@ -1,5 +1,6 @@
 param(
-  [string]$OutputPath = "tests/kpi/results/ws2/ws2-gate-summary.json"
+  [string]$OutputPath = "tests/kpi/results/ws2/ws2-gate-summary.json",
+  [string]$BaseUrl = "http://127.0.0.1:8080"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,7 +23,8 @@ $packs = @(
   @{ Name = "ws2-store-durability"; Script = "tests/kpi/scripts/run-store-durability-smoke.ps1"; Artifact = "tests/kpi/results/ws2/store-durability-smoke.json" },
   @{ Name = "ws2-disk-wal"; Script = "tests/kpi/scripts/run-ws2-disk-wal-smoke.ps1"; Artifact = "tests/kpi/results/ws2/disk-wal-adapter-smoke.json" },
   @{ Name = "ws2-checkpoint-restart"; Script = "tests/kpi/scripts/run-ws2-checkpoint-restart-smoke.ps1"; Artifact = "tests/kpi/results/ws2/ws2-checkpoint-restart-smoke.json" },
-  @{ Name = "ws2-index-constraint"; Script = "tests/kpi/scripts/run-ws2-index-constraint-smoke.ps1"; Artifact = "tests/kpi/results/ws2/ws2-index-constraint-smoke.json" }
+  @{ Name = "ws2-index-constraint"; Script = "tests/kpi/scripts/run-ws2-index-constraint-smoke.ps1"; Artifact = "tests/kpi/results/ws2/ws2-index-constraint-smoke.json" },
+  @{ Name = "ws2-tenant-store-runtime"; Script = "tests/kpi/scripts/run-ws2-tenant-store-runtime-smoke.ps1"; Artifact = "tests/kpi/results/ws2/ws2-tenant-store-runtime-smoke.json" }
 )
 
 foreach ($pack in $packs) {
@@ -30,7 +32,11 @@ foreach ($pack in $packs) {
   $detail = "ok"
   try {
     $global:LASTEXITCODE = 0
-    & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
+    if ($pack.Name -eq "ws2-tenant-store-runtime") {
+      & $pack.Script -BaseUrl $BaseUrl -OutputPath $pack.Artifact 2>&1 | Out-Null
+    } else {
+      & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
+    }
     if (-not $?) { $packStatus = "failed"; $detail = "script_invocation_failed" }
     elseif ($global:LASTEXITCODE -ne 0) { $packStatus = "failed"; $detail = "exit_code=$global:LASTEXITCODE" }
   } catch { $packStatus = "failed"; $detail = $_.Exception.Message }

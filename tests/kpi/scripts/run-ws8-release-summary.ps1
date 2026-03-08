@@ -49,6 +49,8 @@ $artifact = [ordered]@{
   highlights = [ordered]@{
     pack_count = @($summary.packs).Count
     autonomy_controls = [int]$matrix.total_controls
+    ws8_runtime_pack_included = [bool]$matrix.runtime_pack_included
+    ws8_runtime_pack_status = if ([bool]$matrix.runtime_pack_included) { [string](($matrix.matrix | Where-Object { $_.evidence_pack -eq "ws8-tenant-autonomous-runtime" } | Select-Object -First 1).status) } else { "not_included" }
     trend_state = [string]$trend.trend_state
     badge_message = [string]$badge.message
   }
