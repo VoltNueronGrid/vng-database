@@ -1,14 +1,14 @@
 {
-    "smoke":  "ws10-driver-baseline",
-    "status":  "failed",
-    "command":  "cargo test -p voltnuerongrid-driver-rust; driver request/header and config contract checks",
-    "config_contract_checks":  {
-                                   "json":  false,
-                                   "yaml":  false,
-                                   "properties":  false
-                               },
-    "started_at_utc":  "2026-03-08T08:13:59.9714881Z",
-    "finished_at_utc":  "2026-03-08T08:14:01.0851861Z",
-    "duration_ms":  1114,
-    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s"
+  "smoke": "ws10-driver-baseline",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-driver-rust; driver request/header and config contract checks",
+  "config_contract_checks": {
+    "json": true,
+    "yaml": true,
+    "properties": true
+  },
+  "started_at_utc": "2026-03-08T14:54:35.5232880Z",
+  "finished_at_utc": "2026-03-08T14:54:38.7228137Z",
+  "duration_ms": 3200,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_driver_rust-1da95cf21971cc84.exe)\n\nrunning 7 tests\ntest tests::builds_authorize_request_with_admin_and_operator_headers ... ok\ntest tests::builds_sql_execute_request_with_session_headers ... ok\ntest tests::builds_sql_route_and_transaction_requests_with_user_headers ... ok\ntest tests::rejects_partial_tenant_user_config ... ok\ntest tests::validates_driver_contract_from_json ... ok\ntest tests::validates_driver_contract_from_properties ... ok\ntest tests::validates_driver_contract_from_yaml ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests voltnuerongrid_driver_rust\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
 }

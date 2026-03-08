@@ -14,6 +14,24 @@ function Ensure-OutputDir {
 
 Ensure-OutputDir -PathValue $OutputPath
 
+function Get-ArtifactStatus {
+  param([string]$ArtifactPath)
+
+  if (!(Test-Path -Path $ArtifactPath)) {
+    return "missing_artifact"
+  }
+
+  try {
+    $json = Get-Content -Raw -Path $ArtifactPath | ConvertFrom-Json
+    if ($null -ne $json.status) {
+      return [string]$json.status
+    }
+    return "present"
+  } catch {
+    return "invalid_artifact"
+  }
+}
+
 $start = Get-Date
 $runs = @()
 $status = "passed"
@@ -30,14 +48,13 @@ foreach ($pack in $packs) {
   $packStatus = "passed"
   $detail = "ok"
   try {
-    $global:LASTEXITCODE = 0
     & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
-    if (-not $?) {
+    $artifactStatus = Get-ArtifactStatus -ArtifactPath $pack.Artifact
+    if ($artifactStatus -eq "passed") {
+      $packStatus = "passed"
+    } else {
       $packStatus = "failed"
-      $detail = "script_invocation_failed"
-    } elseif ($global:LASTEXITCODE -ne 0) {
-      $packStatus = "failed"
-      $detail = "exit_code=$global:LASTEXITCODE"
+      $detail = $artifactStatus
     }
   } catch {
     $packStatus = "failed"

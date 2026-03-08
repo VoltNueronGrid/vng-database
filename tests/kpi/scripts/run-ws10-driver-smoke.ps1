@@ -14,6 +14,29 @@ function Ensure-OutputDir {
 
 Ensure-OutputDir -PathValue $OutputPath
 
+function Invoke-CargoTestCapture {
+  param([string[]]$Arguments)
+
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $commandText = "cargo " + (($Arguments | ForEach-Object {
+      if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+    }) -join " ")
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "$commandText > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
+    $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+    $ok = ($text -match "test result: ok\." -and $text -notmatch "test result: FAILED" -and $text -notmatch "(?m)^error:")
+    return [pscustomobject]@{
+      Ok = $ok
+      Text = $text
+      ExitCode = $process.ExitCode
+    }
+  } finally {
+    if (Test-Path -Path $tempFile) {
+      Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 $start = Get-Date
 $command = "cargo test -p voltnuerongrid-driver-rust; driver request/header and config contract checks"
 $outputLines = @()
@@ -25,24 +48,29 @@ $contractChecks = [ordered]@{
 }
 
 try {
-  $outputLines = & cargo test -p voltnuerongrid-driver-rust 2>&1
-  $testExit = $LASTEXITCODE
+  $testRun = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongrid-driver-rust")
+  $outputLines = @($testRun.Text)
 
   $driverJsonRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/driver-routing-config.json"
   $driverYamlRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/driver-routing-config.yaml"
   $driverPropertiesRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/driver-routing-config.properties"
 
   $contractChecks.json = (
-    $driverJsonRaw -match '"baseUrl"\s*:\s*' -and
-    $driverJsonRaw -match '"maxConnections"\s*:\s*' -and
+    $driverJsonRaw -match '"driver"\s*:\s*\{' -and
+    $driverJsonRaw -match '"baseUrl"\s*:\s*"http://127\.0\.0\.1:8080"' -and
     $driverJsonRaw -match '"tenantHeaderName"\s*:\s*"x-vng-tenant-id"' -and
-    $driverJsonRaw -match '"userHeaderName"\s*:\s*"x-vng-user-id"'
+    $driverJsonRaw -match '"userHeaderName"\s*:\s*"x-vng-user-id"' -and
+    $driverJsonRaw -match '"minConnections"\s*:\s*2' -and
+    $driverJsonRaw -match '"maxConnections"\s*:\s*16'
   )
   $contractChecks.yaml = (
-    $driverYamlRaw -match '(?m)^\s*baseUrl\s*:\s*' -and
-    $driverYamlRaw -match '(?m)^\s*maxConnections\s*:\s*' -and
-    $driverYamlRaw -match '(?m)^\s*tenantHeaderName\s*:\s*"?x-vng-tenant-id"?' -and
-    $driverYamlRaw -match '(?m)^\s*userHeaderName\s*:\s*"?x-vng-user-id"?'
+    $driverYamlRaw -match '(?m)^driver:\s*$' -and
+    $driverYamlRaw -match '(?m)^\s+baseUrl\s*:\s*"?http://127\.0\.0\.1:8080"?' -and
+    $driverYamlRaw -match '(?m)^\s+tenantHeaderName\s*:\s*"?x-vng-tenant-id"?' -and
+    $driverYamlRaw -match '(?m)^\s+userHeaderName\s*:\s*"?x-vng-user-id"?' -and
+    $driverYamlRaw -match '(?m)^\s+pool:\s*$' -and
+    $driverYamlRaw -match '(?m)^\s+\s+minConnections\s*:\s*2\s*$' -and
+    $driverYamlRaw -match '(?m)^\s+\s+maxConnections\s*:\s*16\s*$'
   )
   $contractChecks.properties = (
     $driverPropertiesRaw -match '(?m)^\s*driver\.baseUrl\s*=' -and
@@ -52,7 +80,7 @@ try {
   )
 
   $configExit = if ($contractChecks.json -and $contractChecks.yaml -and $contractChecks.properties) { 0 } else { 1 }
-  $exitCode = if ($testExit -eq 0 -and $configExit -eq 0) { 0 } else { 1 }
+  $exitCode = if ($testRun.Ok -and $configExit -eq 0) { 0 } else { 1 }
 } catch {
   $outputLines += $_.Exception.Message
   $exitCode = 1

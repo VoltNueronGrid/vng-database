@@ -17,6 +17,7 @@
 |---|---|
 | Not Started | Not yet started |
 | In Progress | Active implementation |
+| Deferred | Intentionally paused pending an external dependency or handoff |
 | Blocked | Waiting dependency/decision |
 | Ready for Validation | Implemented, pending verification |
 | Done | Merged + validated + evidence attached |
@@ -33,7 +34,7 @@
 | PR-004 | Acceptance harness skeleton aligned to KPI table | QA/Performance | Done | KPI harness scaffold created under `tests/kpi` with scenarios, targets, and runner entry points |
 | PR-005 | Repo skeleton for modules/crates from architecture | Platform Engineering | Done | Rust workspace and core module skeletons created (`crates/`, `services/`, `drivers/`, `tools/`, UI placeholder) |
 | PR-006 | Define immediate start order and ownership assignment | Program Governance | Done | Owner assignment matrix and execution order published in tracker sections 4 and 9.4 |
-| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | In Progress | Local single-node smoke/gate coverage is now green across WS1 and WS2, and phase 3 supports deferred execution (`-AllowMissingEnv`) with readiness tracking; remaining env-driven real-cloud profiles and gate report tooling are blocked on cloud credentials, cloud endpoints, and token handoff |
+| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | Deferred | Local single-node smoke/gate coverage is now green across WS1 and WS2, and phase 3 supports deferred execution (`-AllowMissingEnv`) with readiness tracking; remaining env-driven real-cloud profiles and gate report tooling are intentionally deferred until cloud credentials, cloud endpoints, and token handoff arrive |
 
 ---
 
@@ -353,7 +354,7 @@ A tracker row moves to **Done** only when:
 | PR-004 | Done | 100% | improving | Created `tests/kpi` scaffold with KPI targets, scenario definitions, and executable runner scripts | — | Closed |
 | PR-005 | Done | 100% | improving | Created workspace `Cargo.toml` and module skeletons under `crates/`, `services/`, `drivers/`, `tools/`, plus UI placeholder | — | Closed |
 | PR-006 | Done | 100% | improving | Published owner assignment matrix and workstream execution order | — | Closed |
-| PR-007 | In Progress | 88% | improving | Added deferred phase-3 flow: `run-cloud-smoke.ps1 -AllowMissingEnv` produces `cloud-readiness-report.json` + `pending_config` rollup; generated gate report in `tests/kpi/results/20260304-pr007/reports-real` with explicit missing variable checklist per cloud | Dependency: cloud credentials, cloud endpoints, and token handoff are still pending | Populate required env vars and execute true remote run to convert `pending_config` to pass/fail evidence |
+| PR-007 | Deferred | 88% | stable | Added deferred phase-3 flow: `run-cloud-smoke.ps1 -AllowMissingEnv` produces `cloud-readiness-report.json` + `pending_config` rollup; generated gate report in `tests/kpi/results/20260304-pr007/reports-real` with explicit missing variable checklist per cloud | External dependency: cloud credentials, cloud endpoints, and token handoff are still pending | Resume once cloud handoff arrives, then populate env vars and execute the true remote smoke/gate run |
 
 ### 9.2 Architecture Hardening Weekly Status (H-01..H-10)
 
@@ -372,17 +373,17 @@ A tracker row moves to **Done** only when:
 
 ### 9.3 PMO Action Queue (Week 2 Readiness)
 
-- Finalize owner assignment for PR-007 and first implementation workstreams.
+- Keep PR-007 deferred until cloud credentials, cloud endpoints, and token handoff are available; no additional execution work is planned before handoff.
 - R1 scope freeze approved; release gate checklist automation published (`tests/kpi/scripts/check-r1-gate.ps1`).
 - Start scaffold implementation branch for workspace + deploy manifests.
-- Populate real AWS/Azure/GCP endpoint + token environment variables and execute PR-007 true remote smoke packs to close final gate.
+- Once cloud handoff arrives, populate real AWS/Azure/GCP endpoint + token environment variables and execute PR-007 true remote smoke packs to close the deferred gate.
 - Hardening review template for H-01..H-04 published at `reference/hardening-review-h01-h04-template.md`; schedule and assign attendees.
 
 ### 9.4 Owner Assignment Matrix (Published)
 
 | Scope | DRI Team | Supporting Teams | Current State |
 |---|---|---|---|
-| PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | In Progress |
+| PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | Deferred |
 | WS0 governance and CI | Platform + Program Governance | SRE | In Progress |
 | WS1 SQL core | SQL Engine Team | Query/Runtime Team | In Progress |
 | WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | In Progress |
