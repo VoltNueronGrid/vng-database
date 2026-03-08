@@ -76,17 +76,21 @@ $checks += [ordered]@{ check = "ingest_json_route_exists"; status = $c12 }
 $c13 = if ($mainSrc -match "/api/v1/ingest/status") { "passed" } else { "failed" }
 $checks += [ordered]@{ check = "ingest_status_route_exists"; status = $c13 }
 
-# 14. ws4_csv_ingest unit test exists
-$c14 = if ($mainSrc -match "ws4_csv_ingest_via_appstate") { "passed" } else { "failed" }
-$checks += [ordered]@{ check = "ws4_csv_ingest_test_exists"; status = $c14 }
+# 14. Ingest handlers require tenant/operator RBAC
+$c14 = if ($mainSrc -match 'async fn ingest_csv[\s\S]*?require_ingest_runtime_privilege\([\s\S]*?PrivilegeAction::Write[\s\S]*?ingest_scope_for_connector' -and $mainSrc -match 'async fn ingest_status[\s\S]*?require_ingest_runtime_privilege\([\s\S]*?PrivilegeAction::Read[\s\S]*?ingest_status_scope') { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ingest_handlers_require_rbac"; status = $c14 }
 
-# 15. ws4_json_ingest unit test exists
-$c15 = if ($mainSrc -match "ws4_json_ingest_via_appstate") { "passed" } else { "failed" }
-$checks += [ordered]@{ check = "ws4_json_ingest_test_exists"; status = $c15 }
+# 15. ws4_csv_ingest unit test exists
+$c15 = if ($mainSrc -match "ws4_csv_ingest_via_appstate") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ws4_csv_ingest_test_exists"; status = $c15 }
 
-# 16. ws4_ingest_status unit test exists
-$c16 = if ($mainSrc -match "ws4_ingest_status_counts_loaded_records") { "passed" } else { "failed" }
-$checks += [ordered]@{ check = "ws4_ingest_status_test_exists"; status = $c16 }
+# 16. ws4_json_ingest unit test exists
+$c16 = if ($mainSrc -match "ws4_json_ingest_via_appstate") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ws4_json_ingest_test_exists"; status = $c16 }
+
+# 17. ws4_ingest_status unit test exists
+$c17 = if ($mainSrc -match "ws4_ingest_status_counts_loaded_records") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ws4_ingest_status_test_exists"; status = $c17 }
 
 foreach ($c in $checks) {
   if ($c.status -ne "passed") { $status = "failed" }

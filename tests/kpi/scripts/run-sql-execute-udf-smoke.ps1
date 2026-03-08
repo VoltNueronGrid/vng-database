@@ -1,6 +1,8 @@
 param(
   [string]$BaseUrl = "http://127.0.0.1:8080",
-  [string]$OutputPath = "tests/kpi/results/ws1/sql-execute-udf-smoke.json"
+  [string]$OutputPath = "tests/kpi/results/ws1/sql-execute-udf-smoke.json",
+  [string]$TenantId = "acme",
+  [string]$UserId = "analyst-acme"
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,9 +16,22 @@ $okRequest = @{
   sql_batch = "SELECT udf_rust('hello'); SELECT udf_js('abc'); SELECT udf_python('delta');"
   max_rows = 10
 }
+$headers = @{
+  "x-vng-tenant-id" = $TenantId
+  "x-vng-user-id" = $UserId
+}
+
+$unauthorizedHttp = Invoke-WebRequest `
+  -Method Post `
+  -Uri "$BaseUrl/api/v1/sql/execute" `
+  -Body ($okRequest | ConvertTo-Json -Depth 8) `
+  -ContentType "application/json" `
+  -TimeoutSec 20 -UseBasicParsing -SkipHttpErrorCheck
+
 $okResponse = Invoke-RestMethod `
   -Method Post `
   -Uri "$BaseUrl/api/v1/sql/execute" `
+  -Headers $headers `
   -Body ($okRequest | ConvertTo-Json -Depth 8) `
   -ContentType "application/json" `
   -TimeoutSec 20
@@ -28,6 +43,7 @@ $guardRequest = @{
 $guardHttp = Invoke-WebRequest `
   -Method Post `
   -Uri "$BaseUrl/api/v1/sql/execute" `
+  -Headers $headers `
   -Body ($guardRequest | ConvertTo-Json -Depth 8) `
   -ContentType "application/json" `
   -TimeoutSec 20 -UseBasicParsing -SkipHttpErrorCheck
@@ -43,6 +59,7 @@ if ($guardHttp.Content) {
 }
 
 $checks = [ordered]@{
+  execute_requires_user_headers = ([int]$unauthorizedHttp.StatusCode -eq 401)
   execute_status_ok = ($okResponse.status -eq "ok")
   udf_results_present = ($okResponse.udf_results.Count -eq 3)
   udf_catalog_contract_present = ($okResponse.udf_function_catalog.Count -eq 3)

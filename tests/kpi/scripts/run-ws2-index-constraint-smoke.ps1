@@ -87,13 +87,17 @@ $checks += [ordered]@{ check = "store_indexes_route_exists"; status = $c15 }
 $c16 = if ($mainSrc -match "/api/v1/store/constraints") { "passed" } else { "failed" }
 $checks += [ordered]@{ check = "store_constraints_route_exists"; status = $c16 }
 
-# 17. ws2_index unit test exists
-$c17 = if ($mainSrc -match "ws2_index_create_lookup_drop_lifecycle") { "passed" } else { "failed" }
-$checks += [ordered]@{ check = "ws2_index_unit_test_exists"; status = $c17 }
+# 17. Store handlers require operator auth
+$c17 = if ($mainSrc -match 'async fn store_list_indexes[\s\S]*?require_operator_auth\(&headers,\s*&state\)\?;' -and $mainSrc -match 'async fn store_create_index[\s\S]*?require_operator_privilege\([\s\S]*?"storage\.catalog"[\s\S]*?"store/indexes"') { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "store_handlers_require_rbac"; status = $c17 }
 
-# 18. ws2_constraint unit test exists
-$c18 = if ($mainSrc -match "ws2_constraint_pk_not_null_via_appstate") { "passed" } else { "failed" }
-$checks += [ordered]@{ check = "ws2_constraint_unit_test_exists"; status = $c18 }
+# 18. ws2_index unit test exists
+$c18 = if ($mainSrc -match "ws2_index_create_lookup_drop_lifecycle") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ws2_index_unit_test_exists"; status = $c18 }
+
+# 19. ws2_constraint unit test exists
+$c19 = if ($mainSrc -match "ws2_constraint_pk_not_null_via_appstate") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ws2_constraint_unit_test_exists"; status = $c19 }
 
 foreach ($c in $checks) {
   if ($c.status -ne "passed") { $status = "failed" }

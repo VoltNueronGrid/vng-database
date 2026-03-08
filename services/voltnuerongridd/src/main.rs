@@ -75,6 +75,7 @@ struct AppState {
     admin_api_key: Option<String>,
     allowed_operator_roles: Arc<HashSet<OperatorRole>>,
     operator_role_bindings: Arc<HashMap<String, OperatorRole>>,
+    tenant_user_bindings: Arc<HashMap<String, TenantUserBinding>>,
     rbac_privilege_matrix: Arc<RbacPrivilegeMatrix>,
     leader_node_id: Arc<Mutex<String>>,
     audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
@@ -144,6 +145,25 @@ struct OperatorIdentity {
     role: OperatorRole,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TenantUserBinding {
+    tenant_id: String,
+    role: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TenantUserIdentity {
+    user_id: String,
+    tenant_id: String,
+    role: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RuntimeAccessPrincipal {
+    Operator(OperatorIdentity),
+    TenantUser(TenantUserIdentity),
+}
+
 impl AutonomousMode {
     fn from_env(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -197,6 +217,25 @@ fn default_operator_role_bindings() -> HashMap<String, OperatorRole> {
         ("auto_sre".to_string(), OperatorRole::Sre),
         ("security-bot".to_string(), OperatorRole::Security),
         ("autopilot".to_string(), OperatorRole::AiOperator),
+    ])
+}
+
+fn default_tenant_user_bindings() -> HashMap<String, TenantUserBinding> {
+    HashMap::from([
+        (
+            "analyst-acme".to_string(),
+            TenantUserBinding {
+                tenant_id: "acme".to_string(),
+                role: "tenant_analyst".to_string(),
+            },
+        ),
+        (
+            "admin-acme".to_string(),
+            TenantUserBinding {
+                tenant_id: "acme".to_string(),
+                role: "tenant_admin".to_string(),
+            },
+        ),
     ])
 }
 
@@ -256,6 +295,14 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
         matrix.grant_role(
             role.as_str(),
             ResourceGrant {
+                resource: "sql.runtime".to_string(),
+                scopes: vec!["sql/*".to_string()],
+                actions: vec![PrivilegeAction::Read, PrivilegeAction::Execute],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
                 resource: "cluster.failover".to_string(),
                 scopes: vec!["cluster".to_string()],
                 actions: vec![
@@ -311,6 +358,25 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                     PrivilegeAction::Write,
                     PrivilegeAction::Manage,
                 ],
+            },
+        );
+    }
+
+    for role in ["tenant_analyst", "tenant_admin"] {
+        matrix.grant_role(
+            role,
+            ResourceGrant {
+                resource: "sql.runtime".to_string(),
+                scopes: vec!["tenants/{tenant}/sql/*".to_string()],
+                actions: vec![PrivilegeAction::Read, PrivilegeAction::Execute],
+            },
+        );
+        matrix.grant_role(
+            role,
+            ResourceGrant {
+                resource: "ingest.connectors".to_string(),
+                scopes: vec!["tenants/{tenant}/ingest/*".to_string()],
+                actions: vec![PrivilegeAction::Read, PrivilegeAction::Write],
             },
         );
     }
@@ -1165,6 +1231,7 @@ async fn main() {
     let loaded_policy_state = load_dr_hook_policy_state(dr_hook_state_path.as_deref());
     let allowed_operator_roles = Arc::new(load_allowed_operator_roles());
     let operator_role_bindings = Arc::new(load_operator_role_bindings(&allowed_operator_roles));
+    let tenant_user_bindings = Arc::new(default_tenant_user_bindings());
     let rbac_privilege_matrix = Arc::new(default_rbac_privilege_matrix());
     let addr: SocketAddr = http_bind
         .parse()
@@ -1176,6 +1243,7 @@ async fn main() {
         admin_api_key,
         allowed_operator_roles,
         operator_role_bindings,
+        tenant_user_bindings,
         rbac_privilege_matrix,
         leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
         audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
@@ -1289,10 +1357,13 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
 }
 
 async fn sql_transaction(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<SqlTransactionRequest>,
-) -> (StatusCode, Json<SqlTransactionResponse>) {
+) -> Result<(StatusCode, Json<SqlTransactionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_sql_runtime_privilege(&headers, &state, PrivilegeAction::Execute, "sql/transaction")?;
     let (status, response) = execute_transaction_statements(req.statements);
-    (status, Json(response))
+    Ok((status, Json(response)))
 }
 
 async fn sql_pessimistic_lock_acquire(
@@ -1422,7 +1493,12 @@ async fn sql_pessimistic_lock_metrics(
     })
 }
 
-async fn sql_analyze(Json(req): Json<SqlAnalyzeRequest>) -> Json<SqlAnalyzeResponse> {
+async fn sql_analyze(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SqlAnalyzeRequest>,
+) -> Result<Json<SqlAnalyzeResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_sql_runtime_privilege(&headers, &state, PrivilegeAction::Read, "sql/analyze")?;
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
     let mut rejected = 0usize;
     let mut statements = Vec::with_capacity(parsed.len());
@@ -1441,17 +1517,22 @@ async fn sql_analyze(Json(req): Json<SqlAnalyzeRequest>) -> Json<SqlAnalyzeRespo
         });
     }
 
-    Json(SqlAnalyzeResponse {
+    Ok(Json(SqlAnalyzeResponse {
         status: "ok",
         total_statements: statements.len(),
         rejected_statements: rejected,
         statements,
-    })
+    }))
 }
 
-async fn sql_route(Json(req): Json<SqlRouteRequest>) -> Json<SqlRouteResponse> {
+async fn sql_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SqlRouteRequest>,
+) -> Result<Json<SqlRouteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_sql_runtime_privilege(&headers, &state, PrivilegeAction::Read, "sql/route")?;
     let decision = HtapQueryRouter::route_batch(&req.sql_batch);
-    Json(SqlRouteResponse {
+    Ok(Json(SqlRouteResponse {
         status: "ok",
         route_path: route_path_name(decision.path).to_string(),
         reason: decision.reason,
@@ -1463,10 +1544,15 @@ async fn sql_route(Json(req): Json<SqlRouteRequest>) -> Json<SqlRouteResponse> {
                 path: route_path_name(s.path).to_string(),
             })
             .collect(),
-    })
+    }))
 }
 
-async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<SqlExecuteResponse>) {
+async fn sql_execute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SqlExecuteRequest>,
+) -> Result<(StatusCode, Json<SqlExecuteResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_sql_runtime_privilege(&headers, &state, PrivilegeAction::Execute, "sql/execute")?;
     let decision = HtapQueryRouter::route_batch(&req.sql_batch);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
     let udf_function_catalog = udf_function_catalog_contract();
@@ -1477,7 +1563,7 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
     let udf_results = match udf_execution {
         Ok(results) => results,
         Err(reason) => {
-            return (
+            return Ok((
                 StatusCode::BAD_REQUEST,
                 Json(SqlExecuteResponse {
                     status: "error",
@@ -1492,12 +1578,12 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
                     udf_guard_policies,
                     udf_execution_plan,
                 }),
-            );
+            ));
         }
     };
 
     if matches!(decision.path, QueryPath::Unknown) {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(SqlExecuteResponse {
                 status: "error",
@@ -1512,7 +1598,7 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
                 udf_guard_policies,
                 udf_execution_plan,
             }),
-        );
+        ));
     }
 
     let mut transaction_statements = Vec::new();
@@ -1534,7 +1620,7 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
         let (status, response) = execute_transaction_statements(transaction_statements);
         rejected_statement_count += response.rejected_statement_count;
         if status != StatusCode::OK {
-            return (
+            return Ok((
                 status,
                 Json(SqlExecuteResponse {
                     status: "error",
@@ -1549,7 +1635,7 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
                     udf_guard_policies,
                     udf_execution_plan,
                 }),
-            );
+            ));
         }
         transaction = Some(response);
     }
@@ -1559,7 +1645,7 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
         olap = Some(execute_olap_query(query, req.max_rows));
     }
 
-    (
+    Ok((
         StatusCode::OK,
         Json(SqlExecuteResponse {
             status: "ok",
@@ -1578,7 +1664,7 @@ async fn sql_execute(Json(req): Json<SqlExecuteRequest>) -> (StatusCode, Json<Sq
             udf_guard_policies,
             udf_execution_plan,
         }),
-    )
+    ))
 }
 
 async fn olap_query(Json(req): Json<OlapQueryRequest>) -> Json<OlapQueryResponse> {
@@ -3620,6 +3706,95 @@ fn require_operator_privilege(
     }
 }
 
+fn require_sql_runtime_privilege(
+    headers: &HeaderMap,
+    state: &AppState,
+    action: PrivilegeAction,
+    sql_scope: &str,
+) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_runtime_principal(headers, state, "sql.runtime", sql_scope, action)?;
+    let user = match principal {
+        RuntimeAccessPrincipal::Operator(_) => return Ok(()),
+        RuntimeAccessPrincipal::TenantUser(user) => user,
+    };
+    let expected_scope = format!("tenants/{}/{}", user.tenant_id, sql_scope);
+    if state
+        .rbac_privilege_matrix
+        .allows(user.role.as_str(), "sql.runtime", &expected_scope, action)
+    {
+        Ok(())
+    } else {
+        Err(forbidden_error(headers, "insufficient_privilege"))
+    }
+}
+
+fn require_ingest_runtime_privilege(
+    headers: &HeaderMap,
+    state: &AppState,
+    action: PrivilegeAction,
+    ingest_scope: &str,
+) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
+    require_runtime_principal(headers, state, "ingest.connectors", ingest_scope, action)
+}
+
+fn require_runtime_principal(
+    headers: &HeaderMap,
+    state: &AppState,
+    resource: &str,
+    scope: &str,
+    action: PrivilegeAction,
+) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
+    let has_operator_headers = headers.contains_key("x-vng-admin-key")
+        || headers.contains_key("x-vng-operator-id");
+
+    if has_operator_headers {
+        require_operator_auth(headers, state)?;
+        let operator = require_operator_privilege(headers, state, resource, scope, action)?;
+        return Ok(RuntimeAccessPrincipal::Operator(operator));
+    }
+
+    let user = require_tenant_user_privilege(headers, state, action, scope)?;
+    Ok(RuntimeAccessPrincipal::TenantUser(user))
+}
+
+fn ingest_scope_for_connector(connector_id: &str, format: &str) -> String {
+    format!("ingest/connectors/{connector_id}/{format}")
+}
+
+fn ingest_status_scope() -> &'static str {
+    "ingest/status"
+}
+
+fn ingest_storage_key(principal: &RuntimeAccessPrincipal, connector_id: &str) -> String {
+    match principal {
+        RuntimeAccessPrincipal::Operator(_) => connector_id.to_string(),
+        RuntimeAccessPrincipal::TenantUser(user) => {
+            format!("tenant/{}/{}", user.tenant_id, connector_id)
+        }
+    }
+}
+
+fn count_tenant_ingest_records<T>(records: &HashMap<String, Vec<T>>, tenant_id: &str) -> (usize, usize) {
+    let prefix = format!("tenant/{tenant_id}/");
+    let connectors = records.keys().filter(|key| key.starts_with(&prefix)).count();
+    let total_records = records
+        .iter()
+        .filter(|(key, _)| key.starts_with(&prefix))
+        .map(|(_, value)| value.len())
+        .sum();
+    (connectors, total_records)
+}
+
+fn require_tenant_user_privilege(
+    headers: &HeaderMap,
+    state: &AppState,
+    _action: PrivilegeAction,
+    _sql_scope: &str,
+) -> Result<TenantUserIdentity, (StatusCode, Json<AuthErrorResponse>)> {
+    tenant_user_identity_from_headers(headers, state)
+        .ok_or_else(|| auth_error(headers, "missing_or_invalid_user_identity"))
+}
+
 fn operator_identity_from_headers(
     headers: &HeaderMap,
     state: &AppState,
@@ -3635,6 +3810,32 @@ fn operator_identity_from_headers(
     Some(OperatorIdentity {
         operator_id: operator_id.to_string(),
         role,
+    })
+}
+
+fn tenant_user_identity_from_headers(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Option<TenantUserIdentity> {
+    let user_id = headers
+        .get("x-vng-user-id")
+        .and_then(|value| value.to_str().ok())?
+        .trim();
+    let tenant_id = headers
+        .get("x-vng-tenant-id")
+        .and_then(|value| value.to_str().ok())?
+        .trim();
+    if user_id.is_empty() || tenant_id.is_empty() {
+        return None;
+    }
+    let binding = state.tenant_user_bindings.get(user_id)?;
+    if !binding.tenant_id.eq_ignore_ascii_case(tenant_id) {
+        return None;
+    }
+    Some(TenantUserIdentity {
+        user_id: user_id.to_string(),
+        tenant_id: tenant_id.to_string(),
+        role: binding.role.clone(),
     })
 }
 
@@ -3779,7 +3980,16 @@ fn build_authorize_action_response(
 
 async fn store_list_indexes(
     State(state): State<AppState>,
-) -> Json<ListIndexesResponse> {
+    headers: HeaderMap,
+) -> Result<Json<ListIndexesResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "storage.catalog",
+        "store/indexes",
+        PrivilegeAction::Read,
+    )?;
     let mgr = state.index_manager.lock().expect("index lock");
     let indexes = mgr
         .list_indexes()
@@ -3792,16 +4002,25 @@ async fn store_list_indexes(
             unique: d.unique,
         })
         .collect();
-    Json(ListIndexesResponse {
+    Ok(Json(ListIndexesResponse {
         status: "ok",
         indexes,
-    })
+    }))
 }
 
 async fn store_create_index(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CreateIndexRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "storage.catalog",
+        "store/indexes",
+        PrivilegeAction::Manage,
+    )?;
     use voltnuerongrid_store::index::{IndexDescriptor, IndexKind};
     let unique = req.unique.unwrap_or(false);
     let descriptor = IndexDescriptor {
@@ -3812,7 +4031,7 @@ async fn store_create_index(
         unique,
     };
     let mut mgr = state.index_manager.lock().expect("index lock");
-    match mgr.create_index(descriptor) {
+    Ok(match mgr.create_index(descriptor) {
         Ok(()) => (
             StatusCode::CREATED,
             Json(serde_json::to_value(CreateIndexResponse {
@@ -3827,15 +4046,24 @@ async fn store_create_index(
             StatusCode::CONFLICT,
             Json(json!({ "status": "error", "reason": e.to_string() })),
         ),
-    }
+    })
 }
 
 async fn store_drop_index(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<DropIndexRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "storage.catalog",
+        "store/indexes",
+        PrivilegeAction::Manage,
+    )?;
     let mut mgr = state.index_manager.lock().expect("index lock");
-    match mgr.drop_index(&req.name) {
+    Ok(match mgr.drop_index(&req.name) {
         Ok(_desc) => (
             StatusCode::OK,
             Json(serde_json::to_value(DropIndexResponse {
@@ -3847,15 +4075,24 @@ async fn store_drop_index(
             StatusCode::NOT_FOUND,
             Json(json!({ "status": "error", "reason": e.to_string() })),
         ),
-    }
+    })
 }
 
 async fn store_index_lookup(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<IndexLookupRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "storage.catalog",
+        "store/indexes",
+        PrivilegeAction::Read,
+    )?;
     let mgr = state.index_manager.lock().expect("index lock");
-    match mgr.get(&req.index_name) {
+    Ok(match mgr.get(&req.index_name) {
         Some(idx) => {
             let row_keys: Vec<String> = idx.lookup(&req.value).iter().map(|s| s.to_string()).collect();
             (
@@ -3872,13 +4109,22 @@ async fn store_index_lookup(
             StatusCode::NOT_FOUND,
             Json(json!({ "status": "error", "reason": format!("index '{}' not found", req.index_name) })),
         ),
-    }
+    })
 }
 
 async fn store_add_constraint(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<AddConstraintRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "storage.catalog",
+        "store/constraints",
+        PrivilegeAction::Manage,
+    )?;
     use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
     let kind = match req.kind.to_ascii_lowercase().as_str() {
         "primary_key" | "pk" => ConstraintKind::PrimaryKey,
@@ -3886,10 +4132,10 @@ async fn store_add_constraint(
         "not_null" => ConstraintKind::NotNull,
         "foreign_key" | "fk" => ConstraintKind::ForeignKey,
         other => {
-            return (
+            return Ok((
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "status": "error", "reason": format!("unknown constraint kind: {other}") })),
-            );
+            ));
         }
     };
     let descriptor = ConstraintDescriptor {
@@ -3899,7 +4145,7 @@ async fn store_add_constraint(
         kind,
     };
     let mut mgr = state.constraint_manager.lock().expect("constraint lock");
-    match mgr.add_constraint(descriptor) {
+    Ok(match mgr.add_constraint(descriptor) {
         Ok(()) => (
             StatusCode::CREATED,
             Json(serde_json::to_value(AddConstraintResponse {
@@ -3914,15 +4160,24 @@ async fn store_add_constraint(
             StatusCode::CONFLICT,
             Json(json!({ "status": "error", "reason": e.to_string() })),
         ),
-    }
+    })
 }
 
 async fn store_validate_constraint(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<ValidateConstraintRequest>,
-) -> Json<ValidateConstraintResponse> {
+) -> Result<Json<ValidateConstraintResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "storage.catalog",
+        "store/constraints",
+        PrivilegeAction::Read,
+    )?;
     let mgr = state.constraint_manager.lock().expect("constraint lock");
-    match mgr.validate(&req.table, &req.column, req.value.as_deref()) {
+    Ok(match mgr.validate(&req.table, &req.column, req.value.as_deref()) {
         Ok(()) => Json(ValidateConstraintResponse {
             status: "ok",
             valid: true,
@@ -3933,70 +4188,109 @@ async fn store_validate_constraint(
             valid: false,
             violation: Some(v.to_string()),
         }),
-    }
+    })
 }
 
 // ── WS4 Ingest handlers ───────────────────────────────────────────
 
 async fn ingest_csv(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<IngestCsvRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        &ingest_scope_for_connector(&req.connector_id, "csv"),
+    )?;
     use voltnuerongrid_ingest::csv::CsvConnector;
     let mut conn = CsvConnector::new(&req.connector_id, &req.connector_id);
     let count = conn.load_csv(&req.csv_data);
     let records = conn.read_batch(usize::MAX);
+    let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
         .ingest_csv_records
         .lock()
         .expect("csv lock")
-        .insert(req.connector_id.clone(), records);
-    (
+        .insert(storage_key, records);
+    Ok((
         StatusCode::OK,
         Json(serde_json::to_value(IngestCsvResponse {
             status: "ok",
             connector_id: req.connector_id,
             records_parsed: count,
         }).expect("json")),
-    )
+    ))
 }
 
 async fn ingest_json(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<IngestJsonRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        &ingest_scope_for_connector(&req.connector_id, "json"),
+    )?;
     use voltnuerongrid_ingest::json::JsonConnector;
     let mut conn = JsonConnector::new(&req.connector_id, &req.connector_id, &req.key_field);
     let count = conn.load_ndjson(&req.ndjson_data);
     let records = conn.read_batch(usize::MAX);
+    let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
         .ingest_json_records
         .lock()
         .expect("json lock")
-        .insert(req.connector_id.clone(), records);
-    (
+        .insert(storage_key, records);
+    Ok((
         StatusCode::OK,
         Json(serde_json::to_value(IngestJsonResponse {
             status: "ok",
             connector_id: req.connector_id,
             records_parsed: count,
         }).expect("json")),
-    )
+    ))
 }
 
 async fn ingest_status(
     State(state): State<AppState>,
-) -> Json<IngestStatusResponse> {
+    headers: HeaderMap,
+) -> Result<Json<IngestStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        ingest_status_scope(),
+    )?;
     let csv_map = state.ingest_csv_records.lock().expect("csv lock");
     let json_map = state.ingest_json_records.lock().expect("json lock");
-    let csv_total: usize = csv_map.values().map(|v| v.len()).sum();
-    let json_total: usize = json_map.values().map(|v| v.len()).sum();
-    Json(IngestStatusResponse {
+    let (csv_connectors, csv_total) = match &principal {
+        RuntimeAccessPrincipal::Operator(_) => (
+            csv_map.len(),
+            csv_map.values().map(|v| v.len()).sum(),
+        ),
+        RuntimeAccessPrincipal::TenantUser(user) => {
+            count_tenant_ingest_records(&csv_map, &user.tenant_id)
+        }
+    };
+    let (json_connectors, json_total) = match &principal {
+        RuntimeAccessPrincipal::Operator(_) => (
+            json_map.len(),
+            json_map.values().map(|v| v.len()).sum(),
+        ),
+        RuntimeAccessPrincipal::TenantUser(user) => {
+            count_tenant_ingest_records(&json_map, &user.tenant_id)
+        }
+    };
+    Ok(Json(IngestStatusResponse {
         status: "ok",
-        csv_connectors: csv_map.len(),
-        json_connectors: json_map.len(),
+        csv_connectors,
+        json_connectors,
         total_records_loaded: csv_total + json_total,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -4014,6 +4308,16 @@ mod tests {
         headers
     }
 
+    fn tenant_user_headers(user_id: &str, tenant_id: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-vng-user-id", HeaderValue::from_str(user_id).expect("user id"));
+        headers.insert(
+            "x-vng-tenant-id",
+            HeaderValue::from_str(tenant_id).expect("tenant id"),
+        );
+        headers
+    }
+
     fn state_with_key(key: Option<&str>) -> AppState {
         AppState {
             node_id: "node-1".to_string(),
@@ -4021,6 +4325,7 @@ mod tests {
             admin_api_key: key.map(|v| v.to_string()),
             allowed_operator_roles: Arc::new(default_allowed_operator_roles()),
             operator_role_bindings: Arc::new(default_operator_role_bindings()),
+            tenant_user_bindings: Arc::new(default_tenant_user_bindings()),
             rbac_privilege_matrix: Arc::new(default_rbac_privilege_matrix()),
             leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
@@ -4134,6 +4439,199 @@ mod tests {
         )
         .expect("dba should manage storage catalog");
         assert_eq!(identity.role, OperatorRole::Dba);
+    }
+
+    #[test]
+    fn operator_auth_denies_ai_operator_from_storage_catalog_management() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "autopilot");
+        let privilege = require_operator_privilege(
+            &headers,
+            &state,
+            "storage.catalog",
+            "store/indexes",
+            PrivilegeAction::Manage,
+        )
+        .expect_err("ai operator should not manage store catalog");
+        assert_eq!(privilege.0, StatusCode::FORBIDDEN);
+        assert_eq!(privilege.1.reason, "insufficient_privilege");
+    }
+
+    #[test]
+    fn operator_auth_allows_dba_for_ingest_write() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
+        let identity = require_operator_privilege(
+            &headers,
+            &state,
+            "ingest.connectors",
+            "ingest/csv",
+            PrivilegeAction::Write,
+        )
+        .expect("dba should write ingest connectors");
+        assert_eq!(identity.role, OperatorRole::Dba);
+    }
+
+    #[test]
+    fn sql_runtime_allows_tenant_analyst_for_analyze() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        assert!(require_sql_runtime_privilege(
+            &headers,
+            &state,
+            PrivilegeAction::Read,
+            "sql/analyze",
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn sql_runtime_denies_cross_tenant_user_scope() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "globex");
+        let auth = require_sql_runtime_privilege(
+            &headers,
+            &state,
+            PrivilegeAction::Read,
+            "sql/analyze",
+        )
+        .expect_err("cross-tenant user should be rejected");
+        assert_eq!(auth.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(auth.1.reason, "missing_or_invalid_user_identity");
+    }
+
+    #[test]
+    fn sql_runtime_allows_operator_dba_for_execute() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
+        assert!(require_sql_runtime_privilege(
+            &headers,
+            &state,
+            PrivilegeAction::Execute,
+            "sql/execute",
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn sql_execute_accepts_tenant_analyst_headers() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_execute(
+                State(state),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "SELECT udf_rust('hello');".to_string(),
+                    max_rows: Some(10),
+                }),
+            ))
+            .expect("sql execute response");
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.status, "committed");
+    }
+
+    #[test]
+    fn sql_route_accepts_tenant_analyst_headers() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_route(
+                State(state),
+                headers,
+                Json(SqlRouteRequest {
+                    sql_batch: "SELECT 1".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        assert_eq!(response.status, "ok");
+    }
+
+    #[test]
+    fn sql_transaction_accepts_tenant_analyst_headers() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_transaction(
+                State(state),
+                headers,
+                Json(SqlTransactionRequest {
+                    statements: vec!["BEGIN".to_string(), "COMMIT".to_string()],
+                }),
+            ))
+            .expect("sql transaction response");
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.status, "committed");
+    }
+
+    #[test]
+    fn ingest_runtime_allows_tenant_user_write_and_status_scope() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let write = require_ingest_runtime_privilege(
+            &headers,
+            &state,
+            PrivilegeAction::Write,
+            "ingest/connectors/orders-csv/csv",
+        )
+        .expect("tenant user should write ingest");
+        let read = require_ingest_runtime_privilege(
+            &headers,
+            &state,
+            PrivilegeAction::Read,
+            ingest_status_scope(),
+        )
+        .expect("tenant user should read ingest status");
+        assert!(matches!(write, RuntimeAccessPrincipal::TenantUser(_)));
+        assert!(matches!(read, RuntimeAccessPrincipal::TenantUser(_)));
+    }
+
+    #[test]
+    fn ingest_status_scopes_counts_to_tenant_records() {
+        let state = state_with_key(None);
+        state
+            .ingest_csv_records
+            .lock()
+            .expect("csv lock")
+            .insert("tenant/acme/c1".to_string(), vec![]);
+        state
+            .ingest_csv_records
+            .lock()
+            .expect("csv lock")
+            .insert("tenant/acme/c2".to_string(), vec![voltnuerongrid_ingest::IngestRecord {
+                key: "1".to_string(),
+                payload: "{\"id\":\"1\"}".to_string(),
+            }]);
+        state
+            .ingest_json_records
+            .lock()
+            .expect("json lock")
+            .insert("tenant/globex/j1".to_string(), vec![voltnuerongrid_ingest::IngestRecord {
+                key: "2".to_string(),
+                payload: "{\"id\":\"2\"}".to_string(),
+            }]);
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let response = runtime
+            .block_on(ingest_status(
+                State(state),
+                tenant_user_headers("analyst-acme", "acme"),
+            ))
+            .expect("ingest status response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.csv_connectors, 2);
+        assert_eq!(response.json_connectors, 0);
+        assert_eq!(response.total_records_loaded, 1);
     }
 
     #[test]

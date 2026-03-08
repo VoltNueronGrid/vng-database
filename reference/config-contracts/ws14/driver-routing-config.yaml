@@ -1,6 +1,8 @@
 driver:
   baseUrl: "http://127.0.0.1:8080"
   sessionHeaderName: "x-vng-session-id"
+  tenantHeaderName: "x-vng-tenant-id"
+  userHeaderName: "x-vng-user-id"
   routeHintHeaderName: "x-vng-route-hint"
   adminHeaderName: "x-vng-admin-key"
   operatorHeaderName: "x-vng-operator-id"

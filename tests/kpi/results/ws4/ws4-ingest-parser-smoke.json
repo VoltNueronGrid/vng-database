@@ -1,11 +1,11 @@
 {
   "smoke": "ws4-ingest-parser-scaffold",
   "status": "passed",
-  "started_at_utc": "2026-03-06T15:34:12.7793267Z",
-  "finished_at_utc": "2026-03-06T15:34:12.7981730Z",
-  "duration_ms": 19,
-  "total_checks": 16,
-  "passed_checks": 16,
+  "started_at_utc": "2026-03-07T14:42:05.8260149Z",
+  "finished_at_utc": "2026-03-07T14:42:05.8907690Z",
+  "duration_ms": 65,
+  "total_checks": 17,
+  "passed_checks": 17,
   "checks": [
     {
       "check": "csv_connector_struct_exists",
@@ -57,6 +57,10 @@
     },
     {
       "check": "ingest_status_route_exists",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_handlers_require_rbac",
       "status": "passed"
     },
     {

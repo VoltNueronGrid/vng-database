@@ -15,7 +15,7 @@ function Ensure-OutputDir {
 Ensure-OutputDir -PathValue $OutputPath
 
 $start = Get-Date
-$command = "cargo test -p voltnuerongrid-driver-rust validates_driver_contract; config contract parse checks (json/yaml/properties)"
+$command = "cargo test -p voltnuerongrid-driver-rust; driver request/header and config contract checks"
 $outputLines = @()
 $exitCode = 1
 $contractChecks = [ordered]@{
@@ -25,7 +25,7 @@ $contractChecks = [ordered]@{
 }
 
 try {
-  $outputLines = & cargo test -p voltnuerongrid-driver-rust validates_driver_contract 2>&1
+  $outputLines = & cargo test -p voltnuerongrid-driver-rust 2>&1
   $testExit = $LASTEXITCODE
 
   $driverJsonRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/driver-routing-config.json"
@@ -34,15 +34,21 @@ try {
 
   $contractChecks.json = (
     $driverJsonRaw -match '"baseUrl"\s*:\s*' -and
-    $driverJsonRaw -match '"maxConnections"\s*:\s*'
+    $driverJsonRaw -match '"maxConnections"\s*:\s*' -and
+    $driverJsonRaw -match '"tenantHeaderName"\s*:\s*"x-vng-tenant-id"' -and
+    $driverJsonRaw -match '"userHeaderName"\s*:\s*"x-vng-user-id"'
   )
   $contractChecks.yaml = (
     $driverYamlRaw -match '(?m)^\s*baseUrl\s*:\s*' -and
-    $driverYamlRaw -match '(?m)^\s*maxConnections\s*:\s*'
+    $driverYamlRaw -match '(?m)^\s*maxConnections\s*:\s*' -and
+    $driverYamlRaw -match '(?m)^\s*tenantHeaderName\s*:\s*"?x-vng-tenant-id"?' -and
+    $driverYamlRaw -match '(?m)^\s*userHeaderName\s*:\s*"?x-vng-user-id"?'
   )
   $contractChecks.properties = (
     $driverPropertiesRaw -match '(?m)^\s*driver\.baseUrl\s*=' -and
-    $driverPropertiesRaw -match '(?m)^\s*driver\.pool\.maxConnections\s*='
+    $driverPropertiesRaw -match '(?m)^\s*driver\.pool\.maxConnections\s*=' -and
+    $driverPropertiesRaw -match '(?m)^\s*driver\.tenantHeaderName\s*=\s*x-vng-tenant-id' -and
+    $driverPropertiesRaw -match '(?m)^\s*driver\.userHeaderName\s*=\s*x-vng-user-id'
   )
 
   $configExit = if ($contractChecks.json -and $contractChecks.yaml -and $contractChecks.properties) { 0 } else { 1 }

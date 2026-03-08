@@ -200,6 +200,336 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "test"
+		},
+		{
+			"label": "Validate service operator auth RBAC v2",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"operator_auth",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS2 store smoke updated",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws2-index-constraint-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS4 ingest smoke updated",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws4-ingest-parser-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS2 store smoke fixed",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws2-index-constraint-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Run WS4 ingest smoke fixed",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws4-ingest-parser-smoke.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "cargo test sql runtime",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_runtime",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql execute tenant",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_execute_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test operator auth",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"operator_auth",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "run voltnuerongridd",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"run",
+				"-p",
+				"voltnuerongridd"
+			],
+			"isBackground": true
+		},
+		{
+			"label": "run sql analyze smoke",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-sql-analyze-smoke.ps1"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "run sql execute smoke",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-sql-execute-udf-smoke.ps1"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "rerun sql execute smoke",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-sql-execute-udf-smoke.ps1"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test driver crate",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongrid-driver-rust",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql route tenant",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_route_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql tx tenant",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_transaction_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test ingest tenant",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"ingest_",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql route tenant rerun",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_route_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql tx tenant rerun",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_transaction_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test ingest tenant rerun",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"ingest_",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql tx tenant final",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_transaction_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "run ws4 ingest smoke",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws4-ingest-parser-smoke.ps1"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "run ws10 driver smoke",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws10-driver-smoke.ps1"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql tx tenant final rerun",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_transaction_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "run ws10 driver smoke rerun",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-File",
+				"tests/kpi/scripts/run-ws10-driver-smoke.ps1"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql tx tenant clean",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_transaction_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "cargo test sql tx tenant pass",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"voltnuerongridd",
+				"sql_transaction_accepts_tenant_analyst_headers",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
 		}
 	]
 }

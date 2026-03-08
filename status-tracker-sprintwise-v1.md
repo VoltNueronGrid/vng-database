@@ -119,11 +119,11 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | 🔵 In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts + SQL analyze runtime smoke) | CI pipeline green with gate scripts |
-| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | 🔵 In Progress | WS0 | Runtime integration underway; `/api/v1/sql/analyze` online; `/api/v1/sql/execute` includes UDF runtime scaffold with explicit function catalog contract, per-language guard policies, and statement-level execution-plan routing evidence for Rust/JS/Python; gate orchestrator `run-ws1-gate.ps1` -> `tests/kpi/results/ws1/ws1-gate-summary.json`; UDF contract pack -> `tests/kpi/results/ws1/ws1-udf-contract-smoke.json`; runtime UDF API smoke -> `tests/kpi/results/ws1/sql-execute-udf-smoke.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | 🔵 In Progress | WS0 | Durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged; gate orchestrator `run-ws2-gate.ps1` -> `tests/kpi/results/ws2/ws2-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | 🔵 In Progress | WS0 | Runtime integration underway; `/api/v1/sql/analyze`, `/api/v1/sql/route`, `/api/v1/sql/execute`, and `/api/v1/sql/transaction` now enforce tenant-scoped user RBAC via `x-vng-tenant-id` + `x-vng-user-id` while preserving operator/admin access; `/api/v1/sql/execute` includes UDF runtime scaffold with explicit function catalog contract, per-language guard policies, and statement-level execution-plan routing evidence for Rust/JS/Python; gate orchestrator `run-ws1-gate.ps1` -> `tests/kpi/results/ws1/ws1-gate-summary.json`; UDF contract pack -> `tests/kpi/results/ws1/ws1-udf-contract-smoke.json`; runtime analyze/UDF smokes -> `tests/kpi/results/20260305-ws1/sql-analyze-smoke.json`, `tests/kpi/results/ws1/sql-execute-udf-smoke.json`; focused tenant SQL route/transaction tests in `voltnuerongridd`; workflow wiring in `.github/workflows/ci.yml` |
+| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | 🔵 In Progress | WS0 | Durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged; store index/constraint runtime handlers now enforce operator auth + resource-scoped RBAC, validated by `tests/kpi/results/ws2/ws2-index-constraint-smoke.json`; gate orchestrator `run-ws2-gate.ps1` -> `tests/kpi/results/ws2/ws2-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
-- REQ-01 (ANSI SQL + AI extract) — SQL analyzer baseline in `crates/voltnuerongrid-sql` + runtime analyze API smoke
+- REQ-01 (ANSI SQL + AI extract) — SQL analyzer baseline in `crates/voltnuerongrid-sql` + runtime analyze/execute smokes plus tenant SQL route/transaction tests validating tenant-scoped user RBAC on SQL endpoints
 - REQ-02 (DB/table/view lifecycle) — Statement classifier includes create/alter/drop/view/function lifecycle categories
 - REQ-03 (Rust/JS/Python function support) — 🟡 Ready for Validation: WS1 runtime UDF scaffold with function-catalog contract, per-language guard-policy contract, and statement-level execution-plan routing evidence; closure/release linkage includes WS1 closure gate + R1 SQL/UDF gate + R3 UDF runtime gate
 - REQ-05 (Separate compute/data files) — WS2 durability contract scaffold + validation smoke
@@ -198,11 +198,11 @@
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | 🔵 In Progress | WS2 | Ingestion connector/registry scaffold + gate orchestrator `run-ws4-gate.ps1` -> `tests/kpi/results/ws4/ws4-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | 🔵 In Progress | WS2 | Ingestion connector/registry scaffold + runtime ingest handlers now enforce mixed operator-or-tenant RBAC with tenant-scoped connector visibility, validated by `tests/kpi/results/ws4/ws4-ingest-parser-smoke.json`; gate orchestrator `run-ws4-gate.ps1` -> `tests/kpi/results/ws4/ws4-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS22 | (Epic 1 sub) | Pessimistic locking baseline | SQL Engine Team | 🔵 In Progress | WS1 | Runtime pessimistic-lock scaffold endpoints (`/api/v1/sql/locks/pessimistic/acquire`, `/api/v1/sql/locks/pessimistic/release`) with conflict/ownership enforcement + lock contention metrics endpoint (`/api/v1/sql/locks/pessimistic/metrics`) exposing deadlock-detection vs cap-hit-timeout counts + contention ratio for trend artifacts + WS22 smoke/gate posture evidence (`tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json`, `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json`, `tests/kpi/results/ws22/ws22-gate-summary.json`) and unit evidence (`cargo test -p voltnuerongridd ws22_`) |
 
 ### Requirements Covered
-- REQ-06 (CSV/Parquet/JSON/Excel + enterprise ingest) — WS4 ingest scaffold + CSV/JSON parser connectors with runtime endpoints and gate summary
+- REQ-06 (CSV/Parquet/JSON/Excel + enterprise ingest) — WS4 ingest scaffold + CSV/JSON parser connectors with runtime endpoints now protected by mixed operator-or-tenant RBAC and backed by updated smoke evidence
 - REQ-07 (Multithreaded high-speed import) — ⬜ Not Started: Ingest throughput benchmark pending
 - REQ-19 (Blazing ingest/update/read at scale) — ⬜ Not Started: KPI benchmark gates pending
 - REQ-22 (Pessimistic locking) — WS22 runtime scaffold with conflict/ownership enforcement + contention metrics endpoint for trend analysis
@@ -210,6 +210,7 @@
 ### Sprint 3 Deliverables
 - [x] WS4: Ingestion connector/registry scaffold created
 - [ ] WS4: Multi-format ingest (CSV/Parquet/JSON/Excel) runtime implementation
+- [x] WS4: Runtime ingest endpoints enforce operator auth + resource-scoped RBAC
 - [ ] WS4: Multithreaded import benchmark (REQ-07)
 - [x] WS22: Pessimistic lock acquire/release endpoints online
 - [x] WS22: Conflict/ownership enforcement unit tests passing
@@ -227,14 +228,14 @@
 
 | Gate | Scope | Status Source |
 |---|---|---|
-| WS2 Index/Constraint Smoke | Epic 2 + REQ-11 (B-tree index engine + constraint validator with PK/Unique/NotNull + runtime endpoints) | `tests/kpi/results/ws2/ws2-index-constraint-smoke.json` |
+| WS2 Index/Constraint Smoke | Epic 2 + REQ-11 (B-tree index engine + constraint validator with PK/Unique/NotNull + runtime endpoints protected by operator auth + RBAC) | `tests/kpi/results/ws2/ws2-index-constraint-smoke.json` |
 | WS2 Gate Summary | Epic 2 (store durability + WAL + checkpoint + index/constraint) | `tests/kpi/results/ws2/ws2-gate-summary.json` |
 
 ### Gate Evidence — WS4 Ingest Parsers (REQ-06)
 
 | Gate | Scope | Status Source |
 |---|---|---|
-| WS4 Ingest Parser Smoke | Epic 4 + REQ-06 (CSV + JSON/NDJSON connectors + runtime ingest endpoints) | `tests/kpi/results/ws4/ws4-ingest-parser-smoke.json` |
+| WS4 Ingest Parser Smoke | Epic 4 + REQ-06 (CSV + JSON/NDJSON connectors + runtime ingest endpoints protected by mixed operator-or-tenant RBAC) | `tests/kpi/results/ws4/ws4-ingest-parser-smoke.json` |
 | WS4 Gate Summary | Epic 4 (ingest plugin scaffold + CSV/JSON parsers) | `tests/kpi/results/ws4/ws4-gate-summary.json` |
 
 ---
@@ -250,10 +251,10 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | 🔵 In Progress | WS4 | Source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + gate orchestrator `run-ws4a-gate.ps1` -> `tests/kpi/results/ws4a/ws4a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | 🟡 Ready for Validation | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous handlers + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json`; release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | 🟡 Ready for Validation | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous plus mixed operator-or-tenant ingest handlers and tenant-scoped SQL runtime access + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json`; release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
-- REQ-13 (Multi-user roles and privileges) — 🔵 In Progress: Shared RBAC privilege matrix + resource-scoped operator grants enforced in runtime; broader user/tenant hierarchy still pending
+- REQ-13 (Multi-user roles and privileges) — 🔵 In Progress: Shared RBAC privilege matrix + resource-scoped operator and tenant-user grants enforced in runtime across control-plane, storage, mixed ingest, and tenant-scoped SQL surfaces; broader user/tenant hierarchy still pending
 - REQ-16 (SSL + encryption/decryption) — Security contract enforces TLS/mTLS + encryption-at-rest + KMS constraints
 - REQ-18 (Stream in/out + events for debug/audit) — WS4A streaming + replay cursor scaffolds with gate summary
 - REQ-26 (Plugin model for streaming sources/sinks) — WS4A + WS7 linkage in progress
@@ -402,12 +403,12 @@
 |---|---|---|---|---|---|---|
 | WS9 | Epic 9 | Studio UI | UX Team | 🟡 Ready for Validation | WS1, WS3 | Studio API client contracts + endpoint/header/type checks + contract script execution via WS9 smoke harness + gate orchestrator `run-ws9-gate.ps1` -> `tests/kpi/results/ws9/ws9-gate-summary.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS9A | Epic 9A | IDE extension suite | DX Team | 🟡 Ready for Validation | WS1, WS10 | Shared IDE API contract + VS/Cursor/Antigravity/JetBrains/Eclipse adapter manifests + WS9A smoke harness + gate orchestrator `run-ws9a-gate.ps1` -> `tests/kpi/results/ws9a/ws9a-gate-summary.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | 🟡 Ready for Validation | WS1, WS6 | Rust driver request builder + session/admin/operator headers + JSON/properties/YAML `DriverRoutingConfigContract` parsing/validation + WS10 smoke harness + gate orchestrator `run-ws10-gate.ps1` -> `tests/kpi/results/ws10/ws10-gate-summary.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS10 | Epic 10 | Drivers + pooling + gateway/session routing | Integrations Team | 🟡 Ready for Validation | WS1, WS6 | Rust driver request builder now emits session/tenant/user/admin/operator headers and exposes SQL analyze/route/execute/transaction request builders + JSON/properties/YAML `DriverRoutingConfigContract` parsing/validation + WS10 smoke harness + gate orchestrator `run-ws10-gate.ps1` -> `tests/kpi/results/ws10/ws10-gate-summary.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS11 | Epic 11 | Internationalization and UTF-8 | Platform + UX Team | 🟡 Ready for Validation | WS1 | Locale parsing + i18n catalog messages + runtime `/api/v1/i18n/messages` + locale fallback policy tests in SQL/runtime + WS11 smoke harness + gate orchestrator `run-ws11-gate.ps1` -> `tests/kpi/results/ws11/ws11-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-14 (UI + engine separation) — Studio API contract checks validate endpoint/header/type coverage
-- REQ-15 (Driver support multi-language) — Rust driver baseline + JSON/YAML/properties routing contract parse coverage
+- REQ-15 (Driver support multi-language) — Rust driver baseline + tenant/user session header emission + JSON/YAML/properties routing contract parse coverage
 - REQ-25 (Native connection + pooling) — Driver routing contract enforces pool min/max + timeout constraints
 - REQ-28 (IDE extensions) — Shared IDE contract + provider manifests for VS/Cursor/Antigravity/JetBrains/Eclipse
 
@@ -477,7 +478,7 @@
 
 | ID | Hardening Item | Owner | Priority | Status | Completion | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|---|
-| H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 92% | Added operator auth gate (`VNG_ADMIN_API_KEY` + `x-vng-admin-key`) for autonomous control endpoints, then layered registered operator identity + role binding enforcement via `x-vng-operator-id` plus a shared resource-scoped RBAC privilege matrix; retained versioned/checksummed DR policy-state persistence envelope with corruption fallback to `.bak` and legacy snapshot compatibility tests (`ws12_`) | Full RBAC integration pending | Extend operator-scoped RBAC into broader user/tenant privilege hierarchies |
+| H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 96% | Added operator auth gate (`VNG_ADMIN_API_KEY` + `x-vng-admin-key`) for autonomous control endpoints, then layered registered operator identity + role binding enforcement via `x-vng-operator-id` plus a shared resource-scoped RBAC privilege matrix now enforced across control-plane, storage, mixed ingest, tenant-scoped SQL runtime handlers, and tenant-aware driver headers; retained versioned/checksummed DR policy-state persistence envelope with corruption fallback to `.bak` and legacy snapshot compatibility tests (`ws12_`) | Full RBAC integration pending | Extend operator-scoped RBAC into broader user/tenant privilege hierarchies |
 | H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | 🔵 In Progress | 95% | Added restart/replay integrity tests + matrix harness artifact `tests/kpi/results/h02/h02-restart-replay-matrix.json`; matrix now includes persisted WAL recovery signal plus multi-node replay/failover handoff matrix artifact `tests/kpi/results/h02/h02-multi-node-handoff-matrix.json`, and WS6 runtime now consumes explicit multi-node replication transport events for handoff replay | Full distributed transport runtime and leader-election integration not yet implemented | Replace in-memory transport with real network transport while preserving replay contract |
 | H-03 | Control-plane resilience hardening | Distributed Systems | P0 | 🔵 In Progress | 15% | Control-plane clustering requirement and SPOF closure criteria documented | Cluster runtime implementation pending | Control-plane chaos test plan v1 |
 | H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | 🔵 In Progress | 20% | Outbox and replay durability controls defined in architecture | Event bus/outbox services pending | Exactly-once replay test harness draft |

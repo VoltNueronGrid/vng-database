@@ -2,8 +2,9 @@
   "smoke": "sql-execute-udf-runtime",
   "status": "passed",
   "base_url": "http://127.0.0.1:8080",
-  "timestamp_utc": "2026-03-06T04:42:59.3640478Z",
+  "timestamp_utc": "2026-03-07T14:22:25.7900994Z",
   "checks": {
+    "execute_requires_user_headers": true,
     "execute_status_ok": true,
     "udf_results_present": true,
     "udf_catalog_contract_present": true,

@@ -85,14 +85,42 @@ fn scope_matches(allowed_scope: &str, requested_scope: &str) -> bool {
     if allowed_scope == "*" {
         return true;
     }
-    if let Some(prefix) = allowed_scope.strip_suffix("/*") {
-        return requested_scope == prefix
-            || requested_scope
-                .strip_prefix(prefix)
-                .map(|suffix| suffix.starts_with('/'))
-                .unwrap_or(false);
+
+    let allowed_segments: Vec<&str> = allowed_scope
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let requested_segments: Vec<&str> = requested_scope
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+
+    let mut index = 0usize;
+    while index < allowed_segments.len() && index < requested_segments.len() {
+        let allowed = allowed_segments[index];
+        let requested = requested_segments[index];
+
+        if allowed == "*" {
+            return true;
+        }
+        if allowed.starts_with('{') && allowed.ends_with('}') {
+            if requested.is_empty() {
+                return false;
+            }
+            index += 1;
+            continue;
+        }
+        if !allowed.eq_ignore_ascii_case(requested) {
+            return false;
+        }
+        index += 1;
     }
-    allowed_scope.eq_ignore_ascii_case(requested_scope)
+
+    if index == allowed_segments.len() && index == requested_segments.len() {
+        return true;
+    }
+
+    index + 1 == allowed_segments.len() && allowed_segments.get(index) == Some(&"*")
 }
 
 impl SecurityConfigContract {
@@ -333,6 +361,32 @@ token_ttl_seconds: 300
             "security",
             "observability.audit",
             "autonomous/actions",
+            PrivilegeAction::Read,
+        ));
+    }
+
+    #[test]
+    fn ws5_rbac_privilege_matrix_allows_tenant_scope_templates() {
+        let mut matrix = RbacPrivilegeMatrix::new();
+        matrix.grant_role(
+            "tenant_analyst",
+            ResourceGrant {
+                resource: "sql.runtime".to_string(),
+                scopes: vec!["tenants/{tenant}/sql/analyze".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+
+        assert!(matrix.allows(
+            "tenant_analyst",
+            "sql.runtime",
+            "tenants/acme/sql/analyze",
+            PrivilegeAction::Read,
+        ));
+        assert!(!matrix.allows(
+            "tenant_analyst",
+            "sql.runtime",
+            "tenants/acme/sql/execute",
             PrivilegeAction::Read,
         ));
     }

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub struct DriverConfig {
     pub base_url: String,
     pub session_id: String,
+    pub tenant_id: Option<String>,
+    pub user_id: Option<String>,
     pub admin_api_key: Option<String>,
     pub operator_id: Option<String>,
     pub route_hint: Option<String>,
@@ -22,6 +24,9 @@ impl DriverConfig {
         if self.session_id.trim().is_empty() {
             return Err("session_id must not be empty".to_string());
         }
+        if self.tenant_id.is_some() != self.user_id.is_some() {
+            return Err("tenant_id and user_id must be set together".to_string());
+        }
         Ok(())
     }
 }
@@ -30,6 +35,8 @@ impl DriverConfig {
 pub struct DriverRoutingConfigContract {
     pub base_url: String,
     pub session_header_name: String,
+    pub tenant_header_name: String,
+    pub user_header_name: String,
     pub route_hint_header_name: String,
     pub admin_header_name: String,
     pub operator_header_name: String,
@@ -45,6 +52,8 @@ impl DriverRoutingConfigContract {
         }
         for header in [
             &self.session_header_name,
+            &self.tenant_header_name,
+            &self.user_header_name,
             &self.route_hint_header_name,
             &self.admin_header_name,
             &self.operator_header_name,
@@ -113,6 +122,14 @@ impl DriverRoutingConfigContract {
                 .get("driver.sessionHeaderName")
                 .ok_or_else(|| "missing driver.sessionHeaderName".to_string())?
                 .to_string(),
+            tenant_header_name: map
+                .get("driver.tenantHeaderName")
+                .ok_or_else(|| "missing driver.tenantHeaderName".to_string())?
+                .to_string(),
+            user_header_name: map
+                .get("driver.userHeaderName")
+                .ok_or_else(|| "missing driver.userHeaderName".to_string())?
+                .to_string(),
             route_hint_header_name: map
                 .get("driver.routeHintHeaderName")
                 .ok_or_else(|| "missing driver.routeHintHeaderName".to_string())?
@@ -168,6 +185,36 @@ impl VoltNueronGridDriver {
         Ok(self.build_json_post("/api/v1/sql/execute", body))
     }
 
+    pub fn build_sql_analyze_request(&self, sql_batch: &str) -> Result<DriverRequest, String> {
+        if sql_batch.trim().is_empty() {
+            return Err("sql_batch must not be empty".to_string());
+        }
+        let body = serde_json::json!({
+            "sql_batch": sql_batch,
+        });
+        Ok(self.build_json_post("/api/v1/sql/analyze", body))
+    }
+
+    pub fn build_sql_route_request(&self, sql_batch: &str) -> Result<DriverRequest, String> {
+        if sql_batch.trim().is_empty() {
+            return Err("sql_batch must not be empty".to_string());
+        }
+        let body = serde_json::json!({
+            "sql_batch": sql_batch,
+        });
+        Ok(self.build_json_post("/api/v1/sql/route", body))
+    }
+
+    pub fn build_sql_transaction_request(&self, statements: &[&str]) -> Result<DriverRequest, String> {
+        if statements.is_empty() {
+            return Err("statements must not be empty".to_string());
+        }
+        let body = serde_json::json!({
+            "statements": statements,
+        });
+        Ok(self.build_json_post("/api/v1/sql/transaction", body))
+    }
+
     pub fn build_authorize_action_request(
         &self,
         action: &str,
@@ -187,6 +234,12 @@ impl VoltNueronGridDriver {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
         headers.insert("x-vng-session-id".to_string(), self.config.session_id.clone());
+        if let Some(tenant_id) = &self.config.tenant_id {
+            headers.insert("x-vng-tenant-id".to_string(), tenant_id.clone());
+        }
+        if let Some(user_id) = &self.config.user_id {
+            headers.insert("x-vng-user-id".to_string(), user_id.clone());
+        }
         if let Some(route_hint) = &self.config.route_hint {
             headers.insert("x-vng-route-hint".to_string(), route_hint.clone());
         }
@@ -218,6 +271,8 @@ mod tests {
         DriverConfig {
             base_url: "http://127.0.0.1:8080".to_string(),
             session_id: "sess-1".to_string(),
+            tenant_id: Some("acme".to_string()),
+            user_id: Some("analyst-acme".to_string()),
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("operator-a".to_string()),
             route_hint: Some("oltp".to_string()),
@@ -235,6 +290,14 @@ mod tests {
         assert_eq!(
             request.headers.get("x-vng-session-id").map(String::as_str),
             Some("sess-1")
+        );
+        assert_eq!(
+            request.headers.get("x-vng-tenant-id").map(String::as_str),
+            Some("acme")
+        );
+        assert_eq!(
+            request.headers.get("x-vng-user-id").map(String::as_str),
+            Some("analyst-acme")
         );
         assert_eq!(
             request.headers.get("x-vng-route-hint").map(String::as_str),
@@ -262,10 +325,36 @@ mod tests {
     }
 
     #[test]
+    fn builds_sql_route_and_transaction_requests_with_user_headers() {
+        let driver = VoltNueronGridDriver::new(config()).expect("driver");
+        let route = driver.build_sql_route_request("SELECT 1").expect("route request");
+        let tx = driver
+            .build_sql_transaction_request(&["BEGIN", "COMMIT"])
+            .expect("transaction request");
+        assert!(route.url.ends_with("/api/v1/sql/route"));
+        assert!(tx.url.ends_with("/api/v1/sql/transaction"));
+        assert_eq!(route.headers.get("x-vng-user-id").map(String::as_str), Some("analyst-acme"));
+        assert_eq!(tx.headers.get("x-vng-tenant-id").map(String::as_str), Some("acme"));
+    }
+
+    #[test]
+    fn rejects_partial_tenant_user_config() {
+        let err = VoltNueronGridDriver::new(DriverConfig {
+            tenant_id: Some("acme".to_string()),
+            user_id: None,
+            ..config()
+        })
+        .expect_err("partial tenant user config should fail");
+        assert!(err.contains("tenant_id and user_id"));
+    }
+
+    #[test]
     fn validates_driver_contract_from_json() {
         let json = r#"{
           "base_url":"http://127.0.0.1:8080",
           "session_header_name":"x-vng-session-id",
+                    "tenant_header_name":"x-vng-tenant-id",
+                    "user_header_name":"x-vng-user-id",
           "route_hint_header_name":"x-vng-route-hint",
           "admin_header_name":"x-vng-admin-key",
           "operator_header_name":"x-vng-operator-id",
@@ -282,6 +371,8 @@ mod tests {
         let properties = r#"
 driver.baseUrl=http://127.0.0.1:8080
 driver.sessionHeaderName=x-vng-session-id
+driver.tenantHeaderName=x-vng-tenant-id
+driver.userHeaderName=x-vng-user-id
 driver.routeHintHeaderName=x-vng-route-hint
 driver.adminHeaderName=x-vng-admin-key
 driver.operatorHeaderName=x-vng-operator-id
@@ -299,6 +390,8 @@ driver.requestTimeoutMs=2500
         let yaml = r#"
 base_url: http://127.0.0.1:8080
 session_header_name: x-vng-session-id
+tenant_header_name: x-vng-tenant-id
+user_header_name: x-vng-user-id
 route_hint_header_name: x-vng-route-hint
 admin_header_name: x-vng-admin-key
 operator_header_name: x-vng-operator-id

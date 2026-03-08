@@ -1,11 +1,11 @@
 {
   "smoke": "ws2-index-constraint-scaffold",
   "status": "passed",
-  "started_at_utc": "2026-03-06T15:34:04.4767780Z",
-  "finished_at_utc": "2026-03-06T15:34:04.4922009Z",
-  "duration_ms": 15,
-  "total_checks": 18,
-  "passed_checks": 18,
+  "started_at_utc": "2026-03-07T06:50:17.2466313Z",
+  "finished_at_utc": "2026-03-07T06:50:17.2951954Z",
+  "duration_ms": 49,
+  "total_checks": 19,
+  "passed_checks": 19,
   "checks": [
     {
       "check": "index_manager_struct_exists",
@@ -69,6 +69,10 @@
     },
     {
       "check": "store_constraints_route_exists",
+      "status": "passed"
+    },
+    {
+      "check": "store_handlers_require_rbac",
       "status": "passed"
     },
     {
