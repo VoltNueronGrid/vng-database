@@ -1,27 +1,27 @@
-{
-  "smoke": "ws6-rto-rpo-threshold-score",
-  "status": "passed",
-  "timestamp_utc": "2026-03-07T02:18:51.9472904Z",
-  "targets_path": "tests/kpi/config/targets.yaml",
-  "runtime_path": "services/voltnuerongridd/src/main.rs",
-  "thresholds": {
-    "rto_sec_max": 30,
-    "rpo_committed_data_loss": 0,
-    "strict_sync_required_for_rpo": true
-  },
-  "observed": {
-    "reported_rto_seconds": 30,
-    "reported_rpo_rows": 0,
-    "replication_lag_signal_path_present": true
-  },
-  "checks": {
-    "rto_threshold_pass": true,
-    "rpo_threshold_pass": true,
-    "strict_sync_policy_pass": true
-  },
-  "gate_score": {
-    "score_max": 100,
-    "score": 100,
-    "pass_min": 100
-  }
+﻿{
+    "smoke":  "ws6-rto-rpo-threshold-score",
+    "status":  "passed",
+    "timestamp_utc":  "2026-03-09T03:22:07.2704609Z",
+    "targets_path":  "tests/kpi/config/targets.yaml",
+    "runtime_path":  "services/voltnuerongridd/src/main.rs",
+    "thresholds":  {
+                       "rto_sec_max":  30,
+                       "rpo_committed_data_loss":  0,
+                       "strict_sync_required_for_rpo":  true
+                   },
+    "observed":  {
+                     "reported_rto_seconds":  30,
+                     "reported_rpo_rows":  0,
+                     "replication_lag_signal_path_present":  true
+                 },
+    "checks":  {
+                   "rto_threshold_pass":  true,
+                   "rpo_threshold_pass":  true,
+                   "strict_sync_policy_pass":  true
+               },
+    "gate_score":  {
+                       "score_max":  100,
+                       "score":  100,
+                       "pass_min":  100
+                   }
 }

@@ -907,6 +907,7 @@ struct FailoverStatusResponse {
     status: &'static str,
     cluster_mode: String,
     leader_node_id: String,
+    unresolved_critical_count: usize,
     rto_seconds_target: u32,
     rpo_data_loss_rows_target: u32,
 }
@@ -1838,10 +1839,25 @@ async fn failover_status(State(state): State<AppState>) -> Json<FailoverStatusRe
         .lock()
         .map(|value| value.clone())
         .unwrap_or_else(|_| state.node_id.clone());
+    let unresolved_critical_count = state
+        .cluster_failure_signals
+        .lock()
+        .map(|signals| {
+            signals
+                .iter()
+                .filter(|signal| signal.severity.eq_ignore_ascii_case("critical") && !signal.resolved)
+                .count()
+        })
+        .unwrap_or(usize::MAX);
     Json(FailoverStatusResponse {
-        status: "healthy",
+        status: if unresolved_critical_count > 0 {
+            "degraded"
+        } else {
+            "healthy"
+        },
         cluster_mode: state.cluster_mode,
         leader_node_id: leader,
+        unresolved_critical_count,
         rto_seconds_target: 30,
         rpo_data_loss_rows_target: 0,
     })
@@ -5503,6 +5519,211 @@ mod tests {
         let leader = Arc::new(Mutex::new("node-1".to_string()));
         let (_, current) = rotate_leader(&leader, "   ", "node-1");
         assert_eq!(current, "node-1");
+    }
+
+    #[test]
+    fn failover_status_reports_healthy_without_critical_signals() {
+        let state = state_with_key(None);
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime.block_on(failover_status(State(state)));
+
+        assert_eq!(response.0.status, "healthy");
+        assert_eq!(response.0.unresolved_critical_count, 0);
+    }
+
+    #[test]
+    fn failover_status_reports_degraded_with_unresolved_critical_signal() {
+        let state = state_with_key(None);
+        if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+            signals.push(ClusterFailureSignal {
+                signal_id: "sig-status-critical".to_string(),
+                node_id: "node-2".to_string(),
+                transport: "raft".to_string(),
+                failure_type: "leader_heartbeat_timeout".to_string(),
+                severity: "critical".to_string(),
+                message: "control-plane heartbeat timeout".to_string(),
+                observed_unix_ms: now_unix_ms(),
+                resolved: false,
+                resolved_by: None,
+                resolved_unix_ms: None,
+                resolution_note: None,
+            });
+        }
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime.block_on(failover_status(State(state)));
+
+        assert_eq!(response.0.status, "degraded");
+        assert_eq!(response.0.unresolved_critical_count, 1);
+    }
+
+    #[test]
+    fn h03_control_plane_chaos_cycle_recovers_after_failover_and_reconcile() {
+        let state = state_with_key(Some("secret"));
+        if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+            signals.push(ClusterFailureSignal {
+                signal_id: "sig-h03-chaos".to_string(),
+                node_id: "node-2".to_string(),
+                transport: "raft".to_string(),
+                failure_type: "leader_heartbeat_timeout".to_string(),
+                severity: "critical".to_string(),
+                message: "control-plane heartbeat timeout".to_string(),
+                observed_unix_ms: now_unix_ms(),
+                resolved: false,
+                resolved_by: None,
+                resolved_unix_ms: None,
+                resolution_note: None,
+            });
+        }
+        let headers = operator_headers("secret", "platform-admin");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let degraded = runtime.block_on(failover_status(State(state.clone())));
+        assert_eq!(degraded.0.status, "degraded");
+        assert_eq!(degraded.0.unresolved_critical_count, 1);
+
+        let failover_response = runtime
+            .block_on(failover_simulate(
+                State(state.clone()),
+                headers.clone(),
+                Json(FailoverSimulateRequest {
+                    new_leader_node_id: "node-2".to_string(),
+                    reason: Some("h03_control_plane_chaos".to_string()),
+                    requested_by: Some("ignored-body-operator".to_string()),
+                }),
+            ))
+            .expect("failover response");
+
+        assert_eq!(failover_response.0.new_leader_node_id, "node-2");
+        assert_eq!(failover_response.0.handoff_report.handoff_state, "handoff_applied");
+
+        let reconcile_response = runtime
+            .block_on(sre_failure_reconcile(
+                State(state.clone()),
+                headers,
+                Json(FailureReconcileRequest {
+                    signal_ids: None,
+                    resolve_all_critical: Some(true),
+                    note: Some("h03_control_plane_chaos_reconcile".to_string()),
+                }),
+            ))
+            .expect("reconcile response");
+
+        assert_eq!(reconcile_response.0.resolved_count, 1);
+        assert_eq!(reconcile_response.0.unresolved_critical_count, 0);
+
+        let recovered = runtime.block_on(failover_status(State(state)));
+        assert_eq!(recovered.0.status, "healthy");
+        assert_eq!(recovered.0.leader_node_id, "node-2");
+        assert_eq!(recovered.0.unresolved_critical_count, 0);
+    }
+
+    #[test]
+    fn h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotations() {
+        let state = state_with_key(None);
+
+        let (_, leader_after_first_rotation) =
+            rotate_leader(&state.leader_node_id, "node-2", &state.node_id);
+        assert_eq!(leader_after_first_rotation, "node-2");
+
+        record_transport_mutation(
+            &state,
+            "node-1",
+            "node-2",
+            "raft",
+            "cluster_runtime_outbox",
+            "node-2-targeted-prepare",
+            MutationOp::Insert,
+            json!({ "event": "targeted_prepare", "target": "node-2" }),
+        );
+        record_transport_mutation(
+            &state,
+            "node-1",
+            "*",
+            "raft",
+            "cluster_runtime_outbox",
+            "broadcast-cluster-state",
+            MutationOp::Update,
+            json!({ "event": "broadcast_cluster_state", "epoch": 1 }),
+        );
+        record_transport_mutation(
+            &state,
+            "node-1",
+            "node-3",
+            "raft",
+            "cluster_runtime_outbox",
+            "node-3-targeted-prepare",
+            MutationOp::Insert,
+            json!({ "event": "targeted_prepare", "target": "node-3" }),
+        );
+
+        let node_2_handoff = build_failover_handoff_report(&state, "node-1", "node-2");
+        assert_eq!(node_2_handoff.handoff_state, "handoff_applied");
+        assert_eq!(node_2_handoff.replay_batch_size, 2);
+        assert_eq!(node_2_handoff.applied_count, 2);
+        assert_eq!(node_2_handoff.last_applied_sequence_after, 2);
+
+        let (_, leader_after_second_rotation) =
+            rotate_leader(&state.leader_node_id, "node-3", &state.node_id);
+        assert_eq!(leader_after_second_rotation, "node-3");
+
+        let node_3_handoff = build_failover_handoff_report(&state, "node-2", "node-3");
+        assert_eq!(node_3_handoff.handoff_state, "handoff_gap_detected");
+        assert_eq!(node_3_handoff.replay_batch_size, 2);
+        assert_eq!(node_3_handoff.applied_count, 0);
+        assert_eq!(node_3_handoff.last_applied_sequence_after, 0);
+        assert_eq!(node_3_handoff.gap_count, 1);
+        assert_eq!(node_3_handoff.gaps[0].expected, 1);
+        assert_eq!(node_3_handoff.gaps[0].actual, 2);
+
+        record_transport_mutation(
+            &state,
+            "node-3",
+            "*",
+            "raft",
+            "cluster_runtime_outbox",
+            "broadcast-cluster-state-2",
+            MutationOp::Update,
+            json!({ "event": "broadcast_cluster_state", "epoch": 2 }),
+        );
+        record_transport_mutation(
+            &state,
+            "node-3",
+            "node-2",
+            "raft",
+            "cluster_runtime_outbox",
+            "node-2-targeted-rejoin",
+            MutationOp::Update,
+            json!({ "event": "targeted_rejoin", "target": "node-2" }),
+        );
+
+        let (_, leader_after_third_rotation) =
+            rotate_leader(&state.leader_node_id, "node-2", &state.node_id);
+        assert_eq!(leader_after_third_rotation, "node-2");
+
+        let node_2_rejoin = build_failover_handoff_report(&state, "node-3", "node-2");
+        assert_eq!(node_2_rejoin.handoff_state, "handoff_gap_detected");
+        assert_eq!(node_2_rejoin.last_applied_sequence_before, 2);
+        assert_eq!(node_2_rejoin.replay_batch_size, 2);
+        assert_eq!(node_2_rejoin.applied_count, 0);
+        assert_eq!(node_2_rejoin.last_applied_sequence_after, 2);
+        assert_eq!(node_2_rejoin.gap_count, 1);
+        assert_eq!(node_2_rejoin.gaps[0].expected, 3);
+        assert_eq!(node_2_rejoin.gaps[0].actual, 4);
+
+        let replicas = state.replica_replay_states.lock().expect("replica lock");
+        let node_2_replica = replicas.get("node-2").expect("node-2 replica");
+        let node_2_sequences: Vec<u64> = node_2_replica
+            .applied
+            .iter()
+            .map(|mutation| mutation.sequence)
+            .collect();
+        assert_eq!(node_2_sequences, vec![1, 2]);
+
+        let node_3_replica = replicas.get("node-3").expect("node-3 replica");
+        assert!(node_3_replica.applied.is_empty());
+        assert_eq!(node_3_replica.last_applied_sequence, 0);
     }
 
     #[test]

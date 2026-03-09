@@ -15,6 +15,35 @@ function Ensure-OutputDir {
 
 Ensure-OutputDir -PathValue $OutputPath
 
+function Get-ArtifactStatus {
+  param([string]$ArtifactPath)
+
+  if (!(Test-Path -Path $ArtifactPath)) {
+    return "missing_artifact"
+  }
+
+  try {
+    $json = Get-Content -Raw -Path $ArtifactPath | ConvertFrom-Json
+    if ($null -ne $json.status) {
+      return [string]$json.status
+    }
+    return "present"
+  } catch {
+    return "invalid_artifact"
+  }
+}
+
+function Invoke-PackScript {
+  param(
+    [string]$ScriptPath,
+    [string]$ArtifactPath
+  )
+
+  $commandText = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $ScriptPath + '" -OutputPath "' + $ArtifactPath + '" >nul 2>nul'
+  & cmd.exe /c $commandText | Out-Null
+  return $LASTEXITCODE
+}
+
 $priorSummaryPath = "tests/kpi/results/ws6/ws6-gate-summary.previous.json"
 if (Test-Path -Path $OutputPath) {
   Copy-Item -Path $OutputPath -Destination $priorSummaryPath -Force
@@ -69,6 +98,16 @@ $packs = @(
     Name = "ws6-reconcile-latency-envelope"
     Script = "tests/kpi/scripts/run-ws6-reconcile-latency-envelope-smoke.ps1"
     Artifact = "tests/kpi/results/ws6/ws6-reconcile-latency-envelope-smoke.json"
+  },
+  @{
+    Name = "ws6-control-plane-chaos-certification"
+    Script = "tests/kpi/scripts/run-ws6-control-plane-chaos-smoke.ps1"
+    Artifact = "tests/kpi/results/ws6/ws6-control-plane-chaos-smoke.json"
+  },
+  @{
+    Name = "ws6-multi-node-cluster-runtime-chaos"
+    Script = "tests/kpi/scripts/run-ws6-multi-node-cluster-chaos-smoke.ps1"
+    Artifact = "tests/kpi/results/ws6/ws6-multi-node-cluster-chaos-smoke.json"
   }
 )
 
@@ -76,10 +115,14 @@ foreach ($pack in $packs) {
   $packStatus = "passed"
   $detail = "ok"
   try {
-    $global:LASTEXITCODE = 0
-    & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
-    if (-not $?) { $packStatus = "failed"; $detail = "script_invocation_failed" }
-    elseif ($global:LASTEXITCODE -ne 0) { $packStatus = "failed"; $detail = "exit_code=$global:LASTEXITCODE" }
+    $exitCode = Invoke-PackScript -ScriptPath $pack.Script -ArtifactPath $pack.Artifact
+    $artifactStatus = Get-ArtifactStatus -ArtifactPath $pack.Artifact
+    if ($artifactStatus -eq "passed") {
+      $packStatus = "passed"
+    } else {
+      $packStatus = "failed"
+      $detail = if ($exitCode -ne 0) { "exit_code=$exitCode;$artifactStatus" } else { $artifactStatus }
+    }
   } catch { $packStatus = "failed"; $detail = $_.Exception.Message }
   if ($packStatus -ne "passed") { $status = "failed" }
   $runs += [ordered]@{ pack = $pack.Name; status = $packStatus; detail = $detail; artifact = $pack.Artifact }

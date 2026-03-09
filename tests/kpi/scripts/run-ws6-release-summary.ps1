@@ -44,7 +44,7 @@ $artifact = [ordered]@{
   status = $status
   release_readiness = $releaseReadiness
   release_targets = @("R2")
-  scope = @("WS6", "REQ-17")
+  scope = @("WS6", "REQ-17", "H-03")
   generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
   sources = [ordered]@{
     summary = $SummaryPath
@@ -57,6 +57,8 @@ $artifact = [ordered]@{
     pack_count = @($summary.packs).Count
     chaos_fault_modes = [int]$chaos.total_fault_modes
     chaos_passed_modes = [int]$chaos.passed_modes
+    h03_control_plane_pack_status = [string](($summary.packs | Where-Object { $_.pack -eq "ws6-control-plane-chaos-certification" } | Select-Object -First 1).status)
+    h03_multi_node_pack_status = [string](($summary.packs | Where-Object { $_.pack -eq "ws6-multi-node-cluster-runtime-chaos" } | Select-Object -First 1).status)
     trend_state = [string]$trend.trend_state
     badge_message = [string]$badge.message
   }

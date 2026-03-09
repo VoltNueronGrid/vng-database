@@ -1,0 +1,46 @@
+﻿{
+    "smoke":  "ws6-multi-node-cluster-runtime-chaos",
+    "status":  "passed",
+    "hardening_item":  "H-03",
+    "timestamp_utc":  "2026-03-09T03:22:31.5245596Z",
+    "certification_scope":  [
+                                "multi_node_targeted_transport_filtering",
+                                "multi_node_replay_respects_last_applied_sequence",
+                                "multi_node_handoff_replays_only_unapplied_mutations",
+                                "cluster_runtime_targeted_handoff_churn"
+                            ],
+    "steps":  [
+                  {
+                      "step":  "runtime_targeted_handoffs_across_rotations",
+                      "crate":  "voltnuerongridd",
+                      "command":  "cargo test -p voltnuerongridd h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotations -- --nocapture",
+                      "status":  "passed",
+                      "duration_ms":  2180,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s\n"
+                  },
+                  {
+                      "step":  "targeted_transport_exports_only_addressed_events",
+                      "crate":  "voltnuerongrid-store",
+                      "command":  "cargo test -p voltnuerongrid-store multi_node_replication_transport_exports_only_targeted_events -- --nocapture",
+                      "status":  "passed",
+                      "duration_ms":  2146,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_replication_transport_exports_only_targeted_events ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s\n"
+                  },
+                  {
+                      "step":  "targeted_transport_respects_last_applied_sequence",
+                      "crate":  "voltnuerongrid-store",
+                      "command":  "cargo test -p voltnuerongrid-store multi_node_replication_transport_respects_last_applied_sequence -- --nocapture",
+                      "status":  "passed",
+                      "duration_ms":  1096,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_replication_transport_respects_last_applied_sequence ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s\n"
+                  },
+                  {
+                      "step":  "multi_node_handoff_replays_only_unapplied_mutations",
+                      "crate":  "voltnuerongrid-store",
+                      "command":  "cargo test -p voltnuerongrid-store multi_node_failover_handoff_replays_only_unapplied_mutations -- --nocapture",
+                      "status":  "passed",
+                      "duration_ms":  1113,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_replays_only_unapplied_mutations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s\n"
+                  }
+              ]
+}

@@ -14,14 +14,38 @@ function Ensure-OutputDir {
 
 Ensure-OutputDir -PathValue $OutputPath
 
+function Invoke-CargoTestCapture {
+  param([string[]]$Arguments)
+
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $commandText = "cargo " + (($Arguments | ForEach-Object {
+      if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+    }) -join " ")
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "$commandText > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
+    $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+    $ok = ($text -match "test result: ok\." -and $text -notmatch "test result: FAILED" -and $text -notmatch "(?m)^error:")
+    return [pscustomobject]@{
+      Ok = $ok
+      Text = $text
+      ExitCode = $process.ExitCode
+    }
+  } finally {
+    if (Test-Path -Path $tempFile) {
+      Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 $start = Get-Date
-$command = "cargo test -p voltnuerongridd failover_rotate_leader"
+$command = "cargo test -p voltnuerongridd failover_rotate_leader -- --nocapture"
 $outputLines = @()
 $exitCode = 1
 
 try {
-  $outputLines = & cargo test -p voltnuerongridd failover_rotate_leader 2>&1
-  $exitCode = $LASTEXITCODE
+  $testRun = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongridd", "failover_rotate_leader", "--", "--nocapture")
+  $outputLines = @($testRun.Text)
+  $exitCode = if ($testRun.Ok -and $testRun.ExitCode -eq 0) { 0 } else { 1 }
 } catch {
   $outputLines += $_.Exception.Message
   $exitCode = 1

@@ -55,6 +55,18 @@ $matrix = @(
     evidence_pack = "ws6-reconcile-latency-envelope"
     status = $packByName["ws6-reconcile-latency-envelope"]
     artifact = "tests/kpi/results/ws6/ws6-reconcile-latency-envelope-smoke.json"
+  },
+  [ordered]@{
+    fault_mode = "control_plane_leader_churn_and_reconcile"
+    evidence_pack = "ws6-control-plane-chaos-certification"
+    status = $packByName["ws6-control-plane-chaos-certification"]
+    artifact = "tests/kpi/results/ws6/ws6-control-plane-chaos-smoke.json"
+  },
+  [ordered]@{
+    fault_mode = "multi_node_cluster_runtime_targeted_handoff_churn"
+    evidence_pack = "ws6-multi-node-cluster-runtime-chaos"
+    status = $packByName["ws6-multi-node-cluster-runtime-chaos"]
+    artifact = "tests/kpi/results/ws6/ws6-multi-node-cluster-chaos-smoke.json"
   }
 )
 
