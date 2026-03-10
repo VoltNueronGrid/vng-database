@@ -12,16 +12,35 @@ if ($outputDir -and !(Test-Path $outputDir)) {
   New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 }
 
+function Invoke-CargoCapture {
+  param([scriptblock]$Command)
+
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    $output = & $Command 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  return [pscustomobject]@{
+    Output = @($output)
+    ExitCode = $exitCode
+  }
+}
+
 $runtimeFile = Join-Path $RepoRoot $RuntimePath
 $runtimeRaw = Get-Content -Path $runtimeFile -Raw
 
-$global:LASTEXITCODE = 0
-$failureSignalOutput = & cargo test -p voltnuerongridd ws12_failure_signal_ -- --nocapture 2>&1
-$failureSignalExit = $LASTEXITCODE
+$failureSignalResult = Invoke-CargoCapture -Command { cargo test -p voltnuerongridd ws12_failure_signal_ -- --nocapture }
+$failureSignalOutput = $failureSignalResult.Output
+$failureSignalExit = $failureSignalResult.ExitCode
 
-$global:LASTEXITCODE = 0
-$reconcileOutput = & cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture 2>&1
-$reconcileExit = $LASTEXITCODE
+$reconcileResult = Invoke-CargoCapture -Command { cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture }
+$reconcileOutput = $reconcileResult.Output
+$reconcileExit = $reconcileResult.ExitCode
 
 $checks = [ordered]@{
   failure_signal_route_declared = ($runtimeRaw -match '\.route\("/api/v1/sre/failure/signal",\s*post\(sre_failure_signal\)\)')

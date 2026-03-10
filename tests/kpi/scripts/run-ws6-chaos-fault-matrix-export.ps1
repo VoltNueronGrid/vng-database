@@ -67,6 +67,12 @@ $matrix = @(
     evidence_pack = "ws6-multi-node-cluster-runtime-chaos"
     status = $packByName["ws6-multi-node-cluster-runtime-chaos"]
     artifact = "tests/kpi/results/ws6/ws6-multi-node-cluster-chaos-smoke.json"
+  },
+  [ordered]@{
+    fault_mode = "process_isolated_cluster_runtime_failover_churn"
+    evidence_pack = "ws6-process-isolated-cluster-runtime-chaos"
+    status = $packByName["ws6-process-isolated-cluster-runtime-chaos"]
+    artifact = "tests/kpi/results/ws6/ws6-process-isolated-cluster-chaos-smoke.json"
   }
 )
 

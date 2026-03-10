@@ -1,9 +1,9 @@
 {
     "gate":  "ws6",
     "status":  "passed",
-    "started_at_utc":  "2026-03-09T02:40:05.9797544Z",
-    "finished_at_utc":  "2026-03-09T02:42:51.4029150Z",
-    "duration_ms":  165423,
+    "started_at_utc":  "2026-03-09T08:38:32.4178982Z",
+    "finished_at_utc":  "2026-03-09T08:40:11.0027847Z",
+    "duration_ms":  98585,
     "packs":  [
                   {
                       "pack":  "ws6-failover-simulation",
@@ -70,6 +70,12 @@
                       "status":  "passed",
                       "detail":  "ok",
                       "artifact":  "tests/kpi/results/ws6/ws6-multi-node-cluster-chaos-smoke.json"
+                  },
+                  {
+                      "pack":  "ws6-process-isolated-cluster-runtime-chaos",
+                      "status":  "passed",
+                      "detail":  "ok",
+                      "artifact":  "tests/kpi/results/ws6/ws6-process-isolated-cluster-chaos-smoke.json"
                   },
                   {
                       "pack":  "ws6-chaos-fault-matrix",

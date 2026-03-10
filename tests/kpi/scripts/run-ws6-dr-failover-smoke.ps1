@@ -11,11 +11,30 @@ if ($outputDir -and !(Test-Path $outputDir)) {
   New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 }
 
+function Invoke-CargoCapture {
+  param([scriptblock]$Command)
+
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    $output = & $Command 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  return [pscustomobject]@{
+    Output = @($output)
+    ExitCode = $exitCode
+  }
+}
+
 $command = "cargo test -p voltnuerongridd ws12_dr_hook_executes_failover_when_not_dry_run -- --nocapture"
-$global:LASTEXITCODE = 0
-$testOutput = & cargo test -p voltnuerongridd ws12_dr_hook_executes_failover_when_not_dry_run -- --nocapture 2>&1
-$exitCode = $LASTEXITCODE
-$status = if ($? -and $exitCode -eq 0) { "passed" } else { "failed" }
+$testResult = Invoke-CargoCapture -Command { cargo test -p voltnuerongridd ws12_dr_hook_executes_failover_when_not_dry_run -- --nocapture }
+$testOutput = $testResult.Output
+$exitCode = $testResult.ExitCode
+$status = if ($exitCode -eq 0) { "passed" } else { "failed" }
 
 $result = [ordered]@{
   smoke = "ws6-dr-failover-path"

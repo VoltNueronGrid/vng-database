@@ -14,6 +14,38 @@ function Ensure-OutputDir {
 
 Ensure-OutputDir -PathValue $OutputPath
 
+function Get-ArtifactStatus {
+  param([string]$ArtifactPath)
+
+  if (!(Test-Path -Path $ArtifactPath)) {
+    return "missing_artifact"
+  }
+
+  try {
+    $json = Get-Content -Raw -Path $ArtifactPath | ConvertFrom-Json
+    if ($null -ne $json.status) {
+      return [string]$json.status
+    }
+    return "present"
+  } catch {
+    return "invalid_artifact"
+  }
+}
+
+function Invoke-PowerShellScript {
+  param(
+    [string]$ScriptPath,
+    [string[]]$ArgumentList = @()
+  )
+
+  $process = Start-Process -FilePath "powershell.exe" `
+    -ArgumentList (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath) + $ArgumentList) `
+    -NoNewWindow `
+    -PassThru `
+    -Wait
+  return $process.ExitCode
+}
+
 $start = Get-Date
 $ws6SummaryPath = "tests/kpi/results/ws6/ws6-gate-summary.json"
 $ws6ReleasePath = "tests/kpi/results/gates/ws6-release-readiness.json"
@@ -25,18 +57,17 @@ $runs = @()
 $status = "passed"
 
 try {
-  $global:LASTEXITCODE = 0
-  & "tests/kpi/scripts/run-ws6-gate.ps1" `
-    -OutputPath $ws6SummaryPath `
-    -ReleaseSummaryOutputPath $ws6ReleasePath 2>&1 | Out-Null
-  if (-not $?) {
-    $status = "failed"
-    $runs += [ordered]@{ pack = "ws6-gate"; status = "failed"; detail = "script_invocation_failed"; artifact = $ws6SummaryPath }
-  } elseif ($global:LASTEXITCODE -ne 0) {
-    $status = "failed"
-    $runs += [ordered]@{ pack = "ws6-gate"; status = "failed"; detail = "exit_code=$global:LASTEXITCODE"; artifact = $ws6SummaryPath }
-  } else {
+  $exitCode = Invoke-PowerShellScript -ScriptPath "tests/kpi/scripts/run-ws6-gate.ps1" -ArgumentList @(
+    "-OutputPath", $ws6SummaryPath,
+    "-ReleaseSummaryOutputPath", $ws6ReleasePath
+  )
+  $artifactStatus = Get-ArtifactStatus -ArtifactPath $ws6SummaryPath
+  if ($artifactStatus -eq "passed") {
     $runs += [ordered]@{ pack = "ws6-gate"; status = "passed"; detail = "ok"; artifact = $ws6SummaryPath }
+  } else {
+    $status = "failed"
+    $detail = if ($exitCode -ne 0) { "exit_code=$exitCode;$artifactStatus" } else { $artifactStatus }
+    $runs += [ordered]@{ pack = "ws6-gate"; status = "failed"; detail = $detail; artifact = $ws6SummaryPath }
   }
 } catch {
   $status = "failed"

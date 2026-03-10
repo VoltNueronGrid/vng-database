@@ -13,17 +13,36 @@ if ($outputDir -and !(Test-Path $outputDir)) {
   New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 }
 
+function Invoke-CargoCapture {
+  param([scriptblock]$Command)
+
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    $output = & $Command 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  return [pscustomobject]@{
+    Output = @($output)
+    ExitCode = $exitCode
+  }
+}
+
 $runs = @()
 $overallPassed = $true
 
 for ($i = 1; $i -le $Iterations; $i++) {
   $started = Get-Date
-  $global:LASTEXITCODE = 0
-  $output = & cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture 2>&1
-  $exitCode = $LASTEXITCODE
+  $result = Invoke-CargoCapture -Command { cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture }
+  $output = $result.Output
+  $exitCode = $result.ExitCode
   $finished = Get-Date
   $durationMs = [int](($finished - $started).TotalMilliseconds)
-  $passed = ($? -and $exitCode -eq 0)
+  $passed = ($exitCode -eq 0)
   if (-not $passed) { $overallPassed = $false }
   $runs += [ordered]@{
     iteration = $i

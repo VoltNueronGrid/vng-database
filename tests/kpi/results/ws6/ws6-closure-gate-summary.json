@@ -2,9 +2,9 @@
     "gate":  "ws6-closure-gate",
     "status":  "passed",
     "validation_posture":  "ready_for_validation",
-    "started_at_utc":  "2026-03-09T03:21:52.8987966Z",
-    "finished_at_utc":  "2026-03-09T03:22:32.1579315Z",
-    "duration_ms":  39259,
+    "started_at_utc":  "2026-03-09T08:40:35.1796519Z",
+    "finished_at_utc":  "2026-03-09T08:42:18.6720215Z",
+    "duration_ms":  103492,
     "artifacts":  {
                       "ws6_gate":  "tests/kpi/results/ws6/ws6-gate-summary.json",
                       "ws6_release":  "tests/kpi/results/gates/ws6-release-readiness.json",

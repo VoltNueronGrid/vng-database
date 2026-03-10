@@ -1,28 +1,28 @@
-{
-  "smoke": "ws6-replication-lag-failure-scenarios",
-  "status": "passed",
-  "timestamp_utc": "2026-03-07T02:18:51.8349271Z",
-  "runtime_path": "services/voltnuerongridd/src/main.rs",
-  "commands": [
-    "cargo test -p voltnuerongridd ws12_failure_signal_ -- --nocapture",
-    "cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture"
-  ],
-  "scenarios": [
-    {
-      "scenario": "replication_lag_critical",
-      "expected_action": "queue_auto_remediation"
-    },
-    {
-      "scenario": "critical_signal_reconcile",
-      "expected_action": "mark_resolved_and_remove_from_queue"
-    }
-  ],
-  "checks": {
-    "failure_signal_route_declared": true,
-    "failure_reconcile_route_declared": true,
-    "replication_lag_failure_type_present": true,
-    "failure_signal_tests_passed": true,
-    "reconcile_tests_passed": true
-  },
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-454173c58e939023.exe)\n\nrunning 1 test\ntest tests::ws12_failure_signal_queues_auto_remediation ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-454173c58e939023.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.00s\n"
+﻿{
+    "smoke":  "ws6-replication-lag-failure-scenarios",
+    "status":  "passed",
+    "timestamp_utc":  "2026-03-09T08:41:00.8320525Z",
+    "runtime_path":  "services/voltnuerongridd/src/main.rs",
+    "commands":  [
+                     "cargo test -p voltnuerongridd ws12_failure_signal_ -- --nocapture",
+                     "cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture"
+                 ],
+    "scenarios":  [
+                      {
+                          "scenario":  "replication_lag_critical",
+                          "expected_action":  "queue_auto_remediation"
+                      },
+                      {
+                          "scenario":  "critical_signal_reconcile",
+                          "expected_action":  "mark_resolved_and_remove_from_queue"
+                      }
+                  ],
+    "checks":  {
+                   "failure_signal_route_declared":  true,
+                   "failure_reconcile_route_declared":  true,
+                   "replication_lag_failure_type_present":  true,
+                   "failure_signal_tests_passed":  true,
+                   "reconcile_tests_passed":  true
+               },
+    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_failure_signal_queues_auto_remediation ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s\n"
 }

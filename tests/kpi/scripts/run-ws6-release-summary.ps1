@@ -59,6 +59,7 @@ $artifact = [ordered]@{
     chaos_passed_modes = [int]$chaos.passed_modes
     h03_control_plane_pack_status = [string](($summary.packs | Where-Object { $_.pack -eq "ws6-control-plane-chaos-certification" } | Select-Object -First 1).status)
     h03_multi_node_pack_status = [string](($summary.packs | Where-Object { $_.pack -eq "ws6-multi-node-cluster-runtime-chaos" } | Select-Object -First 1).status)
+    h03_process_isolated_pack_status = [string](($summary.packs | Where-Object { $_.pack -eq "ws6-process-isolated-cluster-runtime-chaos" } | Select-Object -First 1).status)
     trend_state = [string]$trend.trend_state
     badge_message = [string]$badge.message
   }

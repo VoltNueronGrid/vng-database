@@ -1,0 +1,107 @@
+﻿{
+    "smoke":  "h04-service-integrated-outbox-runtime",
+    "status":  "passed",
+    "hardening_item":  "H-04",
+    "base_url":  "http://127.0.0.1:18241",
+    "timestamp_utc":  "2026-03-10T09:28:58.2134303Z",
+    "checks":  {
+                   "service_health_ok":  true,
+                   "ingest_request_succeeds":  true,
+                   "outbox_status_reports_events":  true,
+                   "outbox_status_reports_broker_mode":  true,
+                   "first_consumer_replay_delivers_events":  true,
+                   "first_consumer_second_replay_is_empty":  true,
+                   "second_consumer_replays_independently":  true
+               },
+    "observations":  {
+                         "health":  {
+                                        "status":  "ok",
+                                        "node_id":  "node-h04",
+                                        "cluster_mode":  "single"
+                                    },
+                         "runtime_state":  {
+                                               "outbox_wal_path":  "tests\\kpi\\results\\h04\\runtime-state\\h04-ingest-outbox-53772-1773134928251.wal",
+                                               "cursor_wal_path":  "tests\\kpi\\results\\h04\\runtime-state\\h04-ingest-cursors-53772-1773134928251.wal"
+                                           },
+                         "ingest":  {
+                                        "connector_id":  "orders",
+                                        "records_parsed":  2,
+                                        "status":  "ok"
+                                    },
+                         "outbox_status":  {
+                                               "status":  "ok",
+                                               "broker_mode":  "file_wal",
+                                               "stream_count":  1,
+                                               "total_events":  2,
+                                               "last_event_id":  2,
+                                               "streams":  [
+                                                               "ingest.outbox.tenant.acme.orders"
+                                                           ]
+                                           },
+                         "first_replay":  {
+                                              "status":  "ok",
+                                              "delivery_state":  "delivered_and_acked",
+                                              "stream_name":  "ingest.outbox.tenant.acme.orders",
+                                              "consumer_id":  "projection-a",
+                                              "delivered_count":  2,
+                                              "cursor_before_ack":  null,
+                                              "cursor_after_ack":  2,
+                                              "acknowledged":  true,
+                                              "events":  [
+                                                             {
+                                                                 "replay_key":  "ingest.outbox.tenant.acme.orders:1",
+                                                                 "event_id":  1,
+                                                                 "stream_name":  "ingest.outbox.tenant.acme.orders",
+                                                                 "origin":  "node-h04",
+                                                                 "payload_json":  "{\"connector_id\":\"orders\",\"format\":\"csv\",\"payload\":\"a\",\"record_key\":\"1\",\"storage_key\":\"tenant/acme/orders\"}"
+                                                             },
+                                                             {
+                                                                 "replay_key":  "ingest.outbox.tenant.acme.orders:2",
+                                                                 "event_id":  2,
+                                                                 "stream_name":  "ingest.outbox.tenant.acme.orders",
+                                                                 "origin":  "node-h04",
+                                                                 "payload_json":  "{\"connector_id\":\"orders\",\"format\":\"csv\",\"payload\":\"b\",\"record_key\":\"2\",\"storage_key\":\"tenant/acme/orders\"}"
+                                                             }
+                                                         ]
+                                          },
+                         "second_replay":  {
+                                               "status":  "ok",
+                                               "delivery_state":  "already_acknowledged",
+                                               "stream_name":  "ingest.outbox.tenant.acme.orders",
+                                               "consumer_id":  "projection-a",
+                                               "delivered_count":  0,
+                                               "cursor_before_ack":  2,
+                                               "cursor_after_ack":  2,
+                                               "acknowledged":  true,
+                                               "events":  [
+
+                                                          ]
+                                           },
+                         "independent_replay":  {
+                                                    "status":  "ok",
+                                                    "delivery_state":  "delivered_and_acked",
+                                                    "stream_name":  "ingest.outbox.tenant.acme.orders",
+                                                    "consumer_id":  "projection-b",
+                                                    "delivered_count":  2,
+                                                    "cursor_before_ack":  null,
+                                                    "cursor_after_ack":  2,
+                                                    "acknowledged":  true,
+                                                    "events":  [
+                                                                   {
+                                                                       "replay_key":  "ingest.outbox.tenant.acme.orders:1",
+                                                                       "event_id":  1,
+                                                                       "stream_name":  "ingest.outbox.tenant.acme.orders",
+                                                                       "origin":  "node-h04",
+                                                                       "payload_json":  "{\"connector_id\":\"orders\",\"format\":\"csv\",\"payload\":\"a\",\"record_key\":\"1\",\"storage_key\":\"tenant/acme/orders\"}"
+                                                                   },
+                                                                   {
+                                                                       "replay_key":  "ingest.outbox.tenant.acme.orders:2",
+                                                                       "event_id":  2,
+                                                                       "stream_name":  "ingest.outbox.tenant.acme.orders",
+                                                                       "origin":  "node-h04",
+                                                                       "payload_json":  "{\"connector_id\":\"orders\",\"format\":\"csv\",\"payload\":\"b\",\"record_key\":\"2\",\"storage_key\":\"tenant/acme/orders\"}"
+                                                                   }
+                                                               ]
+                                                }
+                     }
+}

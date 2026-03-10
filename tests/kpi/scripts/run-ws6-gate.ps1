@@ -33,15 +33,18 @@ function Get-ArtifactStatus {
   }
 }
 
-function Invoke-PackScript {
+function Invoke-PowerShellScript {
   param(
     [string]$ScriptPath,
-    [string]$ArtifactPath
+    [string[]]$ArgumentList = @()
   )
 
-  $commandText = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $ScriptPath + '" -OutputPath "' + $ArtifactPath + '" >nul 2>nul'
-  & cmd.exe /c $commandText | Out-Null
-  return $LASTEXITCODE
+  $process = Start-Process -FilePath "powershell.exe" `
+    -ArgumentList (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath) + $ArgumentList) `
+    -NoNewWindow `
+    -PassThru `
+    -Wait
+  return $process.ExitCode
 }
 
 $priorSummaryPath = "tests/kpi/results/ws6/ws6-gate-summary.previous.json"
@@ -108,6 +111,11 @@ $packs = @(
     Name = "ws6-multi-node-cluster-runtime-chaos"
     Script = "tests/kpi/scripts/run-ws6-multi-node-cluster-chaos-smoke.ps1"
     Artifact = "tests/kpi/results/ws6/ws6-multi-node-cluster-chaos-smoke.json"
+  },
+  @{
+    Name = "ws6-process-isolated-cluster-runtime-chaos"
+    Script = "tests/kpi/scripts/run-ws6-process-isolated-cluster-chaos-smoke.ps1"
+    Artifact = "tests/kpi/results/ws6/ws6-process-isolated-cluster-chaos-smoke.json"
   }
 )
 
@@ -115,7 +123,7 @@ foreach ($pack in $packs) {
   $packStatus = "passed"
   $detail = "ok"
   try {
-    $exitCode = Invoke-PackScript -ScriptPath $pack.Script -ArtifactPath $pack.Artifact
+    $exitCode = Invoke-PowerShellScript -ScriptPath $pack.Script -ArgumentList @("-OutputPath", $pack.Artifact)
     $artifactStatus = Get-ArtifactStatus -ArtifactPath $pack.Artifact
     if ($artifactStatus -eq "passed") {
       $packStatus = "passed"
@@ -144,58 +152,56 @@ $postArtifacts = @(
   @{
     Name = "ws6-chaos-fault-matrix"
     Script = "tests/kpi/scripts/run-ws6-chaos-fault-matrix-export.ps1"
-    Runner = {
-      & "tests/kpi/scripts/run-ws6-chaos-fault-matrix-export.ps1" `
-        -SummaryPath $OutputPath `
-        -OutputPath "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json"
-    }
+    Artifact = "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json"
+    Arguments = @(
+      "-SummaryPath", $OutputPath,
+      "-OutputPath", "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json"
+    )
   },
   @{
     Name = "ws6-gate-trend-comparison"
     Script = "tests/kpi/scripts/run-ws6-gate-trend-compare.ps1"
-    Runner = {
-      & "tests/kpi/scripts/run-ws6-gate-trend-compare.ps1" `
-        -CurrentSummaryPath $OutputPath `
-        -PriorSummaryPath $priorSummaryPath `
-        -OutputPath "tests/kpi/results/ws6/ws6-gate-trend-comparison.json"
-    }
+    Artifact = "tests/kpi/results/ws6/ws6-gate-trend-comparison.json"
+    Arguments = @(
+      "-CurrentSummaryPath", $OutputPath,
+      "-PriorSummaryPath", $priorSummaryPath,
+      "-OutputPath", "tests/kpi/results/ws6/ws6-gate-trend-comparison.json"
+    )
   },
   @{
     Name = "ws6-failover-stability-badge"
     Script = "tests/kpi/scripts/run-ws6-failover-stability-badge.ps1"
-    Runner = {
-      & "tests/kpi/scripts/run-ws6-failover-stability-badge.ps1" `
-        -SummaryPath $OutputPath `
-        -TrendPath "tests/kpi/results/ws6/ws6-gate-trend-comparison.json" `
-        -OutputPath "tests/kpi/results/ws6/ws6-failover-stability-badge.json"
-    }
+    Artifact = "tests/kpi/results/ws6/ws6-failover-stability-badge.json"
+    Arguments = @(
+      "-SummaryPath", $OutputPath,
+      "-TrendPath", "tests/kpi/results/ws6/ws6-gate-trend-comparison.json",
+      "-OutputPath", "tests/kpi/results/ws6/ws6-failover-stability-badge.json"
+    )
   },
   @{
     Name = "ws6-release-summary"
     Script = "tests/kpi/scripts/run-ws6-release-summary.ps1"
-    Runner = {
-      & "tests/kpi/scripts/run-ws6-release-summary.ps1" `
-        -SummaryPath $OutputPath `
-        -ChaosMatrixPath "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json" `
-        -TrendPath "tests/kpi/results/ws6/ws6-gate-trend-comparison.json" `
-        -BadgePath "tests/kpi/results/ws6/ws6-failover-stability-badge.json" `
-        -OutputPath $ReleaseSummaryOutputPath
-    }
+    Artifact = $ReleaseSummaryOutputPath
+    Arguments = @(
+      "-SummaryPath", $OutputPath,
+      "-ChaosMatrixPath", "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json",
+      "-TrendPath", "tests/kpi/results/ws6/ws6-gate-trend-comparison.json",
+      "-BadgePath", "tests/kpi/results/ws6/ws6-failover-stability-badge.json",
+      "-OutputPath", $ReleaseSummaryOutputPath
+    )
   }
 )
 
 foreach ($artifact in $postArtifacts) {
   try {
-    $global:LASTEXITCODE = 0
-    & $artifact.Runner 2>&1 | Out-Null
-    if (-not $?) {
-      $status = "failed"
-      $runs += [ordered]@{ pack = $artifact.Name; status = "failed"; detail = "script_invocation_failed"; artifact = $artifact.Script }
-    } elseif ($global:LASTEXITCODE -ne 0) {
-      $status = "failed"
-      $runs += [ordered]@{ pack = $artifact.Name; status = "failed"; detail = "exit_code=$global:LASTEXITCODE"; artifact = $artifact.Script }
-    } else {
+    $exitCode = Invoke-PowerShellScript -ScriptPath $artifact.Script -ArgumentList $artifact.Arguments
+    $artifactStatus = Get-ArtifactStatus -ArtifactPath $artifact.Artifact
+    if ($artifactStatus -eq "passed") {
       $runs += [ordered]@{ pack = $artifact.Name; status = "passed"; detail = "ok"; artifact = $artifact.Script }
+    } else {
+      $status = "failed"
+      $detail = if ($exitCode -ne 0) { "exit_code=$exitCode;$artifactStatus" } else { $artifactStatus }
+      $runs += [ordered]@{ pack = $artifact.Name; status = "failed"; detail = $detail; artifact = $artifact.Script }
     }
   } catch {
     $status = "failed"

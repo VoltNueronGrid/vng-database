@@ -12,6 +12,25 @@ if ($outputDir -and !(Test-Path $outputDir)) {
   New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 }
 
+function Invoke-CargoCapture {
+  param([scriptblock]$Command)
+
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    $output = & $Command 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  return [pscustomobject]@{
+    Output = @($output)
+    ExitCode = $exitCode
+  }
+}
+
 $runtimeRaw = Get-Content -Path $RuntimePath -Raw
 
 $steps = @()
@@ -24,11 +43,11 @@ function Run-Step {
     [scriptblock]$Runner
   )
   $started = Get-Date
-  $global:LASTEXITCODE = 0
-  $output = & $Runner 2>&1
-  $exitCode = $LASTEXITCODE
+  $result = Invoke-CargoCapture -Command $Runner
+  $output = $result.Output
+  $exitCode = $result.ExitCode
   $finished = Get-Date
-  $passed = ($? -and $exitCode -eq 0)
+  $passed = ($exitCode -eq 0)
   if (-not $passed) { $script:overallPassed = $false }
   $script:steps += [ordered]@{
     step = $Name

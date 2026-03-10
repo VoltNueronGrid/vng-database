@@ -11,11 +11,30 @@ if ($outputDir -and !(Test-Path $outputDir)) {
   New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 }
 
+function Invoke-CargoCapture {
+  param([scriptblock]$Command)
+
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    $output = & $Command 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  return [pscustomobject]@{
+    Output = @($output)
+    ExitCode = $exitCode
+  }
+}
+
 $command = "cargo test -p voltnuerongridd failover_ -- --nocapture"
-$global:LASTEXITCODE = 0
-$testOutput = & cargo test -p voltnuerongridd failover_ -- --nocapture 2>&1
-$exitCode = $LASTEXITCODE
-$testsPassed = ($? -and $exitCode -eq 0)
+$testResult = Invoke-CargoCapture -Command { cargo test -p voltnuerongridd failover_ -- --nocapture }
+$testOutput = $testResult.Output
+$exitCode = $testResult.ExitCode
+$testsPassed = ($exitCode -eq 0)
 
 $matrix = @(
   [ordered]@{ from = "node-1"; to = "node-2"; expected = "handoff_success"; evidence = "leader_rotation" },

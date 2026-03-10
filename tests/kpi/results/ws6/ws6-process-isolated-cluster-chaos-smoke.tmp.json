@@ -1,0 +1,115 @@
+﻿{
+    "smoke":  "ws6-process-isolated-cluster-runtime-chaos",
+    "status":  "passed",
+    "hardening_item":  "H-03",
+    "timestamp_utc":  "2026-03-09T05:38:27.5963954Z",
+    "certification_scope":  [
+                                "multi_process_runtime_bootstrap",
+                                "live_failover_signal_degradation",
+                                "live_failover_and_reconcile_cycle",
+                                "process_isolated_control_plane_state"
+                            ],
+    "nodes":  [
+                  {
+                      "node_id":  "node-1",
+                      "base_url":  "http://127.0.0.1:18181",
+                      "port":  18181
+                  },
+                  {
+                      "node_id":  "node-2",
+                      "base_url":  "http://127.0.0.1:18182",
+                      "port":  18182
+                  },
+                  {
+                      "node_id":  "node-3",
+                      "base_url":  "http://127.0.0.1:18183",
+                      "port":  18183
+                  }
+              ],
+    "checks":  {
+                   "multi_process_nodes_healthy":  true,
+                   "node1_degrades_after_live_signal":  true,
+                   "node1_failover_executes_live_handoff":  true,
+                   "node1_reconcile_recovers_health":  true,
+                   "node2_remains_isolated_from_node1_faults":  true,
+                   "node3_degrades_independently":  true,
+                   "node2_ignores_node3_local_faults":  true,
+                   "node3_reconcile_recovers_health":  true
+               },
+    "observations":  {
+                         "node1":  {
+                                       "degraded_status":  {
+                                                               "status":  "degraded",
+                                                               "cluster_mode":  "multi",
+                                                               "leader_node_id":  "node-1",
+                                                               "unresolved_critical_count":  1,
+                                                               "rto_seconds_target":  30,
+                                                               "rpo_data_loss_rows_target":  0
+                                                           },
+                                       "failover":  {
+                                                        "status":  "ok",
+                                                        "previous_leader_node_id":  "node-1",
+                                                        "new_leader_node_id":  "node-2",
+                                                        "reason":  "process_isolated_cluster_runtime_chaos",
+                                                        "requested_by":  "process-isolated-pack",
+                                                        "handoff_report":  {
+                                                                               "handoff_state":  "handoff_applied",
+                                                                               "source_node_id":  "node-1",
+                                                                               "target_node_id":  "node-2",
+                                                                               "last_applied_sequence_before":  0,
+                                                                               "last_applied_sequence_after":  3,
+                                                                               "replay_batch_size":  3,
+                                                                               "applied_count":  3,
+                                                                               "gap_count":  0,
+                                                                               "gaps":  [
+
+                                                                                        ]
+                                                                           }
+                                                    },
+                                       "recovered_status":  {
+                                                                "status":  "healthy",
+                                                                "cluster_mode":  "multi",
+                                                                "leader_node_id":  "node-2",
+                                                                "unresolved_critical_count":  0,
+                                                                "rto_seconds_target":  30,
+                                                                "rpo_data_loss_rows_target":  0
+                                                            }
+                                   },
+                         "node2":  {
+                                       "status_before_remote_fault":  {
+                                                                          "status":  "healthy",
+                                                                          "cluster_mode":  "multi",
+                                                                          "leader_node_id":  "node-1",
+                                                                          "unresolved_critical_count":  0,
+                                                                          "rto_seconds_target":  30,
+                                                                          "rpo_data_loss_rows_target":  0
+                                                                      },
+                                       "status_after_node3_fault":  {
+                                                                        "status":  "healthy",
+                                                                        "cluster_mode":  "multi",
+                                                                        "leader_node_id":  "node-1",
+                                                                        "unresolved_critical_count":  0,
+                                                                        "rto_seconds_target":  30,
+                                                                        "rpo_data_loss_rows_target":  0
+                                                                    }
+                                   },
+                         "node3":  {
+                                       "degraded_status":  {
+                                                               "status":  "degraded",
+                                                               "cluster_mode":  "multi",
+                                                               "leader_node_id":  "node-1",
+                                                               "unresolved_critical_count":  1,
+                                                               "rto_seconds_target":  30,
+                                                               "rpo_data_loss_rows_target":  0
+                                                           },
+                                       "recovered_status":  {
+                                                                "status":  "healthy",
+                                                                "cluster_mode":  "multi",
+                                                                "leader_node_id":  "node-1",
+                                                                "unresolved_critical_count":  0,
+                                                                "rto_seconds_target":  30,
+                                                                "rpo_data_loss_rows_target":  0
+                                                            }
+                                   }
+                     }
+}

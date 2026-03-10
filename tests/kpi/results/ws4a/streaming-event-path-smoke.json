@@ -1,9 +1,9 @@
 {
-  "smoke": "ws4a-streaming-event-path",
-  "status": "passed",
-  "command": "cargo test -p voltnuerongrid-ingest streams_from_source_and_replays_to_sink",
-  "started_at_utc": "2026-03-05T17:43:01.7534420Z",
-  "finished_at_utc": "2026-03-05T17:43:02.5539156Z",
-  "duration_ms": 800,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-6c4559b058af068f.exe)\n\nrunning 1 test\ntest tests::streams_from_source_and_replays_to_sink ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s\n"
+    "smoke":  "ws4a-streaming-event-path",
+    "status":  "passed",
+    "command":  "cargo test -p voltnuerongrid-ingest streams_from_source_and_replays_to_sink -- --nocapture",
+    "started_at_utc":  "2026-03-09T05:34:13.2066489Z",
+    "finished_at_utc":  "2026-03-09T05:34:17.3994062Z",
+    "duration_ms":  4193,
+    "output_excerpt":  "   Compiling voltnuerongrid-ingest v0.1.0 (D:\\by\\polap-db\\crates\\voltnuerongrid-ingest)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.58s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-6c4559b058af068f.exe)\n\nrunning 1 test\ntest tests::streams_from_source_and_replays_to_sink ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s\n\n"
 }

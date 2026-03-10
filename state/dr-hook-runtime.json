@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "written_unix_ms": 1773034562005,
+  "checksum_hex": "82dd98f4ebb0d9d3",
+  "snapshot": {
+    "hooks": {
+      "failover_drill": {
+        "last_attempt_unix_ms": 1773034562004,
+        "consecutive_failures": 0,
+        "last_status": "executed"
+      }
+    }
+  }
+}

@@ -1,9 +1,9 @@
 {
     "label":  "ws6-failover-stability",
-    "message":  "11/11 stable",
+    "message":  "12/12 stable",
     "color":  "green",
     "status":  "passed",
     "source_summary":  "tests/kpi/results/ws6/ws6-gate-summary.json",
     "source_trend":  "tests/kpi/results/ws6/ws6-gate-trend-comparison.json",
-    "generated_at_utc":  "2026-03-09T03:22:32.0196879Z"
+    "generated_at_utc":  "2026-03-09T08:42:13.8228655Z"
 }

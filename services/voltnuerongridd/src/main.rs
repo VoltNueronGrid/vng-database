@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::net::SocketAddr;
@@ -13,7 +13,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use voltnuerongrid_auth::{PrivilegeAction, RbacPrivilegeMatrix, ResourceGrant};
+use voltnuerongrid_auth::{
+    ConfiguredKmsProviderAdapter, KmsKeyProvider, KmsKeyResolution, KmsProviderChain,
+    PrivilegeAction, RbacPrivilegeMatrix, ResourceGrant, SecurityConfigContract,
+};
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
@@ -23,7 +26,10 @@ use voltnuerongrid_store::htap_sync::{
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::index::IndexManager;
-use voltnuerongrid_ingest::IngestionConnector;
+use voltnuerongrid_ingest::{
+    IngestionConnector, ManagedEventBusTransport, ManagedReplayCursorStore,
+    ReplayCursorStore, StreamDirection,
+};
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -73,10 +79,12 @@ struct AppState {
     node_id: String,
     cluster_mode: String,
     admin_api_key: Option<String>,
+    security_config: Arc<SecurityConfigContract>,
     allowed_operator_roles: Arc<HashSet<OperatorRole>>,
     operator_role_bindings: Arc<HashMap<String, OperatorRole>>,
     tenant_user_bindings: Arc<HashMap<String, TenantUserBinding>>,
     rbac_privilege_matrix: Arc<RbacPrivilegeMatrix>,
+    kms_runtime: Arc<Mutex<KmsRuntimeState>>,
     leader_node_id: Arc<Mutex<String>>,
     audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
     action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
@@ -96,9 +104,30 @@ struct AppState {
     constraint_manager: Arc<Mutex<ConstraintManager>>,
     ingest_csv_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
     ingest_json_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
+    ingest_outbox_streams: Arc<Mutex<HashMap<String, String>>>,
+    ingest_event_bus: Arc<Mutex<ManagedEventBusTransport>>,
+    ingest_outbox_cursors: Arc<Mutex<ManagedReplayCursorStore>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
+}
+
+#[derive(Clone, Default)]
+struct KmsRuntimeState {
+    providers: Vec<ConfiguredKmsProviderAdapter>,
+    unavailable_envs: HashSet<String>,
+    last_resolution: Option<KmsKeyResolution>,
+    last_error: Option<String>,
+    last_simulation_note: Option<String>,
+}
+
+struct KmsEvaluationSnapshot {
+    status: &'static str,
+    resolution_state: &'static str,
+    resolution: Option<KmsKeyResolution>,
+    unavailable_envs: Vec<String>,
+    last_simulation_note: Option<String>,
+    last_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -300,6 +329,130 @@ fn load_operator_role_bindings(
     } else {
         parsed
     }
+}
+
+fn load_runtime_security_config(allowed_operator_roles: &HashSet<OperatorRole>) -> SecurityConfigContract {
+    let mut configured_roles = allowed_operator_roles
+        .iter()
+        .map(|role| role.as_str().to_string())
+        .collect::<Vec<_>>();
+    configured_roles.sort();
+
+    let kms_failover_key_ref_envs = env::var("VNG_KMS_FAILOVER_KEY_REF_ENVS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| !values.is_empty())
+        .unwrap_or_else(|| {
+            vec![
+                "VNG_KMS_KEY_URI_REGION_B".to_string(),
+                "VNG_KMS_KEY_URI_REGION_C".to_string(),
+            ]
+        });
+
+    let config = SecurityConfigContract {
+        admin_api_key_env: env::var("VNG_ADMIN_API_KEY_ENV")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "VNG_ADMIN_API_KEY".to_string()),
+        admin_header_name: env::var("VNG_ADMIN_HEADER_NAME")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "x-vng-admin-key".to_string()),
+        tls_required: false,
+        mtls_required: false,
+        encryption_at_rest_required: true,
+        kms_key_ref_env: env::var("VNG_KMS_KEY_REF_ENV")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "VNG_KMS_KEY_URI".to_string()),
+        kms_failover_key_ref_envs,
+        allowed_operator_roles: configured_roles,
+        token_ttl_seconds: env::var("VNG_TOKEN_TTL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(300),
+    };
+
+    config
+        .validate()
+        .unwrap_or_else(|error| panic!("invalid runtime security config: {error}"));
+    config
+}
+
+fn load_kms_runtime_state(config: &SecurityConfigContract) -> KmsRuntimeState {
+    let mut provider_index = BTreeMap::<String, usize>::new();
+    let mut providers = Vec::<ConfiguredKmsProviderAdapter>::new();
+    for env_name in config.kms_key_candidates() {
+        if let Ok(value) = env::var(&env_name) {
+            if !value.trim().is_empty() {
+                let candidate = ConfiguredKmsProviderAdapter::from_key_ref(value.trim());
+                let provider_name = candidate.provider_name().to_string();
+                let provider_slot = *provider_index.entry(provider_name.clone()).or_insert_with(|| {
+                    providers.push(candidate);
+                    providers.len() - 1
+                });
+                providers[provider_slot].register_key_ref(&env_name, value.trim());
+            }
+        }
+    }
+
+    KmsRuntimeState {
+        providers,
+        unavailable_envs: HashSet::new(),
+        last_resolution: None,
+        last_error: None,
+        last_simulation_note: None,
+    }
+}
+
+fn load_ingest_event_bus() -> ManagedEventBusTransport {
+    let broker_mode = env::var("VNG_INGEST_OUTBOX_BROKER_MODE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "file_wal".to_string());
+    let broker_target = env::var("VNG_INGEST_EXTERNAL_BROKER_TARGET")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let subject_prefix = env::var("VNG_INGEST_EXTERNAL_BROKER_SUBJECT_PREFIX")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let wal_path = env::var("VNG_INGEST_OUTBOX_WAL_PATH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "state/ingest-outbox-runtime.wal".to_string());
+    ManagedEventBusTransport::from_broker_mode_with_target(
+        &broker_mode,
+        &wal_path,
+        broker_target.as_deref(),
+        subject_prefix.as_deref(),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "failed to initialize ingest event bus broker {broker_mode} with state {wal_path}: {error}"
+        )
+    })
+}
+
+fn load_ingest_outbox_cursor_store() -> ManagedReplayCursorStore {
+    let wal_path = env::var("VNG_INGEST_OUTBOX_CURSOR_WAL_PATH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "state/ingest-outbox-cursors.wal".to_string());
+    ManagedReplayCursorStore::wal_backed(&wal_path).unwrap_or_else(|error| {
+        panic!("failed to initialize ingest outbox cursor store at {wal_path}: {error}")
+    })
 }
 
 fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
@@ -534,7 +687,27 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                 actions: vec![PrivilegeAction::Read],
             },
         );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "security.kms".to_string(),
+                scopes: vec!["security/kms".to_string(), "security/kms/outage".to_string()],
+                actions: vec![
+                    PrivilegeAction::Read,
+                    PrivilegeAction::Manage,
+                ],
+            },
+        );
     }
+
+    matrix.grant_role(
+        OperatorRole::Sre.as_str(),
+        ResourceGrant {
+            resource: "security.kms".to_string(),
+            scopes: vec!["security/kms".to_string()],
+            actions: vec![PrivilegeAction::Read],
+        },
+    );
 
     matrix
 }
@@ -886,6 +1059,83 @@ struct IngestStatusResponse {
     csv_connectors: usize,
     json_connectors: usize,
     total_records_loaded: usize,
+}
+
+#[derive(Serialize)]
+struct IngestOutboxStatusResponse {
+    status: &'static str,
+    broker_mode: String,
+    broker_target: Option<String>,
+    stream_count: usize,
+    total_events: usize,
+    last_event_id: Option<u64>,
+    streams: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct IngestOutboxReplayRequest {
+    connector_id: String,
+    consumer_id: Option<String>,
+    max_items: Option<usize>,
+    acknowledge: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct IngestOutboxReplayEventResponse {
+    replay_key: String,
+    event_id: u64,
+    stream_name: String,
+    origin: String,
+    payload_json: String,
+}
+
+#[derive(Serialize)]
+struct IngestOutboxReplayResponse {
+    status: &'static str,
+    delivery_state: &'static str,
+    stream_name: String,
+    consumer_id: String,
+    delivered_count: usize,
+    cursor_before_ack: Option<u64>,
+    cursor_after_ack: Option<u64>,
+    acknowledged: bool,
+    events: Vec<IngestOutboxReplayEventResponse>,
+}
+
+#[derive(Serialize)]
+struct SecurityKmsStatusResponse {
+    status: &'static str,
+    resolution_state: &'static str,
+    encryption_at_rest_required: bool,
+    configured_envs: Vec<String>,
+    unavailable_envs: Vec<String>,
+    selected_env: Option<String>,
+    key_ref: Option<String>,
+    failover_used: bool,
+    last_simulation_note: Option<String>,
+    last_error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SecurityKmsOutageSimulateRequest {
+    unavailable_envs: Vec<String>,
+    note: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SecurityKmsOutageReconcileRequest {
+    note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SecurityKmsOutageResponse {
+    status: &'static str,
+    resolution_state: &'static str,
+    unavailable_envs: Vec<String>,
+    selected_env: Option<String>,
+    key_ref: Option<String>,
+    failover_used: bool,
+    note: String,
 }
 
 #[derive(Deserialize)]
@@ -1288,6 +1538,8 @@ async fn main() {
     let operator_role_bindings = Arc::new(load_operator_role_bindings(&allowed_operator_roles));
     let tenant_user_bindings = Arc::new(default_tenant_user_bindings());
     let rbac_privilege_matrix = Arc::new(default_rbac_privilege_matrix());
+    let security_config = Arc::new(load_runtime_security_config(&allowed_operator_roles));
+    let kms_runtime = Arc::new(Mutex::new(load_kms_runtime_state(&security_config)));
     let addr: SocketAddr = http_bind
         .parse()
         .unwrap_or_else(|_| "127.0.0.1:8080".parse().expect("fallback socket parse"));
@@ -1296,10 +1548,12 @@ async fn main() {
         node_id,
         cluster_mode,
         admin_api_key,
+        security_config,
         allowed_operator_roles,
         operator_role_bindings,
         tenant_user_bindings,
         rbac_privilege_matrix,
+        kms_runtime,
         leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
         audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
         action_records: Arc::new(Mutex::new(Vec::new())),
@@ -1319,6 +1573,9 @@ async fn main() {
         constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
         ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
         ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
+        ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
+        ingest_event_bus: Arc::new(Mutex::new(load_ingest_event_bus())),
+        ingest_outbox_cursors: Arc::new(Mutex::new(load_ingest_outbox_cursor_store())),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -1363,6 +1620,15 @@ async fn main() {
         .route("/api/v1/sre/gate/evaluate", get(sre_gate_evaluate))
         .route("/api/v1/sre/gate/export", post(sre_gate_export))
         .route("/api/v1/audit/events", get(audit_events))
+        .route("/api/v1/security/kms/status", get(security_kms_status))
+        .route(
+            "/api/v1/security/kms/outage/simulate",
+            post(security_kms_outage_simulate),
+        )
+        .route(
+            "/api/v1/security/kms/outage/reconcile",
+            post(security_kms_outage_reconcile),
+        )
         .route("/api/v1/i18n/messages", get(i18n_messages))
         .route(
             "/api/v1/autonomous/actions/records",
@@ -1394,6 +1660,8 @@ async fn main() {
         .route("/api/v1/ingest/csv", post(ingest_csv))
         .route("/api/v1/ingest/json", post(ingest_json))
         .route("/api/v1/ingest/status", get(ingest_status))
+        .route("/api/v1/ingest/outbox/status", get(ingest_outbox_status))
+        .route("/api/v1/ingest/outbox/replay", post(ingest_outbox_replay))
         .with_state(state);
 
     println!("voltnuerongridd listening on {}", addr);
@@ -3988,6 +4256,23 @@ fn ingest_status_scope() -> &'static str {
     "ingest/status"
 }
 
+fn ingest_outbox_scope(connector_id: Option<&str>) -> String {
+    match connector_id {
+        Some(connector_id) => format!("ingest/outbox/{connector_id}"),
+        None => "ingest/outbox".to_string(),
+    }
+}
+
+fn ingest_outbox_stream_name(storage_key: &str) -> String {
+    format!(
+        "ingest.outbox.{}",
+        storage_key
+            .replace('/', ".")
+            .replace(':', ".")
+            .replace(' ', "_")
+    )
+}
+
 fn ingest_storage_key(principal: &RuntimeAccessPrincipal, connector_id: &str) -> String {
     match principal {
         RuntimeAccessPrincipal::Operator(_) => connector_id.to_string(),
@@ -4006,6 +4291,140 @@ fn count_tenant_ingest_records<T>(records: &HashMap<String, Vec<T>>, tenant_id: 
         .map(|(_, value)| value.len())
         .sum();
     (connectors, total_records)
+}
+
+fn append_ingest_outbox_events(
+    state: &AppState,
+    principal: &RuntimeAccessPrincipal,
+    connector_id: &str,
+    format: &str,
+    records: &[voltnuerongrid_ingest::IngestRecord],
+) -> usize {
+    let storage_key = ingest_storage_key(principal, connector_id);
+    let stream_name = ingest_outbox_stream_name(&storage_key);
+
+    if let Ok(mut stream_map) = state.ingest_outbox_streams.lock() {
+        stream_map.insert(storage_key.clone(), stream_name.clone());
+    }
+
+    let mut event_bus = match state.ingest_event_bus.lock() {
+        Ok(guard) => guard,
+        Err(_) => return 0,
+    };
+
+    let mut appended = 0usize;
+    for record in records {
+        let mut attributes = HashMap::new();
+        attributes.insert("connector_id".to_string(), connector_id.to_string());
+        attributes.insert("format".to_string(), format.to_string());
+        attributes.insert("storage_key".to_string(), storage_key.clone());
+        attributes.insert("record_key".to_string(), record.key.clone());
+        if let RuntimeAccessPrincipal::TenantUser(user) = principal {
+            attributes.insert("tenant_id".to_string(), user.tenant_id.clone());
+        }
+
+        if event_bus
+            .publish(
+            &stream_name,
+            StreamDirection::Internal,
+            &state.node_id,
+            &json!({
+                "connector_id": connector_id,
+                "format": format,
+                "storage_key": storage_key,
+                "record_key": record.key,
+                "payload": record.payload,
+            })
+            .to_string(),
+            attributes,
+        )
+            .is_ok()
+        {
+            appended += 1;
+        }
+    }
+
+    appended
+}
+
+fn evaluate_kms_runtime(state: &AppState) -> KmsEvaluationSnapshot {
+    let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
+    let unavailable_envs = runtime.unavailable_envs.clone();
+    for provider in &mut runtime.providers {
+        provider.clear_unavailable();
+        for env_name in &unavailable_envs {
+            provider.mark_unavailable(env_name);
+        }
+    }
+
+    let mut unavailable_envs = runtime.unavailable_envs.iter().cloned().collect::<Vec<_>>();
+    unavailable_envs.sort();
+
+    let providers = runtime
+        .providers
+        .iter()
+        .map(|provider| provider as &dyn KmsKeyProvider)
+        .collect::<Vec<_>>();
+    let chain = KmsProviderChain::new(providers);
+
+    match state.security_config.resolve_kms_key_ref_with_provider(&chain) {
+        Ok(resolution) => {
+            runtime.last_error = None;
+            runtime.last_resolution = Some(resolution.clone());
+            KmsEvaluationSnapshot {
+                status: if resolution.failover_used { "degraded" } else { "ok" },
+                resolution_state: if resolution.failover_used {
+                    "failover_active"
+                } else {
+                    "primary_active"
+                },
+                resolution: Some(resolution),
+                unavailable_envs,
+                last_simulation_note: runtime.last_simulation_note.clone(),
+                last_error: None,
+            }
+        }
+        Err(error) => {
+            runtime.last_resolution = None;
+            runtime.last_error = Some(error.clone());
+            KmsEvaluationSnapshot {
+                status: "degraded",
+                resolution_state: "unresolved",
+                resolution: None,
+                unavailable_envs,
+                last_simulation_note: runtime.last_simulation_note.clone(),
+                last_error: Some(error),
+            }
+        }
+    }
+}
+
+fn build_security_kms_status_response(
+    state: &AppState,
+    snapshot: &KmsEvaluationSnapshot,
+) -> SecurityKmsStatusResponse {
+    SecurityKmsStatusResponse {
+        status: snapshot.status,
+        resolution_state: snapshot.resolution_state,
+        encryption_at_rest_required: state.security_config.encryption_at_rest_required,
+        configured_envs: state.security_config.kms_key_candidates(),
+        unavailable_envs: snapshot.unavailable_envs.clone(),
+        selected_env: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.selected_env.clone()),
+        key_ref: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.key_ref.clone()),
+        failover_used: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.failover_used)
+            .unwrap_or(false),
+        last_simulation_note: snapshot.last_simulation_note.clone(),
+        last_error: snapshot.last_error.clone(),
+    }
 }
 
 fn require_tenant_user_privilege(
@@ -4651,6 +5070,178 @@ async fn store_validate_constraint(
     })
 }
 
+async fn security_kms_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SecurityKmsStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "security.kms",
+        "security/kms",
+        PrivilegeAction::Read,
+    )?;
+    let principal = RuntimeAccessPrincipal::Operator(operator.clone());
+    let snapshot = evaluate_kms_runtime(&state);
+    let response = build_security_kms_status_response(&state, &snapshot);
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &principal,
+        "security_kms_status",
+        response.status,
+        json!({
+            "route_scope": "security/kms",
+            "resolution_state": response.resolution_state,
+            "selected_env": response.selected_env,
+            "failover_used": response.failover_used,
+            "unavailable_envs": response.unavailable_envs,
+        }),
+    );
+    Ok(Json(response))
+}
+
+async fn security_kms_outage_simulate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SecurityKmsOutageSimulateRequest>,
+) -> Result<Json<SecurityKmsOutageResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "security.kms",
+        "security/kms/outage",
+        PrivilegeAction::Manage,
+    )?;
+
+    let configured = state
+        .security_config
+        .kms_key_candidates()
+        .into_iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let normalized = req
+        .unavailable_envs
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .filter(|value| configured.contains(&value.to_ascii_lowercase()))
+        .map(ToString::to_string)
+        .collect::<HashSet<_>>();
+    let note = req
+        .note
+        .clone()
+        .unwrap_or_else(|| "manual_kms_region_outage_simulation".to_string());
+
+    {
+        let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
+        runtime.unavailable_envs = normalized;
+        runtime.last_simulation_note = Some(note.clone());
+    }
+
+    let principal = RuntimeAccessPrincipal::Operator(operator);
+    let snapshot = evaluate_kms_runtime(&state);
+    let response = SecurityKmsOutageResponse {
+        status: snapshot.status,
+        resolution_state: snapshot.resolution_state,
+        unavailable_envs: snapshot.unavailable_envs.clone(),
+        selected_env: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.selected_env.clone()),
+        key_ref: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.key_ref.clone()),
+        failover_used: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.failover_used)
+            .unwrap_or(false),
+        note: note.clone(),
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &principal,
+        "security_kms_outage_simulate",
+        response.status,
+        json!({
+            "route_scope": "security/kms/outage",
+            "resolution_state": response.resolution_state,
+            "selected_env": response.selected_env,
+            "failover_used": response.failover_used,
+            "unavailable_envs": response.unavailable_envs,
+            "note": response.note,
+        }),
+    );
+    Ok(Json(response))
+}
+
+async fn security_kms_outage_reconcile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SecurityKmsOutageReconcileRequest>,
+) -> Result<Json<SecurityKmsOutageResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "security.kms",
+        "security/kms/outage",
+        PrivilegeAction::Manage,
+    )?;
+    let note = req
+        .note
+        .clone()
+        .unwrap_or_else(|| "manual_kms_region_outage_reconcile".to_string());
+
+    {
+        let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
+        runtime.unavailable_envs.clear();
+        runtime.last_simulation_note = Some(note.clone());
+    }
+
+    let principal = RuntimeAccessPrincipal::Operator(operator);
+    let snapshot = evaluate_kms_runtime(&state);
+    let response = SecurityKmsOutageResponse {
+        status: snapshot.status,
+        resolution_state: snapshot.resolution_state,
+        unavailable_envs: snapshot.unavailable_envs.clone(),
+        selected_env: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.selected_env.clone()),
+        key_ref: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.key_ref.clone()),
+        failover_used: snapshot
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.failover_used)
+            .unwrap_or(false),
+        note: note.clone(),
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &principal,
+        "security_kms_outage_reconcile",
+        response.status,
+        json!({
+            "route_scope": "security/kms/outage",
+            "resolution_state": response.resolution_state,
+            "selected_env": response.selected_env,
+            "failover_used": response.failover_used,
+            "note": response.note,
+        }),
+    );
+    Ok(Json(response))
+}
+
 // ── WS4 Ingest handlers ───────────────────────────────────────────
 
 async fn ingest_csv(
@@ -4674,6 +5265,20 @@ async fn ingest_csv(
         .lock()
         .expect("csv lock")
         .insert(storage_key, records);
+    let outbox_events_written = append_ingest_outbox_events(
+        &state,
+        &principal,
+        &req.connector_id,
+        "csv",
+        state
+            .ingest_csv_records
+            .lock()
+            .expect("csv lock")
+            .get(&ingest_storage_key(&principal, &req.connector_id))
+            .cloned()
+            .unwrap_or_default()
+            .as_slice(),
+    );
     let response = IngestCsvResponse {
         status: "ok",
         connector_id: req.connector_id,
@@ -4689,6 +5294,7 @@ async fn ingest_csv(
             "route_scope": "ingest/connectors/csv",
             "connector_id": response.connector_id,
             "records_parsed": response.records_parsed,
+            "outbox_events_written": outbox_events_written,
         }),
     );
     Ok((
@@ -4718,6 +5324,20 @@ async fn ingest_json(
         .lock()
         .expect("json lock")
         .insert(storage_key, records);
+    let outbox_events_written = append_ingest_outbox_events(
+        &state,
+        &principal,
+        &req.connector_id,
+        "json",
+        state
+            .ingest_json_records
+            .lock()
+            .expect("json lock")
+            .get(&ingest_storage_key(&principal, &req.connector_id))
+            .cloned()
+            .unwrap_or_default()
+            .as_slice(),
+    );
     let response = IngestJsonResponse {
         status: "ok",
         connector_id: req.connector_id,
@@ -4734,6 +5354,7 @@ async fn ingest_json(
             "connector_id": response.connector_id,
             "records_parsed": response.records_parsed,
             "key_field": req.key_field,
+            "outbox_events_written": outbox_events_written,
         }),
     );
     Ok((
@@ -4794,6 +5415,160 @@ async fn ingest_status(
     Ok(Json(response))
 }
 
+async fn ingest_outbox_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<IngestOutboxStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        &ingest_outbox_scope(None),
+    )?;
+    let stream_map = state.ingest_outbox_streams.lock().expect("outbox stream map lock");
+    let accessible_streams = match &principal {
+        RuntimeAccessPrincipal::Operator(_) => stream_map.values().cloned().collect::<Vec<_>>(),
+        RuntimeAccessPrincipal::TenantUser(user) => {
+            let prefix = format!("tenant/{}/", user.tenant_id);
+            stream_map
+                .iter()
+                .filter(|(storage_key, _)| storage_key.starts_with(&prefix))
+                .map(|(_, stream_name)| stream_name.clone())
+                .collect::<Vec<_>>()
+        }
+    };
+    drop(stream_map);
+
+    let accessible_set = accessible_streams.iter().cloned().collect::<HashSet<_>>();
+    let event_bus = state.ingest_event_bus.lock().expect("event bus lock");
+    let broker_mode = event_bus.broker_kind().to_string();
+    let broker_target = event_bus.broker_target();
+    let visible_events = event_bus
+        .events()
+        .into_iter()
+        .filter(|event| accessible_set.contains(&event.event.stream_name))
+        .collect::<Vec<_>>();
+    let response = IngestOutboxStatusResponse {
+        status: "ok",
+        broker_mode,
+        broker_target,
+        stream_count: accessible_streams.len(),
+        total_events: visible_events.len(),
+        last_event_id: visible_events.iter().map(|event| event.event.event_id).max(),
+        streams: accessible_streams,
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Ingest,
+        &principal,
+        "ingest_outbox_status",
+        "ok",
+        json!({
+            "route_scope": "ingest/outbox",
+            "stream_count": response.stream_count,
+            "total_events": response.total_events,
+            "last_event_id": response.last_event_id,
+        }),
+    );
+    Ok(Json(response))
+}
+
+async fn ingest_outbox_replay(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestOutboxReplayRequest>,
+) -> Result<Json<IngestOutboxReplayResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        &ingest_outbox_scope(Some(&req.connector_id)),
+    )?;
+    let storage_key = ingest_storage_key(&principal, &req.connector_id);
+    let stream_name = ingest_outbox_stream_name(&storage_key);
+    let consumer_id = req
+        .consumer_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "default-consumer".to_string());
+    let cursor_key = format!("consumer/{consumer_id}/{stream_name}");
+    let max_items = req.max_items.unwrap_or(100).min(1_000);
+    let acknowledge = req.acknowledge.unwrap_or(true);
+
+    let cursor_before_ack = state
+        .ingest_outbox_cursors
+        .lock()
+        .expect("outbox cursor lock")
+        .load(&cursor_key);
+    let last_acknowledged_event_id = cursor_before_ack.unwrap_or(0);
+    let delivered = state
+        .ingest_event_bus
+        .lock()
+        .expect("event bus lock")
+        .export_for_stream_since(&stream_name, last_acknowledged_event_id, max_items)
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    let mut cursor_after_ack = cursor_before_ack;
+    if acknowledge && !delivered.is_empty() {
+        let last_event_id = delivered
+            .last()
+            .map(|event| event.event_id)
+            .expect("delivered last event");
+        let mut cursor_store = state
+            .ingest_outbox_cursors
+            .lock()
+            .expect("outbox cursor lock");
+        let _ = cursor_store.save(&cursor_key, last_event_id);
+        cursor_after_ack = cursor_store.load(&cursor_key);
+    }
+
+    let delivery_state = if delivered.is_empty() {
+        "already_acknowledged"
+    } else if acknowledge {
+        "delivered_and_acked"
+    } else {
+        "delivered_pending_ack"
+    };
+    let response = IngestOutboxReplayResponse {
+        status: "ok",
+        delivery_state,
+        stream_name,
+        consumer_id: consumer_id.clone(),
+        delivered_count: delivered.len(),
+        cursor_before_ack,
+        cursor_after_ack,
+        acknowledged: acknowledge,
+        events: delivered
+            .into_iter()
+            .map(|event| IngestOutboxReplayEventResponse {
+                replay_key: event.replay_key(),
+                event_id: event.event_id,
+                stream_name: event.stream_name,
+                origin: event.origin,
+                payload_json: event.payload_json,
+            })
+            .collect(),
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Ingest,
+        &principal,
+        "ingest_outbox_replay",
+        "ok",
+        json!({
+            "route_scope": format!("ingest/outbox/{}", req.connector_id),
+            "consumer_id": response.consumer_id,
+            "delivery_state": response.delivery_state,
+            "delivered_count": response.delivered_count,
+            "cursor_before_ack": response.cursor_before_ack,
+            "cursor_after_ack": response.cursor_after_ack,
+            "acknowledged": response.acknowledged,
+        }),
+    );
+    Ok(Json(response))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4820,14 +5595,18 @@ mod tests {
     }
 
     fn state_with_key(key: Option<&str>) -> AppState {
+        let allowed_operator_roles = Arc::new(default_allowed_operator_roles());
+        let security_config = Arc::new(load_runtime_security_config(&allowed_operator_roles));
         AppState {
             node_id: "node-1".to_string(),
             cluster_mode: "single".to_string(),
             admin_api_key: key.map(|v| v.to_string()),
-            allowed_operator_roles: Arc::new(default_allowed_operator_roles()),
+            security_config: security_config.clone(),
+            allowed_operator_roles: allowed_operator_roles.clone(),
             operator_role_bindings: Arc::new(default_operator_role_bindings()),
             tenant_user_bindings: Arc::new(default_tenant_user_bindings()),
             rbac_privilege_matrix: Arc::new(default_rbac_privilege_matrix()),
+            kms_runtime: Arc::new(Mutex::new(load_kms_runtime_state(&security_config))),
             leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
             action_records: Arc::new(Mutex::new(Vec::new())),
@@ -4847,9 +5626,29 @@ mod tests {
             constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
             ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
             ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
+            ingest_event_bus: Arc::new(Mutex::new(ManagedEventBusTransport::in_memory())),
+            ingest_outbox_cursors: Arc::new(Mutex::new(ManagedReplayCursorStore::in_memory())),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
+        }
+    }
+
+    fn kms_test_config() -> SecurityConfigContract {
+        SecurityConfigContract {
+            admin_api_key_env: "VNG_ADMIN_API_KEY".to_string(),
+            admin_header_name: "x-vng-admin-key".to_string(),
+            tls_required: false,
+            mtls_required: false,
+            encryption_at_rest_required: true,
+            kms_key_ref_env: "VNG_KMS_KEY_URI".to_string(),
+            kms_failover_key_ref_envs: vec![
+                "VNG_KMS_KEY_URI_REGION_B".to_string(),
+                "VNG_KMS_KEY_URI_REGION_C".to_string(),
+            ],
+            allowed_operator_roles: vec!["dba".to_string(), "security".to_string(), "sre".to_string()],
+            token_ttl_seconds: 300,
         }
     }
 
@@ -6887,5 +7686,188 @@ mod tests {
         let csv_total: usize = csv_map.values().map(|v| v.len()).sum();
         let json_total: usize = json_map.values().map(|v| v.len()).sum();
         assert_eq!(csv_total + json_total, 3);
+    }
+
+    #[test]
+    fn h05_security_kms_status_prefers_primary_env() {
+        let mut state = state_with_key(Some("secret"));
+        state.security_config = Arc::new(kms_test_config());
+        state.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
+            providers: vec![{
+                let mut provider = ConfiguredKmsProviderAdapter::from_key_ref("kms://region-a/key-primary");
+                provider.register_key_ref("VNG_KMS_KEY_URI", "kms://region-a/key-primary");
+                provider.register_key_ref("VNG_KMS_KEY_URI_REGION_B", "kms://region-b/key-secondary");
+                provider
+            }],
+            ..KmsRuntimeState::default()
+        }));
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let response = runtime
+            .block_on(security_kms_status(
+                State(state),
+                operator_headers("secret", "security-bot"),
+            ))
+            .expect("kms status")
+            .0;
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.resolution_state, "primary_active");
+        assert_eq!(response.selected_env.as_deref(), Some("VNG_KMS_KEY_URI"));
+        assert!(!response.failover_used);
+    }
+
+    #[test]
+    fn h05_security_kms_outage_simulation_fails_over_and_recovers() {
+        let mut state = state_with_key(Some("secret"));
+        state.security_config = Arc::new(kms_test_config());
+        state.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
+            providers: vec![{
+                let mut provider = ConfiguredKmsProviderAdapter::from_key_ref("kms://region-a/key-primary");
+                provider.register_key_ref("VNG_KMS_KEY_URI", "kms://region-a/key-primary");
+                provider.register_key_ref("VNG_KMS_KEY_URI_REGION_B", "kms://region-b/key-secondary");
+                provider.register_key_ref("VNG_KMS_KEY_URI_REGION_C", "kms://region-c/key-tertiary");
+                provider
+            }],
+            ..KmsRuntimeState::default()
+        }));
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let outage = runtime
+            .block_on(security_kms_outage_simulate(
+                State(state.clone()),
+                operator_headers("secret", "security-bot"),
+                Json(SecurityKmsOutageSimulateRequest {
+                    unavailable_envs: vec!["VNG_KMS_KEY_URI".to_string()],
+                    note: Some("primary_down".to_string()),
+                }),
+            ))
+            .expect("outage simulate")
+            .0;
+        assert_eq!(outage.status, "degraded");
+        assert_eq!(outage.resolution_state, "failover_active");
+        assert_eq!(outage.selected_env.as_deref(), Some("VNG_KMS_KEY_URI_REGION_B"));
+        assert!(outage.failover_used);
+
+        let recovered = runtime
+            .block_on(security_kms_outage_reconcile(
+                State(state),
+                operator_headers("secret", "security-bot"),
+                Json(SecurityKmsOutageReconcileRequest {
+                    note: Some("region_restored".to_string()),
+                }),
+            ))
+            .expect("outage reconcile")
+            .0;
+        assert_eq!(recovered.status, "ok");
+        assert_eq!(recovered.selected_env.as_deref(), Some("VNG_KMS_KEY_URI"));
+        assert!(!recovered.failover_used);
+    }
+
+    #[test]
+    fn h05_security_kms_status_reports_unresolved_when_all_regions_out() {
+        let mut state = state_with_key(Some("secret"));
+        state.security_config = Arc::new(kms_test_config());
+        state.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
+            providers: vec![{
+                let mut provider = ConfiguredKmsProviderAdapter::from_key_ref("kms://region-a/key-primary");
+                provider.register_key_ref("VNG_KMS_KEY_URI", "kms://region-a/key-primary");
+                provider.register_key_ref("VNG_KMS_KEY_URI_REGION_B", "kms://region-b/key-secondary");
+                provider
+            }],
+            unavailable_envs: HashSet::from([
+                "VNG_KMS_KEY_URI".to_string(),
+                "VNG_KMS_KEY_URI_REGION_B".to_string(),
+                "VNG_KMS_KEY_URI_REGION_C".to_string(),
+            ]),
+            ..KmsRuntimeState::default()
+        }));
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let response = runtime
+            .block_on(security_kms_status(
+                State(state),
+                operator_headers("secret", "security-bot"),
+            ))
+            .expect("kms status")
+            .0;
+
+        assert_eq!(response.status, "degraded");
+        assert_eq!(response.resolution_state, "unresolved");
+        assert!(response.selected_env.is_none());
+        assert!(response.last_error.is_some());
+    }
+
+    #[test]
+    fn h04_ingest_outbox_replay_acknowledges_exactly_once_per_consumer() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let _ = runtime
+            .block_on(ingest_csv(
+                State(state.clone()),
+                headers.clone(),
+                Json(IngestCsvRequest {
+                    connector_id: "orders".to_string(),
+                    csv_data: "id,value\n1,a\n2,b\n".to_string(),
+                }),
+            ))
+            .expect("ingest csv");
+
+        let status = runtime
+            .block_on(ingest_outbox_status(State(state.clone()), headers.clone()))
+            .expect("outbox status")
+            .0;
+        assert_eq!(status.total_events, 2);
+        assert_eq!(status.stream_count, 1);
+
+        let first_replay = runtime
+            .block_on(ingest_outbox_replay(
+                State(state.clone()),
+                headers.clone(),
+                Json(IngestOutboxReplayRequest {
+                    connector_id: "orders".to_string(),
+                    consumer_id: Some("projection-a".to_string()),
+                    max_items: Some(10),
+                    acknowledge: Some(true),
+                }),
+            ))
+            .expect("first replay")
+            .0;
+        assert_eq!(first_replay.delivered_count, 2);
+        assert_eq!(first_replay.delivery_state, "delivered_and_acked");
+        assert_eq!(first_replay.cursor_after_ack, Some(2));
+
+        let second_replay = runtime
+            .block_on(ingest_outbox_replay(
+                State(state.clone()),
+                headers.clone(),
+                Json(IngestOutboxReplayRequest {
+                    connector_id: "orders".to_string(),
+                    consumer_id: Some("projection-a".to_string()),
+                    max_items: Some(10),
+                    acknowledge: Some(true),
+                }),
+            ))
+            .expect("second replay")
+            .0;
+        assert_eq!(second_replay.delivered_count, 0);
+        assert_eq!(second_replay.delivery_state, "already_acknowledged");
+
+        let independent_consumer = runtime
+            .block_on(ingest_outbox_replay(
+                State(state),
+                headers,
+                Json(IngestOutboxReplayRequest {
+                    connector_id: "orders".to_string(),
+                    consumer_id: Some("projection-b".to_string()),
+                    max_items: Some(10),
+                    acknowledge: Some(true),
+                }),
+            ))
+            .expect("independent replay")
+            .0;
+        assert_eq!(independent_consumer.delivered_count, 2);
     }
 }

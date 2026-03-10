@@ -1,19 +1,21 @@
-{
-  "smoke": "ws6-failover-contract",
-  "status": "passed",
-  "timestamp_utc": "2026-03-07T03:21:06.9363623Z",
-  "runtime_path": "services/voltnuerongridd/src/main.rs",
-  "command": "cargo test -p voltnuerongridd failover_ -- --nocapture",
-  "checks": {
-    "failover_status_route": true,
-    "failover_simulate_route": true,
-    "failover_rto_target_declared": true,
-    "failover_rpo_target_declared": true,
-    "failover_requires_operator_auth": true,
-    "failover_response_includes_handoff_report": true,
-    "failover_runtime_builds_handoff_report": true,
-    "failover_uses_replication_transport": true,
-    "failover_rotation_tests_pass": true
-  },
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.02s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 8 tests\ntest tests::failover_handoff_report_detects_gap_for_target_leader ... ok\ntest tests::failover_handoff_report_returns_empty_when_no_transport_state_exists ... ok\ntest tests::failover_handoff_report_replays_only_unapplied_sequences_for_new_leader ... ok\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok\ntest tests::ws12_dr_hook_executes_failover_when_not_dry_run ... ok\ntest tests::operator_auth_denies_security_role_from_failover_execution ... ok\ntest tests::failover_transport_mutations_feed_runtime_handoff_report ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.02s\n"
+﻿{
+    "smoke":  "ws6-failover-contract",
+    "status":  "passed",
+    "timestamp_utc":  "2026-03-09T08:40:46.6435956Z",
+    "runtime_path":  "services/voltnuerongridd/src/main.rs",
+    "command":  "cargo test -p voltnuerongridd failover_ -- --nocapture",
+    "checks":  {
+                   "failover_status_route":  true,
+                   "failover_simulate_route":  true,
+                   "failover_status_tracks_critical_signals":  true,
+                   "failover_status_degrades_when_critical_signals_present":  true,
+                   "failover_rto_target_declared":  true,
+                   "failover_rpo_target_declared":  true,
+                   "failover_requires_operator_auth":  true,
+                   "failover_response_includes_handoff_report":  true,
+                   "failover_runtime_builds_handoff_report":  true,
+                   "failover_uses_replication_transport":  true,
+                   "failover_rotation_tests_pass":  true
+               },
+    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 11 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_handoff_report_detects_gap_for_target_leader ... ok\ntest tests::failover_handoff_report_returns_empty_when_no_transport_state_exists ... ok\ntest tests::failover_handoff_report_replays_only_unapplied_sequences_for_new_leader ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok\ntest tests::operator_auth_denies_security_role_from_failover_execution ... ok\ntest tests::ws12_dr_hook_executes_failover_when_not_dry_run ... ok\ntest tests::failover_status_reports_degraded_with_unresolved_critical_signal ... ok\ntest tests::failover_transport_mutations_feed_runtime_handoff_report ... ok\ntest tests::failover_status_reports_healthy_without_critical_signals ... ok\ntest tests::h03_control_plane_chaos_cycle_recovers_after_failover_and_reconcile ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 75 filtered out; finished in 0.01s\n"
 }

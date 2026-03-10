@@ -12,6 +12,25 @@ if ($outputDir -and !(Test-Path $outputDir)) {
   New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 }
 
+function Invoke-CargoCapture {
+  param([scriptblock]$Command)
+
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    $output = & $Command 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  return [pscustomobject]@{
+    Output = @($output)
+    ExitCode = $exitCode
+  }
+}
+
 $runtimeFile = Join-Path $RepoRoot $RuntimePath
 $runtimeRaw = Get-Content -Path $runtimeFile -Raw
 
@@ -28,10 +47,10 @@ $checks = [ordered]@{
   failover_uses_replication_transport = ($runtimeRaw -match 'replication_transport')
 }
 
-$global:LASTEXITCODE = 0
-$testOutput = & cargo test -p voltnuerongridd failover_ -- --nocapture 2>&1
-$testExit = $LASTEXITCODE
-$checks.failover_rotation_tests_pass = ($? -and $testExit -eq 0)
+$testResult = Invoke-CargoCapture -Command { cargo test -p voltnuerongridd failover_ -- --nocapture }
+$testOutput = $testResult.Output
+$testExit = $testResult.ExitCode
+$checks.failover_rotation_tests_pass = ($testExit -eq 0)
 
 $status = "passed"
 if (($checks.Values | Where-Object { $_ -eq $false }).Count -gt 0) {

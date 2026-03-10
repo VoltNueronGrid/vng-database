@@ -1,0 +1,76 @@
+{
+  "smoke": "h05-kms-region-failover-runtime",
+  "status": "passed",
+  "hardening_item": "H-05",
+  "base_url": "http://127.0.0.1:18251",
+  "timestamp_utc": "2026-03-10T06:31:45.9122217Z",
+  "checks": {
+    "service_health_ok": true,
+    "primary_status_uses_primary_region": true,
+    "primary_outage_fails_over_to_secondary": true,
+    "all_regions_outage_reports_unresolved": true,
+    "reconcile_restores_primary_region": true
+  },
+  "observations": {
+    "health": {
+      "status": "ok",
+      "node_id": "node-h05",
+      "cluster_mode": "single"
+    },
+    "provider_drill_mode": "generic_runtime",
+    "configured_key_refs": [
+      "kms://region-a/key-primary",
+      "kms://region-b/key-secondary",
+      "kms://region-c/key-tertiary"
+    ],
+    "primary": {
+      "status": "ok",
+      "resolution_state": "primary_active",
+      "encryption_at_rest_required": true,
+      "configured_envs": [
+        "VNG_KMS_KEY_URI",
+        "VNG_KMS_KEY_URI_REGION_B",
+        "VNG_KMS_KEY_URI_REGION_C"
+      ],
+      "unavailable_envs": [],
+      "selected_env": "VNG_KMS_KEY_URI",
+      "key_ref": "kms://region-a/key-primary",
+      "failover_used": false,
+      "last_simulation_note": null,
+      "last_error": null
+    },
+    "failover": {
+      "status": "degraded",
+      "resolution_state": "failover_active",
+      "unavailable_envs": [
+        "VNG_KMS_KEY_URI"
+      ],
+      "selected_env": "VNG_KMS_KEY_URI_REGION_B",
+      "key_ref": "kms://region-b/key-secondary",
+      "failover_used": true,
+      "note": "primary_region_outage"
+    },
+    "all_regions_out": {
+      "status": "degraded",
+      "resolution_state": "unresolved",
+      "unavailable_envs": [
+        "VNG_KMS_KEY_URI",
+        "VNG_KMS_KEY_URI_REGION_B",
+        "VNG_KMS_KEY_URI_REGION_C"
+      ],
+      "selected_env": null,
+      "key_ref": null,
+      "failover_used": false,
+      "note": "all_regions_outage"
+    },
+    "reconcile": {
+      "status": "ok",
+      "resolution_state": "primary_active",
+      "unavailable_envs": [],
+      "selected_env": "VNG_KMS_KEY_URI",
+      "key_ref": "kms://region-a/key-primary",
+      "failover_used": false,
+      "note": "restore_all_regions"
+    }
+  }
+}

@@ -5,6 +5,9 @@ security:
   mtlsRequired: false
   encryptionAtRestRequired: true
   kmsKeyRefEnv: "VNG_KMS_KEY_URI"
+  kmsFailoverKeyRefEnvs:
+    - "VNG_KMS_KEY_URI_REGION_B"
+    - "VNG_KMS_KEY_URI_REGION_C"
   allowedOperatorRoles:
     - "dba"
     - "sre"

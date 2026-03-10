@@ -2,7 +2,7 @@
     "pack":  "h04-outbox-replay-evidence",
     "status":  "passed",
     "hardening_item":  "H-04",
-    "timestamp_utc":  "2026-03-09T02:38:38.0477533Z",
+    "timestamp_utc":  "2026-03-10T03:30:12.7084846Z",
     "evidence_scope":  [
                            "wal_recovery_roundtrip",
                            "checkpoint_boundary_enforcement",
@@ -22,36 +22,36 @@
                       "step":  "wal_adapter_recovery_roundtrip",
                       "command":  "cargo test -p voltnuerongrid-store recovers_state_from_wal_adapter_records -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2227,
-                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest tests::recovers_state_from_wal_adapter_records ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s\n"
+                      "duration_ms":  15828,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest tests::recovers_state_from_wal_adapter_records ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.02s\n"
                   },
                   {
                       "step":  "checkpoint_boundary_clears_pending_wal",
                       "command":  "cargo test -p voltnuerongrid-store checkpoints_after_threshold -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2316,
-                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest tests::checkpoints_after_threshold ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s\n"
+                      "duration_ms":  14339,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.13s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest tests::checkpoints_after_threshold ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s\n"
                   },
                   {
                       "step":  "replay_after_restore_preserves_integrity",
                       "command":  "cargo test -p voltnuerongrid-store replay_after_restore_preserves_integrity_without_faults -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2262,
-                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::replay_after_restore_preserves_integrity_without_faults ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s\n"
+                      "duration_ms":  6661,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::replay_after_restore_preserves_integrity_without_faults ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s\n"
                   },
                   {
                       "step":  "replay_gap_detection_fault_injected",
                       "command":  "cargo test -p voltnuerongrid-store replay_after_restore_detects_gap_when_fault_injected -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2175,
-                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::replay_after_restore_detects_gap_when_fault_injected ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s\n"
+                      "duration_ms":  8487,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::replay_after_restore_detects_gap_when_fault_injected ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s\n"
                   },
                   {
                       "step":  "replay_only_unapplied_mutations",
                       "command":  "cargo test -p voltnuerongrid-store multi_node_failover_handoff_replays_only_unapplied_mutations -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2264,
-                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_replays_only_unapplied_mutations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s\n"
+                      "duration_ms":  5929,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_replays_only_unapplied_mutations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.02s\n"
                   }
               ]
 }

@@ -1,0 +1,32 @@
+{
+    "gate":  "h04-release-event-durability-readiness",
+    "status":  "passed",
+    "release_readiness":  "ready_for_validation",
+    "release_targets":  [
+                            "R2"
+                        ],
+    "scope":  [
+                  "WS4",
+                  "WS4A",
+                  "REQ-18",
+                  "H-04"
+              ],
+    "generated_at_utc":  "2026-03-10T09:28:58.2134303Z",
+    "sources":  {
+                    "summary":  "tests/kpi/results/h04/h04-gate-summary.json"
+                },
+    "checks":  {
+                   "h04_gate_passed":  true,
+                   "h04_all_packs_passed":  true
+               },
+    "highlights":  {
+                       "pack_count":  2,
+                       "h04_runtime_pack_status":  "passed",
+                       "h04_outbox_pack_status":  "passed",
+                       "h04_runtime_implementation":  "managed_broker_file_wal",
+                       "h04_runtime_broker_abstraction":  "managed_event_bus",
+                       "h04_runtime_broker_mode":  "file_wal",
+                       "h04_exactly_once_contract_preserved":  true,
+                       "h04_cursor_checkpoint_durability":  "wal_backed"
+                   }
+}

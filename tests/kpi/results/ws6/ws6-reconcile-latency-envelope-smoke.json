@@ -1,32 +1,32 @@
-{
-  "smoke": "ws6-reconcile-latency-envelope",
-  "status": "passed",
-  "timestamp_utc": "2026-03-07T02:19:09.2404949Z",
-  "command": "cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture",
-  "iterations": 3,
-  "latency_envelope": {
-    "p95_ms": 1535,
-    "p95_max_ms": 6000,
-    "pass": true
-  },
-  "run_results": [
-    {
-      "iteration": 1,
-      "status": "passed",
-      "duration_ms": 1603,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-454173c58e939023.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
-    },
-    {
-      "iteration": 2,
-      "status": "passed",
-      "duration_ms": 1535,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-454173c58e939023.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
-    },
-    {
-      "iteration": 3,
-      "status": "passed",
-      "duration_ms": 1531,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-454173c58e939023.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
-    }
-  ]
+﻿{
+    "smoke":  "ws6-reconcile-latency-envelope",
+    "status":  "passed",
+    "timestamp_utc":  "2026-03-09T08:41:30.3236896Z",
+    "command":  "cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture",
+    "iterations":  3,
+    "latency_envelope":  {
+                             "p95_ms":  1184,
+                             "p95_max_ms":  6000,
+                             "pass":  true
+                         },
+    "run_results":  [
+                        {
+                            "iteration":  1,
+                            "status":  "passed",
+                            "duration_ms":  1378,
+                            "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
+                        },
+                        {
+                            "iteration":  2,
+                            "status":  "passed",
+                            "duration_ms":  1184,
+                            "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
+                        },
+                        {
+                            "iteration":  3,
+                            "status":  "passed",
+                            "duration_ms":  1097,
+                            "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
+                        }
+                    ]
 }
