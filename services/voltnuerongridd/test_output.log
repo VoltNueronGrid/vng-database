@@ -1,0 +1,101 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling voltnuerongridd v0.1.0 (D:\by\polap-db\services\voltnuerongridd)
+error[E0369]: binary operation `==` cannot be applied to type `std::option::Option<SqlTransactionResponse>`
+    --> services\voltnuerongridd\src\main.rs:9261:9
+     |
+9261 |         assert_eq!(response.1.transaction, None);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         std::option::Option<SqlTransactionResponse>
+     |         std::option::Option<SqlTransactionResponse>
+     |
+note: an implementation of `PartialEq` might be missing for `SqlTransactionResponse`
+    --> services\voltnuerongridd\src\main.rs:886:1
+     |
+ 886 | struct SqlTransactionResponse {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+     = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider annotating `SqlTransactionResponse` with `#[derive(PartialEq)]`
+     |
+ 886 + #[derive(PartialEq)]
+ 887 | struct SqlTransactionResponse {
+     |
+
+error[E0277]: `SqlTransactionResponse` doesn't implement `Debug`
+    --> services\voltnuerongridd\src\main.rs:9261:9
+     |
+9261 |         assert_eq!(response.1.transaction, None);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `SqlTransactionResponse`
+     |
+     = note: add `#[derive(Debug)]` to `SqlTransactionResponse` or manually `impl Debug for SqlTransactionResponse`
+help: the trait `Debug` is implemented for `std::option::Option<T>`
+    --> C:\Users\1029346\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs:594:16
+     |
+ 594 | #[derive(Copy, Debug, Hash)]
+     |                ^^^^^
+help: consider annotating `SqlTransactionResponse` with `#[derive(Debug)]`
+     |
+ 886 + #[derive(Debug)]
+ 887 | struct SqlTransactionResponse {
+     |
+
+error[E0507]: cannot move out of dereference of `axum::Json<SqlExecuteResponse>`
+    --> services\voltnuerongridd\src\main.rs:9289:17
+     |
+9289 |         assert!(response.1.transaction.unwrap().status.contains("commit"));
+     |                 ^^^^^^^^^^^^^^^^^^^^^^ -------- value moved due to this method call
+     |                 |
+     |                 help: consider calling `.as_ref()` or `.as_mut()` to borrow the type's contents
+     |                 move occurs because value has type `std::option::Option<SqlTransactionResponse>`, which does not implement the `Copy` trait
+     |
+note: `std::option::Option::<T>::unwrap` takes ownership of the receiver `self`, which moves value
+    --> C:\Users\1029346\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs:1013:25
+     |
+1013 |     pub const fn unwrap(self) -> T {
+     |                         ^^^^
+note: if `SqlTransactionResponse` implemented `Clone`, you could clone the value
+    --> services\voltnuerongridd\src\main.rs:886:1
+     |
+ 886 | struct SqlTransactionResponse {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+...
+9289 |         assert!(response.1.transaction.unwrap().status.contains("commit"));
+     |                 ---------------------- you could clone this value
+help: you could `clone` the value and consume it, if the `SqlTransactionResponse: Clone` trait bound could be satisfied
+     |
+9289 |         assert!(<std::option::Option<SqlTransactionResponse> as Clone>::clone(&response.1.transaction).unwrap().status.contains("commit"));
+     |                 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++                      +
+help: consider annotating `SqlTransactionResponse` with `#[derive(Clone)]`
+     |
+ 886 + #[derive(Clone)]
+ 887 | struct SqlTransactionResponse {
+     |
+
+error[E0507]: cannot move out of dereference of `axum::Json<SqlExecuteResponse>`
+    --> services\voltnuerongridd\src\main.rs:9330:29
+     |
+9330 |         if let Some(olap) = response.1.olap {
+     |                     ----    ^^^^^^^^^^^^^^^
+     |                     |
+     |                     data moved here
+     |                     move occurs because `olap` has type `OlapQueryResponse`, which does not implement the `Copy` trait
+     |
+help: consider borrowing here
+     |
+9330 |         if let Some(olap) = &response.1.olap {
+     |                             +
+
+warning: variable does not need to be mutable
+    --> services\voltnuerongridd\src\main.rs:9388:13
+     |
+9388 |         let mut response = runtime
+     |             ----^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0277, E0369, E0507.
+For more information about an error, try `rustc --explain E0277`.
+warning: `voltnuerongridd` (bin "voltnuerongridd" test) generated 1 warning
+error: could not compile `voltnuerongridd` (bin "voltnuerongridd" test) due to 5 previous errors; 1 warning emitted
