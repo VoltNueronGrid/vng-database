@@ -1,9 +1,14 @@
 {
     "smoke":  "ws3-query-routing",
     "status":  "failed",
-    "command":  "cargo test -p voltnuerongrid-exec; cargo check -p voltnuerongridd",
-    "started_at_utc":  "2026-04-03T15:32:21.0755676Z",
-    "finished_at_utc":  "2026-04-03T15:32:22.2414611Z",
-    "duration_ms":  1166,
-    "output_excerpt":  "   Compiling voltnuerongrid-exec v0.1.0 (D:\\by\\polap-db\\crates\\voltnuerongrid-exec)"
+    "command":  "cargo test -p voltnuerongridd ws3_ -- --test-threads=1 --nocapture",
+    "test_exit_code":  124,
+    "timed_out":  true,
+    "tests_executed":  0,
+    "tests_expected":  10,
+    "test_count_match":  false,
+    "started_at_utc":  "2026-04-03T16:44:47.1589216Z",
+    "finished_at_utc":  "2026-04-03T16:44:52.4899117Z",
+    "duration_ms":  5331,
+    "output_excerpt":  "timeout after 5s"
 }

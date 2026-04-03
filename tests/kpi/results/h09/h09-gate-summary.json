@@ -1,0 +1,15 @@
+{
+    "gate":  "h09",
+    "status":  "passed",
+    "started_at_utc":  "2026-04-03T16:30:43.0361119Z",
+    "finished_at_utc":  "2026-04-03T16:30:43.3960788Z",
+    "duration_ms":  360,
+    "packs":  [
+                  {
+                      "pack":  "h09-ide-parity-matrix",
+                      "status":  "passed",
+                      "detail":  "ok",
+                      "artifact":  "tests/kpi/results/h09/h09-ide-parity-matrix.json"
+                  }
+              ]
+}

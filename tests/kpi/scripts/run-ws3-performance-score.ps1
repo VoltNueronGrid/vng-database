@@ -20,6 +20,17 @@ $summary = Get-Content -Raw -Path $SummaryPath | ConvertFrom-Json
 $byPack = @{}
 foreach ($pack in $summary.packs) { $byPack[[string]$pack.pack] = [string]$pack.status }
 
+Write-Host "[WS3 SCORE] Evaluating controls from: $SummaryPath"
+Write-Host "[WS3 SCORE] Query Routing Pack Status: $($byPack['ws3-query-routing'])"
+Write-Host "[WS3 SCORE] HTAP Contract Pack Status: $($byPack['ws3-htap-target-contract'])"
+Write-Host "[WS3 SCORE] Gate Summary Status: $([string]$summary.status)"
+
+if ($byPack.Count -eq 0) {
+  Write-Error "No packs found in summary. Summary structure may be invalid."
+  Write-Error "Summary content: $($summary | ConvertTo-Json -Depth 1)"
+  exit 1
+}
+
 $controls = @(
   [ordered]@{ name = "query_routing_pack"; weight = 40; passed = ($byPack["ws3-query-routing"] -eq "passed") },
   [ordered]@{ name = "htap_target_contract_pack"; weight = 40; passed = ($byPack["ws3-htap-target-contract"] -eq "passed") },

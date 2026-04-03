@@ -1,14 +1,14 @@
 {
     "gate":  "ws3",
     "status":  "failed",
-    "started_at_utc":  "2026-04-03T15:31:46.4008519Z",
-    "finished_at_utc":  "2026-04-03T15:31:48.6002580Z",
-    "duration_ms":  2199,
+    "started_at_utc":  "2026-04-03T16:27:07.6808312Z",
+    "finished_at_utc":  "2026-04-03T16:27:12.8915001Z",
+    "duration_ms":  5211,
     "packs":  [
                   {
                       "pack":  "ws3-query-routing",
                       "status":  "failed",
-                      "detail":  "WS3 query-routing smoke failed.",
+                      "detail":  "WS3 query-routing smoke failed. See artifact at tests/kpi/results/ws3/query-routing-smoke.json",
                       "artifact":  "tests/kpi/results/ws3/query-routing-smoke.json"
                   },
                   {
@@ -25,14 +25,14 @@
                   },
                   {
                       "pack":  "ws3-gate-trend-comparison",
-                      "status":  "failed",
-                      "detail":  "exit_code=1",
+                      "status":  "passed",
+                      "detail":  "ok",
                       "artifact":  "tests/kpi/scripts/run-ws3-gate-trend-compare.ps1"
                   },
                   {
                       "pack":  "ws3-performance-stability-badge",
-                      "status":  "failed",
-                      "detail":  "exit_code=1",
+                      "status":  "passed",
+                      "detail":  "ok",
                       "artifact":  "tests/kpi/scripts/run-ws3-performance-stability-badge.ps1"
                   },
                   {

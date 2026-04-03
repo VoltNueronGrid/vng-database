@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-04-03
 
 ---
 
@@ -69,7 +69,7 @@
 | REQ-25 | Native connection + pooling | Epic 10, Epic 14 | In Progress | Driver routing contract enforces pool min/max + timeout constraints with cross-format contract checks in WS10 smoke/gate (`tests/kpi/results/ws10/ws10-gate-summary.json`) |
 | REQ-26 | Plugin model for streaming sources/sinks | Epic 4A, Epic 7 | In Progress | WS7 plugin registration boundary + signed manifest policy/revocation checks + closure/release gate evidence (`tests/kpi/results/ws7/ws7-gate-summary.json`, `tests/kpi/results/gates/ws7-release-readiness.json`) |
 | REQ-27 | Native cache engine (Redis-like compat) | Epic 3, Epic 14 | Not Started | Cache failover/invalidation tests |
-| REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Epic 9A | In Progress | Shared IDE contract + provider manifests validated via WS9A smoke/gate evidence (`tests/kpi/results/ws9a/ide-contract-smoke.json`, `tests/kpi/results/ws9a/ws9a-gate-summary.json`) |
+| REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Epic 9A | In Progress | Shared IDE contract + provider manifests validated via WS9A smoke/gate evidence (`tests/kpi/results/ws9a/ide-contract-smoke.json`, `tests/kpi/results/ws9a/ws9a-gate-summary.json`) plus H-09 parity baseline gate/release evidence (`tests/kpi/results/h09/h09-ide-parity-matrix.json`, `tests/kpi/results/h09/h09-gate-summary.json`, `tests/kpi/results/gates/h09-release-readiness.json`) |
 | REQ-29 | Fully autonomous operations | Epic 8, Epic 14 | Ready for Validation | WS8 closure hardening includes autonomous control-plane gate, guardrail policy smoke, audit linkage packs, autonomy matrix, trend comparator, stability badge, WS8 release summary, closure gate, and R3 autonomous release gate (`tests/kpi/results/ws8/ws8-gate-summary.json`, `tests/kpi/results/ws8/ws8-autonomy-matrix.json`, `tests/kpi/results/ws8/ws8-gate-trend-comparison.json`, `tests/kpi/results/ws8/ws8-autonomy-stability-badge.json`, `tests/kpi/results/gates/ws8-release-readiness.json`, `tests/kpi/results/ws8/ws8-closure-gate-summary.json`, `tests/kpi/results/gates/release-r3-autonomous-readiness.json`) |
 | REQ-30 | AI agent authoring for objects/plugins | Epic 8, Epic 7 | Ready for Validation | WS8A closure hardening includes agent authoring workflow smoke (object + plugin controls), WS8A matrix/trend/badge artifacts, WS8A release summary, WS8A closure gate, and R3 agent-authoring release gate (`tests/kpi/results/ws8a/ws8a-gate-summary.json`, `tests/kpi/results/ws8a/ws8a-agent-authoring-smoke.json`, `tests/kpi/results/ws8a/ws8a-agent-authoring-matrix.json`, `tests/kpi/results/ws8a/ws8a-gate-trend-comparison.json`, `tests/kpi/results/ws8a/ws8a-agent-stability-badge.json`, `tests/kpi/results/gates/ws8a-release-readiness.json`, `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`, `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`) |
 | REQ-31 | HTAP (OLTP + OLAP) extreme performance | Epic 2, Epic 3 | In Progress | WS3 performance hardening adds HTAP target-contract smoke, weighted performance scoring, trend comparator, stability badge, and WS3 release summary evidence (`tests/kpi/results/ws3/ws3-htap-target-contract-smoke.json`, `tests/kpi/results/ws3/ws3-performance-score.json`, `tests/kpi/results/ws3/ws3-gate-trend-comparison.json`, `tests/kpi/results/ws3/ws3-performance-stability-badge.json`, `tests/kpi/results/gates/ws3-release-readiness.json`) |
@@ -270,6 +270,22 @@
 | WS8 Tenant Autonomous Runtime Smoke | Epic 8 + REQ-13 (operator-created tenant-scoped autonomous records plus tenant-filtered autonomous record visibility over live HTTP) | `tests/kpi/results/ws8/tenant-autonomous-runtime-smoke.json` |
 | WS8 Release Summary (includes autonomous runtime highlight when present) | Epic 8 (autonomous control plane + tenant-safe observability evidence) | `tests/kpi/results/gates/ws8-release-readiness.json` |
 
+## 5.20) H-09 IDE Parity Evidence
+
+| Gate | Scope | Local Artifact |
+|---|---|---|
+| H-09 IDE Parity Matrix Smoke | H-09 + REQ-28 (cross-IDE parity baseline checks against WS9A contract artifacts) | `tests/kpi/results/h09/h09-ide-parity-matrix.json` |
+| H-09 Gate Summary | H-09 (parity baseline gate status) | `tests/kpi/results/h09/h09-gate-summary.json` |
+| H-09 Release Readiness | H-09 + REQ-28 (release-facing summary over parity baseline evidence) | `tests/kpi/results/gates/h09-release-readiness.json` |
+
+## 5.21) H-10 Governance Evidence
+
+| Gate | Scope | Local Artifact |
+|---|---|---|
+| H-10 Governance Checklist Smoke | H-10 (ARB/deprecation governance artifact presence + seeded registry) | `tests/kpi/results/h10/h10-governance-checklist.json` |
+| H-10 Gate Summary | H-10 (governance checklist gate status) | `tests/kpi/results/h10/h10-gate-summary.json` |
+| H-10 Release Readiness | H-10 (release-facing governance readiness summary) | `tests/kpi/results/gates/h10-release-readiness.json` |
+
 ---
 
 ## 6) Top 10 Architecture Hardening Backlog (from WBS 7.2)
@@ -284,8 +300,8 @@
 | H-06 | Distributed cache hardening | Query + SRE | P1 | R3 | Ready for Validation | Distributed cache resilience now includes runtime endpoint integration and metrics (`/api/v1/sre/cache/{set,get,invalidate,rebalance,metrics}`) with focused service test coverage, and remains backed by passing gate artifacts `tests/kpi/results/h06/h06-cache-resilience-smoke.json`, `tests/kpi/results/h06/h06-gate-summary.json`, and `tests/kpi/results/gates/h06-release-readiness.json`; next milestone is multi-node cache synchronization/failover validation |
 | H-07 | Driver/pooling storm hardening | Integrations | P1 | R3 | Ready for Validation | Driver storm hardening now includes runtime hook surface (`/api/v1/sre/driver/pool/{acquire,release,failure,recover,stats}`) plus SQL data-plane pool orchestration wired through `sql_route`, `sql_transaction`, and `sql_execute`, with focused service tests (`h07_sql_data_plane_pool_acquire_release_on_sql_handlers`, `h07_sql_data_plane_pool_rejects_when_pool_exhausted`) creating comprehensive H-07 data-plane evidence pack via `tests/kpi/scripts/run-h07-data-plane-pool-orchestration-smoke.ps1` and `tests/kpi/scripts/run-h07-driver-storm-smoke.ps1`; all gate artifacts passing (`tests/kpi/results/h07/h07-driver-storm-smoke.json` 7/7 checks, `tests/kpi/results/h07/h07-data-plane-pool-orchestration-smoke.json` 2/2 checks, `tests/kpi/results/h07/h07-gate-summary.json` 5/5 checks with release_readiness="ready_for_validation") next milestone is multi-node surge/failover validation and trend stability badge |
 | H-08 | Autonomous plugin supply-chain hardening | Security + AI Platform | P1 | R3 | Ready for Validation | Supply-chain hardening now includes runtime signed provenance enforcement endpoint path (`/api/v1/security/plugins/provenance/register`) with focused service tests, plus passing evidence in `tests/kpi/results/h08/h08-plugin-supply-chain-smoke.json`, `tests/kpi/results/h08/h08-gate-summary.json`, and `tests/kpi/results/gates/h08-release-readiness.json`; next milestone is production-grade multi-signer/CA-chain rollout |
-| H-09 | IDE extension parity/safety hardening | DX Team | P2 | R4 | Not Started | Cross-IDE parity + permission tests |
-| H-10 | Long-run maintainability hardening | Chief Architect + Release Eng | P2 | R4 | In Progress | Maintainability objective captured in hardening backlog; ARB sign-off + deprecation registry still pending |
+| H-09 | IDE extension parity/safety hardening | DX Team | P2 | R4 | In Progress | Cross-IDE parity baseline matrix + gate/release artifacts (`tests/kpi/results/h09/h09-ide-parity-matrix.json`, `tests/kpi/results/h09/h09-gate-summary.json`, `tests/kpi/results/gates/h09-release-readiness.json`) with next-step live runtime parity/permission-negative scenarios pending |
+| H-10 | Long-run maintainability hardening | Chief Architect + Release Eng | P2 | R4 | In Progress | Governance artifact suite + gate/release linkage now in place (`tests/kpi/results/h10/h10-governance-checklist.json`, `tests/kpi/results/h10/h10-gate-summary.json`, `tests/kpi/results/gates/h10-release-readiness.json`); ARB ratification workflow still pending |
 
 ---
 
@@ -368,8 +384,8 @@ A tracker row moves to **Done** only when:
 | H-06 | Ready for Validation | 70% | improving | P1 | R3 | Completed distributed cache baseline plus runtime endpoint/metrics integration and focused service validation, with passing smoke/gate/release-readiness artifacts (`tests/kpi/results/h06/h06-cache-resilience-smoke.json`, `tests/kpi/results/h06/h06-gate-summary.json`, `tests/kpi/results/gates/h06-release-readiness.json`) | Multi-node synchronization and distributed failover validation remain pending | Implement cluster cache coherency and multi-node failover test harness |
 | H-07 | Ready for Validation | 85% | improving | P1 | R3 | Completed driver storm baseline plus runtime pool hook integration, then wired SQL data-plane pool acquire/release behavior into route/transaction/execute handlers with focused service tests (`h07_sql_data_plane_pool_acquire_release_on_sql_handlers` PASSED, `h07_sql_data_plane_pool_rejects_when_pool_exhausted` PASSED) and created new orchestration smoke script (`tests/kpi/scripts/run-h07-data-plane-pool-orchestration-smoke.ps1`), validated all gate artifacts now passing with comprehensive 14-check coverage (7 driver storm checks + 2 data-plane checks + 5 gate summary checks); gate artifact shows release_readiness="ready_for_validation" | None | Schedule multi-node surge/failover harness validation and publish trend stability badge |
 | H-08 | Ready for Validation | 92% | stable | P1 | R3 | Completed supply-chain baseline plus runtime signed provenance enforcement endpoint path and focused service validation, with all smoke/gate/release artifacts passing (`tests/kpi/results/h08/h08-plugin-supply-chain-smoke.json`, `tests/kpi/results/h08/h08-gate-summary.json`, `tests/kpi/results/gates/h08-release-readiness.json`) | Production multi-signer workflows and external CA-chain integration remain pending | Plan production signer/CA rollout and schedule multi-region signing drill |
-| H-09 | Not Started | 0% | stable | P2 | R4 | IDE extension parity scope documented | SDK + IDE adapters pending | Cross-IDE parity test matrix draft |
-| H-10 | In Progress | 10% | stable | P2 | R4 | Maintainability objective captured in hardening backlog, including follow-up tooling debt for inconsistent Windows PowerShell summary-artifact regeneration during gate/evidence runs and a Codacy CLI installer failure caused by the default WSL Rancher Desktop distro lacking `bash` for the MCP install path | Governance process artifacts pending plus unresolved tooling reliability for summary artifact rewrites and Codacy automation repair on this Windows host | ARB cadence + deprecation policy draft, plus stabilize gate artifact regeneration and repair the WSL/Codacy installer path |
+| H-09 | In Progress | 65% | improving | P2 | R4 | Cross-IDE parity/safety baseline drafted in `reference/h09-cross-ide-parity-test-matrix.md`, executed via `tests/kpi/scripts/run-h09-ide-parity-matrix.ps1` + `tests/kpi/scripts/run-h09-gate.ps1`, and now linked to release evidence via `tests/kpi/scripts/run-h09-release-summary.ps1` (`tests/kpi/results/gates/h09-release-readiness.json`) | Full cross-IDE runtime action parity checks (live extension operations and permission-boundary negative paths) are still pending | Extend H-09 matrix from baseline evidence checks to live runtime parity/permission scenarios and add trend/badge artifacts |
+| H-10 | In Progress | 70% | improving | P2 | R4 | Governance artifact set created (`reference/h10-arb-charter.md`, `reference/h10-deprecation-policy.md`, `reference/h10-deprecation-registry.md`, `reference/h10-governance-checklist.md`) and now wired into executable gate/release evidence via `tests/kpi/scripts/run-h10-governance-checklist.ps1`, `tests/kpi/scripts/run-h10-gate.ps1`, `tests/kpi/scripts/run-h10-release-summary.ps1` | ARB formal approval cycle pending; tooling reliability debt still open for PowerShell artifact regeneration and Codacy automation path on this Windows host | Schedule ARB sign-off session, ratify policy/registry v1, then add ARB decision-log evidence into H-10 release gate |
 
 ### 9.3 PMO Action Queue (Week 2 Readiness)
 
@@ -378,6 +394,8 @@ A tracker row moves to **Done** only when:
 - Start scaffold implementation branch for workspace + deploy manifests.
 - Once cloud handoff arrives, populate real AWS/Azure/GCP endpoint + token environment variables and execute PR-007 true remote smoke packs to close the deferred gate.
 - Hardening review template for H-01..H-04 published at `reference/hardening-review-h01-h04-template.md`; schedule and assign attendees.
+- H-09 parity baseline now includes release-facing evidence via `tests/kpi/results/gates/h09-release-readiness.json`; next step is live runtime parity and permission-boundary negative scenario coverage.
+- H-10 governance baseline is now gate-linked with passing artifacts (`tests/kpi/results/h10/h10-governance-checklist.json`, `tests/kpi/results/h10/h10-gate-summary.json`, `tests/kpi/results/gates/h10-release-readiness.json`); next step is ARB ratification evidence injection.
 - Add a tooling hardening follow-up to stabilize Windows PowerShell gate/evidence summary artifact regeneration so release-facing JSON does not require manual synchronization after validated smoke runs.
 - Repair the default WSL/Codacy installer path, or explicitly document the fallback path when automated Codacy analysis cannot run during file edits.
 

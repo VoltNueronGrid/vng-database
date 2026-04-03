@@ -1,14 +1,14 @@
 {
     "gate":  "ws3",
     "status":  "failed",
-    "started_at_utc":  "2026-04-03T15:32:21.0303983Z",
-    "finished_at_utc":  "2026-04-03T15:32:22.6347613Z",
-    "duration_ms":  1604,
+    "started_at_utc":  "2026-04-03T16:36:42.8489821Z",
+    "finished_at_utc":  "2026-04-03T16:36:46.6244060Z",
+    "duration_ms":  3775,
     "packs":  [
                   {
                       "pack":  "ws3-query-routing",
                       "status":  "failed",
-                      "detail":  "WS3 query-routing smoke failed.",
+                      "detail":  "WS3 query-routing smoke failed. See artifact at tests/kpi/results/ws3/query-routing-smoke.json",
                       "artifact":  "tests/kpi/results/ws3/query-routing-smoke.json"
                   },
                   {

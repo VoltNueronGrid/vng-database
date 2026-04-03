@@ -32,9 +32,17 @@ foreach ($pack in $packs) {
   $detail = "ok"
   try {
     $global:LASTEXITCODE = 0
+    Write-Host "[WS3 GATE] Running pack: $($pack.Name)"
     & $pack.Script -OutputPath $pack.Artifact 2>&1 | Out-Null
-    if (-not $?) { $packStatus = "failed"; $detail = "script_invocation_failed" }
+    if (-not (Test-Path -Path $pack.Artifact)) {
+      $packStatus = "failed"
+      $detail = "artifact_not_generated"
+    }
+    elseif (-not $?) { $packStatus = "failed"; $detail = "script_invocation_failed" }
     elseif ($global:LASTEXITCODE -ne 0) { $packStatus = "failed"; $detail = "exit_code=$global:LASTEXITCODE" }
+    else {
+      Write-Host "[WS3 GATE] Pack passed and artifact generated: $($pack.Artifact)"
+    }
   } catch { $packStatus = "failed"; $detail = $_.Exception.Message }
   if ($packStatus -ne "passed") { $status = "failed" }
   $runs += [ordered]@{

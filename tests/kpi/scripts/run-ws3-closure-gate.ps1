@@ -14,6 +14,25 @@ function Ensure-OutputDir {
 
 Ensure-OutputDir -PathValue $OutputPath
 
+$requiredScripts = @(
+  "tests/kpi/scripts/run-ws3-gate.ps1",
+  "tests/kpi/scripts/run-ws3-query-routing-smoke.ps1",
+  "tests/kpi/scripts/run-ws3-htap-target-contract-smoke.ps1",
+  "tests/kpi/scripts/run-ws3-performance-score.ps1",
+  "tests/kpi/scripts/run-ws3-gate-trend-compare.ps1",
+  "tests/kpi/scripts/run-ws3-performance-stability-badge.ps1",
+  "tests/kpi/scripts/run-ws3-release-summary.ps1"
+)
+
+Write-Host "[CLOSURE GATE] Pre-flight check: required WS3 scripts"
+foreach ($script in $requiredScripts) {
+  if (-not (Test-Path -Path $script)) {
+    Write-Error "Required script missing: $script"
+    exit 1
+  }
+}
+Write-Host "[CLOSURE GATE] Pre-flight passed"
+
 function Get-ArtifactStatus {
   param([string]$ArtifactPath)
 

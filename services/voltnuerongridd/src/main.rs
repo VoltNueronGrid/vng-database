@@ -882,7 +882,7 @@ struct UdfInvocationPlan {
     guard_policy: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SqlTransactionResponse {
     status: &'static str,
     transaction_id: String,
@@ -9286,7 +9286,7 @@ mod tests {
         assert_eq!(response.1.status, "ok");
         assert_eq!(response.1.route_path, "oltp");
         assert!(response.1.transaction.is_some());
-        assert!(response.1.transaction.unwrap().status.contains("commit"));
+        assert!(response.1.transaction.as_ref().unwrap().status.contains("commit"));
     }
 
     #[test]
@@ -9327,7 +9327,7 @@ mod tests {
             .expect("sql execute response");
 
         assert_eq!(response.0, StatusCode::OK);
-        if let Some(olap) = response.1.olap {
+        if let Some(olap) = response.1.olap.as_ref() {
             assert!(olap.rows <= 10_000.min(50));
         }
     }
@@ -9385,7 +9385,7 @@ mod tests {
             })
         };
 
-        let mut response = runtime
+        let response = runtime
             .block_on(sql_route(
                 State(state.clone()),
                 headers2,
