@@ -9148,4 +9148,259 @@ mod tests {
             .0;
         assert_eq!(independent_consumer.delivered_count, 2);
     }
+
+    // ── WS3 HTAP Routing Policy Tests ─────────────────────────────
+    #[test]
+    fn ws3_sql_route_identifies_select_olap_path() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_route(
+                State(state),
+                headers,
+                Json(SqlRouteRequest {
+                    sql_batch: "SELECT * FROM orders WHERE amount > 1000;".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.route_path, "olap");
+        assert!(response.reason.contains("read-heavy") || response.reason.contains("SELECT"));
+    }
+
+    #[test]
+    fn ws3_sql_route_identifies_write_oltp_path() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_route(
+                State(state),
+                headers,
+                Json(SqlRouteRequest {
+                    sql_batch: "INSERT INTO orders VALUES (1, 'acme', 999.99);".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.route_path, "oltp");
+        assert!(response.reason.contains("write-heavy") || response.reason.contains("INSERT"));
+    }
+
+    #[test]
+    fn ws3_sql_route_identifies_mixed_batch_hybrid_path() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_route(
+                State(state),
+                headers,
+                Json(SqlRouteRequest {
+                    sql_batch: "BEGIN; INSERT INTO logs VALUES (1); SELECT COUNT(*) FROM orders; COMMIT;".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.route_path, "hybrid");
+        assert!(response.reason.contains("mixed") || response.reason.len() > 0);
+    }
+
+    #[test]
+    fn ws3_sql_route_routes_multiple_statements_proportionally() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_route(
+                State(state),
+                headers,
+                Json(SqlRouteRequest {
+                    sql_batch: "SELECT * FROM orders; SELECT * FROM products; SELECT * FROM customers;".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.route_path, "olap");
+        assert_eq!(response.statements.len(), 3);
+        for statement in &response.statements {
+            assert_eq!(statement.path, "olap");
+        }
+    }
+
+    #[test]
+    fn ws3_sql_execute_routes_and_executes_olap_query() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_execute(
+                State(state.clone()),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "SELECT * FROM orders LIMIT 100;".to_string(),
+                    max_rows: Some(100),
+                }),
+            ))
+            .expect("sql execute response");
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.status, "ok");
+        assert_eq!(response.1.route_path, "olap");
+        assert!(response.1.olap.is_some());
+        assert_eq!(response.1.transaction, None);
+
+        let audit_events = state.audit_sink.lock().expect("audit lock").latest(1);
+        assert_eq!(audit_events[0].kind, AuditEventKind::Sql);
+        assert!(audit_events[0].details_json.contains("sql/execute"));
+    }
+
+    #[test]
+    fn ws3_sql_execute_routes_and_executes_oltp_transaction() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("admin-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_execute(
+                State(state.clone()),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "BEGIN; UPDATE orders SET amount = 1500 WHERE id = 1; COMMIT;".to_string(),
+                    max_rows: Some(10),
+                }),
+            ))
+            .expect("sql execute response");
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.status, "ok");
+        assert_eq!(response.1.route_path, "oltp");
+        assert!(response.1.transaction.is_some());
+        assert!(response.1.transaction.unwrap().status.contains("commit"));
+    }
+
+    #[test]
+    fn ws3_sql_route_rejects_unknown_or_invalid_statements() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_route(
+                State(state.clone()),
+                headers,
+                Json(SqlRouteRequest {
+                    sql_batch: "INVALID SYNTAX HERE;".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.route_path, "unknown");
+    }
+
+    #[test]
+    fn ws3_routing_policy_enforces_max_rows_limit() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_execute(
+                State(state),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "SELECT * FROM orders;".to_string(),
+                    max_rows: Some(50),
+                }),
+            ))
+            .expect("sql execute response");
+
+        assert_eq!(response.0, StatusCode::OK);
+        if let Some(olap) = response.1.olap {
+            assert!(olap.rows <= 10_000.min(50));
+        }
+    }
+
+    #[test]
+    fn ws3_sql_analyze_classifies_statement_kinds_for_routing() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_analyze(
+                State(state),
+                headers,
+                Json(SqlAnalyzeRequest {
+                    sql_batch: "SELECT 1; INSERT INTO t VALUES (1); UPDATE t SET x = 2; DELETE FROM t;".to_string(),
+                }),
+            ))
+            .expect("sql analyze response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.total_statements, 4);
+        assert_eq!(response.rejected_statements, 0);
+        
+        let analyzed = &response.statements;
+        assert_eq!(analyzed[0].kind, "\"Select\"");
+        assert!(!analyzed[0].requires_transaction);
+        assert_eq!(analyzed[1].kind, "\"Insert\"");
+        assert!(analyzed[1].requires_transaction);
+        assert_eq!(analyzed[2].kind, "\"Update\"");
+        assert!(analyzed[2].requires_transaction);
+        assert_eq!(analyzed[3].kind, "\"Delete\"");
+        assert!(analyzed[3].requires_transaction);
+    }
+
+    #[test]
+    fn ws3_routing_policy_distributes_concurrent_queries() {
+        let state = state_with_key(None);
+        let headers1 = tenant_user_headers("analyst-acme", "acme");
+        let headers2 = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let handle1 = {
+            let state_clone = state.clone();
+            let headers_clone = headers1.clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("runtime");
+                rt.block_on(sql_route(
+                    State(state_clone),
+                    headers_clone,
+                    Json(SqlRouteRequest {
+                        sql_batch: "SELECT * FROM orders;".to_string(),
+                    }),
+                ))
+            })
+        };
+
+        let mut response = runtime
+            .block_on(sql_route(
+                State(state.clone()),
+                headers2,
+                Json(SqlRouteRequest {
+                    sql_batch: "SELECT * FROM products;".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.route_path, "olap");
+
+        let result = handle1.join().expect("thread join").expect("thread route call");
+        assert_eq!(result.status, "ok");
+        assert_eq!(result.route_path, "olap");
+    }
+
 }
