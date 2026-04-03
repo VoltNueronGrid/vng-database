@@ -26,9 +26,16 @@ use voltnuerongrid_store::htap_sync::{
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::index::IndexManager;
+use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
 use voltnuerongrid_ingest::{
     IngestionConnector, ManagedEventBusTransport, ManagedReplayCursorStore,
     ReplayCursorStore, StreamDirection,
+};
+use voltnuerongrid_opt::DistributedCacheManager;
+use voltnuerongrid_plugins::{
+    AttestationType, ConnectorPackageMetadata, PluginLifecycleManager,
+    PluginManifestSignature, ProvenanceAttestation, ProvenanceChain,
+    SbomEntry, SbomInspectionResult, SignedPluginManifest,
 };
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -107,6 +114,9 @@ struct AppState {
     ingest_outbox_streams: Arc<Mutex<HashMap<String, String>>>,
     ingest_event_bus: Arc<Mutex<ManagedEventBusTransport>>,
     ingest_outbox_cursors: Arc<Mutex<ManagedReplayCursorStore>>,
+    distributed_cache: Arc<Mutex<DistributedCacheManager>>,
+    driver_pool: Arc<Mutex<ConnectionPoolManager>>,
+    plugin_lifecycle: Arc<Mutex<PluginLifecycleManager>>,
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
@@ -238,6 +248,24 @@ fn default_allowed_operator_roles() -> HashSet<OperatorRole> {
     CONTROL_PLANE_OPERATOR_ROLES.into_iter().collect()
 }
 
+fn load_allowed_operator_roles() -> HashSet<OperatorRole> {
+    let parsed = env::var("VNG_ALLOWED_OPERATOR_ROLES")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(|entry| OperatorRole::parse(entry.trim()))
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+
+    if parsed.is_empty() {
+        default_allowed_operator_roles()
+    } else {
+        parsed
+    }
+}
+
 fn default_operator_role_bindings() -> HashMap<String, OperatorRole> {
     HashMap::from([
         ("platform-admin".to_string(), OperatorRole::Dba),
@@ -265,39 +293,7 @@ fn default_tenant_user_bindings() -> HashMap<String, TenantUserBinding> {
                 role: "tenant_admin".to_string(),
             },
         ),
-        (
-            "analyst-globex".to_string(),
-            TenantUserBinding {
-                tenant_id: "globex".to_string(),
-                role: "tenant_analyst".to_string(),
-            },
-        ),
-        (
-            "admin-globex".to_string(),
-            TenantUserBinding {
-                tenant_id: "globex".to_string(),
-                role: "tenant_admin".to_string(),
-            },
-        ),
     ])
-}
-
-fn load_allowed_operator_roles() -> HashSet<OperatorRole> {
-    let parsed = env::var("VNG_ALLOWED_OPERATOR_ROLES")
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .filter_map(OperatorRole::parse)
-                .collect::<HashSet<_>>()
-        })
-        .unwrap_or_default();
-
-    if parsed.is_empty() {
-        default_allowed_operator_roles()
-    } else {
-        parsed
-    }
 }
 
 fn load_operator_role_bindings(
@@ -308,8 +304,8 @@ fn load_operator_role_bindings(
         .map(|value| {
             value
                 .split(',')
-                .filter_map(|pair| {
-                    let (operator_id, role) = pair.split_once('=')?;
+                .filter_map(|entry| {
+                    let (operator_id, role) = entry.split_once(':')?;
                     let operator_id = operator_id.trim();
                     let role = OperatorRole::parse(role.trim())?;
                     if operator_id.is_empty() || !allowed_roles.contains(&role) {
@@ -696,6 +692,14 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                     PrivilegeAction::Read,
                     PrivilegeAction::Manage,
                 ],
+            },
+        );
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "security.supply_chain".to_string(),
+                scopes: vec!["security/plugins/provenance/*".to_string()],
+                actions: vec![PrivilegeAction::Read, PrivilegeAction::Manage],
             },
         );
     }
@@ -1501,6 +1505,205 @@ struct DrHookStatusResponse {
     records: Vec<DrHookExecutionRecord>,
 }
 
+#[derive(Deserialize)]
+struct CacheSetRequest {
+    partition_id: String,
+    key: String,
+    value: serde_json::Value,
+    ttl_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct CacheGetQuery {
+    partition_id: String,
+    key: String,
+}
+
+#[derive(Deserialize)]
+struct CacheInvalidateRequest {
+    partition_id: String,
+    key: String,
+}
+
+#[derive(Serialize)]
+struct CacheWriteResponse {
+    status: &'static str,
+    partition_id: String,
+    key: String,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CacheGetResponse {
+    status: &'static str,
+    partition_id: String,
+    key: String,
+    hit: bool,
+    value: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CacheInvalidateResponse {
+    status: &'static str,
+    partition_id: String,
+    key: String,
+    removed: bool,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CacheRebalanceResponse {
+    status: &'static str,
+    partition_count: usize,
+    rebalanced_partitions: usize,
+    entries_evicted: usize,
+}
+
+#[derive(Serialize)]
+struct CachePartitionMetricsResponse {
+    partition_id: String,
+    entry_count: usize,
+    total_hits: u64,
+    total_misses: u64,
+    total_evictions: u64,
+    circuit_breaker_state: String,
+    hit_ratio: f64,
+    last_rebalance_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct CacheMetricsResponse {
+    status: &'static str,
+    partition_count: usize,
+    total_entries: usize,
+    partitions: Vec<CachePartitionMetricsResponse>,
+}
+
+#[derive(Deserialize)]
+struct PoolAcquireRequest {
+    now_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PoolReleaseRequest {
+    connection_id: String,
+    now_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PoolFailureRequest {
+    connection_id: String,
+    error: Option<String>,
+    now_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PoolRecoverRequest {
+    now_ms: Option<u64>,
+    prune_unhealthy: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct PoolStatsResponse {
+    total_connections: usize,
+    idle_connections: usize,
+    active_connections: usize,
+    failed_connections: usize,
+    circuit_breaker_state: String,
+    storm_active: bool,
+    current_rps: u64,
+    total_acquired: u64,
+    total_released: u64,
+    total_rejected: u64,
+    total_circuit_opens: u64,
+}
+
+#[derive(Serialize)]
+struct PoolAcquireResponse {
+    status: &'static str,
+    acquire_state: &'static str,
+    connection_id: Option<String>,
+    error: Option<String>,
+    stats: PoolStatsResponse,
+}
+
+#[derive(Serialize)]
+struct PoolReleaseResponse {
+    status: &'static str,
+    released: bool,
+    stats: PoolStatsResponse,
+}
+
+#[derive(Serialize)]
+struct PoolFailureResponse {
+    status: &'static str,
+    marked_failed: bool,
+    stats: PoolStatsResponse,
+}
+
+#[derive(Serialize)]
+struct PoolRecoverResponse {
+    status: &'static str,
+    circuit_recovered: bool,
+    pruned_unhealthy: usize,
+    stats: PoolStatsResponse,
+}
+
+#[derive(Deserialize)]
+struct SignedProvenanceRegistrationRequest {
+    plugin_id: String,
+    plugin_version: String,
+    checksum_sha256: String,
+    display_name: Option<String>,
+    owner: Option<String>,
+    license: Option<String>,
+    capabilities: Option<Vec<String>>,
+    schema_version: Option<String>,
+    signature_algorithm: String,
+    signature_key_id: String,
+    signature_base64: String,
+    revoked_key_ids: Option<Vec<String>>,
+    attestations: Vec<SignedProvenanceAttestationRequest>,
+    sbom_entries: Option<Vec<SignedProvenanceSbomEntryRequest>>,
+}
+
+#[derive(Deserialize)]
+struct SignedProvenanceAttestationRequest {
+    attester_id: String,
+    attested_at_ms: Option<u64>,
+    attestation_type: String,
+    payload_digest_sha256: String,
+    signature_base64: String,
+    passed: bool,
+}
+
+#[derive(Clone, Deserialize)]
+struct SignedProvenanceSbomEntryRequest {
+    component_name: String,
+    component_version: String,
+    license: String,
+    checksum_sha256: String,
+    source_url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SignedProvenanceRegistrationResponse {
+    status: &'static str,
+    registration_state: &'static str,
+    plugin_id: String,
+    plugin_version: String,
+    chain_complete: bool,
+    chain_digest: String,
+    attestation_count: usize,
+    passed_attestations: usize,
+    sbom_approved: bool,
+    sbom_license_violations: usize,
+    sbom_missing_checksums: usize,
+    audit_records_total: usize,
+    error: Option<String>,
+}
+
 #[tokio::main]
 async fn main() {
     let node_id = env::var("VNG_NODE_ID")
@@ -1576,6 +1779,9 @@ async fn main() {
         ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
         ingest_event_bus: Arc::new(Mutex::new(load_ingest_event_bus())),
         ingest_outbox_cursors: Arc::new(Mutex::new(load_ingest_outbox_cursor_store())),
+        distributed_cache: Arc::new(Mutex::new(DistributedCacheManager::with_default_policy())),
+        driver_pool: Arc::new(Mutex::new(ConnectionPoolManager::with_default_policy())),
+        plugin_lifecycle: Arc::new(Mutex::new(PluginLifecycleManager::new(256))),
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
@@ -1619,6 +1825,20 @@ async fn main() {
         .route("/api/v1/sre/failure/reconcile", post(sre_failure_reconcile))
         .route("/api/v1/sre/gate/evaluate", get(sre_gate_evaluate))
         .route("/api/v1/sre/gate/export", post(sre_gate_export))
+        .route("/api/v1/sre/cache/set", post(sre_cache_set))
+        .route("/api/v1/sre/cache/get", get(sre_cache_get))
+        .route("/api/v1/sre/cache/invalidate", post(sre_cache_invalidate))
+        .route("/api/v1/sre/cache/rebalance", post(sre_cache_rebalance))
+        .route("/api/v1/sre/cache/metrics", get(sre_cache_metrics))
+        .route("/api/v1/sre/driver/pool/acquire", post(sre_driver_pool_acquire))
+        .route("/api/v1/sre/driver/pool/release", post(sre_driver_pool_release))
+        .route("/api/v1/sre/driver/pool/failure", post(sre_driver_pool_failure))
+        .route("/api/v1/sre/driver/pool/recover", post(sre_driver_pool_recover))
+        .route("/api/v1/sre/driver/pool/stats", get(sre_driver_pool_stats))
+        .route(
+            "/api/v1/security/plugins/provenance/register",
+            post(security_plugins_provenance_register),
+        )
         .route("/api/v1/audit/events", get(audit_events))
         .route("/api/v1/security/kms/status", get(security_kms_status))
         .route(
@@ -1690,6 +1910,7 @@ async fn sql_transaction(
         PrivilegeAction::Execute,
         "sql/transaction",
     )?;
+    let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/transaction")?;
     let (status, response) = execute_transaction_statements(req.statements);
     append_runtime_audit_event(
         &state,
@@ -1705,6 +1926,7 @@ async fn sql_transaction(
             "rejected_statement_count": response.rejected_statement_count,
         }),
     );
+    release_sql_data_plane_connection(&state, &connection_id);
     Ok((status, Json(response)))
 }
 
@@ -1886,6 +2108,7 @@ async fn sql_route(
     Json(req): Json<SqlRouteRequest>,
 ) -> Result<Json<SqlRouteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/route")?;
+    let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/route")?;
     let decision = HtapQueryRouter::route_batch(&req.sql_batch);
     let response = SqlRouteResponse {
         status: "ok",
@@ -1913,6 +2136,7 @@ async fn sql_route(
             "reason": response.reason,
         }),
     );
+    release_sql_data_plane_connection(&state, &connection_id);
     Ok(Json(response))
 }
 
@@ -1927,6 +2151,7 @@ async fn sql_execute(
         PrivilegeAction::Execute,
         "sql/execute",
     )?;
+    let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/execute")?;
     let decision = HtapQueryRouter::route_batch(&req.sql_batch);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
     let udf_function_catalog = udf_function_catalog_contract();
@@ -1951,7 +2176,7 @@ async fn sql_execute(
                     "udf_guardrail_status": "blocked",
                 }),
             );
-            return Ok((
+            let response = Ok((
                 StatusCode::BAD_REQUEST,
                 Json(SqlExecuteResponse {
                     status: "error",
@@ -1967,6 +2192,8 @@ async fn sql_execute(
                     udf_execution_plan,
                 }),
             ));
+            release_sql_data_plane_connection(&state, &connection_id);
+            return response;
         }
     };
 
@@ -1984,7 +2211,7 @@ async fn sql_execute(
                 "rejected_statement_count": parsed.len(),
             }),
         );
-        return Ok((
+        let response = Ok((
             StatusCode::BAD_REQUEST,
             Json(SqlExecuteResponse {
                 status: "error",
@@ -2000,6 +2227,8 @@ async fn sql_execute(
                 udf_execution_plan,
             }),
         ));
+        release_sql_data_plane_connection(&state, &connection_id);
+        return response;
     }
 
     let mut transaction_statements = Vec::new();
@@ -2035,7 +2264,7 @@ async fn sql_execute(
                     "transaction_status": response.status,
                 }),
             );
-            return Ok((
+            let response = Ok((
                 status,
                 Json(SqlExecuteResponse {
                     status: "error",
@@ -2051,6 +2280,8 @@ async fn sql_execute(
                     udf_execution_plan,
                 }),
             ));
+            release_sql_data_plane_connection(&state, &connection_id);
+            return response;
         }
         transaction = Some(response);
     }
@@ -2091,6 +2322,7 @@ async fn sql_execute(
             "udf_guardrail_status": response.udf_guardrail_status,
         }),
     );
+    release_sql_data_plane_connection(&state, &connection_id);
     Ok((
         StatusCode::OK,
         Json(response),
@@ -2694,6 +2926,648 @@ async fn sre_gate_export(
         status: "ok",
         output_path,
         gate_result: evaluation.gate_result,
+    }))
+}
+
+async fn sre_cache_set(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CacheSetRequest>,
+) -> Result<Json<CacheWriteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/cache",
+        PrivilegeAction::Execute,
+    )?;
+
+    let now_ms = now_unix_ms_u64();
+    let result = state
+        .distributed_cache
+        .lock()
+        .expect("cache manager lock")
+        .set(
+            req.partition_id.as_str(),
+            req.key.clone(),
+            req.value,
+            req.ttl_ms,
+            now_ms,
+        );
+
+    let response = CacheWriteResponse {
+        status: if result.is_ok() { "ok" } else { "error" },
+        partition_id: req.partition_id.clone(),
+        key: req.key.clone(),
+        error: result.err().map(|error| error.to_string()),
+    };
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "sre_cache_set",
+        response.status,
+        &json!({
+            "partition_id": response.partition_id,
+            "key": response.key,
+            "ttl_ms": req.ttl_ms,
+            "error": response.error,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(response))
+}
+
+async fn sre_cache_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<CacheGetQuery>,
+) -> Result<Json<CacheGetResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/cache",
+        PrivilegeAction::Read,
+    )?;
+
+    let now_ms = now_unix_ms_u64();
+    let result = state
+        .distributed_cache
+        .lock()
+        .expect("cache manager lock")
+        .get(query.partition_id.as_str(), query.key.as_str(), now_ms);
+
+    let response = match result {
+        Ok(value) => CacheGetResponse {
+            status: "ok",
+            partition_id: query.partition_id.clone(),
+            key: query.key.clone(),
+            hit: value.is_some(),
+            value,
+            error: None,
+        },
+        Err(error) => CacheGetResponse {
+            status: "error",
+            partition_id: query.partition_id.clone(),
+            key: query.key.clone(),
+            hit: false,
+            value: None,
+            error: Some(error.to_string()),
+        },
+    };
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "sre_cache_get",
+        response.status,
+        &json!({
+            "partition_id": response.partition_id,
+            "key": response.key,
+            "hit": response.hit,
+            "error": response.error,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(response))
+}
+
+async fn sre_cache_invalidate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CacheInvalidateRequest>,
+) -> Result<Json<CacheInvalidateResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/cache",
+        PrivilegeAction::Execute,
+    )?;
+
+    let result = state
+        .distributed_cache
+        .lock()
+        .expect("cache manager lock")
+        .invalidate(req.partition_id.as_str(), req.key.as_str());
+
+    let response = match result {
+        Ok(removed) => CacheInvalidateResponse {
+            status: "ok",
+            partition_id: req.partition_id.clone(),
+            key: req.key.clone(),
+            removed,
+            error: None,
+        },
+        Err(error) => CacheInvalidateResponse {
+            status: "error",
+            partition_id: req.partition_id.clone(),
+            key: req.key.clone(),
+            removed: false,
+            error: Some(error.to_string()),
+        },
+    };
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "sre_cache_invalidate",
+        response.status,
+        &json!({
+            "partition_id": response.partition_id,
+            "key": response.key,
+            "removed": response.removed,
+            "error": response.error,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(response))
+}
+
+async fn sre_cache_rebalance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<CacheRebalanceResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/cache",
+        PrivilegeAction::Execute,
+    )?;
+
+    let now_ms = now_unix_ms_u64();
+    let results = state
+        .distributed_cache
+        .lock()
+        .expect("cache manager lock")
+        .rebalance_all(now_ms);
+    let entries_evicted: usize = results.iter().map(|result| result.entries_evicted).sum();
+
+    let response = CacheRebalanceResponse {
+        status: "ok",
+        partition_count: results.len(),
+        rebalanced_partitions: results.len(),
+        entries_evicted,
+    };
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "sre_cache_rebalance",
+        "ok",
+        &json!({
+            "partition_count": response.partition_count,
+            "entries_evicted": response.entries_evicted,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(response))
+}
+
+async fn sre_cache_metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<CacheMetricsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/cache",
+        PrivilegeAction::Read,
+    )?;
+
+    let guard = state.distributed_cache.lock().expect("cache manager lock");
+    let partitions = guard
+        .all_stats()
+        .into_iter()
+        .map(|partition| CachePartitionMetricsResponse {
+            partition_id: partition.partition_id,
+            entry_count: partition.entry_count,
+            total_hits: partition.total_hits,
+            total_misses: partition.total_misses,
+            total_evictions: partition.total_evictions,
+            circuit_breaker_state: partition.circuit_breaker_state,
+            hit_ratio: partition.hit_ratio,
+            last_rebalance_ms: partition.last_rebalance_ms,
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(CacheMetricsResponse {
+        status: "ok",
+        partition_count: guard.partition_count(),
+        total_entries: guard.total_entry_count(),
+        partitions,
+    }))
+}
+
+async fn sre_driver_pool_acquire(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PoolAcquireRequest>,
+) -> Result<Json<PoolAcquireResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/driver_pool",
+        PrivilegeAction::Execute,
+    )?;
+    let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
+
+    let (acquire_state, connection_id, error, stats) = {
+        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        let acquire_result = pool.acquire(now_ms);
+        let (acquire_state, connection_id, error) = match acquire_result {
+            Ok(connection_id) => ("acquired", Some(connection_id), None),
+            Err(error) => (
+                pool_acquire_error_state(&error),
+                None,
+                Some(error.to_string()),
+            ),
+        };
+        let stats = pool_stats_response(&pool.pool_stats(now_ms));
+        (acquire_state, connection_id, error, stats)
+    };
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "sre_driver_pool_acquire",
+        if error.is_none() { "ok" } else { "error" },
+        &json!({
+            "acquire_state": acquire_state,
+            "connection_id": connection_id,
+            "error": error,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(PoolAcquireResponse {
+        status: "ok",
+        acquire_state,
+        connection_id,
+        error,
+        stats,
+    }))
+}
+
+async fn sre_driver_pool_release(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PoolReleaseRequest>,
+) -> Result<Json<PoolReleaseResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/driver_pool",
+        PrivilegeAction::Execute,
+    )?;
+    let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
+
+    let (released, stats) = {
+        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        let released = pool.release(req.connection_id.as_str(), now_ms);
+        let stats = pool_stats_response(&pool.pool_stats(now_ms));
+        (released, stats)
+    };
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "sre_driver_pool_release",
+        if released { "ok" } else { "error" },
+        &json!({
+            "connection_id": req.connection_id,
+            "released": released,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(PoolReleaseResponse {
+        status: "ok",
+        released,
+        stats,
+    }))
+}
+
+async fn sre_driver_pool_failure(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PoolFailureRequest>,
+) -> Result<Json<PoolFailureResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/driver_pool",
+        PrivilegeAction::Execute,
+    )?;
+    let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
+
+    let stats = {
+        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        pool.mark_failed(
+            req.connection_id.as_str(),
+            req.error
+                .clone()
+                .unwrap_or_else(|| "simulated_failure".to_string()),
+            now_ms,
+        );
+        pool_stats_response(&pool.pool_stats(now_ms))
+    };
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "sre_driver_pool_failure",
+        "ok",
+        &json!({
+            "connection_id": req.connection_id,
+            "error": req.error,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(PoolFailureResponse {
+        status: "ok",
+        marked_failed: true,
+        stats,
+    }))
+}
+
+async fn sre_driver_pool_recover(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PoolRecoverRequest>,
+) -> Result<Json<PoolRecoverResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/driver_pool",
+        PrivilegeAction::Execute,
+    )?;
+    let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
+
+    let (circuit_recovered, pruned_unhealthy, stats) = {
+        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        let circuit_recovered = pool.check_circuit_recovery(now_ms);
+        let pruned_unhealthy = if req.prune_unhealthy.unwrap_or(true) {
+            pool.prune_unhealthy(now_ms)
+        } else {
+            0
+        };
+        let stats = pool_stats_response(&pool.pool_stats(now_ms));
+        (circuit_recovered, pruned_unhealthy, stats)
+    };
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "sre_driver_pool_recover",
+        "ok",
+        &json!({
+            "circuit_recovered": circuit_recovered,
+            "pruned_unhealthy": pruned_unhealthy,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(PoolRecoverResponse {
+        status: "ok",
+        circuit_recovered,
+        pruned_unhealthy,
+        stats,
+    }))
+}
+
+async fn sre_driver_pool_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<PoolStatsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let _operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/driver_pool",
+        PrivilegeAction::Read,
+    )?;
+    let now_ms = now_unix_ms_u64();
+    let stats = state
+        .driver_pool
+        .lock()
+        .expect("driver pool lock")
+        .pool_stats(now_ms);
+    Ok(Json(pool_stats_response(&stats)))
+}
+
+async fn security_plugins_provenance_register(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SignedProvenanceRegistrationRequest>,
+) -> Result<Json<SignedProvenanceRegistrationResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "security.supply_chain",
+        "security/plugins/provenance/register",
+        PrivilegeAction::Manage,
+    )?;
+
+    let mut chain = ProvenanceChain::new(req.plugin_id.clone(), req.plugin_version.clone());
+    for attestation in &req.attestations {
+        let Some(attestation_type) = parse_attestation_type(attestation.attestation_type.as_str()) else {
+            return Ok(Json(SignedProvenanceRegistrationResponse {
+                status: "error",
+                registration_state: "rejected",
+                plugin_id: req.plugin_id,
+                plugin_version: req.plugin_version,
+                chain_complete: false,
+                chain_digest: String::new(),
+                attestation_count: req.attestations.len(),
+                passed_attestations: req.attestations.iter().filter(|entry| entry.passed).count(),
+                sbom_approved: false,
+                sbom_license_violations: 0,
+                sbom_missing_checksums: 0,
+                audit_records_total: state
+                    .plugin_lifecycle
+                    .lock()
+                    .map(|manager| manager.audit_trail().len())
+                    .unwrap_or(0),
+                error: Some("unsupported_attestation_type".to_string()),
+            }));
+        };
+
+        chain.add_attestation(ProvenanceAttestation {
+            attester_id: attestation.attester_id.clone(),
+            attested_at_ms: attestation.attested_at_ms.unwrap_or_else(now_unix_ms_u64),
+            attestation_type,
+            payload_digest_sha256: attestation.payload_digest_sha256.clone(),
+            signature_base64: attestation.signature_base64.clone(),
+            passed: attestation.passed,
+        });
+    }
+
+    let sbom_entries = req
+        .sbom_entries
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| SbomEntry {
+            component_name: entry.component_name,
+            component_version: entry.component_version,
+            license: entry.license,
+            checksum_sha256: entry.checksum_sha256,
+            source_url: entry.source_url,
+        })
+        .collect::<Vec<_>>();
+    let sbom_result = SbomInspectionResult::inspect(
+        req.plugin_id.clone(),
+        sbom_entries,
+        &["GPL-3.0-only", "AGPL-3.0-only"],
+    );
+
+    if !chain.is_complete() || !sbom_result.approved {
+        append_audit_event(
+            &state,
+            AuditEventKind::Security,
+            &operator.operator_id,
+            "security_plugins_provenance_register",
+            "rejected",
+            &json!({
+                "plugin_id": req.plugin_id,
+                "plugin_version": req.plugin_version,
+                "chain_complete": chain.is_complete(),
+                "sbom_approved": sbom_result.approved,
+            })
+            .to_string(),
+        );
+        return Ok(Json(SignedProvenanceRegistrationResponse {
+            status: "error",
+            registration_state: "rejected",
+            plugin_id: req.plugin_id,
+            plugin_version: req.plugin_version,
+            chain_complete: chain.is_complete(),
+            chain_digest: chain.chain_digest,
+            attestation_count: chain.attestations.len(),
+            passed_attestations: chain.attestations.iter().filter(|entry| entry.passed).count(),
+            sbom_approved: sbom_result.approved,
+            sbom_license_violations: sbom_result.license_violations.len(),
+            sbom_missing_checksums: sbom_result.missing_checksums.len(),
+            audit_records_total: state
+                .plugin_lifecycle
+                .lock()
+                .map(|manager| manager.audit_trail().len())
+                .unwrap_or(0),
+            error: Some("provenance_or_sbom_policy_violation".to_string()),
+        }));
+    }
+
+    let manifest = SignedPluginManifest {
+        schema_version: req.schema_version.unwrap_or_else(|| "v1".to_string()),
+        declared_checksum_sha256: req.checksum_sha256.clone(),
+        generated_epoch_ms: now_unix_ms(),
+        signature: PluginManifestSignature {
+            algorithm: req.signature_algorithm,
+            key_id: req.signature_key_id,
+            signature_base64: req.signature_base64,
+        },
+        revoked_key_ids: req.revoked_key_ids.unwrap_or_default(),
+    };
+    let metadata = ConnectorPackageMetadata {
+        plugin_id: req.plugin_id.clone(),
+        version: req.plugin_version.clone(),
+        display_name: req
+            .display_name
+            .unwrap_or_else(|| req.plugin_id.clone()),
+        owner: req.owner.unwrap_or_else(|| "platform-security".to_string()),
+        license: req.license.unwrap_or_else(|| "Apache-2.0".to_string()),
+        checksum_sha256: req.checksum_sha256,
+        capabilities: req
+            .capabilities
+            .filter(|capabilities| !capabilities.is_empty())
+            .unwrap_or_else(|| vec!["ingest.read".to_string()]),
+    };
+
+    let register_result = state
+        .plugin_lifecycle
+        .lock()
+        .expect("plugin lifecycle lock")
+        .register(
+            manifest,
+            metadata,
+            Some(operator.operator_id.clone()),
+            Some(chain.clone()),
+            now_unix_ms_u64(),
+        );
+
+    let (status, registration_state, error) = match register_result {
+        Ok(_) => ("ok", "registered", None),
+        Err(error) => ("error", "rejected", Some(error.to_string())),
+    };
+
+    let audit_records_total = state
+        .plugin_lifecycle
+        .lock()
+        .map(|manager| manager.audit_trail().len())
+        .unwrap_or(0);
+
+    append_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &operator.operator_id,
+        "security_plugins_provenance_register",
+        status,
+        &json!({
+            "plugin_id": req.plugin_id,
+            "plugin_version": req.plugin_version,
+            "chain_complete": chain.is_complete(),
+            "chain_digest": chain.chain_digest,
+            "registration_state": registration_state,
+            "error": error,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(SignedProvenanceRegistrationResponse {
+        status,
+        registration_state,
+        plugin_id: req.plugin_id,
+        plugin_version: req.plugin_version,
+        chain_complete: chain.is_complete(),
+        chain_digest: chain.chain_digest,
+        attestation_count: chain.attestations.len(),
+        passed_attestations: chain.attestations.iter().filter(|entry| entry.passed).count(),
+        sbom_approved: sbom_result.approved,
+        sbom_license_violations: sbom_result.license_violations.len(),
+        sbom_missing_checksums: sbom_result.missing_checksums.len(),
+        audit_records_total,
+        error,
     }))
 }
 
@@ -3455,6 +4329,95 @@ fn now_unix_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
+}
+
+fn now_unix_ms_u64() -> u64 {
+    now_unix_ms().min(u128::from(u64::MAX)) as u64
+}
+
+fn pool_stats_response(stats: &voltnuerongrid_driver_rust::PoolStats) -> PoolStatsResponse {
+    PoolStatsResponse {
+        total_connections: stats.total_connections,
+        idle_connections: stats.idle_connections,
+        active_connections: stats.active_connections,
+        failed_connections: stats.failed_connections,
+        circuit_breaker_state: stats.circuit_breaker_state.clone(),
+        storm_active: stats.storm_active,
+        current_rps: stats.current_rps,
+        total_acquired: stats.total_acquired,
+        total_released: stats.total_released,
+        total_rejected: stats.total_rejected,
+        total_circuit_opens: stats.total_circuit_opens,
+    }
+}
+
+fn pool_acquire_error_state(error: &PoolAcquireError) -> &'static str {
+    match error {
+        PoolAcquireError::PoolExhausted { .. } => "pool_exhausted",
+        PoolAcquireError::CircuitOpen { .. } => "circuit_open",
+        PoolAcquireError::StormRejection { .. } => "storm_rejected",
+        PoolAcquireError::AcquireTimeout { .. } => "acquire_timeout",
+    }
+}
+
+fn parse_attestation_type(value: &str) -> Option<AttestationType> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "build_verification" => Some(AttestationType::BuildVerification),
+        "security_scan" => Some(AttestationType::SecurityScan),
+        "checksum_verification" => Some(AttestationType::ChecksumVerification),
+        "signature_verification" => Some(AttestationType::SignatureVerification),
+        "review_approval" => Some(AttestationType::ReviewApproval),
+        _ => None,
+    }
+}
+
+fn acquire_sql_data_plane_connection(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &RuntimeAccessPrincipal,
+    route_scope: &str,
+) -> Result<String, (StatusCode, Json<AuthErrorResponse>)> {
+    let now_ms = now_unix_ms_u64();
+    let acquire_result = state
+        .driver_pool
+        .lock()
+        .expect("driver pool lock")
+        .acquire(now_ms);
+    match acquire_result {
+        Ok(connection_id) => Ok(connection_id),
+        Err(error) => {
+            append_runtime_audit_event(
+                state,
+                AuditEventKind::Sql,
+                principal,
+                "sql_data_plane_pool_acquire",
+                "rejected",
+                json!({
+                    "route_scope": route_scope,
+                    "reason": error.to_string(),
+                }),
+            );
+            let locale = locale_from_headers(headers);
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AuthErrorResponse {
+                    status: "unavailable",
+                    reason: "driver_pool_unavailable".to_string(),
+                    locale: locale.as_str().to_string(),
+                    localized_message: "Service temporarily unavailable".to_string(),
+                }),
+            ))
+        }
+    }
+}
+
+fn release_sql_data_plane_connection(state: &AppState, connection_id: &str) {
+    let now_ms = now_unix_ms_u64();
+    let _ = state
+        .driver_pool
+        .lock()
+        .expect("driver pool lock")
+        .release(connection_id, now_ms);
 }
 
 fn compute_retry_backoff_ms(attempt: u32, base_backoff_ms: u64, max_backoff_ms: u64) -> u64 {
@@ -5629,6 +6592,9 @@ mod tests {
             ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
             ingest_event_bus: Arc::new(Mutex::new(ManagedEventBusTransport::in_memory())),
             ingest_outbox_cursors: Arc::new(Mutex::new(ManagedReplayCursorStore::in_memory())),
+            distributed_cache: Arc::new(Mutex::new(DistributedCacheManager::with_default_policy())),
+            driver_pool: Arc::new(Mutex::new(ConnectionPoolManager::with_default_policy())),
+            plugin_lifecycle: Arc::new(Mutex::new(PluginLifecycleManager::new(256))),
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
@@ -5923,6 +6889,83 @@ mod tests {
 
         assert_eq!(response.0, StatusCode::OK);
         assert_eq!(response.1.status, "committed");
+    }
+
+    #[test]
+    fn h07_sql_data_plane_pool_acquire_release_on_sql_handlers() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let _ = runtime
+            .block_on(sql_route(
+                State(state.clone()),
+                headers.clone(),
+                Json(SqlRouteRequest {
+                    sql_batch: "SELECT 1".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        let _ = runtime
+            .block_on(sql_transaction(
+                State(state.clone()),
+                headers.clone(),
+                Json(SqlTransactionRequest {
+                    statements: vec!["BEGIN".to_string(), "COMMIT".to_string()],
+                }),
+            ))
+            .expect("sql transaction response");
+
+        let _ = runtime
+            .block_on(sql_execute(
+                State(state.clone()),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "SELECT udf_rust('hello');".to_string(),
+                    max_rows: Some(10),
+                }),
+            ))
+            .expect("sql execute response");
+
+        let stats = state
+            .driver_pool
+            .lock()
+            .expect("driver pool lock")
+            .pool_stats(now_unix_ms_u64());
+        assert!(stats.total_acquired >= 3);
+        assert!(stats.total_released >= 3);
+        assert_eq!(stats.total_rejected, 0);
+    }
+
+    #[test]
+    fn h07_sql_data_plane_pool_rejects_when_pool_exhausted() {
+        let state = state_with_key(None);
+        {
+            let mut pool = state.driver_pool.lock().expect("driver pool lock");
+            for _ in 0..50 {
+                let _ = pool.acquire(1_000).expect("pre-acquire should succeed");
+            }
+        }
+
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let result = runtime.block_on(sql_execute(
+            State(state),
+            headers,
+            Json(SqlExecuteRequest {
+                sql_batch: "SELECT 1".to_string(),
+                max_rows: Some(10),
+            }),
+        ));
+
+        match result {
+            Ok(_) => panic!("expected pool exhaustion rejection"),
+            Err(error) => {
+                assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
+                assert_eq!(error.1.reason, "driver_pool_unavailable");
+            }
+        }
     }
 
     #[test]
@@ -7226,6 +8269,241 @@ mod tests {
             if total > 0 { (d + sc + wt + c) as f64 / total as f64 } else { 0.0 }
         };
         assert!((actual_ratio - expected_ratio).abs() < 0.001);
+    }
+
+    #[test]
+    fn h06_cache_runtime_endpoints_and_metrics() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let set_response = runtime
+            .block_on(sre_cache_set(
+                State(state.clone()),
+                headers.clone(),
+                Json(CacheSetRequest {
+                    partition_id: "tenant-acme".to_string(),
+                    key: "customer:42".to_string(),
+                    value: json!({"tier":"gold"}),
+                    ttl_ms: Some(60_000),
+                }),
+            ))
+            .expect("cache set should succeed");
+        assert_eq!(set_response.status, "ok");
+
+        let get_response = runtime
+            .block_on(sre_cache_get(
+                State(state.clone()),
+                headers.clone(),
+                Query(CacheGetQuery {
+                    partition_id: "tenant-acme".to_string(),
+                    key: "customer:42".to_string(),
+                }),
+            ))
+            .expect("cache get should succeed");
+        assert_eq!(get_response.status, "ok");
+        assert!(get_response.hit);
+        assert_eq!(get_response.value, Some(json!({"tier":"gold"})));
+
+        let metrics = runtime
+            .block_on(sre_cache_metrics(
+                State(state.clone()),
+                headers.clone(),
+            ))
+            .expect("cache metrics should succeed");
+        assert_eq!(metrics.status, "ok");
+        assert!(metrics.partition_count >= 1);
+        assert!(metrics.total_entries >= 1);
+
+        let invalidate = runtime
+            .block_on(sre_cache_invalidate(
+                State(state.clone()),
+                headers.clone(),
+                Json(CacheInvalidateRequest {
+                    partition_id: "tenant-acme".to_string(),
+                    key: "customer:42".to_string(),
+                }),
+            ))
+            .expect("cache invalidate should succeed");
+        assert_eq!(invalidate.status, "ok");
+        assert!(invalidate.removed);
+
+        let rebalance = runtime
+            .block_on(sre_cache_rebalance(State(state), headers))
+            .expect("cache rebalance should succeed");
+        assert_eq!(rebalance.status, "ok");
+        assert!(rebalance.rebalanced_partitions >= 1);
+    }
+
+    #[test]
+    fn h07_driver_pool_runtime_hooks() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let acquire = runtime
+            .block_on(sre_driver_pool_acquire(
+                State(state.clone()),
+                headers.clone(),
+                Json(PoolAcquireRequest { now_ms: Some(1_000) }),
+            ))
+            .expect("pool acquire should succeed");
+        assert_eq!(acquire.status, "ok");
+        assert_eq!(acquire.acquire_state, "acquired");
+        let connection_id = acquire
+            .connection_id
+            .as_ref()
+            .cloned()
+            .expect("connection id");
+
+        let failure = runtime
+            .block_on(sre_driver_pool_failure(
+                State(state.clone()),
+                headers.clone(),
+                Json(PoolFailureRequest {
+                    connection_id: connection_id.clone(),
+                    error: Some("simulated-burst-failure".to_string()),
+                    now_ms: Some(1_100),
+                }),
+            ))
+            .expect("pool failure hook should succeed");
+        assert_eq!(failure.status, "ok");
+        assert!(failure.marked_failed);
+
+        let release = runtime
+            .block_on(sre_driver_pool_release(
+                State(state.clone()),
+                headers.clone(),
+                Json(PoolReleaseRequest {
+                    connection_id,
+                    now_ms: Some(1_200),
+                }),
+            ))
+            .expect("pool release should succeed");
+        assert_eq!(release.status, "ok");
+
+        let recover = runtime
+            .block_on(sre_driver_pool_recover(
+                State(state.clone()),
+                headers.clone(),
+                Json(PoolRecoverRequest {
+                    now_ms: Some(35_000),
+                    prune_unhealthy: Some(true),
+                }),
+            ))
+            .expect("pool recover should succeed");
+        assert_eq!(recover.status, "ok");
+
+        let stats = runtime
+            .block_on(sre_driver_pool_stats(State(state), headers))
+            .expect("pool stats should succeed");
+        assert!(stats.total_connections >= 1);
+    }
+
+    #[test]
+    fn h08_signed_provenance_enforcement_endpoint_path() {
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "security-bot");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let rejected = runtime
+            .block_on(security_plugins_provenance_register(
+                State(state.clone()),
+                headers.clone(),
+                Json(SignedProvenanceRegistrationRequest {
+                    plugin_id: "connector.kafka".to_string(),
+                    plugin_version: "1.0.0".to_string(),
+                    checksum_sha256: "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd".to_string(),
+                    display_name: None,
+                    owner: Some("team-ingest".to_string()),
+                    license: Some("Apache-2.0".to_string()),
+                    capabilities: Some(vec!["ingest.read".to_string()]),
+                    schema_version: Some("v1".to_string()),
+                    signature_algorithm: "ed25519".to_string(),
+                    signature_key_id: "ws7-signer-1".to_string(),
+                    signature_base64: "dGVzdC1zaWduYXR1cmUtcGF5bG9hZA==".to_string(),
+                    revoked_key_ids: Some(Vec::new()),
+                    attestations: vec![
+                        SignedProvenanceAttestationRequest {
+                            attester_id: "ci-1".to_string(),
+                            attested_at_ms: Some(1_700_000_000_100),
+                            attestation_type: "checksum_verification".to_string(),
+                            payload_digest_sha256: "digest-1".to_string(),
+                            signature_base64: "sig-1".to_string(),
+                            passed: true,
+                        },
+                    ],
+                    sbom_entries: Some(vec![SignedProvenanceSbomEntryRequest {
+                        component_name: "serde".to_string(),
+                        component_version: "1.0".to_string(),
+                        license: "Apache-2.0".to_string(),
+                        checksum_sha256: "sum-1".to_string(),
+                        source_url: None,
+                    }]),
+                }),
+            ))
+            .expect("endpoint should return rejection payload");
+        assert_eq!(rejected.status, "error");
+        assert_eq!(rejected.registration_state, "rejected");
+        assert!(!rejected.chain_complete);
+
+        let accepted = runtime
+            .block_on(security_plugins_provenance_register(
+                State(state),
+                headers,
+                Json(SignedProvenanceRegistrationRequest {
+                    plugin_id: "connector.kafka".to_string(),
+                    plugin_version: "1.0.1".to_string(),
+                    checksum_sha256: "bbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddee".to_string(),
+                    display_name: Some("Kafka Connector".to_string()),
+                    owner: Some("team-ingest".to_string()),
+                    license: Some("Apache-2.0".to_string()),
+                    capabilities: Some(vec!["ingest.read".to_string()]),
+                    schema_version: Some("v1".to_string()),
+                    signature_algorithm: "ed25519".to_string(),
+                    signature_key_id: "ws7-signer-1".to_string(),
+                    signature_base64: "dGVzdC1zaWduYXR1cmUtcGF5bG9hZA==".to_string(),
+                    revoked_key_ids: Some(Vec::new()),
+                    attestations: vec![
+                        SignedProvenanceAttestationRequest {
+                            attester_id: "ci-1".to_string(),
+                            attested_at_ms: Some(1_700_000_000_100),
+                            attestation_type: "checksum_verification".to_string(),
+                            payload_digest_sha256: "digest-1".to_string(),
+                            signature_base64: "sig-1".to_string(),
+                            passed: true,
+                        },
+                        SignedProvenanceAttestationRequest {
+                            attester_id: "ci-2".to_string(),
+                            attested_at_ms: Some(1_700_000_000_101),
+                            attestation_type: "signature_verification".to_string(),
+                            payload_digest_sha256: "digest-2".to_string(),
+                            signature_base64: "sig-2".to_string(),
+                            passed: true,
+                        },
+                        SignedProvenanceAttestationRequest {
+                            attester_id: "review-1".to_string(),
+                            attested_at_ms: Some(1_700_000_000_102),
+                            attestation_type: "review_approval".to_string(),
+                            payload_digest_sha256: "digest-3".to_string(),
+                            signature_base64: "sig-3".to_string(),
+                            passed: true,
+                        },
+                    ],
+                    sbom_entries: Some(vec![SignedProvenanceSbomEntryRequest {
+                        component_name: "serde".to_string(),
+                        component_version: "1.0".to_string(),
+                        license: "Apache-2.0".to_string(),
+                        checksum_sha256: "sum-1".to_string(),
+                        source_url: None,
+                    }]),
+                }),
+            ))
+            .expect("endpoint should accept complete provenance");
+        assert_eq!(accepted.status, "ok");
+        assert_eq!(accepted.registration_state, "registered");
+        assert!(accepted.chain_complete);
+        assert!(accepted.audit_records_total >= 1);
     }
 
     #[test]

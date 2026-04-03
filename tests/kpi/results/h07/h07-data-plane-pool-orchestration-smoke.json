@@ -1,0 +1,19 @@
+﻿{
+    "id":  "h07-data-plane-pool-orchestration-smoke",
+    "timestamp":  "2026-04-03T20:57:51Z",
+    "status":  "passed",
+    "checks":  [
+                   {
+                       "name":  "h07_sql_data_plane_pool_acquire_release",
+                       "status":  "passed"
+                   },
+                   {
+                       "name":  "h07_sql_data_plane_pool_exhaustion_rejection",
+                       "status":  "passed"
+                   }
+               ],
+    "total_checks":  2,
+    "passed_checks":  2,
+    "failed_checks":  0,
+    "coverage":  "sql_route_sql_transaction_sql_execute_data_plane_pool_orchestration"
+}

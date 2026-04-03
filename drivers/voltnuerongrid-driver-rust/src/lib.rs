@@ -263,6 +263,448 @@ impl VoltNueronGridDriver {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolConnectionState {
+    Idle,
+    Active,
+    HealthChecking,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PooledConnection {
+    pub connection_id: String,
+    pub state: PoolConnectionState,
+    pub created_at_ms: u64,
+    pub last_used_ms: u64,
+    pub use_count: u64,
+    pub last_error: Option<String>,
+}
+
+impl PooledConnection {
+    pub fn new(id: String, now_ms: u64) -> Self {
+        Self {
+            connection_id: id,
+            state: PoolConnectionState::Idle,
+            created_at_ms: now_ms,
+            last_used_ms: now_ms,
+            use_count: 0,
+            last_error: None,
+        }
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.state == PoolConnectionState::Idle
+    }
+
+    pub fn is_healthy(&self, now_ms: u64, idle_timeout_ms: u64) -> bool {
+        self.state != PoolConnectionState::Failed
+            && now_ms.saturating_sub(self.last_used_ms) < idle_timeout_ms
+    }
+
+    pub fn mark_active(&mut self, now_ms: u64) {
+        self.state = PoolConnectionState::Active;
+        self.last_used_ms = now_ms;
+        self.use_count = self.use_count.saturating_add(1);
+    }
+
+    pub fn mark_idle(&mut self, now_ms: u64) {
+        self.state = PoolConnectionState::Idle;
+        self.last_used_ms = now_ms;
+    }
+
+    pub fn mark_failed(&mut self, error: String) {
+        self.state = PoolConnectionState::Failed;
+        self.last_error = Some(error);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolCircuitBreakerState {
+    Closed,
+    Open { opened_at_ms: u64, failure_count: u32 },
+    HalfOpen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolBackpressurePolicy {
+    pub max_pool_size: usize,
+    pub min_pool_size: usize,
+    pub acquire_timeout_ms: u64,
+    pub idle_timeout_ms: u64,
+    pub max_queue_depth: usize,
+    pub circuit_breaker_threshold: u32,
+    pub circuit_breaker_reset_ms: u64,
+    pub storm_detection_window_ms: u64,
+    pub storm_detection_rps_threshold: u64,
+}
+
+impl Default for PoolBackpressurePolicy {
+    fn default() -> Self {
+        Self {
+            max_pool_size: 50,
+            min_pool_size: 5,
+            acquire_timeout_ms: 5000,
+            idle_timeout_ms: 60000,
+            max_queue_depth: 200,
+            circuit_breaker_threshold: 10,
+            circuit_breaker_reset_ms: 30000,
+            storm_detection_window_ms: 1000,
+            storm_detection_rps_threshold: 500,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StormDetector {
+    pub policy: PoolBackpressurePolicy,
+    request_timestamps_ms: Vec<u64>,
+    pub storm_active: bool,
+    pub storm_started_at_ms: Option<u64>,
+    pub total_requests: u64,
+    pub rejected_requests: u64,
+    pub storm_events: u64,
+}
+
+impl StormDetector {
+    pub fn new(policy: PoolBackpressurePolicy) -> Self {
+        Self {
+            policy,
+            request_timestamps_ms: Vec::new(),
+            storm_active: false,
+            storm_started_at_ms: None,
+            total_requests: 0,
+            rejected_requests: 0,
+            storm_events: 0,
+        }
+    }
+
+    pub fn record_request(&mut self, now_ms: u64) -> StormCheckResult {
+        self.total_requests = self.total_requests.saturating_add(1);
+        self.request_timestamps_ms.push(now_ms);
+
+        let window_ms = self.policy.storm_detection_window_ms.max(1);
+        self.request_timestamps_ms
+            .retain(|ts| now_ms.saturating_sub(*ts) <= window_ms);
+
+        let window_seconds = (window_ms / 1000).max(1);
+        let current_rps = (self.request_timestamps_ms.len() as u64) / window_seconds;
+        let threshold = self.policy.storm_detection_rps_threshold;
+
+        if current_rps >= threshold && !self.storm_active {
+            self.storm_active = true;
+            self.storm_events = self.storm_events.saturating_add(1);
+            self.storm_started_at_ms = Some(now_ms);
+        } else if current_rps < (threshold / 2) && self.storm_active {
+            self.storm_active = false;
+            self.storm_started_at_ms = None;
+        }
+
+        StormCheckResult {
+            storm_active: self.storm_active,
+            current_rps,
+            threshold_rps: threshold,
+        }
+    }
+
+    pub fn current_rps(&self, now_ms: u64) -> u64 {
+        let window_ms = self.policy.storm_detection_window_ms.max(1);
+        let window_seconds = (window_ms / 1000).max(1);
+        let requests_in_window = self
+            .request_timestamps_ms
+            .iter()
+            .filter(|ts| now_ms.saturating_sub(**ts) <= window_ms)
+            .count() as u64;
+        requests_in_window / window_seconds
+    }
+
+    pub fn storm_stats(&self) -> StormStats {
+        StormStats {
+            storm_active: self.storm_active,
+            storm_events: self.storm_events,
+            total_requests: self.total_requests,
+            rejected_requests: self.rejected_requests,
+            current_rps: self.current_rps(*self.request_timestamps_ms.last().unwrap_or(&0u64)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StormCheckResult {
+    pub storm_active: bool,
+    pub current_rps: u64,
+    pub threshold_rps: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StormStats {
+    pub storm_active: bool,
+    pub storm_events: u64,
+    pub total_requests: u64,
+    pub rejected_requests: u64,
+    pub current_rps: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectionPoolManager {
+    connections: Vec<PooledConnection>,
+    policy: PoolBackpressurePolicy,
+    circuit_breaker: PoolCircuitBreakerState,
+    storm_detector: StormDetector,
+    circuit_failure_count: u32,
+    pub connection_counter: u64,
+    pub total_acquired: u64,
+    pub total_released: u64,
+    pub total_rejected: u64,
+    pub total_circuit_opens: u64,
+}
+
+impl ConnectionPoolManager {
+    pub fn new(policy: PoolBackpressurePolicy) -> Self {
+        let mut connections = Vec::with_capacity(policy.max_pool_size);
+        for i in 0..policy.min_pool_size {
+            connections.push(PooledConnection::new(format!("conn-{}", i + 1), 0u64));
+        }
+        Self {
+            connection_counter: policy.min_pool_size as u64,
+            connections,
+            circuit_breaker: PoolCircuitBreakerState::Closed,
+            storm_detector: StormDetector::new(policy.clone()),
+            policy,
+            circuit_failure_count: 0,
+            total_acquired: 0,
+            total_released: 0,
+            total_rejected: 0,
+            total_circuit_opens: 0,
+        }
+    }
+
+    pub fn with_default_policy() -> Self {
+        Self::new(PoolBackpressurePolicy::default())
+    }
+
+    pub fn acquire(&mut self, now_ms: u64) -> Result<String, PoolAcquireError> {
+        let storm = self.storm_detector.record_request(now_ms);
+        let active_count = self
+            .connections
+            .iter()
+            .filter(|c| c.state == PoolConnectionState::Active)
+            .count();
+
+        let queue_pressure_limit = self.policy.max_queue_depth.min(self.policy.max_pool_size);
+        if storm.storm_active && active_count >= queue_pressure_limit {
+            self.total_rejected = self.total_rejected.saturating_add(1);
+            self.storm_detector.rejected_requests =
+                self.storm_detector.rejected_requests.saturating_add(1);
+            return Err(PoolAcquireError::StormRejection {
+                current_rps: storm.current_rps,
+                threshold: storm.threshold_rps,
+            });
+        }
+
+        if let PoolCircuitBreakerState::Open {
+            opened_at_ms,
+            failure_count,
+        } = self.circuit_breaker
+        {
+            let elapsed = now_ms.saturating_sub(opened_at_ms);
+            if elapsed < self.policy.circuit_breaker_reset_ms {
+                self.total_rejected = self.total_rejected.saturating_add(1);
+                return Err(PoolAcquireError::CircuitOpen {
+                    failure_count,
+                    reset_in_ms: self.policy.circuit_breaker_reset_ms.saturating_sub(elapsed),
+                });
+            }
+            self.circuit_breaker = PoolCircuitBreakerState::HalfOpen;
+            self.circuit_failure_count = 0;
+        }
+
+        if let Some(connection) = self
+            .connections
+            .iter_mut()
+            .find(|c| c.is_idle() && c.is_healthy(now_ms, self.policy.idle_timeout_ms))
+        {
+            connection.mark_active(now_ms);
+            self.total_acquired = self.total_acquired.saturating_add(1);
+            if self.circuit_breaker == PoolCircuitBreakerState::HalfOpen {
+                self.circuit_breaker = PoolCircuitBreakerState::Closed;
+                self.circuit_failure_count = 0;
+            }
+            return Ok(connection.connection_id.clone());
+        }
+
+        if self.connections.len() < self.policy.max_pool_size {
+            self.connection_counter = self.connection_counter.saturating_add(1);
+            let conn_id = format!("conn-{}", self.connection_counter);
+            let mut connection = PooledConnection::new(conn_id.clone(), now_ms);
+            connection.mark_active(now_ms);
+            self.connections.push(connection);
+            self.total_acquired = self.total_acquired.saturating_add(1);
+            if self.circuit_breaker == PoolCircuitBreakerState::HalfOpen {
+                self.circuit_breaker = PoolCircuitBreakerState::Closed;
+                self.circuit_failure_count = 0;
+            }
+            return Ok(conn_id);
+        }
+
+        self.total_rejected = self.total_rejected.saturating_add(1);
+        Err(PoolAcquireError::PoolExhausted {
+            active_count,
+            max: self.policy.max_pool_size,
+        })
+    }
+
+    pub fn release(&mut self, connection_id: &str, now_ms: u64) -> bool {
+        if let Some(connection) = self
+            .connections
+            .iter_mut()
+            .find(|c| c.connection_id == connection_id)
+        {
+            connection.mark_idle(now_ms);
+            self.total_released = self.total_released.saturating_add(1);
+            return true;
+        }
+        false
+    }
+
+    pub fn mark_failed(&mut self, connection_id: &str, error: String, now_ms: u64) {
+        if let Some(connection) = self
+            .connections
+            .iter_mut()
+            .find(|c| c.connection_id == connection_id)
+        {
+            connection.mark_failed(error);
+            self.record_circuit_failure(now_ms);
+        }
+    }
+
+    pub fn record_circuit_failure(&mut self, now_ms: u64) {
+        self.circuit_failure_count = self.circuit_failure_count.saturating_add(1);
+        if self.circuit_failure_count >= self.policy.circuit_breaker_threshold {
+            self.circuit_breaker = PoolCircuitBreakerState::Open {
+                opened_at_ms: now_ms,
+                failure_count: self.circuit_failure_count,
+            };
+            self.total_circuit_opens = self.total_circuit_opens.saturating_add(1);
+        }
+    }
+
+    pub fn check_circuit_recovery(&mut self, now_ms: u64) -> bool {
+        if let PoolCircuitBreakerState::Open {
+            opened_at_ms,
+            failure_count: _,
+        } = self.circuit_breaker
+        {
+            if now_ms.saturating_sub(opened_at_ms) >= self.policy.circuit_breaker_reset_ms {
+                self.circuit_breaker = PoolCircuitBreakerState::HalfOpen;
+                self.circuit_failure_count = 0;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn prune_unhealthy(&mut self, now_ms: u64) -> usize {
+        let original_len = self.connections.len();
+        self.connections
+            .retain(|c| c.is_healthy(now_ms, self.policy.idle_timeout_ms));
+        original_len.saturating_sub(self.connections.len())
+    }
+
+    pub fn pool_stats(&self, now_ms: u64) -> PoolStats {
+        let total_connections = self.connections.len();
+        let idle_connections = self
+            .connections
+            .iter()
+            .filter(|c| c.state == PoolConnectionState::Idle)
+            .count();
+        let active_connections = self
+            .connections
+            .iter()
+            .filter(|c| c.state == PoolConnectionState::Active)
+            .count();
+        let failed_connections = self
+            .connections
+            .iter()
+            .filter(|c| c.state == PoolConnectionState::Failed)
+            .count();
+
+        PoolStats {
+            total_connections,
+            idle_connections,
+            active_connections,
+            failed_connections,
+            circuit_breaker_state: self.circuit_breaker_state_str().to_string(),
+            storm_active: self.storm_detector.storm_active,
+            current_rps: self.storm_detector.current_rps(now_ms),
+            total_acquired: self.total_acquired,
+            total_released: self.total_released,
+            total_rejected: self.total_rejected,
+            total_circuit_opens: self.total_circuit_opens,
+        }
+    }
+
+    pub fn circuit_breaker_state_str(&self) -> &'static str {
+        match self.circuit_breaker {
+            PoolCircuitBreakerState::Closed => "closed",
+            PoolCircuitBreakerState::Open { .. } => "open",
+            PoolCircuitBreakerState::HalfOpen => "half_open",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolAcquireError {
+    PoolExhausted { active_count: usize, max: usize },
+    CircuitOpen { failure_count: u32, reset_in_ms: u64 },
+    StormRejection { current_rps: u64, threshold: u64 },
+    AcquireTimeout { waited_ms: u64 },
+}
+
+impl std::fmt::Display for PoolAcquireError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PoolAcquireError::PoolExhausted { active_count, max } => {
+                write!(f, "pool exhausted: active={} max={}", active_count, max)
+            }
+            PoolAcquireError::CircuitOpen {
+                failure_count,
+                reset_in_ms,
+            } => write!(
+                f,
+                "circuit open: failures={} reset_in_ms={}",
+                failure_count, reset_in_ms
+            ),
+            PoolAcquireError::StormRejection {
+                current_rps,
+                threshold,
+            } => write!(
+                f,
+                "storm rejection: current_rps={} threshold={}",
+                current_rps, threshold
+            ),
+            PoolAcquireError::AcquireTimeout { waited_ms } => {
+                write!(f, "acquire timeout: waited_ms={}", waited_ms)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolStats {
+    pub total_connections: usize,
+    pub idle_connections: usize,
+    pub active_connections: usize,
+    pub failed_connections: usize,
+    pub circuit_breaker_state: String,
+    pub storm_active: bool,
+    pub current_rps: u64,
+    pub total_acquired: u64,
+    pub total_released: u64,
+    pub total_rejected: u64,
+    pub total_circuit_opens: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +843,116 @@ request_timeout_ms: 2500
 "#;
         let contract = DriverRoutingConfigContract::from_yaml_str(yaml).expect("valid");
         assert_eq!(contract.pool_min_connections, 2);
+    }
+
+    #[test]
+    fn test_pool_acquire_and_release() {
+        let policy = PoolBackpressurePolicy {
+            min_pool_size: 1,
+            max_pool_size: 2,
+            ..PoolBackpressurePolicy::default()
+        };
+        let mut pool = ConnectionPoolManager::new(policy);
+        let conn_id = pool.acquire(0u64).expect("acquire should succeed");
+        assert!(pool.release(&conn_id, 100u64));
+        let stats = pool.pool_stats(100u64);
+        assert_eq!(stats.active_connections, 0);
+    }
+
+    #[test]
+    fn test_pool_exhaustion_error() {
+        let policy = PoolBackpressurePolicy {
+            min_pool_size: 0,
+            max_pool_size: 1,
+            ..PoolBackpressurePolicy::default()
+        };
+        let mut pool = ConnectionPoolManager::new(policy);
+        let _ = pool.acquire(0u64).expect("first acquire should pass");
+        let err = pool.acquire(1u64).expect_err("pool should be exhausted");
+        assert!(matches!(err, PoolAcquireError::PoolExhausted { .. }));
+    }
+
+    #[test]
+    fn test_pool_circuit_breaker_opens() {
+        let policy = PoolBackpressurePolicy {
+            min_pool_size: 1,
+            max_pool_size: 1,
+            circuit_breaker_threshold: 2,
+            ..PoolBackpressurePolicy::default()
+        };
+        let mut pool = ConnectionPoolManager::new(policy);
+        let conn_id = pool.acquire(0u64).expect("acquire should succeed");
+        pool.mark_failed(&conn_id, "io failure".to_string(), 10u64);
+        pool.mark_failed(&conn_id, "io failure".to_string(), 20u64);
+
+        let err = pool.acquire(21u64).expect_err("circuit should be open");
+        assert!(matches!(err, PoolAcquireError::CircuitOpen { .. }));
+    }
+
+    #[test]
+    fn test_pool_circuit_breaker_half_open() {
+        let policy = PoolBackpressurePolicy {
+            min_pool_size: 1,
+            max_pool_size: 1,
+            circuit_breaker_threshold: 1,
+            circuit_breaker_reset_ms: 1000,
+            ..PoolBackpressurePolicy::default()
+        };
+        let mut pool = ConnectionPoolManager::new(policy);
+        let conn_id = pool.acquire(0u64).expect("acquire should succeed");
+        pool.mark_failed(&conn_id, "downstream failure".to_string(), 5u64);
+
+        assert!(pool.check_circuit_recovery(1005u64));
+        assert_eq!(pool.circuit_breaker_state_str(), "half_open");
+    }
+
+    #[test]
+    fn test_storm_detector_activates() {
+        let policy = PoolBackpressurePolicy {
+            storm_detection_window_ms: 1000,
+            storm_detection_rps_threshold: 10,
+            ..PoolBackpressurePolicy::default()
+        };
+        let mut detector = StormDetector::new(policy);
+
+        for i in 0u64..10u64 {
+            let _ = detector.record_request(i);
+        }
+
+        assert!(detector.storm_active);
+    }
+
+    #[test]
+    fn test_storm_detector_deactivates() {
+        let policy = PoolBackpressurePolicy {
+            storm_detection_window_ms: 1000,
+            storm_detection_rps_threshold: 10,
+            ..PoolBackpressurePolicy::default()
+        };
+        let mut detector = StormDetector::new(policy);
+
+        for i in 0u64..10u64 {
+            let _ = detector.record_request(i);
+        }
+        assert!(detector.storm_active);
+
+        let _ = detector.record_request(3000u64);
+        assert!(!detector.storm_active);
+    }
+
+    #[test]
+    fn test_pool_prune_unhealthy() {
+        let policy = PoolBackpressurePolicy {
+            min_pool_size: 1,
+            max_pool_size: 1,
+            ..PoolBackpressurePolicy::default()
+        };
+        let mut pool = ConnectionPoolManager::new(policy);
+        let conn_id = pool.acquire(0u64).expect("acquire should succeed");
+        pool.mark_failed(&conn_id, "failed health check".to_string(), 10u64);
+
+        let pruned = pool.prune_unhealthy(11u64);
+        assert_eq!(pruned, 1);
+        assert_eq!(pool.pool_stats(11u64).total_connections, 0);
     }
 }

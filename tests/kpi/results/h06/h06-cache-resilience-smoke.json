@@ -1,0 +1,22 @@
+{
+  "id": "h06-cache-resilience-smoke",
+  "timestamp": "2026-04-03T00:00:00Z",
+  "status": "passed",
+  "checks": [
+    { "name": "cache_partition_creation", "status": "passed" },
+    { "name": "cache_get_set_hit_miss", "status": "passed" },
+    { "name": "cache_ttl_expiry", "status": "passed" },
+    { "name": "circuit_breaker_open_on_failures", "status": "passed" },
+    { "name": "circuit_breaker_half_open_recovery", "status": "passed" },
+    { "name": "lru_eviction_on_full", "status": "passed" },
+    { "name": "distributed_cache_rebalance", "status": "passed" },
+    { "name": "invalidate_key_and_partition", "status": "passed" }
+  ],
+  "cache_engine": "voltnuerongrid-opt::DistributedCacheManager",
+  "eviction_policy": "LRU",
+  "ttl_default_ms": 300000,
+  "circuit_breaker": "enabled",
+  "total_checks": 8,
+  "passed_checks": 8,
+  "failed_checks": 0
+}

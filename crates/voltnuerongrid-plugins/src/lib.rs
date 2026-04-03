@@ -348,6 +348,420 @@ pub fn compute_package_checksum_sha256(package: &ConnectorPluginPackage) -> Stri
     checksum
 }
 
+// --- Supply-Chain Provenance ------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvenanceAttestation {
+    pub attester_id: String,
+    pub attested_at_ms: u64,
+    pub attestation_type: AttestationType,
+    pub payload_digest_sha256: String,
+    pub signature_base64: String,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttestationType {
+    BuildVerification,
+    SecurityScan,
+    ChecksumVerification,
+    SignatureVerification,
+    ReviewApproval,
+}
+
+impl AttestationType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::BuildVerification => "build_verification",
+            Self::SecurityScan => "security_scan",
+            Self::ChecksumVerification => "checksum_verification",
+            Self::SignatureVerification => "signature_verification",
+            Self::ReviewApproval => "review_approval",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvenanceChain {
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub attestations: Vec<ProvenanceAttestation>,
+    pub chain_complete: bool,
+    pub chain_digest: String,
+}
+
+impl ProvenanceChain {
+    pub fn new(plugin_id: String, plugin_version: String) -> Self {
+        let mut chain = Self {
+            plugin_id,
+            plugin_version,
+            attestations: Vec::new(),
+            chain_complete: false,
+            chain_digest: String::new(),
+        };
+        chain.chain_digest = chain.compute_chain_digest();
+        chain
+    }
+
+    pub fn add_attestation(&mut self, att: ProvenanceAttestation) {
+        self.attestations.push(att);
+        self.chain_complete = self.is_complete();
+        self.chain_digest = self.compute_chain_digest();
+    }
+
+    pub fn is_complete(&self) -> bool {
+        let has_checksum = self.attestations.iter().any(|att| {
+            att.passed && matches!(att.attestation_type, AttestationType::ChecksumVerification)
+        });
+        let has_signature = self.attestations.iter().any(|att| {
+            att.passed && matches!(att.attestation_type, AttestationType::SignatureVerification)
+        });
+        let has_build_or_review = self.attestations.iter().any(|att| {
+            att.passed
+                && matches!(
+                    att.attestation_type,
+                    AttestationType::BuildVerification | AttestationType::ReviewApproval
+                )
+        });
+
+        has_checksum && has_signature && has_build_or_review
+    }
+
+    pub fn compute_chain_digest(&self) -> String {
+        let mut digests = self
+            .attestations
+            .iter()
+            .map(|a| a.payload_digest_sha256.clone())
+            .collect::<Vec<_>>();
+        digests.sort();
+        let joined = digests.join(":");
+        let bytes = Sha256::digest(joined.as_bytes());
+        hex_encode(&bytes)
+    }
+
+    pub fn summary(&self) -> ProvenanceChainSummary {
+        let passed_count = self.attestations.iter().filter(|att| att.passed).count();
+        ProvenanceChainSummary {
+            plugin_id: self.plugin_id.clone(),
+            plugin_version: self.plugin_version.clone(),
+            attestation_count: self.attestations.len(),
+            passed_count,
+            chain_complete: self.chain_complete,
+            chain_digest: self.chain_digest.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvenanceChainSummary {
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub attestation_count: usize,
+    pub passed_count: usize,
+    pub chain_complete: bool,
+    pub chain_digest: String,
+}
+
+// --- SBOM (Software Bill of Materials) inspection ---------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SbomEntry {
+    pub component_name: String,
+    pub component_version: String,
+    pub license: String,
+    pub checksum_sha256: String,
+    pub source_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SbomInspectionResult {
+    pub plugin_id: String,
+    pub entries: Vec<SbomEntry>,
+    pub license_violations: Vec<String>,
+    pub missing_checksums: Vec<String>,
+    pub approved: bool,
+}
+
+impl SbomInspectionResult {
+    pub fn inspect(plugin_id: String, entries: Vec<SbomEntry>, disallowed_licenses: &[&str]) -> Self {
+        let mut license_violations = Vec::new();
+        let mut missing_checksums = Vec::new();
+
+        for entry in &entries {
+            if disallowed_licenses
+                .iter()
+                .any(|license| *license == entry.license)
+            {
+                license_violations.push(entry.component_name.clone());
+            }
+            if entry.checksum_sha256.trim().is_empty() {
+                missing_checksums.push(entry.component_name.clone());
+            }
+        }
+
+        let approved = license_violations.is_empty() && missing_checksums.is_empty();
+        Self {
+            plugin_id,
+            entries,
+            license_violations,
+            missing_checksums,
+            approved,
+        }
+    }
+}
+
+// --- Supply-Chain Audit Record ----------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupplyChainEventKind {
+    PluginRegistered,
+    PluginDeregistered,
+    SignatureVerificationFailed,
+    ChecksumMismatch,
+    ProvenanceChainIncomplete,
+    SbomViolation,
+    KeyRevocationDetected,
+}
+
+impl SupplyChainEventKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PluginRegistered => "plugin_registered",
+            Self::PluginDeregistered => "plugin_deregistered",
+            Self::SignatureVerificationFailed => "signature_verification_failed",
+            Self::ChecksumMismatch => "checksum_mismatch",
+            Self::ProvenanceChainIncomplete => "provenance_chain_incomplete",
+            Self::SbomViolation => "sbom_violation",
+            Self::KeyRevocationDetected => "key_revocation_detected",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSupplyChainAuditRecord {
+    pub record_id: String,
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub event_kind: SupplyChainEventKind,
+    pub timestamp_ms: u64,
+    pub details: String,
+    pub operator_id: Option<String>,
+    pub provenance_digest: Option<String>,
+}
+
+// --- Plugin Registry ---------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredPlugin {
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub manifest: SignedPluginManifest,
+    pub metadata: ConnectorPackageMetadata,
+    pub registered_at_ms: u64,
+    pub registration_operator_id: Option<String>,
+    pub provenance_chain: Option<ProvenanceChain>,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginRegistryError {
+    AlreadyRegistered { plugin_id: String, version: String },
+    NotFound { plugin_id: String },
+    ValidationFailed(String),
+    RegistryFull { max_plugins: usize },
+}
+
+impl std::fmt::Display for PluginRegistryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyRegistered { plugin_id, version } => {
+                write!(f, "plugin {}@{} is already registered", plugin_id, version)
+            }
+            Self::NotFound { plugin_id } => write!(f, "plugin {} not found", plugin_id),
+            Self::ValidationFailed(reason) => write!(f, "plugin validation failed: {}", reason),
+            Self::RegistryFull { max_plugins } => {
+                write!(f, "plugin registry is full (max={})", max_plugins)
+            }
+        }
+    }
+}
+
+impl std::error::Error for PluginRegistryError {}
+
+pub struct PluginLifecycleManager {
+    plugins: HashMap<String, RegisteredPlugin>,
+    audit_trail: Vec<PluginSupplyChainAuditRecord>,
+    max_plugins: usize,
+    audit_counter: u64,
+    boundary: PluginRegistrationBoundary,
+}
+
+impl PluginLifecycleManager {
+    pub fn new(max_plugins: usize) -> Self {
+        Self {
+            plugins: HashMap::new(),
+            audit_trail: Vec::new(),
+            max_plugins,
+            audit_counter: 0,
+            boundary: PluginRegistrationBoundary::default(),
+        }
+    }
+
+    pub fn register(
+        &mut self,
+        manifest: SignedPluginManifest,
+        metadata: ConnectorPackageMetadata,
+        operator_id: Option<String>,
+        provenance: Option<ProvenanceChain>,
+        now_ms: u64,
+    ) -> Result<String, PluginRegistryError> {
+        let _boundary = &self.boundary;
+        if self.plugins.len() >= self.max_plugins {
+            return Err(PluginRegistryError::RegistryFull {
+                max_plugins: self.max_plugins,
+            });
+        }
+
+        if metadata.plugin_id.trim().is_empty() {
+            return Err(PluginRegistryError::ValidationFailed(
+                "metadata.plugin_id must not be empty".to_string(),
+            ));
+        }
+        if metadata.version.trim().is_empty() {
+            return Err(PluginRegistryError::ValidationFailed(
+                "metadata.version must not be empty".to_string(),
+            ));
+        }
+        if manifest.schema_version.trim().is_empty() {
+            return Err(PluginRegistryError::ValidationFailed(
+                "manifest.schema_version must not be empty".to_string(),
+            ));
+        }
+        if manifest.declared_checksum_sha256 != metadata.checksum_sha256 {
+            return Err(PluginRegistryError::ValidationFailed(
+                "manifest.declared_checksum_sha256 must match metadata.checksum_sha256"
+                    .to_string(),
+            ));
+        }
+
+        let key = format!("{}@{}", metadata.plugin_id, metadata.version);
+        if self.plugins.contains_key(&key) {
+            return Err(PluginRegistryError::AlreadyRegistered {
+                plugin_id: metadata.plugin_id,
+                version: metadata.version,
+            });
+        }
+
+        let plugin_id = metadata.plugin_id.clone();
+        let plugin_version = metadata.version.clone();
+        let provenance_digest = provenance.as_ref().map(|p| p.chain_digest.clone());
+        let registered = RegisteredPlugin {
+            plugin_id: plugin_id.clone(),
+            plugin_version: plugin_version.clone(),
+            manifest,
+            metadata,
+            registered_at_ms: now_ms,
+            registration_operator_id: operator_id.clone(),
+            provenance_chain: provenance,
+            active: true,
+        };
+
+        self.plugins.insert(key, registered);
+        self.emit_audit(
+            plugin_id.clone(),
+            plugin_version,
+            SupplyChainEventKind::PluginRegistered,
+            "plugin registered".to_string(),
+            operator_id,
+            provenance_digest,
+            now_ms,
+        );
+
+        Ok(plugin_id)
+    }
+
+    pub fn deregister(
+        &mut self,
+        plugin_id: &str,
+        version: &str,
+        operator_id: Option<String>,
+        now_ms: u64,
+    ) -> Result<(), PluginRegistryError> {
+        let key = format!("{}@{}", plugin_id, version);
+        let plugin = self
+            .plugins
+            .get_mut(&key)
+            .ok_or_else(|| PluginRegistryError::NotFound {
+                plugin_id: plugin_id.to_string(),
+            })?;
+
+        plugin.active = false;
+        let provenance_digest = plugin.provenance_chain.as_ref().map(|p| p.chain_digest.clone());
+        self.emit_audit(
+            plugin_id.to_string(),
+            version.to_string(),
+            SupplyChainEventKind::PluginDeregistered,
+            "plugin deregistered".to_string(),
+            operator_id,
+            provenance_digest,
+            now_ms,
+        );
+
+        Ok(())
+    }
+
+    pub fn query_by_id(&self, plugin_id: &str) -> Vec<&RegisteredPlugin> {
+        self.plugins
+            .values()
+            .filter(|plugin| plugin.plugin_id == plugin_id)
+            .collect()
+    }
+
+    pub fn list_active(&self) -> Vec<&RegisteredPlugin> {
+        self.plugins.values().filter(|plugin| plugin.active).collect()
+    }
+
+    pub fn audit_trail(&self) -> &[PluginSupplyChainAuditRecord] {
+        &self.audit_trail
+    }
+
+    pub fn plugin_count(&self) -> usize {
+        self.plugins.len()
+    }
+
+    fn emit_audit(
+        &mut self,
+        plugin_id: String,
+        version: String,
+        kind: SupplyChainEventKind,
+        details: String,
+        operator_id: Option<String>,
+        provenance_digest: Option<String>,
+        now_ms: u64,
+    ) {
+        self.audit_counter += 1;
+        let record = PluginSupplyChainAuditRecord {
+            record_id: format!("sc-audit-{}", self.audit_counter),
+            plugin_id,
+            plugin_version: version,
+            event_kind: kind,
+            timestamp_ms: now_ms,
+            details,
+            operator_id,
+            provenance_digest,
+        };
+        self.audit_trail.push(record);
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,6 +815,45 @@ mod tests {
         package.metadata.checksum_sha256 = checksum.clone();
         package.manifest.declared_checksum_sha256 = checksum;
         package
+    }
+
+    fn make_test_manifest() -> SignedPluginManifest {
+        SignedPluginManifest {
+            schema_version: "1.0".into(),
+            declared_checksum_sha256:
+                "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd".into(),
+            generated_epoch_ms: 1_700_000_000_000,
+            signature: PluginManifestSignature {
+                algorithm: "hmac-sha256".into(),
+                key_id: "prod-key-001".into(),
+                signature_base64: "dGVzdHNpZ25hdHVyZXBhc3Nib3VuZGFyeXZlcmlmeWluZw==".into(),
+            },
+            revoked_key_ids: vec![],
+        }
+    }
+
+    fn make_test_metadata(id: &str, version: &str) -> ConnectorPackageMetadata {
+        ConnectorPackageMetadata {
+            plugin_id: id.into(),
+            version: version.into(),
+            display_name: format!("Test Plugin {}", id),
+            owner: "test-team".into(),
+            license: "Apache-2.0".into(),
+            checksum_sha256:
+                "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd".into(),
+            capabilities: vec!["ingest.read".into()],
+        }
+    }
+
+    fn make_attestation(kind: AttestationType, digest: &str, passed: bool) -> ProvenanceAttestation {
+        ProvenanceAttestation {
+            attester_id: "ci-pipeline-prod".into(),
+            attested_at_ms: 1_700_000_000_100,
+            attestation_type: kind,
+            payload_digest_sha256: digest.into(),
+            signature_base64: "sig".into(),
+            passed,
+        }
     }
 
     #[test]
@@ -548,5 +1001,164 @@ mod tests {
                 assert!(issues.iter().any(|i| i.contains("trust level")));
             }
         }
+    }
+
+    #[test]
+    fn test_provenance_chain_completeness() {
+        let mut chain = ProvenanceChain::new("plugin-a".into(), "1.0.0".into());
+        chain.add_attestation(make_attestation(
+            AttestationType::ChecksumVerification,
+            "aa",
+            true,
+        ));
+        chain.add_attestation(make_attestation(
+            AttestationType::SignatureVerification,
+            "bb",
+            true,
+        ));
+        chain.add_attestation(make_attestation(
+            AttestationType::BuildVerification,
+            "cc",
+            true,
+        ));
+        assert!(chain.is_complete());
+    }
+
+    #[test]
+    fn test_provenance_chain_incomplete() {
+        let mut chain = ProvenanceChain::new("plugin-a".into(), "1.0.0".into());
+        chain.add_attestation(make_attestation(
+            AttestationType::ChecksumVerification,
+            "aa",
+            true,
+        ));
+        assert!(!chain.is_complete());
+    }
+
+    #[test]
+    fn test_provenance_chain_digest_changes_on_add() {
+        let mut chain = ProvenanceChain::new("plugin-a".into(), "1.0.0".into());
+        let before = chain.chain_digest.clone();
+        chain.add_attestation(make_attestation(
+            AttestationType::ChecksumVerification,
+            "aa",
+            true,
+        ));
+        let after = chain.chain_digest.clone();
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn test_sbom_inspection_approves_clean() {
+        let entries = vec![SbomEntry {
+            component_name: "serde".into(),
+            component_version: "1.0.0".into(),
+            license: "MIT".into(),
+            checksum_sha256: "abc".into(),
+            source_url: None,
+        }];
+        let result = SbomInspectionResult::inspect("plugin-a".into(), entries, &["GPL"]);
+        assert!(result.approved);
+        assert!(result.license_violations.is_empty());
+        assert!(result.missing_checksums.is_empty());
+    }
+
+    #[test]
+    fn test_sbom_inspection_finds_violations() {
+        let entries = vec![SbomEntry {
+            component_name: "libx".into(),
+            component_version: "2.1.0".into(),
+            license: "GPL".into(),
+            checksum_sha256: "abc".into(),
+            source_url: None,
+        }];
+        let result = SbomInspectionResult::inspect("plugin-a".into(), entries, &["GPL"]);
+        assert!(!result.approved);
+        assert_eq!(result.license_violations, vec!["libx".to_string()]);
+    }
+
+    #[test]
+    fn test_plugin_lifecycle_register_deregister() {
+        let mut manager = PluginLifecycleManager::new(8);
+        let manifest = make_test_manifest();
+        let metadata = make_test_metadata("plugin-a", "1.0.0");
+
+        let plugin_id = manager
+            .register(
+                manifest,
+                metadata,
+                Some("operator-1".into()),
+                None,
+                1_700_000_000_200,
+            )
+            .expect("register should succeed");
+
+        assert_eq!(plugin_id, "plugin-a");
+        assert_eq!(manager.query_by_id("plugin-a").len(), 1);
+
+        manager
+            .deregister("plugin-a", "1.0.0", Some("operator-2".into()), 1_700_000_000_300)
+            .expect("deregister should succeed");
+
+        assert!(manager
+            .list_active()
+            .iter()
+            .all(|plugin| plugin.plugin_id != "plugin-a"));
+    }
+
+    #[test]
+    fn test_plugin_lifecycle_prevents_duplicate_registration() {
+        let mut manager = PluginLifecycleManager::new(8);
+        manager
+            .register(
+                make_test_manifest(),
+                make_test_metadata("plugin-a", "1.0.0"),
+                None,
+                None,
+                1_700_000_000_200,
+            )
+            .expect("first registration should succeed");
+
+        let err = manager
+            .register(
+                make_test_manifest(),
+                make_test_metadata("plugin-a", "1.0.0"),
+                None,
+                None,
+                1_700_000_000_201,
+            )
+            .expect_err("second registration should fail");
+
+        match err {
+            PluginRegistryError::AlreadyRegistered { plugin_id, version } => {
+                assert_eq!(plugin_id, "plugin-a");
+                assert_eq!(version, "1.0.0");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn test_plugin_lifecycle_audit_trail_grows() {
+        let mut manager = PluginLifecycleManager::new(8);
+        manager
+            .register(
+                make_test_manifest(),
+                make_test_metadata("plugin-b", "2.0.0"),
+                Some("operator-1".into()),
+                None,
+                1_700_000_000_500,
+            )
+            .expect("registration should succeed");
+        manager
+            .deregister("plugin-b", "2.0.0", Some("operator-1".into()), 1_700_000_000_600)
+            .expect("deregister should succeed");
+
+        assert_eq!(manager.audit_trail().len(), 2);
+        assert_eq!(manager.audit_trail()[0].event_kind.as_str(), "plugin_registered");
+        assert_eq!(
+            manager.audit_trail()[1].event_kind.as_str(),
+            "plugin_deregistered"
+        );
     }
 }

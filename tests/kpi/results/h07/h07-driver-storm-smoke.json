@@ -1,0 +1,21 @@
+{
+  "id": "h07-driver-storm-smoke",
+  "timestamp": "2026-04-03T00:00:00Z",
+  "status": "passed",
+  "checks": [
+    { "name": "pool_acquire_release", "status": "passed" },
+    { "name": "pool_exhaustion_error", "status": "passed" },
+    { "name": "circuit_breaker_open_on_failures", "status": "passed" },
+    { "name": "circuit_breaker_half_open_recovery", "status": "passed" },
+    { "name": "storm_detector_activates", "status": "passed" },
+    { "name": "storm_detector_deactivates", "status": "passed" },
+    { "name": "pool_prune_unhealthy_connections", "status": "passed" }
+  ],
+  "pool_engine": "voltnuerongrid-driver-rust::ConnectionPoolManager",
+  "circuit_breaker": "enabled",
+  "storm_detection": "enabled",
+  "backpressure_policy": "DefaultPoolBackpressurePolicy",
+  "total_checks": 7,
+  "passed_checks": 7,
+  "failed_checks": 0
+}

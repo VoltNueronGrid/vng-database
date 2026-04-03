@@ -1,0 +1,44 @@
+Runtime test: h07_driver_pool_runtime_hooks
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.78s
+     Running unittests src\main.rs (D:\by\target\debug\deps\voltnuerongridd-702463741a1979cf.exe)
+
+running 1 test
+test tests::h07_driver_pool_runtime_hooks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 94 filtered out; finished in 0.02s
+
+[PASS] H-07 runtime pool/storm hook test
+=== H-07 Driver Storm Smoke ===
+[PASSED] pool_acquire_release
+[PASSED] pool_exhaustion_error
+[PASSED] circuit_breaker_open_on_failures
+[PASSED] circuit_breaker_half_open_recovery
+[PASSED] storm_detector_activates
+[PASSED] storm_detector_deactivates
+[PASSED] pool_prune_unhealthy_connections
+[PASS] h07-driver-storm-smoke
+Runtime test: h07_sql_data_plane_pool_acquire_release_on_sql_handlers
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.86s
+     Running unittests src\main.rs (D:\by\target\debug\deps\voltnuerongridd-702463741a1979cf.exe)
+
+running 1 test
+test tests::h07_sql_data_plane_pool_acquire_release_on_sql_handlers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 94 filtered out; finished in 0.02s
+
+Runtime test: h07_sql_data_plane_pool_rejects_when_pool_exhausted
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.19s
+     Running unittests src\main.rs (D:\by\target\debug\deps\voltnuerongridd-702463741a1979cf.exe)
+
+running 1 test
+test tests::h07_sql_data_plane_pool_rejects_when_pool_exhausted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 94 filtered out; finished in 0.02s
+
+[PASS] h07-data-plane-pool-orchestration-smoke
+=== H-07 Gate ===
+[PASSED] h07_driver_storm_smoke_and_runtime_hooks
+[PASSED] h07_data_plane_pool_orchestration
+[PASSED] h07_gate_summary
+[PASSED] h07_release_readiness
+Passed: 4/4

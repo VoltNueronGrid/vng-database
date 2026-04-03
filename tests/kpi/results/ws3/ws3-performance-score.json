@@ -1,26 +1,26 @@
 {
-  "report": "ws3-performance-score",
-  "status": "passed",
-  "generated_at_utc": "2026-03-06T03:24:00.8814536Z",
-  "source_summary": "tests/kpi/results/ws3/ws3-gate-summary.json",
-  "score": 100,
-  "max_score": 100,
-  "threshold": 100,
-  "controls": [
-    {
-      "name": "query_routing_pack",
-      "weight": 40,
-      "passed": true
-    },
-    {
-      "name": "htap_target_contract_pack",
-      "weight": 40,
-      "passed": true
-    },
-    {
-      "name": "gate_summary_status",
-      "weight": 20,
-      "passed": true
-    }
-  ]
+    "report":  "ws3-performance-score",
+    "status":  "failed",
+    "generated_at_utc":  "2026-04-03T15:32:22.7104251Z",
+    "source_summary":  "tests/kpi/results/ws3/ws3-gate-summary.json",
+    "score":  40,
+    "max_score":  100,
+    "threshold":  100,
+    "controls":  [
+                     {
+                         "name":  "query_routing_pack",
+                         "weight":  40,
+                         "passed":  false
+                     },
+                     {
+                         "name":  "htap_target_contract_pack",
+                         "weight":  40,
+                         "passed":  true
+                     },
+                     {
+                         "name":  "gate_summary_status",
+                         "weight":  20,
+                         "passed":  false
+                     }
+                 ]
 }

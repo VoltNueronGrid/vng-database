@@ -690,6 +690,8 @@ dependencies = [
 name = "voltnuerongrid-opt"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "voltnuerongrid-core",
 ]
 
@@ -728,8 +730,11 @@ dependencies = [
  "voltnuerongrid-audit",
  "voltnuerongrid-auth",
  "voltnuerongrid-core",
+ "voltnuerongrid-driver-rust",
  "voltnuerongrid-exec",
  "voltnuerongrid-ingest",
+ "voltnuerongrid-opt",
+ "voltnuerongrid-plugins",
  "voltnuerongrid-sql",
  "voltnuerongrid-store",
 ]

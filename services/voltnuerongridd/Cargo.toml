@@ -18,3 +18,6 @@ voltnuerongrid-exec = { path = "../../crates/voltnuerongrid-exec" }
 voltnuerongrid-sql = { path = "../../crates/voltnuerongrid-sql" }
 voltnuerongrid-store = { path = "../../crates/voltnuerongrid-store" }
 voltnuerongrid-ingest = { path = "../../crates/voltnuerongrid-ingest" }
+voltnuerongrid-opt = { path = "../../crates/voltnuerongrid-opt" }
+voltnuerongrid-plugins = { path = "../../crates/voltnuerongrid-plugins" }
+voltnuerongrid-driver-rust = { path = "../../drivers/voltnuerongrid-driver-rust" }
