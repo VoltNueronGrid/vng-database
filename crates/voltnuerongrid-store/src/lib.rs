@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod constraints;
+pub mod ddl_catalog;
 pub mod htap_sync;
 pub mod index;
 pub mod wal_adapter;

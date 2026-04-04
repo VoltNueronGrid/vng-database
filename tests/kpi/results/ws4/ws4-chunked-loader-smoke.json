@@ -1,0 +1,91 @@
+{
+  "smoke": "ws4-chunked-loader",
+  "status": "passed",
+  "started_at_utc": "2026-04-04T07:32:24.6352122Z",
+  "finished_at_utc": "2026-04-04T07:32:24.6758436Z",
+  "duration_ms": 41,
+  "total_checks": 20,
+  "passed_checks": 20,
+  "checks": [
+    {
+      "check": "chunked_loader_struct_exists",
+      "status": "passed"
+    },
+    {
+      "check": "chunked_loader_push_chunk_method",
+      "status": "passed"
+    },
+    {
+      "check": "chunked_loader_finalize_method",
+      "status": "passed"
+    },
+    {
+      "check": "chunked_loader_tests_exist_in_service",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_outbox_replay_route_wired",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_outbox_status_route_wired",
+      "status": "passed"
+    },
+    {
+      "check": "managed_event_bus_transport_exported",
+      "status": "passed"
+    },
+    {
+      "check": "managed_replay_cursor_store_exported",
+      "status": "passed"
+    },
+    {
+      "check": "appstate_has_ingest_event_bus",
+      "status": "passed"
+    },
+    {
+      "check": "appstate_has_ingest_outbox_cursors",
+      "status": "passed"
+    },
+    {
+      "check": "ddl_catalog_schemas_route_wired",
+      "status": "passed"
+    },
+    {
+      "check": "ddl_catalog_schemas_handler_exists",
+      "status": "passed"
+    },
+    {
+      "check": "acid_transactions_active_route_wired",
+      "status": "passed"
+    },
+    {
+      "check": "acid_transactions_handler_exists",
+      "status": "passed"
+    },
+    {
+      "check": "acid_transaction_registry_struct_exists",
+      "status": "passed"
+    },
+    {
+      "check": "ddl_catalog_imported_from_store",
+      "status": "passed"
+    },
+    {
+      "check": "ws2_ddl_catalog_tests_exist",
+      "status": "passed"
+    },
+    {
+      "check": "ws23_acid_tx_tests_exist",
+      "status": "passed"
+    },
+    {
+      "check": "ws3_legacy_agg_real_data_test_exists",
+      "status": "passed"
+    },
+    {
+      "check": "legacy_agg_uses_real_ingest_data",
+      "status": "passed"
+    }
+  ]
+}

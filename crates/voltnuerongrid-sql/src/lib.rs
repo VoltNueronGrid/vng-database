@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 pub mod legacy_aggregations;
 
+pub use legacy_aggregations::eval_legacy_numeric_aggregation;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SqlStatementKind {
     Select,

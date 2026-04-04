@@ -47,3 +47,12 @@ Always use: `$result | ConvertTo-Json -Depth 10 | Set-Content -Path $OutputPath 
 ## Live Server Dependency
 Scripts using `$BaseUrl` require `voltnuerongridd` running on port 8080.
 In CI: start with `cargo run -p voltnuerongridd`, wait for `/health`, wrap in `trap cleanup EXIT`.
+
+## WS1A numeric smoke (no HTTP)
+- `run-ws1a-legacy-numeric-eval-smoke.ps1` → `tests/kpi/results/ws1a/ws1a-legacy-numeric-eval-smoke.json`; runs `cargo test -p voltnuerongrid-sql legacy_aggregations::numeric_tests`. Pack inside `run-ws1a-gate.ps1`.
+
+## Parquet / Excel ingest (base64 JSON)
+- `POST /api/v1/ingest/parquet` body: `connector_id`, `parquet_data_base64` (RFC 4648 Parquet bytes).
+- `POST /api/v1/ingest/excel` body: `connector_id`, `xlsx_data_base64` (`.xlsx` workbook bytes).
+- Bad base64 → `400` `invalid_base64_payload`; bad file → `400` `parquet_parse_failed` / `excel_parse_failed`.
+- See `.github/instructions/gate-scripts.instructions.md` for the full table and RBAC notes.

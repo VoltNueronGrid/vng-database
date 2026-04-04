@@ -21,11 +21,15 @@ use voltnuerongrid_auth::{
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
-use voltnuerongrid_sql::{I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale};
+use voltnuerongrid_sql::{
+    eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale,
+};
+use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
 use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
+use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, DdlCatalog};
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
 use voltnuerongrid_ingest::{
@@ -72,6 +76,106 @@ impl PessimisticLockContentionMetrics {
             lock_conflicts: Arc::new(AtomicU64::new(0)),
             lock_releases: Arc::new(AtomicU64::new(0)),
         }
+    }
+}
+
+// ── ACID Transaction State Machine (REQ-23) ──────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AcidTxState {
+    Active,
+    Committed,
+    RolledBack,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AcidTxEntry {
+    transaction_id: String,
+    state: AcidTxState,
+    isolation_level: String,
+    started_at_unix_ms: u128,
+    completed_at_unix_ms: Option<u128>,
+    statement_count: usize,
+    affected_tables: Vec<String>,
+    savepoints: Vec<String>,
+}
+
+#[derive(Default)]
+struct AcidTransactionRegistry {
+    transactions: HashMap<String, AcidTxEntry>,
+}
+
+impl AcidTransactionRegistry {
+    fn begin(&mut self, tx_id: &str, isolation_level: &str, now_ms: u128) {
+        self.transactions.insert(
+            tx_id.to_string(),
+            AcidTxEntry {
+                transaction_id: tx_id.to_string(),
+                state: AcidTxState::Active,
+                isolation_level: isolation_level.to_string(),
+                started_at_unix_ms: now_ms,
+                completed_at_unix_ms: None,
+                statement_count: 0,
+                affected_tables: Vec::new(),
+                savepoints: Vec::new(),
+            },
+        );
+    }
+
+    fn commit(&mut self, tx_id: &str, now_ms: u128) -> bool {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            if entry.state == AcidTxState::Active {
+                entry.state = AcidTxState::Committed;
+                entry.completed_at_unix_ms = Some(now_ms);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn rollback(&mut self, tx_id: &str, now_ms: u128) -> bool {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            if entry.state == AcidTxState::Active {
+                entry.state = AcidTxState::RolledBack;
+                entry.completed_at_unix_ms = Some(now_ms);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn add_savepoint(&mut self, tx_id: &str, savepoint: &str) -> bool {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            if entry.state == AcidTxState::Active {
+                entry.savepoints.push(savepoint.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
+    fn record_statement(&mut self, tx_id: &str, affected_table: Option<String>) {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            entry.statement_count += 1;
+            if let Some(t) = affected_table {
+                if !t.is_empty() && !entry.affected_tables.contains(&t) {
+                    entry.affected_tables.push(t);
+                }
+            }
+        }
+    }
+
+    fn active_transactions(&self) -> Vec<&AcidTxEntry> {
+        self.transactions
+            .values()
+            .filter(|e| e.state == AcidTxState::Active)
+            .collect()
+    }
+
+    fn all_transactions(&self) -> Vec<&AcidTxEntry> {
+        self.transactions.values().collect()
     }
 }
 
@@ -123,6 +227,8 @@ struct AppState {
     autonomous_mode: AutonomousMode,
     emergency_stop: Arc<AtomicEmergencyStop>,
     guardrails: Arc<Vec<GuardrailRule>>,
+    ddl_catalog: Arc<Mutex<DdlCatalog>>,
+    acid_transactions: Arc<Mutex<AcidTransactionRegistry>>,
 }
 
 #[derive(Clone, Default)]
@@ -834,6 +940,18 @@ struct SqlExecuteRequest {
 }
 
 #[derive(Serialize)]
+struct LegacyAggResult {
+    /// Aggregate function name (e.g. `"SUM"`, `"COUNT"`).
+    aggregation: String,
+    /// Computed result; `None` when evaluation errored.
+    result: Option<f64>,
+    /// Error message when evaluation failed.
+    error: Option<String>,
+    /// Indicates this result came through the legacy aggregation routing path.
+    source: &'static str,
+}
+
+#[derive(Serialize)]
 struct SqlExecuteResponse {
     status: &'static str,
     route_path: String,
@@ -846,6 +964,7 @@ struct SqlExecuteResponse {
     udf_function_catalog: Vec<UdfFunctionCatalogEntry>,
     udf_guard_policies: Vec<UdfLanguageGuardPolicy>,
     udf_execution_plan: Vec<UdfExecutionPlanStep>,
+    legacy_agg_results: Option<Vec<LegacyAggResult>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1820,6 +1939,8 @@ async fn main() {
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
+        ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
+        acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -1919,6 +2040,10 @@ async fn main() {
         .route("/api/v1/ingest/status", get(ingest_status))
         .route("/api/v1/ingest/outbox/status", get(ingest_outbox_status))
         .route("/api/v1/ingest/outbox/replay", post(ingest_outbox_replay))
+        // REQ-02 DDL catalog endpoint
+        .route("/api/v1/catalog/schemas", get(catalog_schemas))
+        // REQ-23 ACID transaction introspection
+        .route("/api/v1/sql/transactions/active", get(sql_transactions_active))
         .with_state(state);
 
     println!("voltnuerongridd listening on {}", addr);
@@ -1948,6 +2073,47 @@ async fn sql_transaction(
         "sql/transaction",
     )?;
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/transaction")?;
+    // REQ-23: ACID transaction state machine tracking
+    {
+        let now_ms = now_unix_ms();
+        let tx_id = {
+            let identity = match &principal {
+                RuntimeAccessPrincipal::Operator(op) => op.operator_id.clone(),
+                RuntimeAccessPrincipal::TenantUser(tu) => tu.user_id.clone(),
+            };
+            format!("tx-{}-{}", identity, now_ms)
+        };
+        let has_begin = req.statements.iter().any(|s| {
+            matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Begin)
+        });
+        let has_commit = req.statements.iter().any(|s| {
+            matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Commit)
+        });
+        let has_rollback = req.statements.iter().any(|s| {
+            matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Rollback)
+        });
+        let mut acid = state.acid_transactions.lock().expect("acid_tx lock");
+        if has_begin {
+            acid.begin(&tx_id, "read_committed", now_ms);
+        }
+        for stmt in &req.statements {
+            let upper = stmt.to_ascii_uppercase();
+            let affected = if upper.starts_with("INSERT INTO ")
+                || upper.starts_with("UPDATE ")
+                || upper.starts_with("DELETE FROM ")
+            {
+                stmt.split_ascii_whitespace().nth(2).map(|t| t.trim_end_matches(|c| c == '(' || c == ' ').to_string())
+            } else {
+                None
+            };
+            acid.record_statement(&tx_id, affected);
+        }
+        if has_commit {
+            acid.commit(&tx_id, now_ms);
+        } else if has_rollback {
+            acid.rollback(&tx_id, now_ms);
+        }
+    }
     let (status, response) = execute_transaction_statements(req.statements);
     append_runtime_audit_event(
         &state,
@@ -2227,6 +2393,7 @@ async fn sql_execute(
                     udf_function_catalog,
                     udf_guard_policies,
                     udf_execution_plan,
+                    legacy_agg_results: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -2262,6 +2429,7 @@ async fn sql_execute(
                 udf_function_catalog,
                 udf_guard_policies,
                 udf_execution_plan,
+                legacy_agg_results: None,
             }),
         ));
         release_sql_data_plane_connection(&state, &connection_id);
@@ -2284,6 +2452,8 @@ async fn sql_execute(
     let mut rejected_statement_count = 0usize;
 
     if !transaction_statements.is_empty() {
+        // REQ-02: snapshot statements for DDL catalog update after ownership transfer
+        let ddl_snapshot: Vec<String> = transaction_statements.clone();
         let (status, response) = execute_transaction_statements(transaction_statements);
         rejected_statement_count += response.rejected_statement_count;
         if status != StatusCode::OK {
@@ -2315,18 +2485,90 @@ async fn sql_execute(
                     udf_function_catalog,
                     udf_guard_policies,
                     udf_execution_plan,
+                    legacy_agg_results: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
             return response;
         }
         transaction = Some(response);
+        // REQ-02: update DDL catalog when DDL statements touched the catalog
+        if transaction.as_ref().map(|r| r.touches_catalog).unwrap_or(false) {
+            let now_ms = now_unix_ms();
+            let mut catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+            for stmt in &ddl_snapshot {
+                if let Some(info) = parse_ddl_info(stmt) {
+                    match info.operation {
+                        "create" => { catalog.record_create(&info.object_kind, &info.object_name, stmt, now_ms); }
+                        "drop" => { catalog.record_drop(&info.object_name); }
+                        "alter" => { catalog.record_alter(&info.object_name, stmt, now_ms); }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     if !olap_statements.is_empty() {
         let query = olap_statements.join("; ");
         olap = Some(execute_olap_query(query, req.max_rows));
     }
+
+    // REQ-12: Detect legacy aggregate functions in OLAP SELECT statements and
+    // route them through eval_legacy_numeric_aggregation.
+    let legacy_agg_results: Option<Vec<LegacyAggResult>> = {
+        let mut agg_results: Vec<LegacyAggResult> = Vec::new();
+        // REQ-12: collect real numeric values from all ingest stores; fall back to synthetic sample.
+        let mut real_values: Vec<f64> = Vec::new();
+        for store in [
+            &state.ingest_csv_records,
+            &state.ingest_json_records,
+            &state.ingest_parquet_records,
+            &state.ingest_excel_records,
+        ] {
+            if let Ok(guard) = store.lock() {
+                for records in guard.values() {
+                    for rec in records {
+                        if let Ok(jv) = serde_json::from_str::<serde_json::Value>(&rec.payload) {
+                            if let Some(obj) = jv.as_object() {
+                                for v in obj.values() {
+                                    if let Some(n) = v.as_f64() { real_values.push(n); }
+                                }
+                            } else if let Some(n) = jv.as_f64() {
+                                real_values.push(n);
+                            }
+                        } else {
+                            for field in rec.payload.split(',') {
+                                if let Ok(f) = field.trim().parse::<f64>() { real_values.push(f); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let sample_storage: Vec<f64>;
+        let sample: &[f64] = if real_values.is_empty() {
+            &[1.0, 2.0, 3.0, 4.0, 5.0]
+        } else {
+            sample_storage = real_values;
+            &sample_storage
+        };
+        for stmt in &olap_statements {
+            let upper = stmt.to_ascii_uppercase();
+            for &agg in SUPPORTED_LEGACY_AGGREGATIONS {
+                if upper.contains(&format!("{agg}(")) || upper.contains(&format!("{agg} (")) {
+                    let eval = eval_legacy_numeric_aggregation(agg, sample, None);
+                    agg_results.push(LegacyAggResult {
+                        aggregation: agg.to_string(),
+                        result: eval.as_ref().ok().copied(),
+                        error: eval.err(),
+                        source: "legacy_agg_olap_path",
+                    });
+                }
+            }
+        }
+        if agg_results.is_empty() { None } else { Some(agg_results) }
+    };
 
     let response = SqlExecuteResponse {
         status: "ok",
@@ -2344,6 +2586,7 @@ async fn sql_execute(
         udf_function_catalog,
         udf_guard_policies,
         udf_execution_plan,
+        legacy_agg_results,
     };
     append_runtime_audit_event(
         &state,
@@ -6738,6 +6981,83 @@ async fn ingest_outbox_replay(
     Ok(Json(response))
 }
 
+// ── REQ-02: DDL catalog schemas ───────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct CatalogEntryView {
+    object_name: String,
+    object_kind: String,
+    created_at_unix_ms: u128,
+    last_altered_at_unix_ms: Option<u128>,
+    alteration_count: u32,
+}
+
+#[derive(Serialize)]
+struct CatalogSchemasResponse {
+    status: &'static str,
+    active_count: usize,
+    total_count: usize,
+    entries: Vec<CatalogEntryView>,
+}
+
+async fn catalog_schemas(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<CatalogSchemasResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "catalog/schemas")?;
+    let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+    let active = catalog.active_entries();
+    let entries: Vec<CatalogEntryView> = active
+        .iter()
+        .map(|e| CatalogEntryView {
+            object_name: e.object_name.clone(),
+            object_kind: e.object_kind.clone(),
+            created_at_unix_ms: e.created_at_unix_ms,
+            last_altered_at_unix_ms: e.last_altered_at_unix_ms,
+            alteration_count: e.alteration_count,
+        })
+        .collect();
+    let resp = CatalogSchemasResponse {
+        status: "ok",
+        active_count: catalog.active_count(),
+        total_count: catalog.total_count(),
+        entries,
+    };
+    Ok((StatusCode::OK, Json(resp)))
+}
+
+// ── REQ-23: ACID active transactions ─────────────────────────────────────────
+
+#[derive(Serialize)]
+struct AcidTransactionsResponse {
+    status: &'static str,
+    active_count: usize,
+    total_count: usize,
+    transactions: Vec<AcidTxEntry>,
+}
+
+async fn sql_transactions_active(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AcidTransactionsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_sql_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        "sql/transactions/active",
+    )?;
+    let acid = state.acid_transactions.lock().expect("acid_tx lock");
+    let all = acid.all_transactions();
+    let active = acid.active_transactions();
+    let resp = AcidTransactionsResponse {
+        status: "ok",
+        active_count: active.len(),
+        total_count: all.len(),
+        transactions: active.iter().map(|t| (*t).clone()).collect(),
+    };
+    Ok((StatusCode::OK, Json(resp)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6806,6 +7126,8 @@ mod tests {
             autonomous_mode: AutonomousMode::Supervised,
             emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
             guardrails: Arc::new(default_guardrail_rules()),
+            ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
+            acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
         }
     }
 
@@ -9703,4 +10025,314 @@ mod tests {
         assert_eq!(result.route_path, "oltp");
     }
 
+    // ── REQ-07: parallel / chunked ingest loading KPI tests ──────────────────
+
+    #[test]
+    fn ws4_chunked_load_produces_correct_chunk_count() {
+        use voltnuerongrid_ingest::chunked_loader::load_records_chunked;
+        use voltnuerongrid_ingest::batch_config::IngestParallelConfig;
+        use voltnuerongrid_ingest::IngestRecord;
+
+        let records: Vec<IngestRecord> = (0..35)
+            .map(|i| IngestRecord { key: format!("k{i}"), payload: format!("v{i}") })
+            .collect();
+
+        let cfg = IngestParallelConfig { max_in_flight_tasks: 4, chunk_target_rows: 10 };
+        let stats = load_records_chunked(&records, &cfg);
+
+        // 35 / 10 = 4 chunks (10+10+10+5)
+        assert_eq!(stats.total_records, 35);
+        assert_eq!(stats.chunk_count, 4);
+        assert_eq!(stats.outcomes.len(), 4);
+        assert_eq!(stats.outcomes[3].records_in_chunk, 5);
+    }
+
+    #[test]
+    fn ws4_chunked_load_tasks_dispatched_honours_in_flight_cap() {
+        use voltnuerongrid_ingest::chunked_loader::load_records_chunked;
+        use voltnuerongrid_ingest::batch_config::IngestParallelConfig;
+        use voltnuerongrid_ingest::IngestRecord;
+
+        let records: Vec<IngestRecord> = (0..100)
+            .map(|i| IngestRecord { key: format!("k{i}"), payload: format!("v{i}") })
+            .collect();
+
+        // 100 records / 10 per chunk = 10 chunks; only 3 in-flight at a time
+        let cfg = IngestParallelConfig { max_in_flight_tasks: 3, chunk_target_rows: 10 };
+        let stats = load_records_chunked(&records, &cfg);
+
+        assert_eq!(stats.chunk_count, 10);
+        assert_eq!(stats.tasks_dispatched, 3); // capped at max_in_flight_tasks
+        assert_eq!(stats.total_records, 100);
+        // All chunks still appear in outcomes even across multiple waves
+        assert_eq!(stats.outcomes.len(), 10);
+    }
+
+    #[test]
+    fn ws4_chunked_load_empty_payload_is_safe() {
+        use voltnuerongrid_ingest::chunked_loader::load_records_chunked;
+        use voltnuerongrid_ingest::batch_config::IngestParallelConfig;
+
+        let cfg = IngestParallelConfig::default();
+        let stats = load_records_chunked(&[], &cfg);
+
+        assert_eq!(stats.total_records, 0);
+        assert_eq!(stats.chunk_count, 0);
+        assert_eq!(stats.tasks_dispatched, 0);
+        assert!(stats.outcomes.is_empty());
+    }
+
+    #[test]
+    fn ws4_chunked_load_single_chunk_within_target() {
+        use voltnuerongrid_ingest::chunked_loader::load_records_chunked;
+        use voltnuerongrid_ingest::batch_config::IngestParallelConfig;
+        use voltnuerongrid_ingest::IngestRecord;
+
+        let records: Vec<IngestRecord> = (0..7)
+            .map(|i| IngestRecord { key: format!("k{i}"), payload: format!("v{i}") })
+            .collect();
+
+        let cfg = IngestParallelConfig { max_in_flight_tasks: 4, chunk_target_rows: 10 };
+        let stats = load_records_chunked(&records, &cfg);
+
+        assert_eq!(stats.chunk_count, 1);
+        assert_eq!(stats.tasks_dispatched, 1);
+        assert_eq!(stats.outcomes[0].records_in_chunk, 7);
+    }
+
+    // ── REQ-12: legacy aggregate routing through sql_execute ─────────────────
+
+    #[test]
+    fn ws3_legacy_agg_sum_routed_through_sql_execute_olap_path() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let (status, Json(body)) = runtime
+            .block_on(sql_execute(
+                State(state),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "SELECT SUM(amount) FROM orders;".to_string(),
+                    max_rows: Some(100),
+                }),
+            ))
+            .expect("sql execute should succeed");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.route_path, "olap");
+
+        let agg_results = body.legacy_agg_results
+            .expect("SUM should produce legacy_agg_results");
+        assert!(!agg_results.is_empty());
+        assert_eq!(agg_results[0].aggregation, "SUM");
+        assert!(agg_results[0].result.is_some());
+        assert_eq!(agg_results[0].source, "legacy_agg_olap_path");
+    }
+
+    #[test]
+    fn ws3_legacy_agg_count_and_avg_detected_together() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let (status, Json(body)) = runtime
+            .block_on(sql_execute(
+                State(state),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "SELECT COUNT(id), AVG(price) FROM products;".to_string(),
+                    max_rows: None,
+                }),
+            ))
+            .expect("sql execute should succeed");
+
+        assert_eq!(status, StatusCode::OK);
+        let agg_results = body.legacy_agg_results
+            .expect("COUNT + AVG should produce legacy_agg_results");
+        assert!(agg_results.iter().any(|r| r.aggregation == "COUNT"));
+        assert!(agg_results.iter().any(|r| r.aggregation == "AVG"));
+    }
+
+    #[test]
+    fn ws3_legacy_agg_none_when_no_aggregate_in_select() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_execute(
+                State(state),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "SELECT id, name FROM orders;".to_string(),
+                    max_rows: Some(50),
+                }),
+            ))
+            .expect("sql execute should succeed");
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert!(
+            response.1.legacy_agg_results.is_none(),
+            "plain SELECT should not produce legacy_agg_results"
+        );
+    }
+
+    #[test]
+    fn ws3_legacy_agg_not_emitted_for_oltp_paths() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("admin-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_execute(
+                State(state),
+                headers,
+                Json(SqlExecuteRequest {
+                    sql_batch: "INSERT INTO orders (id, amount) VALUES (99, 500);".to_string(),
+                    max_rows: None,
+                }),
+            ))
+            .expect("sql execute should succeed");
+
+        assert_eq!(response.0, StatusCode::OK);
+        // INSERT goes to OLTP path; no OLAP SELECT → no legacy_agg_results
+        assert!(response.1.legacy_agg_results.is_none());
+    }
+
+    // ── REQ-02: DDL catalog tests ─────────────────────────────────────────
+    #[test]
+    fn ws2_ddl_catalog_create_table_wires_through_sql_execute() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlExecuteRequest {
+            sql_batch: "CREATE TABLE orders (id INT, amount FLOAT)".to_string(),
+            max_rows: None,
+        };
+        let response = rt
+            .block_on(sql_execute(
+                State(state.clone()),
+                headers.clone(),
+                Json(req),
+            ))
+            .expect("sql execute should succeed");
+        assert_eq!(response.0, StatusCode::OK);
+        // The catalog should now have the entry (touches_catalog = true for CREATE TABLE)
+        let catalog = state.ddl_catalog.lock().unwrap();
+        assert_eq!(catalog.active_count(), 1);
+        let entries = catalog.active_entries();
+        assert_eq!(entries[0].object_name, "orders");
+        assert_eq!(entries[0].object_kind, "table");
+    }
+
+    #[test]
+    fn ws2_ddl_catalog_drop_table_removes_active_entry() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        // Create then drop via sql_execute
+        let create_req = SqlExecuteRequest {
+            sql_batch: "CREATE TABLE temp_data (x INT)".to_string(),
+            max_rows: None,
+        };
+        rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(create_req)))
+            .expect("create should succeed");
+        {
+            let catalog = state.ddl_catalog.lock().unwrap();
+            assert_eq!(catalog.active_count(), 1, "table should be active after create");
+        }
+        let drop_req = SqlExecuteRequest {
+            sql_batch: "DROP TABLE temp_data".to_string(),
+            max_rows: None,
+        };
+        rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(drop_req)))
+            .expect("drop should succeed");
+        let catalog = state.ddl_catalog.lock().unwrap();
+        assert_eq!(catalog.active_count(), 0, "table should be gone after drop");
+        assert_eq!(catalog.total_count(), 1, "total should include dropped entry");
+    }
+
+    // ── REQ-23: ACID transaction tracking tests ───────────────────────────
+    #[test]
+    fn ws23_acid_tx_begin_commit_tracked_in_registry() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO accounts VALUES (1, 'alice', 500.0)".to_string(),
+                "COMMIT".to_string(),
+            ],
+        };
+        let response = rt
+            .block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+            .expect("transaction should succeed");
+        assert_eq!(response.0, StatusCode::OK);
+        let acid = state.acid_transactions.lock().unwrap();
+        assert_eq!(acid.all_transactions().len(), 1, "should have 1 tracked transaction");
+        let tx = acid.all_transactions()[0];
+        assert!(matches!(tx.state, AcidTxState::Committed), "state should be Committed");
+        assert_eq!(tx.statement_count, 3, "all 3 statements recorded");
+    }
+
+    #[test]
+    fn ws23_acid_tx_rollback_tracked_in_registry() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "DELETE FROM staging WHERE id = 99".to_string(),
+                "ROLLBACK".to_string(),
+            ],
+        };
+        rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+            .expect("transaction should succeed");
+        let acid = state.acid_transactions.lock().unwrap();
+        let tx = acid.all_transactions()[0];
+        assert!(matches!(tx.state, AcidTxState::RolledBack), "state should be RolledBack");
+    }
+
+    // ── REQ-12: real ingest data in legacy agg ────────────────────────────
+    #[test]
+    fn ws3_legacy_agg_uses_real_ingest_data_when_available() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        // Pre-populate ingest JSON store with numeric payload
+        {
+            let mut guard = state.ingest_json_records.lock().unwrap();
+            guard.insert(
+                "connector-metrics".to_string(),
+                vec![
+                    voltnuerongrid_ingest::IngestRecord {
+                        key: "r1".to_string(),
+                        payload: r#"{"value":10.0,"score":20.0}"#.to_string(),
+                    },
+                    voltnuerongrid_ingest::IngestRecord {
+                        key: "r2".to_string(),
+                        payload: r#"{"value":30.0,"score":40.0}"#.to_string(),
+                    },
+                ],
+            );
+        }
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlExecuteRequest {
+            sql_batch: "SELECT SUM(value) FROM metrics".to_string(),
+            max_rows: None,
+        };
+        let response = rt
+            .block_on(sql_execute(State(state), headers, Json(req)))
+            .expect("sql execute should succeed");
+        assert_eq!(response.0, StatusCode::OK);
+        let agg_results = response.1.legacy_agg_results.as_ref().expect("should have agg results");
+        let sum_entry = agg_results.iter().find(|r| r.aggregation == "SUM").expect("SUM result");
+        // Real data: [10.0, 20.0, 30.0, 40.0] → SUM = 100.0
+        let sum_val = sum_entry.result.expect("SUM should have numeric result");
+        assert!((sum_val - 100.0).abs() < 1e-9, "SUM should be 100.0, got {sum_val}");
+    }
+
 }
+

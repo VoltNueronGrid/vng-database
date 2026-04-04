@@ -2,6 +2,8 @@
 
 pub const CRATE_NAME: &str = "voltnuerongrid-ingest";
 
+pub mod batch_config;
+pub mod chunked_loader;
 pub mod csv;
 pub mod excel;
 pub mod json;

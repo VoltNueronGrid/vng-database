@@ -20,7 +20,8 @@ $status = "passed"
 
 $packs = @(
   @{ Name = "ws4-ingest-plugin"; Script = "tests/kpi/scripts/run-ws4-ingest-plugin-smoke.ps1"; Artifact = "tests/kpi/results/ws4/ingest-plugin-smoke.json" },
-  @{ Name = "ws4-ingest-parser"; Script = "tests/kpi/scripts/run-ws4-ingest-parser-smoke.ps1"; Artifact = "tests/kpi/results/ws4/ws4-ingest-parser-smoke.json" }
+  @{ Name = "ws4-ingest-parser"; Script = "tests/kpi/scripts/run-ws4-ingest-parser-smoke.ps1"; Artifact = "tests/kpi/results/ws4/ws4-ingest-parser-smoke.json" },
+  @{ Name = "ws4-chunked-loader"; Script = "tests/kpi/scripts/run-ws4-chunked-loader-smoke.ps1"; Artifact = "tests/kpi/results/ws4/ws4-chunked-loader-smoke.json" }
 )
 
 foreach ($pack in $packs) {

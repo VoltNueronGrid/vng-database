@@ -311,6 +311,7 @@ jobs:
             tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json
             tests/kpi/results/ws1a/ci-ws1a-gate-summary.json
             tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json
+            tests/kpi/results/ws1a/ws1a-legacy-numeric-eval-smoke.json
             tests/kpi/results/ws2/ci-ws2-gate-summary.json
             tests/kpi/results/ws2/ws2-index-constraint-smoke.json
             tests/kpi/results/ws2a/ci-ws2a-gate-summary.json
