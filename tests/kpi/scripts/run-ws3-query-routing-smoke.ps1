@@ -76,7 +76,7 @@ $exitCode = 1
 $testExitCode = -1
 $timedOut = $false
 $testsExecuted = 0
-$expectedTests = 10
+$expectedTests = 11
 
 try {
   $result = Invoke-CargoWithCapture -Arguments @("test", "-p", "voltnuerongridd", "ws3_", "--", "--test-threads=1", "--nocapture") -TimeoutSecondsValue $TimeoutSeconds
@@ -84,7 +84,7 @@ try {
   $timedOut = $result.TimedOut
   $outputLines = @($result.OutputLines)
 
-  $testsExecuted = @($outputLines | Where-Object { $_ -match "^test\s+ws3_" }).Count
+  $testsExecuted = @($outputLines | Where-Object { $_ -match "test\s+tests::ws3_" }).Count
 
   if ($testExitCode -ne 0) {
     $errorLines = @($outputLines | Where-Object { $_ -match "error\[E|error:|FAILED|panicked|test result: FAILED|could not compile" })

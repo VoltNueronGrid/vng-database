@@ -6,5 +6,14 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+arrow-array = { version = "53", default-features = false }
+arrow-schema = { version = "53", default-features = false }
+bytes = "1"
+calamine = "0.26"
+parquet = { version = "53", default-features = false, features = ["arrow", "snap"] }
+serde_json = "1"
 voltnuerongrid-core = { path = "../voltnuerongrid-core" }
 voltnuerongrid-store = { path = "../voltnuerongrid-store" }
+
+[dev-dependencies]
+rust_xlsxwriter = "0.79"

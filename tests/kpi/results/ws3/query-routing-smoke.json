@@ -1,14 +1,14 @@
 {
-    "smoke":  "ws3-query-routing",
-    "status":  "failed",
-    "command":  "cargo test -p voltnuerongridd ws3_ -- --test-threads=1 --nocapture",
-    "test_exit_code":  124,
-    "timed_out":  true,
-    "tests_executed":  0,
-    "tests_expected":  10,
-    "test_count_match":  false,
-    "started_at_utc":  "2026-04-03T16:44:47.1589216Z",
-    "finished_at_utc":  "2026-04-03T16:44:52.4899117Z",
-    "duration_ms":  5331,
-    "output_excerpt":  "timeout after 5s"
+  "smoke": "ws3-query-routing",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongridd ws3_ -- --test-threads=1 --nocapture",
+  "test_exit_code": 0,
+  "timed_out": false,
+  "tests_executed": 11,
+  "tests_expected": 11,
+  "test_count_match": true,
+  "started_at_utc": "2026-04-04T03:46:06.8056199Z",
+  "finished_at_utc": "2026-04-04T03:46:08.1888955Z",
+  "duration_ms": 1383,
+  "output_excerpt": "\nrunning 11 tests\ntest tests::ws3_routing_policy_distributes_concurrent_queries ... ok\ntest tests::ws3_routing_policy_enforces_max_rows_limit ... ok\ntest tests::ws3_sql_analyze_classifies_statement_kinds_for_routing ... ok\ntest tests::ws3_sql_execute_routes_and_executes_olap_query ... ok\ntest tests::ws3_sql_execute_routes_and_executes_oltp_transaction ... ok\ntest tests::ws3_sql_route_identifies_analytical_select_olap_path ... ok\ntest tests::ws3_sql_route_identifies_mixed_batch_hybrid_path ... ok\ntest tests::ws3_sql_route_identifies_point_select_oltp_path ... ok\ntest tests::ws3_sql_route_identifies_write_oltp_path ... ok\ntest tests::ws3_sql_route_rejects_unknown_or_invalid_statements ... ok\ntest tests::ws3_sql_route_routes_multiple_point_selects_as_oltp ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 95 filtered out; finished in 0.11s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s\n     Running unittests src\\main.rs (D:\\by\\target\\debug\\deps\\voltnuerongridd-702463741a1979cf.exe)"
 }

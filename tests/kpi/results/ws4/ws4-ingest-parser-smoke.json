@@ -1,11 +1,11 @@
 {
   "smoke": "ws4-ingest-parser-scaffold",
   "status": "passed",
-  "started_at_utc": "2026-03-07T14:42:05.8260149Z",
-  "finished_at_utc": "2026-03-07T14:42:05.8907690Z",
-  "duration_ms": 65,
-  "total_checks": 17,
-  "passed_checks": 17,
+  "started_at_utc": "2026-04-04T04:20:51.3902145Z",
+  "finished_at_utc": "2026-04-04T04:20:51.4224067Z",
+  "duration_ms": 32,
+  "total_checks": 24,
+  "passed_checks": 24,
   "checks": [
     {
       "check": "csv_connector_struct_exists",
@@ -73,6 +73,34 @@
     },
     {
       "check": "ws4_ingest_status_test_exists",
+      "status": "passed"
+    },
+    {
+      "check": "parquet_connector_and_load_exist",
+      "status": "passed"
+    },
+    {
+      "check": "excel_connector_and_load_exist",
+      "status": "passed"
+    },
+    {
+      "check": "lib_exports_parquet_excel_modules",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_format_parquet_excel_variants",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_parquet_excel_routes_exist",
+      "status": "passed"
+    },
+    {
+      "check": "ingest_status_includes_parquet_excel_counts",
+      "status": "passed"
+    },
+    {
+      "check": "ws4_parquet_excel_tests_exist",
       "status": "passed"
     }
   ]

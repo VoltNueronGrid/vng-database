@@ -1,23 +1,23 @@
 {
-    "smoke":  "ws3-htap-target-contract",
-    "status":  "passed",
-    "timestamp_utc":  "2026-04-03T16:36:46.6079515Z",
-    "targets_path":  "tests/kpi/config/targets.yaml",
-    "scenario_path":  "tests/kpi/scenarios/htap-mixed-throughput.yaml",
-    "targets":  {
-                    "read_qps_min":  25000,
-                    "write_tps_min":  10000
-                },
-    "scenario_assertions":  {
-                                "read_qps_target":  25000,
-                                "write_tps_target":  10000
-                            },
-    "checks":  {
-                   "targets_file_present":  true,
-                   "scenario_file_present":  true,
-                   "target_read_qps_positive":  true,
-                   "target_write_tps_positive":  true,
-                   "scenario_read_qps_matches_target":  true,
-                   "scenario_write_tps_matches_target":  true
-               }
+  "smoke": "ws3-htap-target-contract",
+  "status": "passed",
+  "timestamp_utc": "2026-04-04T03:46:08.3576134Z",
+  "targets_path": "tests/kpi/config/targets.yaml",
+  "scenario_path": "tests/kpi/scenarios/htap-mixed-throughput.yaml",
+  "targets": {
+    "read_qps_min": 25000.0,
+    "write_tps_min": 10000.0
+  },
+  "scenario_assertions": {
+    "read_qps_target": 25000.0,
+    "write_tps_target": 10000.0
+  },
+  "checks": {
+    "targets_file_present": true,
+    "scenario_file_present": true,
+    "target_read_qps_positive": true,
+    "target_write_tps_positive": true,
+    "scenario_read_qps_matches_target": true,
+    "scenario_write_tps_matches_target": true
+  }
 }

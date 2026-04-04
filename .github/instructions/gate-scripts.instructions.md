@@ -69,7 +69,9 @@ $summary | ConvertTo-Json -Depth 10 | Set-Content -Path $OutputPath -Encoding UT
 
 ## Windows Compatibility Notes
 
-- Use `Invoke-RestMethod` or `Invoke-WebRequest` for HTTP calls — **not** `[System.Net.Http.HttpClient]` directly (missing `GetResponseStream` method)
+- For JSON HTTP from smoke scripts, dot-source `tests/kpi/scripts/kpi-http-helpers.ps1` (`Invoke-HttpJson`). Simple probes may use `Invoke-RestMethod` / `Invoke-WebRequest` — **never** read error bodies via `GetResponseStream()` on PS7 `Invoke-WebRequest` failures, and avoid raw `HttpClient` in scripts
+- When a closure gate uses `Start-Process` to run another gate script, set `-WorkingDirectory` to the **repository root** so `cargo` and relative artifact paths resolve; prefer `pwsh` when available
+- On success, `run-ws1-closure-gate.ps1`, `run-ws22-closure-gate.ps1`, and `run-release-r1-sql-udf-gate.ps1` **mirror** the canonical `ci-*` filenames next to the default artifact when `-OutputPath` is not already the CI path (matches `.github/workflows/ci.yml` uploads)
 - For background server launch use `Start-Process` with `-PassThru`, not detached `cmd.exe /c ...`
 - On Windows, `$LASTEXITCODE` from `Invoke-Expression` or nested `pwsh -File` can be stale — always capture output text and parse JSON artifact status
 - Use `-Encoding UTF8` when writing JSON artifacts

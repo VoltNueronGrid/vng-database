@@ -1,32 +1,32 @@
 {
-    "gate":  "ws3-release-performance-readiness",
-    "status":  "failed",
-    "release_readiness":  "blocked",
-    "release_targets":  [
-                            "R3",
-                            "R4"
-                        ],
-    "scope":  [
-                  "WS3",
-                  "REQ-31"
-              ],
-    "generated_at_utc":  "2026-04-03T16:36:47.0050766Z",
-    "sources":  {
-                    "summary":  "tests/kpi/results/ws3/ws3-gate-summary.json",
-                    "score":  "tests/kpi/results/ws3/ws3-performance-score.json",
-                    "trend":  "tests/kpi/results/ws3/ws3-gate-trend-comparison.json",
-                    "badge":  "tests/kpi/results/ws3/ws3-performance-stability-badge.json"
-                },
-    "checks":  {
-                   "ws3_gate_passed":  false,
-                   "ws3_score_passed":  false,
-                   "ws3_trend_not_regressed":  true,
-                   "ws3_badge_passed":  true
-               },
-    "highlights":  {
-                       "pack_count":  2,
-                       "score":  40,
-                       "trend_state":  "stable",
-                       "badge_message":  "1/2 stable"
-                   }
+  "gate": "ws3-release-performance-readiness",
+  "status": "passed",
+  "release_readiness": "in_progress_with_evidence",
+  "release_targets": [
+    "R3",
+    "R4"
+  ],
+  "scope": [
+    "WS3",
+    "REQ-31"
+  ],
+  "generated_at_utc": "2026-04-04T03:46:08.6061587Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws3/ws3-gate-summary.json",
+    "score": "tests/kpi/results/ws3/ws3-performance-score.json",
+    "trend": "tests/kpi/results/ws3/ws3-gate-trend-comparison.json",
+    "badge": "tests/kpi/results/ws3/ws3-performance-stability-badge.json"
+  },
+  "checks": {
+    "ws3_gate_passed": true,
+    "ws3_score_passed": true,
+    "ws3_trend_not_regressed": true,
+    "ws3_badge_passed": true
+  },
+  "highlights": {
+    "pack_count": 2,
+    "score": 100,
+    "trend_state": "stable",
+    "badge_message": "2/2 stable"
+  }
 }

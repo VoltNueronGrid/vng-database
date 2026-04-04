@@ -147,6 +147,12 @@ mod tests {
     }
 
     #[test]
+    fn routes_point_select_to_oltp() {
+        let decision = HtapQueryRouter::route_statement("SELECT * FROM orders WHERE id = 1");
+        assert_eq!(decision.path, QueryPath::Oltp);
+    }
+
+    #[test]
     fn routes_mixed_batch_to_hybrid() {
         let batch =
             "BEGIN; UPDATE orders SET amount=200 WHERE id=1; SELECT region, SUM(amount) FROM orders GROUP BY region;";

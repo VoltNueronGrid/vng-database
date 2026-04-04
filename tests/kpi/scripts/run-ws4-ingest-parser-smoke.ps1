@@ -21,6 +21,8 @@ $status = "passed"
 # --- Contract checks against Rust source ---
 $csvSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/csv.rs" -Raw
 $jsonSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/json.rs" -Raw
+$pqSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/parquet.rs" -Raw
+$xlsxSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/excel.rs" -Raw
 $libSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/lib.rs" -Raw
 $mainSrc = Get-Content -Path "services/voltnuerongridd/src/main.rs" -Raw
 
@@ -91,6 +93,34 @@ $checks += [ordered]@{ check = "ws4_json_ingest_test_exists"; status = $c16 }
 # 17. ws4_ingest_status unit test exists
 $c17 = if ($mainSrc -match "ws4_ingest_status_counts_loaded_records") { "passed" } else { "failed" }
 $checks += [ordered]@{ check = "ws4_ingest_status_test_exists"; status = $c17 }
+
+# 18. ParquetConnector + load method
+$c18 = if ($pqSrc -match "pub struct ParquetConnector" -and $pqSrc -match "pub fn load_parquet_bytes") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "parquet_connector_and_load_exist"; status = $c18 }
+
+# 19. ExcelConnector + load method
+$c19 = if ($xlsxSrc -match "pub struct ExcelConnector" -and $xlsxSrc -match "pub fn load_xlsx_bytes") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "excel_connector_and_load_exist"; status = $c19 }
+
+# 20. lib exports parquet + excel modules
+$c20 = if ($libSrc -match "pub mod parquet" -and $libSrc -match "pub mod excel") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "lib_exports_parquet_excel_modules"; status = $c20 }
+
+# 21. IngestFormat Parquet + Excel variants
+$c21 = if ($libSrc -match "Parquet," -and $libSrc -match "Excel,") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ingest_format_parquet_excel_variants"; status = $c21 }
+
+# 22. HTTP routes for parquet + excel ingest
+$c22 = if ($mainSrc -match "/api/v1/ingest/parquet" -and $mainSrc -match "/api/v1/ingest/excel") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ingest_parquet_excel_routes_exist"; status = $c22 }
+
+# 23. Status payload includes parquet + excel connector counts
+$c23 = if ($mainSrc -match "parquet_connectors" -and $mainSrc -match "excel_connectors") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ingest_status_includes_parquet_excel_counts"; status = $c23 }
+
+# 24. WS4 parquet + excel appstate tests
+$c24 = if ($mainSrc -match "ws4_parquet_ingest_via_appstate" -and $mainSrc -match "ws4_excel_ingest_via_appstate") { "passed" } else { "failed" }
+$checks += [ordered]@{ check = "ws4_parquet_excel_tests_exist"; status = $c24 }
 
 foreach ($c in $checks) {
   if ($c.status -ne "passed") { $status = "failed" }

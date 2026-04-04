@@ -7,45 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Invoke-HttpJson {
-  param(
-    [string]$Method,
-    [string]$Uri,
-    [hashtable]$Headers,
-    [object]$Body = $null
-  )
-
-  $params = @{
-    Method = $Method
-    Uri = $Uri
-    TimeoutSec = 15
-    UseBasicParsing = $true
-  }
-  if ($Headers) {
-    $params.Headers = $Headers
-  }
-  if ($null -ne $Body) {
-    $params.Body = ($Body | ConvertTo-Json -Depth 8)
-    $params.ContentType = "application/json"
-  }
-
-  try {
-    $response = Invoke-WebRequest @params
-    $json = if ($response.Content) { $response.Content | ConvertFrom-Json } else { $null }
-    return [pscustomobject]@{ StatusCode = [int]$response.StatusCode; Json = $json; Content = $response.Content }
-  } catch {
-    $statusCode = 0
-    $content = ""
-    if ($_.Exception.Response) {
-      $statusCode = [int]$_.Exception.Response.StatusCode.value__
-      $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-      $content = $reader.ReadToEnd()
-      $reader.Close()
-    }
-    $json = if ($content) { try { $content | ConvertFrom-Json } catch { $null } } else { $null }
-    return [pscustomobject]@{ StatusCode = $statusCode; Json = $json; Content = $content }
-  }
-}
+$kpiScriptsRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $kpiScriptsRoot "kpi-http-helpers.ps1")
+$PSDefaultParameterValues['Invoke-HttpJson:TimeoutSec'] = 15
 
 $outputDir = Split-Path -Parent $OutputPath
 if ($outputDir -and !(Test-Path $outputDir)) {
@@ -85,5 +49,5 @@ $artifact = [ordered]@{
 }
 
 $artifact | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutputPath -Encoding utf8
-Write-Host "SQL analyze smoke result: $OutputPath"
+Write-Host "SQL analyze smoke result: $OutputPath ($status)"
 if ($status -ne "passed") { exit 1 }

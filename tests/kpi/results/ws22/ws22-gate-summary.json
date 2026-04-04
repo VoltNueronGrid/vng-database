@@ -1,9 +1,9 @@
 {
   "gate": "ws22",
   "status": "passed",
-  "started_at_utc": "2026-03-06T11:27:15.4189761Z",
-  "finished_at_utc": "2026-03-06T11:27:18.7184522Z",
-  "duration_ms": 3299,
+  "started_at_utc": "2026-04-04T03:49:37.6709263Z",
+  "finished_at_utc": "2026-04-04T03:49:41.3254695Z",
+  "duration_ms": 3655,
   "packs": [
     {
       "pack": "ws22-pessimistic-lock-smoke",

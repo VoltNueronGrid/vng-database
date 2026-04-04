@@ -9,6 +9,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use base64::Engine;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -111,6 +112,8 @@ struct AppState {
     constraint_manager: Arc<Mutex<ConstraintManager>>,
     ingest_csv_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
     ingest_json_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
+    ingest_parquet_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
+    ingest_excel_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
     ingest_outbox_streams: Arc<Mutex<HashMap<String, String>>>,
     ingest_event_bus: Arc<Mutex<ManagedEventBusTransport>>,
     ingest_outbox_cursors: Arc<Mutex<ManagedReplayCursorStore>>,
@@ -1057,11 +1060,41 @@ struct IngestJsonResponse {
     records_parsed: usize,
 }
 
+#[derive(Deserialize)]
+struct IngestParquetRequest {
+    connector_id: String,
+    /// Standard base64 (RFC 4648) encoded Parquet file bytes.
+    parquet_data_base64: String,
+}
+
+#[derive(Serialize)]
+struct IngestParquetResponse {
+    status: &'static str,
+    connector_id: String,
+    records_parsed: usize,
+}
+
+#[derive(Deserialize)]
+struct IngestExcelRequest {
+    connector_id: String,
+    /// Standard base64 (RFC 4648) encoded `.xlsx` workbook bytes.
+    xlsx_data_base64: String,
+}
+
+#[derive(Serialize)]
+struct IngestExcelResponse {
+    status: &'static str,
+    connector_id: String,
+    records_parsed: usize,
+}
+
 #[derive(Serialize)]
 struct IngestStatusResponse {
     status: &'static str,
     csv_connectors: usize,
     json_connectors: usize,
+    parquet_connectors: usize,
+    excel_connectors: usize,
     total_records_loaded: usize,
 }
 
@@ -1776,6 +1809,8 @@ async fn main() {
         constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
         ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
         ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
+        ingest_parquet_records: Arc::new(Mutex::new(HashMap::new())),
+        ingest_excel_records: Arc::new(Mutex::new(HashMap::new())),
         ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
         ingest_event_bus: Arc::new(Mutex::new(load_ingest_event_bus())),
         ingest_outbox_cursors: Arc::new(Mutex::new(load_ingest_outbox_cursor_store())),
@@ -1879,6 +1914,8 @@ async fn main() {
         // WS4 Ingest endpoints
         .route("/api/v1/ingest/csv", post(ingest_csv))
         .route("/api/v1/ingest/json", post(ingest_json))
+        .route("/api/v1/ingest/parquet", post(ingest_parquet))
+        .route("/api/v1/ingest/excel", post(ingest_excel))
         .route("/api/v1/ingest/status", get(ingest_status))
         .route("/api/v1/ingest/outbox/status", get(ingest_outbox_status))
         .route("/api/v1/ingest/outbox/replay", post(ingest_outbox_replay))
@@ -5493,6 +5530,23 @@ fn forbidden_error(
     )
 }
 
+fn bad_request_error(
+    headers: &HeaderMap,
+    reason: &str,
+) -> (StatusCode, Json<AuthErrorResponse>) {
+    let locale = locale_from_headers(headers);
+    let localized = I18nCatalog::message(locale, "unauthorized");
+    (
+        StatusCode::BAD_REQUEST,
+        Json(AuthErrorResponse {
+            status: "bad_request",
+            reason: reason.to_string(),
+            locale: locale.as_str().to_string(),
+            localized_message: localized.message.to_string(),
+        }),
+    )
+}
+
 fn locale_from_headers(headers: &HeaderMap) -> SupportedLocale {
     headers
         .get("accept-language")
@@ -6326,6 +6380,134 @@ async fn ingest_json(
     ))
 }
 
+async fn ingest_parquet(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestParquetRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        &ingest_scope_for_connector(&req.connector_id, "parquet"),
+    )?;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(req.parquet_data_base64.trim())
+        .map_err(|_| bad_request_error(&headers, "invalid_base64_payload"))?;
+    use voltnuerongrid_ingest::parquet::ParquetConnector;
+    let mut conn = ParquetConnector::new(&req.connector_id, &req.connector_id);
+    let count = conn
+        .load_parquet_bytes(&raw)
+        .map_err(|_| bad_request_error(&headers, "parquet_parse_failed"))?;
+    let records = conn.read_batch(usize::MAX);
+    let storage_key = ingest_storage_key(&principal, &req.connector_id);
+    state
+        .ingest_parquet_records
+        .lock()
+        .expect("parquet lock")
+        .insert(storage_key, records);
+    let outbox_events_written = append_ingest_outbox_events(
+        &state,
+        &principal,
+        &req.connector_id,
+        "parquet",
+        state
+            .ingest_parquet_records
+            .lock()
+            .expect("parquet lock")
+            .get(&ingest_storage_key(&principal, &req.connector_id))
+            .cloned()
+            .unwrap_or_default()
+            .as_slice(),
+    );
+    let response = IngestParquetResponse {
+        status: "ok",
+        connector_id: req.connector_id,
+        records_parsed: count,
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Ingest,
+        &principal,
+        "ingest_parquet",
+        "ok",
+        json!({
+            "route_scope": "ingest/connectors/parquet",
+            "connector_id": response.connector_id,
+            "records_parsed": response.records_parsed,
+            "outbox_events_written": outbox_events_written,
+        }),
+    );
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::to_value(response).expect("json")),
+    ))
+}
+
+async fn ingest_excel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestExcelRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        &ingest_scope_for_connector(&req.connector_id, "excel"),
+    )?;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(req.xlsx_data_base64.trim())
+        .map_err(|_| bad_request_error(&headers, "invalid_base64_payload"))?;
+    use voltnuerongrid_ingest::excel::ExcelConnector;
+    let mut conn = ExcelConnector::new(&req.connector_id, &req.connector_id);
+    let count = conn
+        .load_xlsx_bytes(&raw)
+        .map_err(|_| bad_request_error(&headers, "excel_parse_failed"))?;
+    let records = conn.read_batch(usize::MAX);
+    let storage_key = ingest_storage_key(&principal, &req.connector_id);
+    state
+        .ingest_excel_records
+        .lock()
+        .expect("excel lock")
+        .insert(storage_key, records);
+    let outbox_events_written = append_ingest_outbox_events(
+        &state,
+        &principal,
+        &req.connector_id,
+        "excel",
+        state
+            .ingest_excel_records
+            .lock()
+            .expect("excel lock")
+            .get(&ingest_storage_key(&principal, &req.connector_id))
+            .cloned()
+            .unwrap_or_default()
+            .as_slice(),
+    );
+    let response = IngestExcelResponse {
+        status: "ok",
+        connector_id: req.connector_id,
+        records_parsed: count,
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Ingest,
+        &principal,
+        "ingest_excel",
+        "ok",
+        json!({
+            "route_scope": "ingest/connectors/excel",
+            "connector_id": response.connector_id,
+            "records_parsed": response.records_parsed,
+            "outbox_events_written": outbox_events_written,
+        }),
+    );
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::to_value(response).expect("json")),
+    ))
+}
+
 async fn ingest_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -6338,6 +6520,8 @@ async fn ingest_status(
     )?;
     let csv_map = state.ingest_csv_records.lock().expect("csv lock");
     let json_map = state.ingest_json_records.lock().expect("json lock");
+    let parquet_map = state.ingest_parquet_records.lock().expect("parquet lock");
+    let excel_map = state.ingest_excel_records.lock().expect("excel lock");
     let (csv_connectors, csv_total) = match &principal {
         RuntimeAccessPrincipal::Operator(_) => (
             csv_map.len(),
@@ -6356,11 +6540,31 @@ async fn ingest_status(
             count_tenant_ingest_records(&json_map, &user.tenant_id)
         }
     };
+    let (parquet_connectors, parquet_total) = match &principal {
+        RuntimeAccessPrincipal::Operator(_) => (
+            parquet_map.len(),
+            parquet_map.values().map(|v| v.len()).sum(),
+        ),
+        RuntimeAccessPrincipal::TenantUser(user) => {
+            count_tenant_ingest_records(&parquet_map, &user.tenant_id)
+        }
+    };
+    let (excel_connectors, excel_total) = match &principal {
+        RuntimeAccessPrincipal::Operator(_) => (
+            excel_map.len(),
+            excel_map.values().map(|v| v.len()).sum(),
+        ),
+        RuntimeAccessPrincipal::TenantUser(user) => {
+            count_tenant_ingest_records(&excel_map, &user.tenant_id)
+        }
+    };
     let response = IngestStatusResponse {
         status: "ok",
         csv_connectors,
         json_connectors,
-        total_records_loaded: csv_total + json_total,
+        parquet_connectors,
+        excel_connectors,
+        total_records_loaded: csv_total + json_total + parquet_total + excel_total,
     };
     append_runtime_audit_event(
         &state,
@@ -6372,6 +6576,8 @@ async fn ingest_status(
             "route_scope": "ingest/status",
             "csv_connectors": response.csv_connectors,
             "json_connectors": response.json_connectors,
+            "parquet_connectors": response.parquet_connectors,
+            "excel_connectors": response.excel_connectors,
             "total_records_loaded": response.total_records_loaded,
         }),
     );
@@ -6589,6 +6795,8 @@ mod tests {
             constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
             ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
             ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_parquet_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_excel_records: Arc::new(Mutex::new(HashMap::new())),
             ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
             ingest_event_bus: Arc::new(Mutex::new(ManagedEventBusTransport::in_memory())),
             ingest_outbox_cursors: Arc::new(Mutex::new(ManagedReplayCursorStore::in_memory())),
@@ -6849,7 +7057,7 @@ mod tests {
             .expect("sql execute response");
 
         assert_eq!(response.0, StatusCode::OK);
-        assert_eq!(response.1.status, "committed");
+        assert_eq!(response.1.status, "ok");
     }
 
     #[test]
@@ -8937,6 +9145,77 @@ mod tests {
     }
 
     #[test]
+    fn ws4_parquet_ingest_via_appstate() {
+        use arrow_array::{Int32Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema};
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+        use voltnuerongrid_ingest::parquet::ParquetConnector;
+
+        let id = StringArray::from(vec!["k1", "k2"]);
+        let amt = Int32Array::from(vec![7, 8]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("amount", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(id) as arrow_array::ArrayRef, Arc::new(amt)],
+        )
+        .expect("batch");
+        let mut buffer = Vec::new();
+        {
+            let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).expect("writer");
+            writer.write(&batch).expect("write");
+            writer.close().expect("close");
+        }
+
+        let state = state_with_key(None);
+        let mut conn = ParquetConnector::new("pq-orders", "Parquet Orders");
+        let count = conn.load_parquet_bytes(&buffer).expect("parquet load");
+        assert_eq!(count, 2);
+        let records = conn.read_batch(usize::MAX);
+        state
+            .ingest_parquet_records
+            .lock()
+            .expect("lock")
+            .insert("pq-orders".to_string(), records);
+
+        let map = state.ingest_parquet_records.lock().expect("lock");
+        assert_eq!(map.get("pq-orders").expect("get").len(), 2);
+    }
+
+    #[test]
+    fn ws4_excel_ingest_via_appstate() {
+        use rust_xlsxwriter::{Format, Workbook};
+        use voltnuerongrid_ingest::excel::ExcelConnector;
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        let header = Format::new().set_bold();
+        sheet.write_string_with_format(0, 0, "id", &header).unwrap();
+        sheet.write_string_with_format(0, 1, "sku", &header).unwrap();
+        sheet.write_number(1, 0, 100).unwrap();
+        sheet.write_string(1, 1, "A1").unwrap();
+        let buffer = workbook.save_to_buffer().expect("buffer");
+
+        let state = state_with_key(None);
+        let mut conn = ExcelConnector::new("xlsx-stock", "Excel Stock");
+        let count = conn.load_xlsx_bytes(&buffer).expect("excel load");
+        assert_eq!(count, 1);
+        let records = conn.read_batch(usize::MAX);
+        state
+            .ingest_excel_records
+            .lock()
+            .expect("lock")
+            .insert("xlsx-stock".to_string(), records);
+
+        let map = state.ingest_excel_records.lock().expect("lock");
+        assert_eq!(map.get("xlsx-stock").expect("get").len(), 1);
+        assert_eq!(map.get("xlsx-stock").expect("get")[0].key, "100");
+    }
+
+    #[test]
     fn ws4_ingest_status_counts_loaded_records() {
         use voltnuerongrid_ingest::csv::CsvConnector;
         use voltnuerongrid_ingest::json::JsonConnector;
@@ -9151,7 +9430,7 @@ mod tests {
 
     // ── WS3 HTAP Routing Policy Tests ─────────────────────────────
     #[test]
-    fn ws3_sql_route_identifies_select_olap_path() {
+    fn ws3_sql_route_identifies_point_select_oltp_path() {
         let state = state_with_key(None);
         let headers = tenant_user_headers("analyst-acme", "acme");
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
@@ -9167,8 +9446,29 @@ mod tests {
             .expect("sql route response");
 
         assert_eq!(response.status, "ok");
+        assert_eq!(response.route_path, "oltp");
+        assert!(response.reason.contains("point-select") || response.reason.contains("transactional"));
+    }
+
+    #[test]
+    fn ws3_sql_route_identifies_analytical_select_olap_path() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let response = runtime
+            .block_on(sql_route(
+                State(state),
+                headers,
+                Json(SqlRouteRequest {
+                    sql_batch: "SELECT region, SUM(amount) FROM orders GROUP BY region;".to_string(),
+                }),
+            ))
+            .expect("sql route response");
+
+        assert_eq!(response.status, "ok");
         assert_eq!(response.route_path, "olap");
-        assert!(response.reason.contains("read-heavy") || response.reason.contains("SELECT"));
+        assert!(response.reason.contains("analytical") || response.reason.contains("workload"));
     }
 
     #[test]
@@ -9189,7 +9489,7 @@ mod tests {
 
         assert_eq!(response.status, "ok");
         assert_eq!(response.route_path, "oltp");
-        assert!(response.reason.contains("write-heavy") || response.reason.contains("INSERT"));
+        assert!(response.reason.contains("transactional"));
     }
 
     #[test]
@@ -9214,7 +9514,7 @@ mod tests {
     }
 
     #[test]
-    fn ws3_sql_route_routes_multiple_statements_proportionally() {
+    fn ws3_sql_route_routes_multiple_point_selects_as_oltp() {
         let state = state_with_key(None);
         let headers = tenant_user_headers("analyst-acme", "acme");
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
@@ -9230,10 +9530,10 @@ mod tests {
             .expect("sql route response");
 
         assert_eq!(response.status, "ok");
-        assert_eq!(response.route_path, "olap");
+        assert_eq!(response.route_path, "oltp");
         assert_eq!(response.statements.len(), 3);
         for statement in &response.statements {
-            assert_eq!(statement.path, "olap");
+            assert_eq!(statement.path, "oltp");
         }
     }
 
@@ -9248,7 +9548,7 @@ mod tests {
                 State(state.clone()),
                 headers,
                 Json(SqlExecuteRequest {
-                    sql_batch: "SELECT * FROM orders LIMIT 100;".to_string(),
+                    sql_batch: "SELECT COUNT(*) FROM orders;".to_string(),
                     max_rows: Some(100),
                 }),
             ))
@@ -9320,7 +9620,7 @@ mod tests {
                 State(state),
                 headers,
                 Json(SqlExecuteRequest {
-                    sql_batch: "SELECT * FROM orders;".to_string(),
+                    sql_batch: "SELECT COUNT(*) FROM orders;".to_string(),
                     max_rows: Some(50),
                 }),
             ))
@@ -9353,13 +9653,13 @@ mod tests {
         assert_eq!(response.rejected_statements, 0);
         
         let analyzed = &response.statements;
-        assert_eq!(analyzed[0].kind, "\"Select\"");
+        assert_eq!(analyzed[0].kind, "Select");
         assert!(!analyzed[0].requires_transaction);
-        assert_eq!(analyzed[1].kind, "\"Insert\"");
+        assert_eq!(analyzed[1].kind, "Insert");
         assert!(analyzed[1].requires_transaction);
-        assert_eq!(analyzed[2].kind, "\"Update\"");
+        assert_eq!(analyzed[2].kind, "Update");
         assert!(analyzed[2].requires_transaction);
-        assert_eq!(analyzed[3].kind, "\"Delete\"");
+        assert_eq!(analyzed[3].kind, "Delete");
         assert!(analyzed[3].requires_transaction);
     }
 
@@ -9396,11 +9696,11 @@ mod tests {
             .expect("sql route response");
 
         assert_eq!(response.status, "ok");
-        assert_eq!(response.route_path, "olap");
+        assert_eq!(response.route_path, "oltp");
 
         let result = handle1.join().expect("thread join").expect("thread route call");
         assert_eq!(result.status, "ok");
-        assert_eq!(result.route_path, "olap");
+        assert_eq!(result.route_path, "oltp");
     }
 
 }

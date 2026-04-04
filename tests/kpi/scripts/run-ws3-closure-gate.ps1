@@ -54,11 +54,19 @@ function Get-ArtifactStatus {
 function Invoke-PowerShellScript {
   param(
     [string]$ScriptPath,
-    [string[]]$ArgumentList = @()
+    [string[]]$ArgumentList = @(),
+    [string]$WorkingDirectory
   )
 
-  $process = Start-Process -FilePath "powershell.exe" `
+  $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+    (Get-Command pwsh).Source
+  } else {
+    "powershell.exe"
+  }
+
+  $process = Start-Process -FilePath $shell `
     -ArgumentList (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath) + $ArgumentList) `
+    -WorkingDirectory $WorkingDirectory `
     -NoNewWindow `
     -PassThru `
     -Wait
@@ -66,6 +74,7 @@ function Invoke-PowerShellScript {
 }
 
 $start = Get-Date
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $ws3SummaryPath = "tests/kpi/results/ws3/ws3-gate-summary.json"
 $ws3ReleasePath = "tests/kpi/results/gates/ws3-release-readiness.json"
 $ws3TrendPath = "tests/kpi/results/ws3/ws3-gate-trend-comparison.json"
@@ -75,7 +84,7 @@ $runs = @()
 $status = "passed"
 
 try {
-  $exitCode = Invoke-PowerShellScript -ScriptPath "tests/kpi/scripts/run-ws3-gate.ps1" -ArgumentList @(
+  $exitCode = Invoke-PowerShellScript -WorkingDirectory $repoRoot -ScriptPath "tests/kpi/scripts/run-ws3-gate.ps1" -ArgumentList @(
     "-OutputPath", $ws3SummaryPath,
     "-ReleaseSummaryOutputPath", $ws3ReleasePath
   )
@@ -127,7 +136,7 @@ if ($releaseStatus -eq "passed") {
 try {
   if (Test-Path -Path $ws3TrendPath) {
     $trendJson = Get-Content -Raw -Path $ws3TrendPath | ConvertFrom-Json
-    $checks.ws3_trend_stable_or_improved = ($trendJson.trend -eq "stable" -or $trendJson.trend -eq "improving")
+    $checks.ws3_trend_stable_or_improved = (@("stable", "improved", "baseline_established") -contains [string]$trendJson.trend_state)
   }
 } catch {
   $checks.ws3_trend_stable_or_improved = $false
@@ -137,14 +146,14 @@ try {
 try {
   if (Test-Path -Path $ws3BadgePath) {
     $badgeJson = Get-Content -Raw -Path $ws3BadgePath | ConvertFrom-Json
-    $checks.ws3_stability_badge_green = ($badgeJson.status -eq "green")
+    $checks.ws3_stability_badge_green = ([string]$badgeJson.color -eq "green")
   }
 } catch {
   $checks.ws3_stability_badge_green = $false
 }
 
 # Determine final status
-$passedChecks = ($checks.Values | Measure-Object -Sum).Sum
+$passedChecks = ($checks.Values | Where-Object { $_ -eq $true }).Count
 $totalChecks = $checks.Count
 
 if ($passedChecks -eq $totalChecks) {

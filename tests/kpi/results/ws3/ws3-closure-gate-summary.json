@@ -1,27 +1,27 @@
 {
-    "id":  "ws3-closure-gate",
-    "timestamp":  "2026-04-03T21:01:50Z",
-    "status":  "failed",
-    "validation_posture":  "validation_blocked",
-    "checks":  {
-                   "ws3_gate_passed":  false,
-                   "ws3_release_summary_passed":  false,
-                   "ws3_all_packs_passed":  false,
-                   "ws3_trend_stable_or_improved":  false,
-                   "ws3_stability_badge_green":  false
-               },
-    "total_checks":  5,
-    "passed_checks":  0,
-    "failed_checks":  5,
-    "runs":  [
-                 {
-                     "pack":  "ws3-gate",
-                     "status":  "failed",
-                     "detail":  "exit_code=1;failed",
-                     "artifact":  "tests/kpi/results/ws3/ws3-gate-summary.json"
-                 }
-             ],
-    "elapsed_ms":  5477,
-    "scope":  "HTAP query execution and routing (Epic 3, REQ-31)",
-    "release_target":  "R3"
+  "id": "ws3-closure-gate",
+  "timestamp": "2026-04-04T09:16:09Z",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "checks": {
+    "ws3_gate_passed": true,
+    "ws3_release_summary_passed": true,
+    "ws3_all_packs_passed": true,
+    "ws3_trend_stable_or_improved": true,
+    "ws3_stability_badge_green": true
+  },
+  "total_checks": 5,
+  "passed_checks": 5,
+  "failed_checks": 0,
+  "runs": [
+    {
+      "pack": "ws3-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws3/ws3-gate-summary.json"
+    }
+  ],
+  "elapsed_ms": 4160,
+  "scope": "HTAP query execution and routing (Epic 3, REQ-31)",
+  "release_target": "R3"
 }

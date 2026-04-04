@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 axum = "0.7"
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"] }
@@ -21,3 +22,9 @@ voltnuerongrid-ingest = { path = "../../crates/voltnuerongrid-ingest" }
 voltnuerongrid-opt = { path = "../../crates/voltnuerongrid-opt" }
 voltnuerongrid-plugins = { path = "../../crates/voltnuerongrid-plugins" }
 voltnuerongrid-driver-rust = { path = "../../drivers/voltnuerongrid-driver-rust" }
+
+[dev-dependencies]
+arrow-array = { version = "53", default-features = false }
+arrow-schema = { version = "53", default-features = false }
+parquet = { version = "53", default-features = false, features = ["arrow", "snap"] }
+rust_xlsxwriter = "0.79"

@@ -3,7 +3,9 @@
 pub const CRATE_NAME: &str = "voltnuerongrid-ingest";
 
 pub mod csv;
+pub mod excel;
 pub mod json;
+pub mod parquet;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1439,13 +1441,15 @@ mod tests {
     #[test]
     fn external_broker_mode_requires_target() {
         let wal_path = unique_wal_path();
-        let error = ManagedEventBusTransport::from_broker_mode_with_target(
+        let error = match ManagedEventBusTransport::from_broker_mode_with_target(
             "nats",
             &wal_path,
             None,
             Some("vng.outbox"),
-        )
-        .expect_err("missing target should fail");
+        ) {
+            Ok(_) => panic!("missing target should fail"),
+            Err(err) => err,
+        };
         assert!(error.contains("VNG_INGEST_EXTERNAL_BROKER_TARGET"));
     }
 }

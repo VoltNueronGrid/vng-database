@@ -33,6 +33,11 @@ $packs = @(
     Name = "ws1a-udf-contract-bridge"
     Script = "tests/kpi/scripts/run-ws1a-udf-contract-bridge-smoke.ps1"
     Artifact = "tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json"
+  },
+  @{
+    Name = "ws1a-legacy-numeric-eval"
+    Script = "tests/kpi/scripts/run-ws1a-legacy-numeric-eval-smoke.ps1"
+    Artifact = "tests/kpi/results/ws1a/ws1a-legacy-numeric-eval-smoke.json"
   }
 )
 

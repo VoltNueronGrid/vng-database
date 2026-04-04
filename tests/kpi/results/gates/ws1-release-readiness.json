@@ -1,7 +1,7 @@
 {
   "gate": "ws1-release-udf-readiness",
-  "status": "failed",
-  "release_readiness": "blocked",
+  "status": "passed",
+  "release_readiness": "in_progress_with_evidence",
   "release_targets": [
     "R1",
     "R3"
@@ -10,7 +10,7 @@
     "WS1",
     "REQ-03"
   ],
-  "generated_at_utc": "2026-03-08T08:47:14.1730612Z",
+  "generated_at_utc": "2026-04-04T03:49:37.5469835Z",
   "sources": {
     "summary": "tests/kpi/results/ws1/ws1-gate-summary.json",
     "coverage_matrix": "tests/kpi/results/ws1/ws1-udf-coverage-matrix.json",
@@ -18,7 +18,7 @@
     "badge": "tests/kpi/results/ws1/ws1-udf-stability-badge.json"
   },
   "checks": {
-    "ws1_gate_passed": false,
+    "ws1_gate_passed": true,
     "ws1_udf_coverage_passed": true,
     "ws1_trend_not_regressed": true,
     "ws1_badge_passed": true
@@ -27,6 +27,6 @@
     "pack_count": 8,
     "coverage_controls": 4,
     "trend_state": "stable",
-    "badge_message": "4/8 stable"
+    "badge_message": "8/8 stable"
   }
 }

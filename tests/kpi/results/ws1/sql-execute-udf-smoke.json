@@ -1,124 +1,124 @@
-﻿{
-    "smoke":  "sql-execute-udf-runtime",
-    "status":  "passed",
-    "base_url":  "http://127.0.0.1:18080",
-    "timestamp_utc":  "2026-03-08T04:54:24.6408444Z",
-    "checks":  {
-                   "execute_requires_user_headers":  true,
-                   "execute_status_ok":  true,
-                   "udf_results_present":  true,
-                   "udf_catalog_contract_present":  true,
-                   "udf_guard_policy_contract_present":  true,
-                   "udf_execution_plan_present":  true,
-                   "udf_execution_plan_has_invocations":  true,
-                   "rust_udf_output_expected":  true,
-                   "js_udf_output_expected":  true,
-                   "python_udf_output_expected":  true,
-                   "guardrail_blocks_unsafe_payload":  true,
-                   "guardrail_returns_language_policy_reason":  true
-               },
-    "udf_results":  [
-                        {
-                            "language":  "rust",
-                            "function":  "udf_rust",
-                            "input":  "hello",
-                            "output":  "HELLO"
-                        },
-                        {
-                            "language":  "javascript",
-                            "function":  "udf_js",
-                            "input":  "abc",
-                            "output":  "cba"
-                        },
-                        {
-                            "language":  "python",
-                            "function":  "udf_python",
-                            "input":  "delta",
-                            "output":  "5"
-                        }
-                    ],
-    "udf_function_catalog":  [
-                                 {
-                                     "name":  "udf_rust",
-                                     "language":  "rust",
-                                     "deterministic":  true,
-                                     "status":  "enabled"
-                                 },
-                                 {
-                                     "name":  "udf_js",
-                                     "language":  "javascript",
-                                     "deterministic":  false,
-                                     "status":  "enabled"
-                                 },
-                                 {
-                                     "name":  "udf_python",
-                                     "language":  "python",
-                                     "deterministic":  false,
-                                     "status":  "enabled"
-                                 }
-                             ],
-    "udf_guard_policies":  [
-                               {
-                                   "language":  "rust",
-                                   "blocked_tokens":  [
-                                                          "unsafe",
-                                                          "std::process",
-                                                          "process::"
-                                                      ],
-                                   "max_input_bytes":  256
-                               },
-                               {
-                                   "language":  "javascript",
-                                   "blocked_tokens":  [
-                                                          "eval(",
-                                                          "function(",
-                                                          "child_process"
-                                                      ],
-                                   "max_input_bytes":  256
-                               },
-                               {
-                                   "language":  "python",
-                                   "blocked_tokens":  [
-                                                          "import os",
-                                                          "subprocess",
-                                                          "exec("
-                                                      ],
-                                   "max_input_bytes":  256
-                               }
-                           ],
-    "udf_execution_plan":  [
-                               {
-                                   "statement":  "SELECT udf_rust(\u0027hello\u0027)",
-                                   "route_path":  "olap",
-                                   "udf_invocations":  [
-                                                           {
-                                                               "function":  "udf_rust",
-                                                               "language":  "rust",
-                                                               "guard_policy":  "rust_default"
-                                                           }
-                                                       ]
-                               },
-                               {
-                                   "statement":  "SELECT udf_js(\u0027abc\u0027)",
-                                   "route_path":  "olap",
-                                   "udf_invocations":  [
-                                                           {
-                                                               "function":  "udf_js",
-                                                               "language":  "javascript",
-                                                               "guard_policy":  "javascript_default"
-                                                           }
-                                                       ]
-                               },
-                               {
-                                   "statement":  "SELECT udf_python(\u0027delta\u0027)",
-                                   "route_path":  "olap",
-                                   "udf_invocations":  [
-                                                           {
-                                                               "function":  "udf_python",
-                                                               "language":  "python",
-                                                               "guard_policy":  "python_default"
-                                                           }
-                                                       ]
-                               }
-                           ]
+{
+  "smoke": "sql-execute-udf-runtime",
+  "status": "passed",
+  "base_url": "http://127.0.0.1:8080",
+  "timestamp_utc": "2026-04-04T03:49:37.2457377Z",
+  "checks": {
+    "execute_requires_user_headers": true,
+    "execute_status_ok": true,
+    "udf_results_present": true,
+    "udf_catalog_contract_present": true,
+    "udf_guard_policy_contract_present": true,
+    "udf_execution_plan_present": true,
+    "udf_execution_plan_has_invocations": true,
+    "rust_udf_output_expected": true,
+    "js_udf_output_expected": true,
+    "python_udf_output_expected": true,
+    "guardrail_blocks_unsafe_payload": true,
+    "guardrail_returns_language_policy_reason": true
+  },
+  "udf_results": [
+    {
+      "language": "rust",
+      "function": "udf_rust",
+      "input": "hello",
+      "output": "HELLO"
+    },
+    {
+      "language": "javascript",
+      "function": "udf_js",
+      "input": "abc",
+      "output": "cba"
+    },
+    {
+      "language": "python",
+      "function": "udf_python",
+      "input": "delta",
+      "output": "5"
+    }
+  ],
+  "udf_function_catalog": [
+    {
+      "name": "udf_rust",
+      "language": "rust",
+      "deterministic": true,
+      "status": "enabled"
+    },
+    {
+      "name": "udf_js",
+      "language": "javascript",
+      "deterministic": false,
+      "status": "enabled"
+    },
+    {
+      "name": "udf_python",
+      "language": "python",
+      "deterministic": false,
+      "status": "enabled"
+    }
+  ],
+  "udf_guard_policies": [
+    {
+      "language": "rust",
+      "blocked_tokens": [
+        "unsafe",
+        "std::process",
+        "process::"
+      ],
+      "max_input_bytes": 256
+    },
+    {
+      "language": "javascript",
+      "blocked_tokens": [
+        "eval(",
+        "function(",
+        "child_process"
+      ],
+      "max_input_bytes": 256
+    },
+    {
+      "language": "python",
+      "blocked_tokens": [
+        "import os",
+        "subprocess",
+        "exec("
+      ],
+      "max_input_bytes": 256
+    }
+  ],
+  "udf_execution_plan": [
+    {
+      "statement": "SELECT udf_rust('hello')",
+      "route_path": "olap",
+      "udf_invocations": [
+        {
+          "function": "udf_rust",
+          "language": "rust",
+          "guard_policy": "rust_default"
+        }
+      ]
+    },
+    {
+      "statement": "SELECT udf_js('abc')",
+      "route_path": "olap",
+      "udf_invocations": [
+        {
+          "function": "udf_js",
+          "language": "javascript",
+          "guard_policy": "javascript_default"
+        }
+      ]
+    },
+    {
+      "statement": "SELECT udf_python('delta')",
+      "route_path": "olap",
+      "udf_invocations": [
+        {
+          "function": "udf_python",
+          "language": "python",
+          "guard_policy": "python_default"
+        }
+      ]
+    }
+  ]
 }

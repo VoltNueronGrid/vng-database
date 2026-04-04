@@ -24,12 +24,21 @@ $overallStatus = if ($packs | Where-Object { $_.status -eq "failed" }) { "failed
 ```
 
 ## HTTP Calls
-```powershell
-# CORRECT
-$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/health" -Method Get
+Dot-source the shared helper for JSON request/response + correct error bodies on PS 7+:
 
-# WRONG — GetResponseStream is not available in modern .NET
-$client = [System.Net.Http.HttpClient]::new()
+```powershell
+$kpiScriptsRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $kpiScriptsRoot "kpi-http-helpers.ps1")
+# Optional per-script default timeout:
+# $PSDefaultParameterValues['Invoke-HttpJson:TimeoutSec'] = 15
+$r = Invoke-HttpJson -Method Get -Uri "$BaseUrl/api/v1/health" -Headers @{}
+```
+
+For simple health checks without parsing error bodies, `Invoke-RestMethod` is fine.
+
+```powershell
+# WRONG — HttpResponseMessage from Invoke-WebRequest has no GetResponseStream()
+$reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
 ```
 
 ## Output

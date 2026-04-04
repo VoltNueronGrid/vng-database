@@ -1,10 +1,10 @@
 {
   "gate": "ws1-closure-gate",
-  "status": "failed",
-  "validation_posture": "blocked",
-  "started_at_utc": "2026-03-08T08:47:01.4860937Z",
-  "finished_at_utc": "2026-03-08T08:47:14.1858881Z",
-  "duration_ms": 12700,
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-04-04T03:49:24.8979636Z",
+  "finished_at_utc": "2026-04-04T03:49:37.5845592Z",
+  "duration_ms": 12687,
   "artifacts": {
     "ws1_gate": "tests/kpi/results/ws1/ws1-gate-summary.json",
     "ws1_release": "tests/kpi/results/gates/ws1-release-readiness.json",
@@ -14,18 +14,18 @@
     "ws1_runtime_smoke": "tests/kpi/results/ws1/sql-execute-udf-smoke.json"
   },
   "checks": {
-    "ws1_gate_passed": false,
-    "ws1_release_summary_passed": false,
-    "ws1_coverage_controls_all_passed": false,
-    "ws1_trend_allowed": false,
-    "ws1_stability_badge_green": false,
-    "ws1_runtime_udf_smoke_passed": false
+    "ws1_gate_passed": true,
+    "ws1_release_summary_passed": true,
+    "ws1_coverage_controls_all_passed": true,
+    "ws1_trend_allowed": true,
+    "ws1_stability_badge_green": true,
+    "ws1_runtime_udf_smoke_passed": true
   },
   "runs": [
     {
       "pack": "ws1-gate",
-      "status": "failed",
-      "detail": "script_invocation_failed",
+      "status": "passed",
+      "detail": "ok",
       "artifact": "tests/kpi/results/ws1/ws1-gate-summary.json"
     }
   ]

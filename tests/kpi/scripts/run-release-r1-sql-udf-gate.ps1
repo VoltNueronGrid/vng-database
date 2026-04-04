@@ -80,4 +80,12 @@ $artifact = [ordered]@{
 
 $artifact | ConvertTo-Json -Depth 10 | Set-Content -Path $OutputPath
 Write-Host "Release R1 SQL/UDF/locking gate summary: $OutputPath ($status)"
+if ($status -eq "passed") {
+  $outDir = Split-Path -Parent $OutputPath
+  $ciMirror = Join-Path $outDir "ci-release-r1-sql-udf-readiness.json"
+  if ($ciMirror -ne $OutputPath) {
+    Copy-Item -LiteralPath $OutputPath -Destination $ciMirror -Force
+    Write-Host "CI mirror: $ciMirror"
+  }
+}
 if ($status -ne "passed") { exit 1 }

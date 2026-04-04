@@ -1,45 +1,45 @@
 {
-    "gate":  "ws3",
-    "status":  "failed",
-    "started_at_utc":  "2026-04-03T16:36:42.8489821Z",
-    "finished_at_utc":  "2026-04-03T16:36:46.6244060Z",
-    "duration_ms":  3775,
-    "packs":  [
-                  {
-                      "pack":  "ws3-query-routing",
-                      "status":  "failed",
-                      "detail":  "WS3 query-routing smoke failed. See artifact at tests/kpi/results/ws3/query-routing-smoke.json",
-                      "artifact":  "tests/kpi/results/ws3/query-routing-smoke.json"
-                  },
-                  {
-                      "pack":  "ws3-htap-target-contract",
-                      "status":  "passed",
-                      "detail":  "ok",
-                      "artifact":  "tests/kpi/results/ws3/ws3-htap-target-contract-smoke.json"
-                  },
-                  {
-                      "pack":  "ws3-performance-score",
-                      "status":  "failed",
-                      "detail":  "exit_code=1",
-                      "artifact":  "tests/kpi/scripts/run-ws3-performance-score.ps1"
-                  },
-                  {
-                      "pack":  "ws3-gate-trend-comparison",
-                      "status":  "passed",
-                      "detail":  "ok",
-                      "artifact":  "tests/kpi/scripts/run-ws3-gate-trend-compare.ps1"
-                  },
-                  {
-                      "pack":  "ws3-performance-stability-badge",
-                      "status":  "passed",
-                      "detail":  "ok",
-                      "artifact":  "tests/kpi/scripts/run-ws3-performance-stability-badge.ps1"
-                  },
-                  {
-                      "pack":  "ws3-release-summary",
-                      "status":  "failed",
-                      "detail":  "exit_code=1",
-                      "artifact":  "tests/kpi/scripts/run-ws3-release-summary.ps1"
-                  }
-              ]
+  "gate": "ws3",
+  "status": "passed",
+  "started_at_utc": "2026-04-04T03:46:06.7302014Z",
+  "finished_at_utc": "2026-04-04T03:46:08.3686133Z",
+  "duration_ms": 1638,
+  "packs": [
+    {
+      "pack": "ws3-query-routing",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws3/query-routing-smoke.json"
+    },
+    {
+      "pack": "ws3-htap-target-contract",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws3/ws3-htap-target-contract-smoke.json"
+    },
+    {
+      "pack": "ws3-performance-score",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/scripts/run-ws3-performance-score.ps1"
+    },
+    {
+      "pack": "ws3-gate-trend-comparison",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/scripts/run-ws3-gate-trend-compare.ps1"
+    },
+    {
+      "pack": "ws3-performance-stability-badge",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/scripts/run-ws3-performance-stability-badge.ps1"
+    },
+    {
+      "pack": "ws3-release-summary",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/scripts/run-ws3-release-summary.ps1"
+    }
+  ]
 }
