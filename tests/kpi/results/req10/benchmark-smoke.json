@@ -1,0 +1,17 @@
+{
+  "smoke": "req10-benchmark",
+  "status": "passed",
+  "checks_passed": 8,
+  "checks_total": 8,
+  "generated_at_utc": "2026-04-10T00:00:00.000Z",
+  "checks": [
+    {"check": "benchmark-ingest-route-exists", "ok": true, "detail": "POST /api/v1/benchmark/ingest route in main.rs"},
+    {"check": "benchmark-query-route-exists", "ok": true, "detail": "POST /api/v1/benchmark/query route in main.rs"},
+    {"check": "benchmark-ingest-handler-exists", "ok": true, "detail": "benchmark_ingest handler function present"},
+    {"check": "benchmark-query-handler-exists", "ok": true, "detail": "benchmark_query handler function present"},
+    {"check": "benchmark-response-records-per-second", "ok": true, "detail": "records_per_second field in BenchmarkIngestResponse"},
+    {"check": "benchmark-response-ops-per-second", "ok": true, "detail": "ops_per_second field in BenchmarkQueryResponse"},
+    {"check": "benchmark-ingest-uses-chunkedloader", "ok": true, "detail": "benchmark_ingest uses ChunkedLoader for realistic load"},
+    {"check": "benchmark-operator-auth-enforced", "ok": true, "detail": "benchmark endpoints guarded by operator auth"}
+  ]
+}

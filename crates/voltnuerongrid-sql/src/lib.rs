@@ -23,6 +23,10 @@ pub enum SqlStatementKind {
     Begin,
     Commit,
     Rollback,
+    // REQ-23: savepoint support
+    Savepoint,
+    ReleaseSavepoint,
+    RollbackToSavepoint,
     Unknown,
 }
 
@@ -111,7 +115,11 @@ impl SqlAnalyzer {
             (Some("DROP"), Some("TABLE"), _) => SqlStatementKind::DropTable,
             (Some("BEGIN"), _, _) => SqlStatementKind::Begin,
             (Some("COMMIT"), _, _) => SqlStatementKind::Commit,
+            // ROLLBACK TO [SAVEPOINT] — must match before bare ROLLBACK
+            (Some("ROLLBACK"), Some("TO"), _) => SqlStatementKind::RollbackToSavepoint,
             (Some("ROLLBACK"), _, _) => SqlStatementKind::Rollback,
+            (Some("SAVEPOINT"), _, _) => SqlStatementKind::Savepoint,
+            (Some("RELEASE"), Some("SAVEPOINT"), _) => SqlStatementKind::ReleaseSavepoint,
             _ => SqlStatementKind::Unknown,
         }
     }

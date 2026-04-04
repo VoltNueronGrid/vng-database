@@ -45,7 +45,10 @@ impl HtapQueryRouter {
             | SqlStatementKind::Delete
             | SqlStatementKind::Begin
             | SqlStatementKind::Commit
-            | SqlStatementKind::Rollback => RouteDecision {
+            | SqlStatementKind::Rollback
+            | SqlStatementKind::Savepoint
+            | SqlStatementKind::ReleaseSavepoint
+            | SqlStatementKind::RollbackToSavepoint => RouteDecision {
                 path: QueryPath::Oltp,
                 reason: "transactional statement".to_string(),
             },

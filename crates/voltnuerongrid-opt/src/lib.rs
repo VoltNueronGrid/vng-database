@@ -238,7 +238,53 @@ impl CachePartition {
         count
     }
 
-    /// Remove all expired entries; returns the count evicted.
+    /// Return all current (non-expired) keys in this partition.
+    pub fn keys(&self, now_ms: u64) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(_, e)| !e.is_expired(now_ms))
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+
+    /// Update the TTL on an existing, non-expired key (re-bases the TTL clock to now_ms).
+    /// Returns false if the key does not exist or is already expired.
+    pub fn expire(&mut self, key: &str, ttl_ms: u64, now_ms: u64) -> bool {
+        let is_expired = self.entries.get(key).map(|e| e.is_expired(now_ms)).unwrap_or(true);
+        if is_expired {
+            self.entries.remove(key);
+            return false;
+        }
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.ttl_ms = Some(ttl_ms);
+            entry.created_at_ms = now_ms;
+            return true;
+        }
+        false
+    }
+
+    /// Atomically increment a numeric value by `delta`. If the key does not exist (or is
+    /// expired) it is treated as 0 before incrementing. Non-numeric existing values are also
+    /// treated as 0. Returns the new value.
+    pub fn increment(
+        &mut self,
+        key: &str,
+        delta: f64,
+        ttl_ms: Option<u64>,
+        now_ms: u64,
+    ) -> Result<f64, CacheError> {
+        let current = self
+            .entries
+            .get(key)
+            .filter(|e| !e.is_expired(now_ms))
+            .and_then(|e| e.value.as_f64())
+            .unwrap_or(0.0);
+        let new_val = current + delta;
+        self.set(key.to_string(), serde_json::json!(new_val), ttl_ms, now_ms)?;
+        Ok(new_val)
+    }
+
+    /// Remove expired entries from this partition; returns the count evicted.
     pub fn evict_expired(&mut self, now_ms: u64) -> usize {
         let expired_keys: Vec<String> = self
             .entries
@@ -439,6 +485,54 @@ impl DistributedCacheManager {
 
     pub fn total_entry_count(&self) -> usize {
         self.partitions.values().map(|p| p.entries.len()).sum()
+    }
+
+    /// Return all current (non-expired) keys in a named partition.
+    pub fn keys_in_partition(
+        &self,
+        partition_id: &str,
+        now_ms: u64,
+    ) -> Result<Vec<String>, CacheError> {
+        let partition = self
+            .partitions
+            .get(partition_id)
+            .ok_or_else(|| CacheError::PartitionNotFound {
+                partition_id: partition_id.to_string(),
+            })?;
+        Ok(partition.keys(now_ms))
+    }
+
+    /// Update the TTL on an existing key in a named partition.
+    /// Returns `Err(PartitionNotFound)` if the partition does not exist;
+    /// returns `Ok(false)` if the key is absent or already expired.
+    pub fn expire_key(
+        &mut self,
+        partition_id: &str,
+        key: &str,
+        ttl_ms: u64,
+        now_ms: u64,
+    ) -> Result<bool, CacheError> {
+        let partition = self
+            .partitions
+            .get_mut(partition_id)
+            .ok_or_else(|| CacheError::PartitionNotFound {
+                partition_id: partition_id.to_string(),
+            })?;
+        Ok(partition.expire(key, ttl_ms, now_ms))
+    }
+
+    /// Atomically increment (or create) a numeric key by `delta` in a named partition.
+    /// The partition is created if absent (ensures_partition semantics).
+    pub fn increment_key(
+        &mut self,
+        partition_id: &str,
+        key: &str,
+        delta: f64,
+        ttl_ms: Option<u64>,
+        now_ms: u64,
+    ) -> Result<f64, CacheError> {
+        let partition = self.ensure_partition(partition_id);
+        partition.increment(key, delta, ttl_ms, now_ms)
     }
 }
 

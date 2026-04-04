@@ -13,6 +13,10 @@ pub const SUPPORTED_LEGACY_AGGREGATIONS: &[&str] = &[
     "STDDEV",
     "VARIANCE",
     "PERCENTILE",
+    // P2 aggregations (REQ-12): promoted from stub to evaluated implementations
+    "APPROX_COUNT_DISTINCT",
+    "TOP_N",
+    "BOTTOM_N",
 ];
 
 pub const P2_STUB_AGGREGATIONS: &[&str] = &["APPROX_COUNT_DISTINCT", "TOP_N", "BOTTOM_N"];
@@ -113,6 +117,42 @@ pub fn eval_legacy_numeric_aggregation(
                 return Err("PERCENTILE argument must be finite and within [0, 100]".to_string());
             }
             percentile_linear(values, p)
+        }
+        // REQ-12 P2 aggregations — promoted from stub
+        "APPROX_COUNT_DISTINCT" => {
+            // P2 stub: exact COUNT_DISTINCT semantics until HyperLogLog engine is available.
+            let unique: HashSet<u64> = values.iter().copied().map(f64::to_bits).collect();
+            Ok(unique.len() as f64)
+        }
+        "TOP_N" => {
+            // P2 stub: average of the top-N values. N is supplied via the `percentile` argument
+            // (rounded to usize). Defaults to 3 if omitted.
+            if values.is_empty() {
+                return Err("TOP_N requires at least one value".to_string());
+            }
+            let n = percentile
+                .map(|p| p.round() as usize)
+                .unwrap_or(3)
+                .max(1);
+            let mut sorted = values.to_vec();
+            sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+            let take = n.min(sorted.len());
+            Ok(sorted[..take].iter().copied().sum::<f64>() / take as f64)
+        }
+        "BOTTOM_N" => {
+            // P2 stub: average of the bottom-N values. N is supplied via the `percentile` argument
+            // (rounded to usize). Defaults to 3 if omitted.
+            if values.is_empty() {
+                return Err("BOTTOM_N requires at least one value".to_string());
+            }
+            let n = percentile
+                .map(|p| p.round() as usize)
+                .unwrap_or(3)
+                .max(1);
+            let mut sorted = values.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let take = n.min(sorted.len());
+            Ok(sorted[..take].iter().copied().sum::<f64>() / take as f64)
         }
         other => Err(format!("internal mapping missing for {other}")),
     }
@@ -233,5 +273,49 @@ mod numeric_tests {
     #[test]
     fn percentile_requires_argument() {
         assert!(eval_legacy_numeric_aggregation("PERCENTILE", &[1.0, 2.0], None).is_err());
+    }
+
+    #[test]
+    fn p2_approx_count_distinct_matches_exact() {
+        let v = [1.0, 1.0, 2.0, 3.0];
+        assert_eq!(
+            eval_legacy_numeric_aggregation("APPROX_COUNT_DISTINCT", &v, None).unwrap(),
+            3.0
+        );
+        // Verify it agrees with COUNT_DISTINCT
+        assert_eq!(
+            eval_legacy_numeric_aggregation("COUNT_DISTINCT", &v, None).unwrap(),
+            eval_legacy_numeric_aggregation("APPROX_COUNT_DISTINCT", &v, None).unwrap(),
+        );
+    }
+
+    #[test]
+    fn p2_top_n_returns_avg_of_top_values() {
+        let v = [1.0, 5.0, 3.0, 7.0, 2.0];
+        // top-3 = [7, 5, 3], avg = 5.0
+        let result = eval_legacy_numeric_aggregation("TOP_N", &v, Some(3.0)).unwrap();
+        assert!((result - 5.0).abs() < 1e-9, "expected 5.0 got {result}");
+    }
+
+    #[test]
+    fn p2_bottom_n_returns_avg_of_bottom_values() {
+        let v = [1.0, 5.0, 3.0, 7.0, 2.0];
+        // bottom-3 = [1, 2, 3], avg = 2.0
+        let result = eval_legacy_numeric_aggregation("BOTTOM_N", &v, Some(3.0)).unwrap();
+        assert!((result - 2.0).abs() < 1e-9, "expected 2.0 got {result}");
+    }
+
+    #[test]
+    fn p2_top_n_default_n_uses_three() {
+        let v = [10.0, 20.0, 30.0, 40.0, 50.0];
+        // default n=3 → top-3 = [50, 40, 30], avg = 40.0
+        let result = eval_legacy_numeric_aggregation("TOP_N", &v, None).unwrap();
+        assert!((result - 40.0).abs() < 1e-9, "expected 40.0 got {result}");
+    }
+
+    #[test]
+    fn p2_top_n_empty_errors() {
+        assert!(eval_legacy_numeric_aggregation("TOP_N", &[], None).is_err());
+        assert!(eval_legacy_numeric_aggregation("BOTTOM_N", &[], None).is_err());
     }
 }

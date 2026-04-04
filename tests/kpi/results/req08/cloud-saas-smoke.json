@@ -1,0 +1,201 @@
+{
+  "smoke": "req08-cloud-saas-deployment-baseline",
+  "status": "passed",
+  "started_at_utc": "2026-04-04T15:09:27.8733815Z",
+  "finished_at_utc": "2026-04-04T15:09:28.0341929Z",
+  "duration_ms": 161,
+  "providers_checked": [
+    "aws",
+    "azure",
+    "gcp"
+  ],
+  "critical_failed": 0,
+  "total_checks": 37,
+  "checks": [
+    {
+      "check": "cloud_dir_exists_aws",
+      "ok": true,
+      "detail": "deploy/cloud/aws"
+    },
+    {
+      "check": "cloud_file_aws_profile_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/aws/profile.yaml"
+    },
+    {
+      "check": "cloud_file_aws_helm_values_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/aws/helm-values.yaml"
+    },
+    {
+      "check": "cloud_file_aws_single_node_overlay_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/aws/single-node-overlay.yaml"
+    },
+    {
+      "check": "cloud_file_aws_multi_node_overlay_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/aws/multi-node-overlay.yaml"
+    },
+    {
+      "check": "cloud_file_aws_README_md",
+      "ok": true,
+      "detail": "deploy/cloud/aws/README.md"
+    },
+    {
+      "check": "cloud_profile_provider_key_aws",
+      "ok": true,
+      "detail": "provider: aws"
+    },
+    {
+      "check": "cloud_profile_admin_env_aws",
+      "ok": true,
+      "detail": "admin_key_env present"
+    },
+    {
+      "check": "cloud_profile_region_env_aws",
+      "ok": true,
+      "detail": "region_env present"
+    },
+    {
+      "check": "cloud_multi_node_ha_keys_aws",
+      "ok": true,
+      "detail": "replica/ha_mode/cluster_mode/replication"
+    },
+    {
+      "check": "cloud_dir_exists_azure",
+      "ok": true,
+      "detail": "deploy/cloud/azure"
+    },
+    {
+      "check": "cloud_file_azure_profile_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/azure/profile.yaml"
+    },
+    {
+      "check": "cloud_file_azure_helm_values_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/azure/helm-values.yaml"
+    },
+    {
+      "check": "cloud_file_azure_single_node_overlay_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/azure/single-node-overlay.yaml"
+    },
+    {
+      "check": "cloud_file_azure_multi_node_overlay_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/azure/multi-node-overlay.yaml"
+    },
+    {
+      "check": "cloud_file_azure_README_md",
+      "ok": true,
+      "detail": "deploy/cloud/azure/README.md"
+    },
+    {
+      "check": "cloud_profile_provider_key_azure",
+      "ok": true,
+      "detail": "provider: azure"
+    },
+    {
+      "check": "cloud_profile_admin_env_azure",
+      "ok": true,
+      "detail": "admin_key_env present"
+    },
+    {
+      "check": "cloud_profile_region_env_azure",
+      "ok": true,
+      "detail": "region_env present"
+    },
+    {
+      "check": "cloud_multi_node_ha_keys_azure",
+      "ok": true,
+      "detail": "replica/ha_mode/cluster_mode/replication"
+    },
+    {
+      "check": "cloud_dir_exists_gcp",
+      "ok": true,
+      "detail": "deploy/cloud/gcp"
+    },
+    {
+      "check": "cloud_file_gcp_profile_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/profile.yaml"
+    },
+    {
+      "check": "cloud_file_gcp_helm_values_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/helm-values.yaml"
+    },
+    {
+      "check": "cloud_file_gcp_single_node_overlay_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/single-node-overlay.yaml"
+    },
+    {
+      "check": "cloud_file_gcp_multi_node_overlay_yaml",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/multi-node-overlay.yaml"
+    },
+    {
+      "check": "cloud_file_gcp_README_md",
+      "ok": true,
+      "detail": "deploy/cloud/gcp/README.md"
+    },
+    {
+      "check": "cloud_profile_provider_key_gcp",
+      "ok": true,
+      "detail": "provider: gcp"
+    },
+    {
+      "check": "cloud_profile_admin_env_gcp",
+      "ok": true,
+      "detail": "admin_key_env present"
+    },
+    {
+      "check": "cloud_profile_region_env_gcp",
+      "ok": true,
+      "detail": "region_env present"
+    },
+    {
+      "check": "cloud_multi_node_ha_keys_gcp",
+      "ok": true,
+      "detail": "replica/ha_mode/cluster_mode/replication"
+    },
+    {
+      "check": "cloud_common_dir_exists",
+      "ok": true,
+      "detail": "deploy/cloud/common"
+    },
+    {
+      "check": "deploy_helm_dir_exists",
+      "ok": true,
+      "detail": "deploy/helm"
+    },
+    {
+      "check": "redis_compat_port_6380_documented",
+      "ok": true,
+      "detail": "port 6380 referenced in a cloud/helm artefact"
+    },
+    {
+      "check": "sre_cache_endpoint_referenced_in_docs",
+      "ok": false,
+      "detail": "cache/redis/6380 present in a provider README"
+    },
+    {
+      "check": "design_doc_approx_count_distinct",
+      "ok": false,
+      "detail": "reference/voltnuerongrid-db-design.md"
+    },
+    {
+      "check": "design_doc_top_n",
+      "ok": false,
+      "detail": "reference/voltnuerongrid-db-design.md"
+    },
+    {
+      "check": "design_doc_bottom_n",
+      "ok": false,
+      "detail": "reference/voltnuerongrid-db-design.md"
+    }
+  ]
+}

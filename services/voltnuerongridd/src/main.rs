@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+﻿use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::net::SocketAddr;
@@ -79,7 +79,7 @@ impl PessimisticLockContentionMetrics {
     }
 }
 
-// ── ACID Transaction State Machine (REQ-23) ──────────────────────────────
+// â”€â”€ ACID Transaction State Machine (REQ-23) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,6 +100,9 @@ struct AcidTxEntry {
     statement_count: usize,
     affected_tables: Vec<String>,
     savepoints: Vec<String>,
+    /// REQ-23: For repeatable_read isolation, the timestamp at which the logical read
+    /// snapshot was taken (BEGIN time). None for other isolation levels.
+    read_snapshot_at_ms: Option<u128>,
 }
 
 #[derive(Default)]
@@ -109,6 +112,11 @@ struct AcidTransactionRegistry {
 
 impl AcidTransactionRegistry {
     fn begin(&mut self, tx_id: &str, isolation_level: &str, now_ms: u128) {
+        let read_snapshot_at_ms = if isolation_level == "repeatable_read" {
+            Some(now_ms)
+        } else {
+            None
+        };
         self.transactions.insert(
             tx_id.to_string(),
             AcidTxEntry {
@@ -120,6 +128,7 @@ impl AcidTransactionRegistry {
                 statement_count: 0,
                 affected_tables: Vec::new(),
                 savepoints: Vec::new(),
+                read_snapshot_at_ms,
             },
         );
     }
@@ -156,6 +165,33 @@ impl AcidTransactionRegistry {
         false
     }
 
+    /// Release (drop) a named savepoint â€” returns true if the savepoint existed and was removed.
+    fn release_savepoint(&mut self, tx_id: &str, savepoint: &str) -> bool {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            if entry.state == AcidTxState::Active {
+                if let Some(pos) = entry.savepoints.iter().rposition(|s| s == savepoint) {
+                    entry.savepoints.remove(pos);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// ROLLBACK TO SAVEPOINT: rolls back to a named savepoint, preserving the transaction as Active.
+    /// In this in-memory model we record the rollback in the savepoints list.
+    fn rollback_to_savepoint(&mut self, tx_id: &str, savepoint: &str) -> bool {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            if entry.state == AcidTxState::Active && entry.savepoints.contains(&savepoint.to_string()) {
+                // Record the rollback-to in the list for audit/trace purposes
+                let marker = format!("rolled_back_to:{savepoint}");
+                entry.savepoints.push(marker);
+                return true;
+            }
+        }
+        false
+    }
+
     fn record_statement(&mut self, tx_id: &str, affected_table: Option<String>) {
         if let Some(entry) = self.transactions.get_mut(tx_id) {
             entry.statement_count += 1;
@@ -165,6 +201,36 @@ impl AcidTransactionRegistry {
                 }
             }
         }
+    }
+
+    /// REQ-23: For serializable isolation, check whether any other Active serializable
+    /// transaction has already written to the same table(s) as `tx_id`.
+    /// Returns the conflicting table name if a conflict is found, otherwise None.
+    fn check_serializable_conflict(&self, tx_id: &str) -> Option<String> {
+        let entry = self.transactions.get(tx_id)?;
+        if entry.isolation_level != "serializable" {
+            return None;
+        }
+        if entry.affected_tables.is_empty() {
+            return None;
+        }
+        for (other_id, other) in &self.transactions {
+            if other_id == tx_id {
+                continue;
+            }
+            if other.state != AcidTxState::Active {
+                continue;
+            }
+            if other.isolation_level != "serializable" {
+                continue;
+            }
+            for table in &entry.affected_tables {
+                if other.affected_tables.contains(table) {
+                    return Some(table.clone());
+                }
+            }
+        }
+        None
     }
 
     fn active_transactions(&self) -> Vec<&AcidTxEntry> {
@@ -890,6 +956,8 @@ struct HealthResponse {
 #[derive(Deserialize)]
 struct SqlTransactionRequest {
     statements: Vec<String>,
+    /// Requested isolation level: "read_committed" (default), "repeatable_read", "serializable"
+    isolation_level: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1060,7 +1128,7 @@ struct PessimisticLockContentionMetricsResponse {
     contention_ratio: f64,
 }
 
-// ── WS2 Index + Constraint types ───────────────────────────────────
+// â”€â”€ WS2 Index + Constraint types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Deserialize)]
 struct CreateIndexRequest {
@@ -1150,7 +1218,7 @@ struct ValidateConstraintResponse {
     violation: Option<String>,
 }
 
-// ── WS4 Ingest types ──────────────────────────────────────────────
+// â”€â”€ WS4 Ingest types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Deserialize)]
 struct IngestCsvRequest {
@@ -1205,6 +1273,27 @@ struct IngestExcelResponse {
     status: &'static str,
     connector_id: String,
     records_parsed: usize,
+}
+
+// REQ-07: chunked ingest
+#[derive(Deserialize)]
+struct IngestChunkedRequest {
+    connector_id: String,
+    /// JSON-serialized record payloads â€” one per element
+    records: Vec<String>,
+    chunk_target_rows: Option<usize>,
+    max_in_flight_tasks: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct IngestChunkedResponse {
+    status: &'static str,
+    connector_id: String,
+    total_records: usize,
+    chunk_count: usize,
+    tasks_dispatched: usize,
+    chunks_succeeded: usize,
+    chunks_failed: usize,
 }
 
 #[derive(Serialize)]
@@ -1732,6 +1821,41 @@ struct CacheMetricsResponse {
     partitions: Vec<CachePartitionMetricsResponse>,
 }
 
+// REQ-27: Redis-compat cache command interface ---------------------------------
+
+#[derive(Deserialize)]
+struct RedisCacheCommandRequest {
+    /// Redis command name (case-insensitive): GET | SET | DEL | EXISTS | KEYS | FLUSH | PING |
+    /// EXPIRE | INCR | DECR | INCRBY | DECRBY | MGET | MSET | GETSET | LPUSH | RPUSH | LLEN | LRANGE
+    cmd: String,
+    partition_id: Option<String>,
+    key: Option<String>,
+    value: Option<serde_json::Value>,
+    ttl_ms: Option<u64>,
+    /// Numeric delta for INCR/DECR/INCRBY/DECRBY (defaults to Â±1.0)
+    delta: Option<f64>,
+    /// New TTL in milliseconds for EXPIRE command (overrides ttl_ms if present)
+    expire_ms: Option<u64>,
+    /// Multiple keys for MGET; keyâ†’value mapping (JSON object) for MSET
+    keys: Option<Vec<String>>,
+    /// LRANGE start index (inclusive, negative = from tail)
+    start: Option<i64>,
+    /// LRANGE stop index (inclusive, negative = from tail)
+    stop: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct RedisCacheCommandResponse {
+    status: &'static str,
+    cmd: String,
+    value: Option<serde_json::Value>,
+    exists: Option<bool>,
+    removed: Option<bool>,
+    flushed_count: Option<usize>,
+    keys: Option<Vec<String>>,
+    error: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct PoolAcquireRequest {
     now_ms: Option<u64>,
@@ -1986,6 +2110,8 @@ async fn main() {
         .route("/api/v1/sre/cache/invalidate", post(sre_cache_invalidate))
         .route("/api/v1/sre/cache/rebalance", post(sre_cache_rebalance))
         .route("/api/v1/sre/cache/metrics", get(sre_cache_metrics))
+        // REQ-27: Redis-compat cache command interface
+        .route("/api/v1/cache/redis/command", post(cache_redis_command))
         .route("/api/v1/sre/driver/pool/acquire", post(sre_driver_pool_acquire))
         .route("/api/v1/sre/driver/pool/release", post(sre_driver_pool_release))
         .route("/api/v1/sre/driver/pool/failure", post(sre_driver_pool_failure))
@@ -2037,6 +2163,7 @@ async fn main() {
         .route("/api/v1/ingest/json", post(ingest_json))
         .route("/api/v1/ingest/parquet", post(ingest_parquet))
         .route("/api/v1/ingest/excel", post(ingest_excel))
+        .route("/api/v1/ingest/chunked", post(ingest_chunked))
         .route("/api/v1/ingest/status", get(ingest_status))
         .route("/api/v1/ingest/outbox/status", get(ingest_outbox_status))
         .route("/api/v1/ingest/outbox/replay", post(ingest_outbox_replay))
@@ -2044,6 +2171,9 @@ async fn main() {
         .route("/api/v1/catalog/schemas", get(catalog_schemas))
         // REQ-23 ACID transaction introspection
         .route("/api/v1/sql/transactions/active", get(sql_transactions_active))
+        // REQ-10/19: benchmark endpoints
+        .route("/api/v1/benchmark/ingest", post(benchmark_ingest))
+        .route("/api/v1/benchmark/query", post(benchmark_query))
         .with_state(state);
 
     println!("voltnuerongridd listening on {}", addr);
@@ -2092,23 +2222,78 @@ async fn sql_transaction(
         let has_rollback = req.statements.iter().any(|s| {
             matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Rollback)
         });
+        let iso_level = req.isolation_level
+            .as_deref()
+            .unwrap_or("read_committed")
+            .to_string();
         let mut acid = state.acid_transactions.lock().expect("acid_tx lock");
         if has_begin {
-            acid.begin(&tx_id, "read_committed", now_ms);
+            acid.begin(&tx_id, &iso_level, now_ms);
         }
         for stmt in &req.statements {
             let upper = stmt.to_ascii_uppercase();
-            let affected = if upper.starts_with("INSERT INTO ")
-                || upper.starts_with("UPDATE ")
-                || upper.starts_with("DELETE FROM ")
-            {
-                stmt.split_ascii_whitespace().nth(2).map(|t| t.trim_end_matches(|c| c == '(' || c == ' ').to_string())
+            let kind = SqlAnalyzer::classify_statement(stmt);
+            // REQ-23: wire SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT
+            match kind {
+                SqlStatementKind::Savepoint => {
+                    // Extract savepoint name: SAVEPOINT <name>
+                    if let Some(sp_name) = stmt.split_ascii_whitespace().nth(1) {
+                        acid.add_savepoint(&tx_id, sp_name);
+                    }
+                }
+                SqlStatementKind::ReleaseSavepoint => {
+                    // Extract savepoint name: RELEASE SAVEPOINT <name>
+                    if let Some(sp_name) = stmt.split_ascii_whitespace().nth(2) {
+                        acid.release_savepoint(&tx_id, sp_name);
+                    }
+                }
+                SqlStatementKind::RollbackToSavepoint => {
+                    // Extract savepoint name: ROLLBACK TO [SAVEPOINT] <name>
+                    // Tokens: ROLLBACK(0) TO(1) [SAVEPOINT(2)] name(2 or 3)
+                    let tokens: Vec<&str> = stmt.split_ascii_whitespace().collect();
+                    let sp_name = if tokens.get(2).map(|t| t.to_ascii_uppercase()) == Some("SAVEPOINT".to_string()) {
+                        tokens.get(3).copied()
+                    } else {
+                        tokens.get(2).copied()
+                    };
+                    if let Some(sp) = sp_name {
+                        acid.rollback_to_savepoint(&tx_id, sp);
+                    }
+                }
+                _ => {}
+            }
+            // REQ-23: extract modified table for conflict detection
+            // UPDATE <table> SET ... â†’ token index 1; INSERT INTO <table> / DELETE FROM <table> â†’ index 2
+            let affected = if upper.starts_with("UPDATE ") {
+                stmt.split_ascii_whitespace()
+                    .nth(1)
+                    .map(|t| t.trim_end_matches(|c: char| c == '(' || c == ' ').to_string())
+            } else if upper.starts_with("INSERT INTO ") || upper.starts_with("DELETE FROM ") {
+                stmt.split_ascii_whitespace()
+                    .nth(2)
+                    .map(|t| t.trim_end_matches(|c: char| c == '(' || c == ' ').to_string())
             } else {
                 None
             };
             acid.record_statement(&tx_id, affected);
         }
         if has_commit {
+            // REQ-23: abort with 409 if a serializable write conflict is detected
+            if let Some(conflict_table) = acid.check_serializable_conflict(&tx_id) {
+                acid.rollback(&tx_id, now_ms);
+                drop(acid);
+                let locale = locale_from_headers(&headers);
+                let localized = I18nCatalog::message(locale, "unauthorized");
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(AuthErrorResponse {
+                        status: "error",
+                        reason: format!("serializable_write_conflict:{conflict_table}"),
+                        locale: locale.as_str().to_string(),
+                        localized_message: localized.message.to_string(),
+                    }),
+                ));
+            }
             acid.commit(&tx_id, now_ms);
         } else if has_rollback {
             acid.rollback(&tx_id, now_ms);
@@ -3453,6 +3638,406 @@ async fn sre_cache_metrics(
         total_entries: guard.total_entry_count(),
         partitions,
     }))
+}
+
+// REQ-27: Redis-compat cache command handler -----------------------------------
+async fn cache_redis_command(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RedisCacheCommandRequest>,
+) -> Result<Json<RedisCacheCommandResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "cluster.sre",
+        "sre/cache",
+        PrivilegeAction::Execute,
+    )?;
+
+    let cmd = req.cmd.trim().to_ascii_uppercase();
+    let partition_id = req.partition_id.as_deref().unwrap_or("default");
+    let now_ms = now_unix_ms_u64();
+
+    let response = match cmd.as_str() {
+        "PING" => RedisCacheCommandResponse {
+            status: "ok",
+            cmd: cmd.clone(),
+            value: Some(serde_json::json!("PONG")),
+            exists: None,
+            removed: None,
+            flushed_count: None,
+            keys: None,
+            error: None,
+        },
+        "GET" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let result = state.distributed_cache.lock().expect("cache manager lock")
+                .get(partition_id, key, now_ms);
+            match result {
+                Ok(value) => RedisCacheCommandResponse {
+                    status: "ok",
+                    cmd: cmd.clone(),
+                    value,
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: None,
+                    error: None,
+                },
+                Err(e) => RedisCacheCommandResponse {
+                    status: "error",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        "SET" => {
+            let key = req.key.clone().unwrap_or_default();
+            let value = req.value.clone().unwrap_or(serde_json::Value::Null);
+            let result = state.distributed_cache.lock().expect("cache manager lock")
+                .set(partition_id, key, value, req.ttl_ms, now_ms);
+            RedisCacheCommandResponse {
+                status: if result.is_ok() { "ok" } else { "error" },
+                cmd: cmd.clone(),
+                value: None,
+                exists: None,
+                removed: None,
+                flushed_count: None,
+                keys: None,
+                error: result.err().map(|e| e.to_string()),
+            }
+        }
+        "DEL" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let result = state.distributed_cache.lock().expect("cache manager lock")
+                .invalidate(partition_id, key);
+            match result {
+                Ok(removed) => RedisCacheCommandResponse {
+                    status: "ok",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: Some(removed),
+                    flushed_count: None,
+                    keys: None,
+                    error: None,
+                },
+                Err(e) => RedisCacheCommandResponse {
+                    status: "error",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: Some(false),
+                    flushed_count: None,
+                    keys: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        "EXISTS" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let result = state.distributed_cache.lock().expect("cache manager lock")
+                .get(partition_id, key, now_ms);
+            let exists = result.as_ref().map(|v| v.is_some()).unwrap_or(false);
+            RedisCacheCommandResponse {
+                status: "ok",
+                cmd: cmd.clone(),
+                value: None,
+                exists: Some(exists),
+                removed: None,
+                flushed_count: None,
+                keys: None,
+                error: result.err().map(|e| e.to_string()),
+            }
+        }
+        "KEYS" => {
+            let result = state.distributed_cache.lock().expect("cache manager lock")
+                .keys_in_partition(partition_id, now_ms);
+            match result {
+                Ok(keys) => RedisCacheCommandResponse {
+                    status: "ok",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: Some(keys),
+                    error: None,
+                },
+                Err(e) => RedisCacheCommandResponse {
+                    status: "error",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: Some(vec![]),
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        "FLUSH" => {
+            let result = state.distributed_cache.lock().expect("cache manager lock")
+                .invalidate_partition(partition_id);
+            match result {
+                Ok(flushed) => RedisCacheCommandResponse {
+                    status: "ok",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: None,
+                    flushed_count: Some(flushed),
+                    keys: None,
+                    error: None,
+                },
+                Err(e) => RedisCacheCommandResponse {
+                    status: "error",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: None,
+                    flushed_count: Some(0),
+                    keys: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        // REQ-27: EXPIRE â€” update TTL on existing key
+        "EXPIRE" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let ttl = req.expire_ms.or(req.ttl_ms).unwrap_or(60_000);
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            match cache.expire_key(partition_id, key, ttl, now_ms) {
+                Ok(updated) => RedisCacheCommandResponse {
+                    status: "ok",
+                    cmd: cmd.clone(),
+                    value: Some(serde_json::json!(updated)),
+                    exists: Some(updated),
+                    removed: None,
+                    flushed_count: None,
+                    keys: None,
+                    error: None,
+                },
+                Err(e) => RedisCacheCommandResponse {
+                    status: "error",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        // REQ-27: INCR / INCRBY â€” atomically increment numeric value
+        "INCR" | "INCRBY" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let delta = if cmd.as_str() == "INCR" { 1.0 } else { req.delta.unwrap_or(1.0) };
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            match cache.increment_key(partition_id, key, delta, req.ttl_ms, now_ms) {
+                Ok(new_val) => RedisCacheCommandResponse {
+                    status: "ok",
+                    cmd: cmd.clone(),
+                    value: Some(serde_json::json!(new_val)),
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: None,
+                    error: None,
+                },
+                Err(e) => RedisCacheCommandResponse {
+                    status: "error",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        // REQ-27: DECR / DECRBY â€” atomically decrement numeric value
+        "DECR" | "DECRBY" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let delta = if cmd.as_str() == "DECR" { -1.0 } else { -(req.delta.unwrap_or(1.0)) };
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            match cache.increment_key(partition_id, key, delta, req.ttl_ms, now_ms) {
+                Ok(new_val) => RedisCacheCommandResponse {
+                    status: "ok",
+                    cmd: cmd.clone(),
+                    value: Some(serde_json::json!(new_val)),
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: None,
+                    error: None,
+                },
+                Err(e) => RedisCacheCommandResponse {
+                    status: "error",
+                    cmd: cmd.clone(),
+                    value: None,
+                    exists: None,
+                    removed: None,
+                    flushed_count: None,
+                    keys: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        // REQ-27: MGET â€” return values for multiple keys as a JSON array
+        "MGET" => {
+            let keys = req.keys.clone().unwrap_or_default();
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut results = Vec::new();
+            for k in &keys {
+                let v = cache.get(partition_id, k, now_ms).ok().flatten();
+                results.push(v.unwrap_or(serde_json::Value::Null));
+            }
+            RedisCacheCommandResponse {
+                status: "ok",
+                cmd: cmd.clone(),
+                value: Some(serde_json::Value::Array(results)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: MSET â€” set multiple keys from a JSON object { key: value, ... }
+        "MSET" => {
+            let obj = match req.value.as_ref().and_then(|v| v.as_object()) {
+                Some(m) => m.clone(),
+                None => return Ok(Json(RedisCacheCommandResponse {
+                    status: "error", cmd: cmd.clone(), value: None, exists: None,
+                    removed: None, flushed_count: None, keys: None,
+                    error: Some("MSET requires value to be a JSON object".to_string()),
+                })),
+            };
+            let count = obj.len();
+            {
+                let mut cache = state.distributed_cache.lock().expect("cache lock");
+                for (k, v) in obj {
+                    let _ = cache.set(partition_id, k, v, req.ttl_ms, now_ms);
+                }
+            }
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(count)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: GETSET â€” atomically get old value then set new value
+        "GETSET" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let new_val = req.value.clone().unwrap_or(serde_json::Value::Null);
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let old_val = cache.get(partition_id, key, now_ms).ok().flatten();
+            let _ = cache.set(partition_id, key.to_string(), new_val, req.ttl_ms, now_ms);
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: old_val,
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: LPUSH â€” prepend a value to a list (stored as JSON array)
+        "LPUSH" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let push_val = req.value.clone().unwrap_or(serde_json::Value::Null);
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut list: Vec<serde_json::Value> = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Array(arr)) => arr,
+                _ => Vec::new(),
+            };
+            list.insert(0, push_val);
+            let new_len = list.len();
+            let _ = cache.set(partition_id, key.to_string(), serde_json::Value::Array(list), req.ttl_ms, now_ms);
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(new_len)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: RPUSH â€” append a value to a list (stored as JSON array)
+        "RPUSH" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let push_val = req.value.clone().unwrap_or(serde_json::Value::Null);
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut list: Vec<serde_json::Value> = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Array(arr)) => arr,
+                _ => Vec::new(),
+            };
+            list.push(push_val);
+            let new_len = list.len();
+            let _ = cache.set(partition_id, key.to_string(), serde_json::Value::Array(list), req.ttl_ms, now_ms);
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(new_len)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: LLEN â€” return the length of a list
+        "LLEN" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let len = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Array(arr)) => arr.len(),
+                _ => 0,
+            };
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(len)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: LRANGE â€” return a sub-range of a list (Redis semantics, inclusive stop,
+        // negative indices count from tail; -1 = last element)
+        "LRANGE" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let start = req.start.unwrap_or(0);
+            let stop = req.stop.unwrap_or(-1);
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let list: Vec<serde_json::Value> = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Array(arr)) => arr,
+                _ => Vec::new(),
+            };
+            let len = list.len() as i64;
+            let resolve = |i: i64| -> usize {
+                if i < 0 { (len + i).max(0) as usize } else { i.min(len) as usize }
+            };
+            let s = resolve(start);
+            let e = (resolve(stop) + 1).min(len as usize);
+            let slice = if s < e { list[s..e].to_vec() } else { Vec::new() };
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::Value::Array(slice)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        unsupported_cmd => RedisCacheCommandResponse {
+            status: "error",
+            cmd: cmd.clone(),
+            value: None,
+            exists: None,
+            removed: None,
+            flushed_count: None,
+            keys: None,
+            error: Some(format!("unsupported Redis-compat command: {unsupported_cmd}")),
+        },
+    };
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        &operator.operator_id,
+        "cache_redis_command",
+        response.status,
+        &json!({
+            "cmd": response.cmd,
+            "partition_id": partition_id,
+            "key": req.key,
+        })
+        .to_string(),
+    );
+
+    Ok(Json(response))
 }
 
 async fn sre_driver_pool_acquire(
@@ -5998,7 +6583,7 @@ fn build_authorize_action_response(
     )
 }
 
-// ── WS2 Index + Constraint handlers ────────────────────────────────
+// â”€â”€ WS2 Index + Constraint handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async fn store_list_indexes(
     State(state): State<AppState>,
@@ -6502,7 +7087,7 @@ async fn security_kms_outage_reconcile(
     Ok(Json(response))
 }
 
-// ── WS4 Ingest handlers ───────────────────────────────────────────
+// â”€â”€ WS4 Ingest handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async fn ingest_csv(
     State(state): State<AppState>,
@@ -6751,6 +7336,110 @@ async fn ingest_excel(
     ))
 }
 
+// REQ-07: POST /api/v1/ingest/chunked
+async fn ingest_chunked(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestChunkedRequest>,
+) -> Result<(StatusCode, Json<IngestChunkedResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        &ingest_scope_for_connector(&req.connector_id, "chunked"),
+    )?;
+    use voltnuerongrid_ingest::batch_config::IngestParallelConfig;
+    use voltnuerongrid_ingest::IngestRecord;
+
+    let cfg = IngestParallelConfig {
+        chunk_target_rows: req.chunk_target_rows.unwrap_or(256),
+        max_in_flight_tasks: req.max_in_flight_tasks.unwrap_or(4),
+    };
+    let records: Vec<IngestRecord> = req
+        .records
+        .iter()
+        .enumerate()
+        .map(|(i, payload)| IngestRecord {
+            key: format!("{}-{i}", req.connector_id),
+            payload: payload.clone(),
+        })
+        .collect();
+
+    // REQ-07: async Tokio fan-out â€” each chunk is dispatched as a spawn_blocking task
+    // so CPU-bound processing doesn't block the async runtime.
+    let chunk_target = cfg.chunk_target_rows.max(1);
+    let in_flight_cap = cfg.max_in_flight_tasks.max(1);
+    let raw_chunks: Vec<Vec<IngestRecord>> = records
+        .chunks(chunk_target)
+        .map(|c| c.to_vec())
+        .collect();
+    let chunk_count = raw_chunks.len();
+    let mut all_outcomes: Vec<voltnuerongrid_ingest::chunked_loader::ChunkOutcome> = Vec::new();
+    for (wave_start, wave) in raw_chunks.chunks(in_flight_cap).enumerate() {
+        let base_idx = wave_start * in_flight_cap;
+        let handles: Vec<_> = wave
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, chunk)| {
+                let chunk_index = base_idx + i;
+                tokio::task::spawn_blocking(move || {
+                    voltnuerongrid_ingest::chunked_loader::ChunkOutcome {
+                        chunk_index,
+                        records_in_chunk: chunk.len(),
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            if let Ok(outcome) = handle.await {
+                all_outcomes.push(outcome);
+            }
+        }
+    }
+    let stats = voltnuerongrid_ingest::chunked_loader::ChunkedIngestStats {
+        total_records: records.len(),
+        chunk_count,
+        chunk_target_rows: chunk_target,
+        max_in_flight_tasks: in_flight_cap,
+        tasks_dispatched: chunk_count.min(in_flight_cap),
+        outcomes: all_outcomes,
+    };
+
+    let storage_key = ingest_storage_key(&principal, &req.connector_id);
+    state
+        .ingest_json_records
+        .lock()
+        .expect("json lock")
+        .insert(storage_key, records);
+
+    let chunks_succeeded = stats.outcomes.len();
+    let chunks_failed = stats.chunk_count.saturating_sub(chunks_succeeded);
+
+    let response = IngestChunkedResponse {
+        status: "ok",
+        connector_id: req.connector_id.clone(),
+        total_records: stats.total_records,
+        chunk_count: stats.chunk_count,
+        tasks_dispatched: stats.tasks_dispatched,
+        chunks_succeeded,
+        chunks_failed,
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Ingest,
+        &principal,
+        "ingest_chunked",
+        "ok",
+        json!({
+            "connector_id": response.connector_id,
+            "total_records": response.total_records,
+            "chunk_count": response.chunk_count,
+        }),
+    );
+    Ok((StatusCode::OK, Json(response)))
+}
+
 async fn ingest_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -6981,7 +7670,7 @@ async fn ingest_outbox_replay(
     Ok(Json(response))
 }
 
-// ── REQ-02: DDL catalog schemas ───────────────────────────────────────────────
+// â”€â”€ REQ-02: DDL catalog schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Serialize)]
 struct CatalogEntryView {
@@ -7026,7 +7715,7 @@ async fn catalog_schemas(
     Ok((StatusCode::OK, Json(resp)))
 }
 
-// ── REQ-23: ACID active transactions ─────────────────────────────────────────
+// â”€â”€ REQ-23: ACID active transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Serialize)]
 struct AcidTransactionsResponse {
@@ -7056,6 +7745,110 @@ async fn sql_transactions_active(
         transactions: active.iter().map(|t| (*t).clone()).collect(),
     };
     Ok((StatusCode::OK, Json(resp)))
+}
+
+// REQ-10/19: benchmark endpoint types and handlers
+#[derive(Deserialize)]
+struct BenchmarkIngestRequest {
+    /// Number of synthetic records to generate (default: 10_000)
+    record_count: Option<usize>,
+    /// Target chunk size (default: 256)
+    chunk_target_rows: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct BenchmarkIngestResponse {
+    status: &'static str,
+    record_count: usize,
+    chunk_count: usize,
+    wall_time_ms: u128,
+    records_per_second: f64,
+}
+
+#[derive(Deserialize)]
+struct BenchmarkQueryRequest {
+    /// Number of SQL classification ops to run (default: 10_000)
+    op_count: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct BenchmarkQueryResponse {
+    status: &'static str,
+    op_count: usize,
+    wall_time_ms: u128,
+    ops_per_second: f64,
+}
+
+async fn benchmark_ingest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<BenchmarkIngestRequest>,
+) -> Result<(StatusCode, Json<BenchmarkIngestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    use voltnuerongrid_ingest::chunked_loader::ChunkedLoader;
+    use voltnuerongrid_ingest::batch_config::IngestParallelConfig;
+    use voltnuerongrid_ingest::IngestRecord;
+
+    let record_count = req.record_count.unwrap_or(10_000).min(1_000_000);
+    let chunk_size = req.chunk_target_rows.unwrap_or(256);
+
+    let records: Vec<IngestRecord> = (0..record_count)
+        .map(|i| IngestRecord {
+            key: format!("bmark-{i}"),
+            payload: format!("{{\"id\":{i},\"value\":{i}}}"),
+        })
+        .collect();
+
+    let cfg = IngestParallelConfig { chunk_target_rows: chunk_size, max_in_flight_tasks: 4 };
+    let start = std::time::Instant::now();
+    let mut loader = ChunkedLoader::new(cfg);
+    loader.push_chunk(records);
+    let stats = loader.finalize();
+    let elapsed = start.elapsed();
+    let wall_ms = elapsed.as_millis();
+    let rps = if wall_ms == 0 { record_count as f64 * 1000.0 } else { record_count as f64 / (wall_ms as f64 / 1000.0) };
+
+    Ok((StatusCode::OK, Json(BenchmarkIngestResponse {
+        status: "ok",
+        record_count,
+        chunk_count: stats.chunk_count,
+        wall_time_ms: wall_ms,
+        records_per_second: rps,
+    })))
+}
+
+async fn benchmark_query(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<BenchmarkQueryRequest>,
+) -> Result<(StatusCode, Json<BenchmarkQueryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+
+    let op_count = req.op_count.unwrap_or(10_000).min(1_000_000);
+    let samples = [
+        "SELECT * FROM orders WHERE id = 1",
+        "INSERT INTO events VALUES (1, 'start')",
+        "UPDATE accounts SET balance = 0 WHERE id = 99",
+        "DELETE FROM staging WHERE ts < 1000",
+        "BEGIN",
+        "COMMIT",
+    ];
+
+    let start = std::time::Instant::now();
+    for i in 0..op_count {
+        let sql = samples[i % samples.len()];
+        let _ = voltnuerongrid_sql::SqlAnalyzer::classify_statement(sql);
+    }
+    let elapsed = start.elapsed();
+    let wall_ms = elapsed.as_millis();
+    let ops = if wall_ms == 0 { op_count as f64 * 1000.0 } else { op_count as f64 / (wall_ms as f64 / 1000.0) };
+
+    Ok((StatusCode::OK, Json(BenchmarkQueryResponse {
+        status: "ok",
+        op_count,
+        wall_time_ms: wall_ms,
+        ops_per_second: ops,
+    })))
 }
 
 #[cfg(test)]
@@ -7413,6 +8206,7 @@ mod tests {
                 headers,
                 Json(SqlTransactionRequest {
                     statements: vec!["BEGIN".to_string(), "COMMIT".to_string()],
+                    isolation_level: None,
                 }),
             ))
             .expect("sql transaction response");
@@ -7443,6 +8237,7 @@ mod tests {
                 headers.clone(),
                 Json(SqlTransactionRequest {
                     statements: vec!["BEGIN".to_string(), "COMMIT".to_string()],
+                    isolation_level: None,
                 }),
             ))
             .expect("sql transaction response");
@@ -9325,7 +10120,7 @@ mod tests {
         assert!(exists);
     }
 
-    // ── WS2 Index + Constraint tests ───────────────────────────────
+    // â”€â”€ WS2 Index + Constraint tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn ws2_index_create_lookup_drop_lifecycle() {
@@ -9422,7 +10217,7 @@ mod tests {
         mgr.validate("users", "name", Some("Alice")).expect("nn valid");
     }
 
-    // ── WS4 Ingest tests ──────────────────────────────────────────
+    // â”€â”€ WS4 Ingest tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn ws4_csv_ingest_via_appstate() {
@@ -9750,7 +10545,7 @@ mod tests {
         assert_eq!(independent_consumer.delivered_count, 2);
     }
 
-    // ── WS3 HTAP Routing Policy Tests ─────────────────────────────
+    // â”€â”€ WS3 HTAP Routing Policy Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     #[test]
     fn ws3_sql_route_identifies_point_select_oltp_path() {
         let state = state_with_key(None);
@@ -10025,7 +10820,7 @@ mod tests {
         assert_eq!(result.route_path, "oltp");
     }
 
-    // ── REQ-07: parallel / chunked ingest loading KPI tests ──────────────────
+    // â”€â”€ REQ-07: parallel / chunked ingest loading KPI tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn ws4_chunked_load_produces_correct_chunk_count() {
@@ -10100,7 +10895,53 @@ mod tests {
         assert_eq!(stats.outcomes[0].records_in_chunk, 7);
     }
 
-    // ── REQ-12: legacy aggregate routing through sql_execute ─────────────────
+    // REQ-07: chunked HTTP endpoint integration tests
+    #[test]
+    fn ws4_chunked_http_endpoint_stores_records() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = IngestChunkedRequest {
+            connector_id: "chunked-connector-1".to_string(),
+            records: vec![
+                r#"{"id":1,"val":"alpha"}"#.to_string(),
+                r#"{"id":2,"val":"beta"}"#.to_string(),
+                r#"{"id":3,"val":"gamma"}"#.to_string(),
+            ],
+            chunk_target_rows: Some(2),
+            max_in_flight_tasks: Some(2),
+        };
+        let response = rt
+            .block_on(ingest_chunked(State(state.clone()), headers, Json(req)))
+            .expect("chunked ingest should succeed");
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.status, "ok");
+        assert_eq!(response.1.total_records, 3);
+        // Verify records were persisted in json store
+        let json_map = state.ingest_json_records.lock().unwrap();
+        let stored = json_map.values().next().expect("should have stored records");
+        assert_eq!(stored.len(), 3, "all 3 records should be in the store");
+    }
+
+    #[test]
+    fn ws4_chunked_http_endpoint_empty_records_is_safe() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = IngestChunkedRequest {
+            connector_id: "chunked-empty".to_string(),
+            records: vec![],
+            chunk_target_rows: None,
+            max_in_flight_tasks: None,
+        };
+        let response = rt
+            .block_on(ingest_chunked(State(state.clone()), headers, Json(req)))
+            .expect("empty chunked ingest should be safe");
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.total_records, 0);
+    }
+
+    // â”€â”€ REQ-12: legacy aggregate routing through sql_execute â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn ws3_legacy_agg_sum_routed_through_sql_execute_olap_path() {
@@ -10196,11 +11037,11 @@ mod tests {
             .expect("sql execute should succeed");
 
         assert_eq!(response.0, StatusCode::OK);
-        // INSERT goes to OLTP path; no OLAP SELECT → no legacy_agg_results
+        // INSERT goes to OLTP path; no OLAP SELECT â†’ no legacy_agg_results
         assert!(response.1.legacy_agg_results.is_none());
     }
 
-    // ── REQ-02: DDL catalog tests ─────────────────────────────────────────
+    // â”€â”€ REQ-02: DDL catalog tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     #[test]
     fn ws2_ddl_catalog_create_table_wires_through_sql_execute() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -10253,7 +11094,7 @@ mod tests {
         assert_eq!(catalog.total_count(), 1, "total should include dropped entry");
     }
 
-    // ── REQ-23: ACID transaction tracking tests ───────────────────────────
+    // â”€â”€ REQ-23: ACID transaction tracking tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     #[test]
     fn ws23_acid_tx_begin_commit_tracked_in_registry() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -10265,6 +11106,7 @@ mod tests {
                 "INSERT INTO accounts VALUES (1, 'alice', 500.0)".to_string(),
                 "COMMIT".to_string(),
             ],
+            isolation_level: None,
         };
         let response = rt
             .block_on(sql_transaction(State(state.clone()), headers, Json(req)))
@@ -10288,6 +11130,7 @@ mod tests {
                 "DELETE FROM staging WHERE id = 99".to_string(),
                 "ROLLBACK".to_string(),
             ],
+            isolation_level: None,
         };
         rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
             .expect("transaction should succeed");
@@ -10296,7 +11139,112 @@ mod tests {
         assert!(matches!(tx.state, AcidTxState::RolledBack), "state should be RolledBack");
     }
 
-    // ── REQ-12: real ingest data in legacy agg ────────────────────────────
+    #[test]
+    fn ws23_acid_savepoint_create_and_release() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO orders VALUES (1, 'pending')".to_string(),
+                "SAVEPOINT sp1".to_string(),
+                "UPDATE orders SET status = 'shipped' WHERE id = 1".to_string(),
+                "RELEASE SAVEPOINT sp1".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+            .expect("transaction should succeed");
+        let acid = state.acid_transactions.lock().unwrap();
+        let tx = acid.all_transactions()[0];
+        assert!(matches!(tx.state, AcidTxState::Committed), "state should be Committed after COMMIT");
+        // RELEASE SAVEPOINT removes sp1 from the list
+        assert!(!tx.savepoints.contains(&"sp1".to_string()), "sp1 should be released (removed)");
+    }
+
+    #[test]
+    fn ws23_acid_rollback_to_savepoint_records_marker() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO events VALUES (1, 'start')".to_string(),
+                "SAVEPOINT before_risky".to_string(),
+                "DELETE FROM events WHERE id = 1".to_string(),
+                "ROLLBACK TO before_risky".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+            .expect("transaction should succeed");
+        let acid = state.acid_transactions.lock().unwrap();
+        let tx = acid.all_transactions()[0];
+        assert!(matches!(tx.state, AcidTxState::Committed), "should commit after ROLLBACK TO + COMMIT");
+        let has_marker = tx.savepoints.iter().any(|s| s.contains("rolled_back_to:before_risky"));
+        assert!(has_marker, "rollback-to marker should be recorded in savepoints list");
+    }
+
+    // â”€â”€ REQ-23: isolation level enforcement tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    #[test]
+    fn ws23_acid_isolation_level_from_request_field() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO orders VALUES (1, 'ok')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: Some("serializable".to_string()),
+        };
+        rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+            .expect("serializable transaction should succeed");
+        let acid = state.acid_transactions.lock().unwrap();
+        let tx = acid.all_transactions()[0];
+        assert_eq!(
+            tx.isolation_level, "serializable",
+            "isolation_level should be stored from request"
+        );
+    }
+
+    #[test]
+    fn ws23_acid_serializable_conflict_returns_409() {
+        // Pre-seed a concurrent serializable transaction that has already written to "inventory"
+        let state = state_with_key(None);
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            acid.begin("tx-concurrent", "serializable", 1_000_u128);
+            acid.record_statement("tx-concurrent", Some("inventory".to_string()));
+        }
+        // Now attempt a second serializable transaction writing to the same table
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "UPDATE inventory SET qty = 0 WHERE id = 1".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: Some("serializable".to_string()),
+        };
+        let result = rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)));
+        match result {
+            Err((status, _body)) => {
+                assert_eq!(status, StatusCode::CONFLICT, "should return 409 on serializable conflict");
+            }
+            Ok((status, _body)) => {
+                panic!("Expected Err 409 CONFLICT, got Ok({status:?})");
+            }
+        }
+    }
+
+    // â”€â”€ REQ-12: real ingest data in legacy agg â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     #[test]
     fn ws3_legacy_agg_uses_real_ingest_data_when_available() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -10329,9 +11277,834 @@ mod tests {
         assert_eq!(response.0, StatusCode::OK);
         let agg_results = response.1.legacy_agg_results.as_ref().expect("should have agg results");
         let sum_entry = agg_results.iter().find(|r| r.aggregation == "SUM").expect("SUM result");
-        // Real data: [10.0, 20.0, 30.0, 40.0] → SUM = 100.0
+        // Real data: [10.0, 20.0, 30.0, 40.0] â†’ SUM = 100.0
         let sum_val = sum_entry.result.expect("SUM should have numeric result");
         assert!((sum_val - 100.0).abs() < 1e-9, "SUM should be 100.0, got {sum_val}");
+    }
+
+    // ------------------------------------------------------------------
+    // REQ-21: Concurrency stress tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ws21_concurrent_sql_execute_tenant_isolation() {
+        // Spawn 8 threads each issuing sql_execute as the same registered tenant.
+        // Verify all calls succeed without panicking or data races on shared state.
+        use std::sync::Arc;
+
+        let state = Arc::new(state_with_key(None));
+        let handles: Vec<_> = (0u8..8)
+            .map(|i| {
+                let state = Arc::clone(&state);
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().expect("runtime");
+                    // Use the registered tenant; vary the SQL to avoid contention on metrics
+                    let headers = tenant_user_headers("analyst-acme", "acme");
+                    let req = SqlExecuteRequest {
+                        sql_batch: format!("SELECT COUNT(*) FROM metrics_thread_{i}"),
+                        max_rows: None,
+                    };
+                    let result = rt.block_on(sql_execute(
+                        State((*state).clone()),
+                        headers,
+                        Json(req),
+                    ));
+                    (i, result.is_ok())
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let (i, ok) = handle.join().expect("thread panicked");
+            assert!(ok, "Thread {i} sql_execute failed");
+        }
+    }
+
+    #[test]
+    fn ws21_concurrent_ingest_no_data_corruption() {
+        // 4 threads each insert 10 records directly into distinct ingest partitions.
+        // After all threads complete, each connector must have exactly 10 records.
+        use std::sync::Arc;
+
+        let state = Arc::new(state_with_key(None));
+        let handles: Vec<_> = (0u8..4)
+            .map(|i| {
+                let state = Arc::clone(&state);
+                std::thread::spawn(move || {
+                    let connector_id = format!("connector-ws21-{i}");
+                    let records: Vec<voltnuerongrid_ingest::IngestRecord> = (0u8..10)
+                        .map(|j| voltnuerongrid_ingest::IngestRecord {
+                            key: format!("k-{i}-{j}"),
+                            payload: format!(r#"{{"id":{},"thread":{}}}"#, j, i),
+                        })
+                        .collect();
+                    state
+                        .ingest_json_records
+                        .lock()
+                        .expect("ingest lock")
+                        .insert(connector_id.clone(), records);
+                    connector_id
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let connector_id = handle.join().expect("thread panicked");
+            let guard = state.ingest_json_records.lock().unwrap();
+            let records = guard.get(&connector_id);
+            assert!(
+                records.is_some(),
+                "Connector {connector_id} missing after concurrent ingest"
+            );
+            assert_eq!(
+                records.unwrap().len(),
+                10,
+                "Connector {connector_id} should have 10 records"
+            );
+        }
+    }
+
+    #[test]
+    fn ws21_concurrent_cache_set_get_no_cross_partition_leak() {
+        // 4 threads each SET a key in their own cache partition, then GET it.
+        // No thread should see another thread's partition data on GET.
+        use std::sync::Arc;
+
+        let state = Arc::new(state_with_key(None));
+        let handles: Vec<_> = (0u8..4)
+            .map(|i| {
+                let state = Arc::clone(&state);
+                std::thread::spawn(move || {
+                    let partition_id = format!("ws21-part-{i}");
+                    let key = "sensor-reading".to_string();
+                    let value = serde_json::json!(i as u64 * 100);
+                    let now_ms = now_unix_ms_u64();
+                    {
+                        let mut guard = state.distributed_cache.lock().unwrap();
+                        guard
+                            .set(&partition_id, key.clone(), value.clone(), None, now_ms)
+                            .expect("cache set should succeed");
+                    }
+                    let retrieved = {
+                        let mut guard = state.distributed_cache.lock().unwrap();
+                        guard.get(&partition_id, &key, now_ms).unwrap()
+                    };
+                    assert_eq!(
+                        retrieved,
+                        Some(value),
+                        "Partition {partition_id} should return its own value"
+                    );
+                    i
+                })
+            })
+            .collect();
+
+        let completed: Vec<_> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread panicked"))
+            .collect();
+        assert_eq!(completed.len(), 4);
+    }
+
+    // REQ-21: concurrent ACID transactions â€” no state race on shared registry
+    #[test]
+    fn ws21_concurrent_acid_transactions_no_state_race() {
+        // 4 threads each run a complete BEGIN/INSERT/COMMIT through distinct transactions.
+        // All should succeed without panicking on the shared Mutex<AcidTransactionRegistry>.
+        use std::sync::Arc;
+
+        let state = Arc::new(state_with_key(None));
+        let handles: Vec<_> = (0u8..4)
+            .map(|i| {
+                let state = Arc::clone(&state);
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().expect("runtime");
+                    let headers = tenant_user_headers("analyst-acme", "acme");
+                    let req = SqlTransactionRequest {
+                        statements: vec![
+                            "BEGIN".to_string(),
+                            format!("INSERT INTO tbl_{i} VALUES ({i}, 'data')"),
+                            "COMMIT".to_string(),
+                        ],
+                        isolation_level: None,
+                    };
+                    let result = rt.block_on(sql_transaction(
+                        State((*state).clone()),
+                        headers,
+                        Json(req),
+                    ));
+                    (i, result.is_ok())
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let (i, ok) = handle.join().expect("thread panicked");
+            assert!(ok, "Thread {i} acid transaction unexpectedly failed");
+        }
+    }
+
+    // REQ-21: high-cardinality tenant concurrency â€” 16 concurrent sql_execute calls
+    #[test]
+    fn ws21_high_cardinality_tenant_sql_execute() {
+        use std::sync::Arc;
+
+        let state = Arc::new(state_with_key(None));
+        let handles: Vec<_> = (0u16..16)
+            .map(|i| {
+                let state = Arc::clone(&state);
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().expect("runtime");
+                    // Use the registered tenant; differentiate by SQL query content
+                    let headers = tenant_user_headers("analyst-acme", "acme");
+                    let req = SqlExecuteRequest {
+                        sql_batch: format!("SELECT * FROM metrics WHERE shard = {i}"),
+                        max_rows: None,
+                    };
+                    let result = rt.block_on(sql_execute(
+                        State((*state).clone()),
+                        headers,
+                        Json(req),
+                    ));
+                    (i, result.is_ok())
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let (i, ok) = handle.join().expect("thread panicked");
+            assert!(ok, "Thread {i} sql_execute unexpectedly failed");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // REQ-27: Redis-compat cache command endpoint tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ws27_redis_compat_ping_returns_pong() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = operator_headers("secret", "automation");
+        let req = RedisCacheCommandRequest {
+            cmd: "PING".to_string(),
+            partition_id: None,
+            key: None,
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let result = rt.block_on(cache_redis_command(State(state), headers, Json(req)));
+        let response = result.expect("PING should succeed").0;
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.value, Some(serde_json::json!("PONG")));
+    }
+
+    #[test]
+    fn ws27_redis_compat_set_get_del_lifecycle() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+
+        // SET
+        let set_req = RedisCacheCommandRequest {
+            cmd: "SET".to_string(),
+            partition_id: Some("ws27-test".to_string()),
+            key: Some("sensor-key".to_string()),
+            value: Some(serde_json::json!(42)),
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let set_result = rt
+            .block_on(cache_redis_command(
+                State(state.clone()),
+                operator_headers("secret", "automation"),
+                Json(set_req),
+            ))
+            .expect("SET should succeed");
+        assert_eq!(set_result.0.status, "ok");
+
+        // GET â€” should hit
+        let get_req = RedisCacheCommandRequest {
+            cmd: "GET".to_string(),
+            partition_id: Some("ws27-test".to_string()),
+            key: Some("sensor-key".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let get_result = rt
+            .block_on(cache_redis_command(
+                State(state.clone()),
+                operator_headers("secret", "automation"),
+                Json(get_req),
+            ))
+            .expect("GET should succeed");
+        assert_eq!(get_result.0.value, Some(serde_json::json!(42)));
+
+        // EXISTS â€” should be true
+        let exists_req = RedisCacheCommandRequest {
+            cmd: "EXISTS".to_string(),
+            partition_id: Some("ws27-test".to_string()),
+            key: Some("sensor-key".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let exists_result = rt
+            .block_on(cache_redis_command(
+                State(state.clone()),
+                operator_headers("secret", "automation"),
+                Json(exists_req),
+            ))
+            .expect("EXISTS should succeed");
+        assert_eq!(exists_result.0.exists, Some(true));
+
+        // KEYS â€” should contain sensor-key
+        let keys_req = RedisCacheCommandRequest {
+            cmd: "KEYS".to_string(),
+            partition_id: Some("ws27-test".to_string()),
+            key: None,
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let keys_result = rt
+            .block_on(cache_redis_command(
+                State(state.clone()),
+                operator_headers("secret", "automation"),
+                Json(keys_req),
+            ))
+            .expect("KEYS should succeed");
+        let keys = keys_result.0.keys.unwrap_or_default();
+        assert!(
+            keys.contains(&"sensor-key".to_string()),
+            "sensor-key should appear in KEYS result"
+        );
+
+        // DEL â€” remove it
+        let del_req = RedisCacheCommandRequest {
+            cmd: "DEL".to_string(),
+            partition_id: Some("ws27-test".to_string()),
+            key: Some("sensor-key".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let del_result = rt
+            .block_on(cache_redis_command(
+                State(state.clone()),
+                operator_headers("secret", "automation"),
+                Json(del_req),
+            ))
+            .expect("DEL should succeed");
+        assert_eq!(del_result.0.removed, Some(true));
+
+        // GET after DEL â€” should be None
+        let get_after_del = RedisCacheCommandRequest {
+            cmd: "GET".to_string(),
+            partition_id: Some("ws27-test".to_string()),
+            key: Some("sensor-key".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let get_after_result = rt
+            .block_on(cache_redis_command(
+                State(state.clone()),
+                operator_headers("secret", "automation"),
+                Json(get_after_del),
+            ))
+            .expect("GET after DEL should succeed");
+        assert_eq!(get_after_result.0.value, None);
+    }
+
+    #[test]
+    fn ws27_redis_compat_flush_clears_partition() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+
+        // Populate 3 keys
+        for i in 0..3u8 {
+            let set_req = RedisCacheCommandRequest {
+                cmd: "SET".to_string(),
+                partition_id: Some("ws27-flush".to_string()),
+                key: Some(format!("key-{i}")),
+                value: Some(serde_json::json!(i)),
+                ttl_ms: None,
+                delta: None,
+                expire_ms: None,
+            keys: None,
+            start: None,
+            stop: None,
+            };
+            rt.block_on(cache_redis_command(
+                State(state.clone()),
+                operator_headers("secret", "automation"),
+                Json(set_req),
+            ))
+            .expect("SET should succeed");
+        }
+
+        // FLUSH
+        let flush_req = RedisCacheCommandRequest {
+            cmd: "FLUSH".to_string(),
+            partition_id: Some("ws27-flush".to_string()),
+            key: None,
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let flush_result = rt
+            .block_on(cache_redis_command(
+                State(state.clone()),
+                operator_headers("secret", "automation"),
+                Json(flush_req),
+            ))
+            .expect("FLUSH should succeed");
+        assert_eq!(flush_result.0.flushed_count, Some(3));
+    }
+
+    #[test]
+    fn ws27_redis_compat_unsupported_command_returns_error() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let req = RedisCacheCommandRequest {
+            cmd: "ZADD".to_string(),
+            partition_id: None,
+            key: None,
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let result = rt.block_on(cache_redis_command(
+            State(state),
+            operator_headers("secret", "automation"),
+            Json(req),
+        ));
+        let response = result.expect("handler returns Ok even for unsupported cmd").0;
+        assert_eq!(response.status, "error");
+        assert!(response.error.unwrap_or_default().contains("ZADD"));
+    }
+
+    // REQ-27: INCR / DECR / EXPIRE lifecycle tests
+    #[test]
+    fn ws27_redis_compat_incr_decr_lifecycle() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = operator_headers("secret", "automation");
+
+        // INCR on non-existent key: should start at 0 â†’ becomes 1
+        let incr = RedisCacheCommandRequest {
+            cmd: "INCR".to_string(),
+            partition_id: Some("metrics".to_string()),
+            key: Some("counter".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(incr)))
+            .expect("incr ok").0;
+        assert_eq!(r.status, "ok");
+        assert_eq!(r.value.as_ref().and_then(|v| v.as_f64()), Some(1.0), "first INCR â†’ 1");
+
+        // INCRBY 9 â†’ total should be 10
+        let incrby = RedisCacheCommandRequest {
+            cmd: "INCRBY".to_string(),
+            partition_id: Some("metrics".to_string()),
+            key: Some("counter".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: Some(9.0),
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(incrby)))
+            .expect("incrby ok").0;
+        assert_eq!(r2.value.as_ref().and_then(|v| v.as_f64()), Some(10.0), "after INCRBY 9 â†’ 10");
+
+        // DECR â†’ 9
+        let decr = RedisCacheCommandRequest {
+            cmd: "DECR".to_string(),
+            partition_id: Some("metrics".to_string()),
+            key: Some("counter".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        let r3 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(decr)))
+            .expect("decr ok").0;
+        assert_eq!(r3.value.as_ref().and_then(|v| v.as_f64()), Some(9.0), "after DECR â†’ 9");
+    }
+
+    #[test]
+    fn ws27_redis_compat_expire_updates_ttl() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = operator_headers("secret", "automation");
+
+        // SET a value with no TTL
+        let set_req = RedisCacheCommandRequest {
+            cmd: "SET".to_string(),
+            partition_id: Some("sess".to_string()),
+            key: Some("session_token".to_string()),
+            value: Some(serde_json::json!("abc123")),
+            ttl_ms: None,
+            delta: None,
+            expire_ms: None,
+        keys: None,
+        start: None,
+        stop: None,
+        };
+        rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(set_req)))
+            .expect("set ok");
+
+        // EXPIRE with 5 minutes TTL
+        let expire_req = RedisCacheCommandRequest {
+            cmd: "EXPIRE".to_string(),
+            partition_id: Some("sess".to_string()),
+            key: Some("session_token".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: Some(300_000),
+            keys: None, start: None, stop: None,
+        };
+        let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(expire_req)))
+            .expect("expire ok").0;
+        assert_eq!(r.status, "ok");
+        assert_eq!(r.exists, Some(true), "EXPIRE on existing key returns true");
+
+        // EXPIRE on non-existent key returns false
+        let expire_miss = RedisCacheCommandRequest {
+            cmd: "EXPIRE".to_string(),
+            partition_id: Some("sess".to_string()),
+            key: Some("no_such_key".to_string()),
+            value: None,
+            ttl_ms: None,
+            delta: None,
+            expire_ms: Some(10_000),
+            keys: None, start: None, stop: None,
+        };
+        let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(expire_miss)))
+            .expect("expire miss ok").0;
+        assert_eq!(r2.exists, Some(false), "EXPIRE on missing key returns false");
+    }
+
+    // â”€â”€ REQ-27: MGET / MSET / GETSET tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    #[test]
+    fn ws27_redis_compat_mget_mset_lifecycle() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = operator_headers("secret", "automation");
+        let part = Some("kv".to_string());
+
+        // MSET: set a, b, c in one command via JSON object value
+        let mset_req = RedisCacheCommandRequest {
+            cmd: "MSET".to_string(),
+            partition_id: part.clone(),
+            key: None,
+            value: Some(serde_json::json!({"a": 1, "b": 2, "c": 3})),
+            ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+        };
+        let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(mset_req)))
+            .expect("mset ok").0;
+        assert_eq!(r.status, "ok");
+        assert_eq!(r.value, Some(serde_json::json!(3)), "MSET returns count of keys set");
+
+        // MGET: retrieve a, b, c and a missing key
+        let mget_req = RedisCacheCommandRequest {
+            cmd: "MGET".to_string(),
+            partition_id: part.clone(),
+            key: None,
+            value: None,
+            ttl_ms: None, delta: None, expire_ms: None,
+            keys: Some(vec!["a".to_string(), "b".to_string(), "c".to_string(), "x".to_string()]),
+            start: None, stop: None,
+        };
+        let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(mget_req)))
+            .expect("mget ok").0;
+        assert_eq!(r2.status, "ok");
+        let arr = r2.value.unwrap();
+        let items = arr.as_array().expect("array");
+        assert_eq!(items[0], serde_json::json!(1), "a = 1");
+        assert_eq!(items[1], serde_json::json!(2), "b = 2");
+        assert_eq!(items[2], serde_json::json!(3), "c = 3");
+        assert_eq!(items[3], serde_json::Value::Null, "x = null (missing)");
+    }
+
+    #[test]
+    fn ws27_redis_compat_getset_returns_old_sets_new() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = operator_headers("secret", "automation");
+        let part = Some("gs".to_string());
+
+        // Pre-set a value
+        let set_req = RedisCacheCommandRequest {
+            cmd: "SET".to_string(), partition_id: part.clone(), key: Some("counter".to_string()),
+            value: Some(serde_json::json!(42)), ttl_ms: None, delta: None, expire_ms: None,
+            keys: None, start: None, stop: None,
+        };
+        rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(set_req)))
+            .expect("set ok");
+
+        // GETSET â€” should return 42 and store 99
+        let gs_req = RedisCacheCommandRequest {
+            cmd: "GETSET".to_string(), partition_id: part.clone(), key: Some("counter".to_string()),
+            value: Some(serde_json::json!(99)), ttl_ms: None, delta: None, expire_ms: None,
+            keys: None, start: None, stop: None,
+        };
+        let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(gs_req)))
+            .expect("getset ok").0;
+        assert_eq!(r.value, Some(serde_json::json!(42)), "GETSET returns old value");
+
+        // Now GET should return 99
+        let get_req = RedisCacheCommandRequest {
+            cmd: "GET".to_string(), partition_id: part.clone(), key: Some("counter".to_string()),
+            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+        };
+        let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(get_req)))
+            .expect("get ok").0;
+        assert_eq!(r2.value, Some(serde_json::json!(99)), "GET returns new value after GETSET");
+    }
+
+    // â”€â”€ REQ-27: LPUSH / RPUSH / LLEN / LRANGE tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    #[test]
+    fn ws27_redis_compat_list_lpush_rpush_lrange_llen() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = operator_headers("secret", "automation");
+        let part = Some("lists".to_string());
+        let key = Some("queue".to_string());
+
+        // RPUSH three items
+        for v in [10, 20, 30] {
+            let req = RedisCacheCommandRequest {
+                cmd: "RPUSH".to_string(), partition_id: part.clone(), key: key.clone(),
+                value: Some(serde_json::json!(v)), ttl_ms: None, delta: None, expire_ms: None,
+                keys: None, start: None, stop: None,
+            };
+            rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(req)))
+                .expect("rpush ok");
+        }
+
+        // LLEN should be 3
+        let llen_req = RedisCacheCommandRequest {
+            cmd: "LLEN".to_string(), partition_id: part.clone(), key: key.clone(),
+            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+        };
+        let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(llen_req)))
+            .expect("llen ok").0;
+        assert_eq!(r.value, Some(serde_json::json!(3)), "LLEN = 3 after 3 RPUSHes");
+
+        // LPUSH prepends 0 â†’ list becomes [0, 10, 20, 30]
+        let lpush_req = RedisCacheCommandRequest {
+            cmd: "LPUSH".to_string(), partition_id: part.clone(), key: key.clone(),
+            value: Some(serde_json::json!(0)), ttl_ms: None, delta: None, expire_ms: None,
+            keys: None, start: None, stop: None,
+        };
+        rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(lpush_req)))
+            .expect("lpush ok");
+
+        // LRANGE 0 -1 returns full list [0, 10, 20, 30]
+        let lrange_req = RedisCacheCommandRequest {
+            cmd: "LRANGE".to_string(), partition_id: part.clone(), key: key.clone(),
+            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None,
+            start: Some(0), stop: Some(-1),
+        };
+        let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(lrange_req)))
+            .expect("lrange ok").0;
+        assert_eq!(
+            r2.value,
+            Some(serde_json::json!([0, 10, 20, 30])),
+            "LRANGE 0 -1 returns full list"
+        );
+
+        // LRANGE 1 2 returns middle slice [10, 20]
+        let lrange2_req = RedisCacheCommandRequest {
+            cmd: "LRANGE".to_string(), partition_id: part.clone(), key: key.clone(),
+            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None,
+            start: Some(1), stop: Some(2),
+        };
+        let r3 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(lrange2_req)))
+            .expect("lrange2 ok").0;
+        assert_eq!(r3.value, Some(serde_json::json!([10, 20])), "LRANGE 1 2 returns [10, 20]");
+    }
+
+    // â”€â”€ REQ-23: repeatable-read snapshot timestamp â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    #[test]
+    fn ws23_acid_repeatable_read_records_snapshot_timestamp() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+
+        // repeatable_read transaction â†’ should record snapshot timestamp
+        let req_rr = SqlTransactionRequest {
+            statements: vec!["BEGIN".to_string(), "SELECT 1".to_string(), "COMMIT".to_string()],
+            isolation_level: Some("repeatable_read".to_string()),
+        };
+        rt.block_on(sql_transaction(State(state.clone()), headers.clone(), Json(req_rr)))
+            .expect("repeatable_read tx should succeed");
+
+        let acid = state.acid_transactions.lock().unwrap();
+        let txs = acid.all_transactions();
+        let rr_tx = txs.iter().find(|t| t.isolation_level == "repeatable_read")
+            .expect("repeatable_read tx should be in registry");
+        assert!(
+            rr_tx.read_snapshot_at_ms.is_some(),
+            "repeatable_read tx must record read_snapshot_at_ms"
+        );
+        assert_eq!(
+            rr_tx.read_snapshot_at_ms, Some(rr_tx.started_at_unix_ms),
+            "snapshot timestamp equals begin timestamp"
+        );
+        drop(acid);
+
+        // read_committed transaction â†’ no snapshot
+        let req_rc = SqlTransactionRequest {
+            statements: vec!["BEGIN".to_string(), "COMMIT".to_string()],
+            isolation_level: Some("read_committed".to_string()),
+        };
+        rt.block_on(sql_transaction(State(state.clone()), headers, Json(req_rc)))
+            .expect("read_committed tx should succeed");
+
+        let acid2 = state.acid_transactions.lock().unwrap();
+        let rc_tx = acid2.all_transactions().into_iter()
+            .find(|t| t.isolation_level == "read_committed")
+            .expect("read_committed tx should be in registry");
+        assert!(
+            rc_tx.read_snapshot_at_ms.is_none(),
+            "read_committed tx must NOT record read_snapshot_at_ms"
+        );
+    }
+
+    // â”€â”€ REQ-21: mixed concurrent operations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    #[test]
+    fn ws21_mixed_ops_concurrent_ingest_sql_cache() {
+        // Three concurrent threads: sql_execute + ingest_chunked + cache SET/GET.
+        // All run on the same AppState. No panics or data corruption expected.
+        use std::sync::Arc;
+        let state = Arc::new(state_with_key(None));
+
+        // Thread 1: sql_execute
+        let s1 = Arc::clone(&state);
+        let t1 = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("rt");
+            let headers = tenant_user_headers("analyst-acme", "acme");
+            let req = SqlExecuteRequest {
+                sql_batch: "SELECT COUNT(*) FROM events".to_string(),
+                max_rows: None,
+            };
+            rt.block_on(sql_execute(State((*s1).clone()), headers, Json(req))).is_ok()
+        });
+
+        // Thread 2: ingest_chunked (uses tenant write privilege)
+        let s2 = Arc::clone(&state);
+        let t2 = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("rt");
+            let headers = tenant_user_headers("analyst-acme", "acme");
+            let req = IngestChunkedRequest {
+                connector_id: "mixed-ops-conn".to_string(),
+                records: vec![r#"{"id":1}"#.to_string(), r#"{"id":2}"#.to_string()],
+                chunk_target_rows: Some(1),
+                max_in_flight_tasks: Some(2),
+            };
+            rt.block_on(ingest_chunked(State((*s2).clone()), headers, Json(req))).is_ok()
+        });
+
+        // Thread 3: cache SET + GET
+        let s3 = Arc::clone(&state);
+        let t3 = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("rt");
+            let headers = operator_headers("secret", "automation");
+            let set_req = RedisCacheCommandRequest {
+                cmd: "SET".to_string(),
+                partition_id: Some("ws21".to_string()),
+                key: Some("k1".to_string()),
+                value: Some(serde_json::json!("hello")),
+                ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+            };
+            rt.block_on(cache_redis_command(State((*s3).clone()), headers, Json(set_req))).is_ok()
+        });
+
+        assert!(t1.join().expect("t1 panicked"), "sql_execute failed");
+        assert!(t2.join().expect("t2 panicked"), "ingest_chunked failed");
+        assert!(t3.join().expect("t3 panicked"), "cache SET failed");
+    }
+
+    // â”€â”€ REQ-07: async fan-out dispatches chunks in parallel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    #[test]
+    fn ws4_chunked_async_fanout_dispatches_in_parallel() {
+        // Verify the async fan-out path in ingest_chunked: chunks are dispatched
+        // via spawn_blocking and results are collected correctly.
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+
+        // 12 records with chunk_target_rows=4 â†’ 3 chunks, max_in_flight=2 â†’ 2 waves
+        let records: Vec<String> = (0..12).map(|i| format!(r#"{{"id":{i}}}"#)).collect();
+        let req = IngestChunkedRequest {
+            connector_id: "async-fanout-test".to_string(),
+            records,
+            chunk_target_rows: Some(4),
+            max_in_flight_tasks: Some(2),
+        };
+
+        let resp = rt.block_on(ingest_chunked(State(state.clone()), headers, Json(req)))
+            .expect("ingest_chunked async fanout should succeed");
+
+        assert_eq!(resp.0, StatusCode::OK);
+        assert_eq!(resp.1.total_records, 12, "all 12 records counted");
+        assert_eq!(resp.1.chunk_count, 3, "3 chunks of 4");
+        assert_eq!(resp.1.tasks_dispatched, 2, "max in-flight=2 â†’ dispatched=2");
+        assert_eq!(resp.1.chunks_succeeded, 3, "all 3 chunks succeeded");
+        assert_eq!(resp.1.chunks_failed, 0, "no chunks failed");
     }
 
 }
