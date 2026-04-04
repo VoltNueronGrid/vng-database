@@ -1,0 +1,46 @@
+# VoltNueronGrid DB — Cursor Rules
+
+## Project Overview
+Rust workspace for a distributed HTAP database engine. Crates: `crates/voltnuerongrid-*`. Main service: `services/voltnuerongridd/src/main.rs` (9400+ lines). Driver: `drivers/voltnuerongrid-driver-rust/`.
+
+## Build Commands
+```bash
+cargo check -p voltnuerongridd     # fast check
+cargo build                         # full build
+cargo test -p voltnuerongrid-sql   # SQL tests
+cargo test -p voltnuerongridd       # service tests (45+)
+```
+
+## Crate Naming
+- Folder: `voltnuerongrid-{name}` (hyphens)
+- Import: `use voltnuerongrid_{name}::Trait` (underscores)
+- Three stub crates (`voltnuerongrid-core`, `voltnuerongrid-failover`, `voltnuerongrid-meta`) — do not add logic.
+
+## RBAC — NEVER BYPASS
+Every protected endpoint must check in order:
+1. `VNG_ADMIN_API_KEY` env + `x-vng-admin-key` header → `401` if missing, `403` if invalid
+2. `x-vng-operator-id` + role binding → for operator paths
+3. `x-vng-tenant-id` + `x-vng-user-id` → for tenant paths
+Never return `200` on unauthenticated requests. Never add a `skip_auth` flag.
+
+## Test Naming
+- `ws{N}_{feature}` — workstream tests
+- `h{NN}_{feature}` — hardening tests
+- Tests use `#[tokio::test]`, `state_with_key()` from the test helpers module
+- `state_with_key()` MUST be updated before adding new `AppState` fields
+
+## Gate Scripts
+- `tests/kpi/scripts/run-{wsN}-gate.ps1` — gate orchestrators
+- `tests/kpi/results/{wsN}/` — artifacts
+- Derive gate status from artifact JSON `.status`, NOT `$LASTEXITCODE`
+- Use `Invoke-RestMethod` for HTTP in PowerShell — NOT `[System.Net.Http.HttpClient]`
+
+## Security Rules
+- Never log API key header values
+- KMS key IDs: always `env::var("VNG_KMS_*")` — never hardcoded
+- Plugin manifests must be signed; reject unsigned with `403`
+- No `unwrap()` in handler paths, no `panic!` in handlers
+
+## Known Blockers (2026-04-04)
+- WS3 HTAP routing: score 40/100, routing policies incomplete, `ws3_` tests need live server
+- WS1 live smokes: PowerShell `GetResponseStream` error — use `Invoke-RestMethod`

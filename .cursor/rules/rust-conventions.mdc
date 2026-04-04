@@ -1,0 +1,44 @@
+---
+description: "Rust conventions for VoltNueronGrid DB crates and service"
+globs: ["crates/**/*.rs", "services/**/*.rs", "drivers/**/*.rs"]
+---
+# Rust Conventions
+
+## Naming
+- Crate folders use hyphens: `voltnuerongrid-{name}`
+- Rust imports use underscores: `use voltnuerongrid_{name}::TraitName`
+- New crates must `pub use` traits from their `lib.rs`
+
+## AppState
+- Tests must use `state_with_key()` — never construct `AppState` directly
+- When adding new `AppState` fields, update `state_with_key()` in the test helpers first
+
+## Endpoint Pattern
+```rust
+async fn my_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<Req>,
+) -> impl IntoResponse {
+    // 1. Auth check (admin → operator → tenant order)
+    // 2. Business logic
+    // 3. Json(response)
+}
+```
+
+## HTTP Status Codes
+- 401 — missing credentials
+- 403 — insufficient privilege
+- 409 — conflict (deadlock risk, duplicate key)
+- 408 — lock wait timeout
+
+## Forbidden
+- `unwrap()` in handler paths — use `?` or explicit error mapping
+- `panic!` in handler code — return a 500 response
+- Logging header values that may contain API keys
+
+## Test Naming
+- `ws{N}_{feature}` — workstream integration tests
+- `h{NN}_{feature}` — hardening tests  
+- `operator_auth_{scenario}` — RBAC tests
+- `sql_runtime_{scenario}` — SQL endpoint tests

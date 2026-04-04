@@ -1,0 +1,40 @@
+---
+description: "Gate script authoring conventions for VoltNueronGrid DB PowerShell smoke and gate files"
+globs: ["tests/kpi/scripts/**"]
+---
+# Gate Script Conventions
+
+## Script Naming
+- Smoke: `run-{wsN}-{feature}-smoke.ps1` → artifact: `tests/kpi/results/{wsN}/{feature}-smoke.json`
+- Gate: `run-{wsN}-gate.ps1` → artifact: `tests/kpi/results/{wsN}/{wsN}-gate-summary.json`
+- Release: `run-{wsN}-release-summary.ps1` → artifact: `tests/kpi/results/gates/{wsN}-release-readiness.json`
+
+## Gate Status Derivation
+```powershell
+# CORRECT: derive from pack statuses
+$overallStatus = if ($packs | Where-Object { $_.status -eq "failed" }) { "failed" } else { "passed" }
+
+# WRONG: do not use $LASTEXITCODE from nested PowerShell calls
+```
+
+## Smoke Artifact Schema
+```json
+{ "smoke": "wsN-name", "status": "passed|failed", "checks_passed": 7, "checks_total": 8,
+  "generated_at_utc": "...", "checks": [{"name": "...", "passed": true, "detail": "..."}] }
+```
+
+## HTTP Calls
+```powershell
+# CORRECT
+$r = Invoke-RestMethod -Uri "$BaseUrl/api/v1/health" -Method Get
+
+# WRONG — GetResponseStream is not available in modern .NET
+$client = [System.Net.Http.HttpClient]::new()
+```
+
+## Output
+Always use: `$result | ConvertTo-Json -Depth 10 | Set-Content -Path $OutputPath -Encoding UTF8`
+
+## Live Server Dependency
+Scripts using `$BaseUrl` require `voltnuerongridd` running on port 8080.
+In CI: start with `cargo run -p voltnuerongridd`, wait for `/health`, wrap in `trap cleanup EXIT`.

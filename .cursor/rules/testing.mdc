@@ -1,0 +1,33 @@
+---
+description: "Testing strategy, gate scripts, and test naming for VoltNueronGrid DB"
+globs: ["tests/**", "services/voltnuerongridd/src/main.rs"]
+---
+# Testing & Gate Script Rules
+
+## Test Layers
+
+| Layer | Command | Server Needed |
+|-------|---------|---------------|
+| Crate unit tests | `cargo test -p voltnuerongrid-{name}` | No |
+| Service tests | `cargo test -p voltnuerongridd {prefix}_` | No (except ws3_) |
+| Live smoke tests | `pwsh ./tests/kpi/scripts/run-ws*-gate.ps1 -BaseUrl http://127.0.0.1:8080` | Yes |
+
+## Test Naming
+- `ws{N}_{feature}` — workstream integration tests
+- `h{NN}_{feature}` — hardening tests
+- `operator_auth_{scenario}` — RBAC tests
+- `sql_runtime_{scenario}`, `store_{scenario}`, `ingest_{scenario}`
+
+## AppState
+- Use `state_with_key()` in all tests — never direct `AppState::new(...)`
+- Update `state_with_key()` before adding new `AppState` fields
+
+## Gate Script Rules
+- Scripts: `tests/kpi/scripts/run-{wsN}-{name}-smoke.ps1`
+- Artifacts: `tests/kpi/results/{wsN}/{name}.json`
+- Status from artifact JSON `.status` field — **not** `$LASTEXITCODE`
+- Use `Invoke-RestMethod` for HTTP — not `[System.Net.Http.HttpClient]`
+
+## Known Failures (2026-04-04)
+- `ws3_` tests: need live server AND complete HTAP routing
+- WS1 live smokes: `GetResponseStream` error — use `Invoke-RestMethod`

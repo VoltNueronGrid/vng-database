@@ -1,0 +1,33 @@
+---
+description: "Security, RBAC, auth, and tenant isolation rules for VoltNueronGrid DB"
+globs: ["crates/voltnuerongrid-auth/**", "services/voltnuerongridd/src/main.rs"]
+---
+# Security & RBAC Rules
+
+## Auth Enforcement Order — MANDATORY on every protected handler
+
+```
+1. x-vng-admin-key  checked against VNG_ADMIN_API_KEY env var
+2. x-vng-operator-id  +  registered role binding in AppState  (operator paths)
+3. x-vng-tenant-id  +  x-vng-user-id  (tenant paths)
+```
+
+- Return `401` for missing headers
+- Return `403` for present-but-invalid credentials
+- Mixed surfaces (ingest): check admin/operator first, fall through to tenant
+- **Never** add a `skip_auth: bool` or any bypass path
+
+## Tenant Isolation
+- All queries on tenant paths must filter by `tenant_id`
+- Audit records emitted from tenant operations must carry `x-vng-tenant-id`
+- Autonomous records must include `tenant_scope` metadata
+
+## Secret Hygiene
+- Never log header values or API key material
+- KMS key IDs must come from `env::var("VNG_KMS_*")` — no hardcoded ARNs/URIs
+- Never return raw secrets in error responses
+
+## Plugin Security
+- Verify signature before loading any plugin manifest
+- Reject unsigned manifests with `403`
+- Invoke revocation policy hook before trusting any manifest
