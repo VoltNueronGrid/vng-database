@@ -5,6 +5,7 @@ pub const CRATE_NAME: &str = "voltnuerongrid-store";
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod columnar;
 pub mod constraints;
 pub mod ddl_catalog;
 pub mod htap_sync;

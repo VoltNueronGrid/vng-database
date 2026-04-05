@@ -1,0 +1,44 @@
+{
+  "schema": "vng-kpi-gate/1.0",
+  "gate": "ws1-ansi-conformance-smoke",
+  "timestamp": "2026-04-05T20:53:08Z",
+  "status": "passed",
+  "summary": "ANSI SQL conformance harness: 17 conformance tests, 81 total sql-crate tests",
+  "test_counts": {
+    "ansi_conformance_tests": 17,
+    "all_sql_crate_tests": 81
+  },
+  "checks": {
+    "ast_source_present": true,
+    "parse_one_entrypoint_present": true,
+    "statement_enum_present": true,
+    "select_variant_present": true,
+    "insert_variant_present": true,
+    "update_variant_present": true,
+    "delete_variant_present": true,
+    "create_table_variant_present": true,
+    "begin_commit_rollback_present": true,
+    "select_statement_has_where_clause": true,
+    "select_statement_has_group_by": true,
+    "select_statement_has_having": true,
+    "select_statement_has_order_by": true,
+    "select_statement_has_limit": true,
+    "insert_supports_column_list": true,
+    "insert_supports_multi_row_values": true,
+    "update_has_assignments": true,
+    "ansi_conformance_test_module_present": true,
+    "conformance_tests_select_star": true,
+    "conformance_tests_insert_multi_row": true,
+    "conformance_tests_update_multi_assign": true,
+    "conformance_tests_create_table_types": true,
+    "conformance_tests_unsupported_ddl": true,
+    "conformance_tests_transaction_control": true,
+    "ansi_conformance_cargo_tests_pass": true,
+    "all_sql_crate_tests_pass": true
+  },
+  "failed_checks": [],
+  "cargo_output": {
+    "ansi_conformance": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_sql-db50013cf5e36acc.exe)\n\nrunning 17 tests\ntest ast::ansi_conformance::ansi_create_table_if_not_exists_parses_without_panic ... ok\ntest ast::ansi_conformance::ansi_create_table_various_types ... ok\ntest ast::ansi_conformance::ansi_delete_with_where_clause ... ok\ntest ast::ansi_conformance::ansi_delete_without_where ... ok\ntest ast::ansi_conformance::ansi_insert_multi_row_values ... ok\ntest ast::ansi_conformance::ansi_insert_single_row_positional ... ok\ntest ast::ansi_conformance::ansi_select_distinct_parses_as_select ... ok\ntest ast::ansi_conformance::ansi_select_limit_only ... ok\ntest ast::ansi_conformance::ansi_select_multi_column_group_by ... ok\ntest ast::ansi_conformance::ansi_select_order_by_multiple_columns ... ok\ntest ast::ansi_conformance::ansi_select_where_and_or ... ok\ntest ast::ansi_conformance::ansi_select_where_numeric_comparison ... ok\ntest ast::ansi_conformance::ansi_select_with_alias_parses_as_select ... ok\ntest ast::ansi_conformance::ansi_transaction_control_statements ... ok\ntest ast::ansi_conformance::ansi_unsupported_ddl_falls_to_unknown ... ok\ntest ast::ansi_conformance::ansi_update_multiple_assignments ... ok\ntest ast::ansi_conformance::ansi_update_without_where ... ok\n\ntest result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.02s\n\n\r\n",
+    "all_sql_tests": "\r\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s\r\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_sql-db50013cf5e36acc.exe)\r\n\r\nrunning 81 tests\r\ntest ast::ansi_conformance::ansi_create_table_if_not_exists_parses_without_panic ... ok\r\ntest ast::ansi_conformance::ansi_create_table_various_types ... ok\r\ntest ast::ansi_conformance::ansi_delete_with_where_clause ... ok\r\ntest ast::ansi_conformance::ansi_delete_without_where ... ok\r\ntest ast::ansi_conformance::ansi_insert_multi_row_values ... ok\r\ntest ast::ansi_conformance::ansi_insert_single_row_positional ... ok\r\ntest ast::ansi_conformance::ansi_select_distinct_parses_as_select ... ok\r\ntest ast::ansi_conformance::ansi_select_limit_only ... ok\r\ntest ast::ansi_conformance::ansi_select_multi_column_group_by ... ok\r\ntest ast::ansi_conformance::ansi_select_order_by_multiple_columns ... ok\r\ntest ast::ansi_conformance::ansi_select_where_and_or ... ok\r\ntest ast::ansi_conformance::ansi_select_where_numeric_comparison ... ok\r\ntest ast::ansi_conformance::ansi_select_with_alias_parses_as_select ... ok\r\ntest ast::ansi_conformance::ansi_transaction_control_statements ... ok\r\ntest ast::ansi_conformance::ansi_unsupported_ddl_falls_to_unknown ... ok\r\ntest ast::ansi_conformance::ansi_update_multiple_assignments ... ok\r\ntest ast::ansi_conformance::ansi_update_without_where ... ok\r\ntest ast::tests::ast_parse_begin_commit_rollback ... ok\r\ntest ast::tests::ast_parse_create_table ... ok\r\ntest ast::tests::ast_parse_delete_with_where ... ok\r\ntest ast::tests::ast_parse_empty_returns_err ... ok\r\ntest ast::tests::ast_parse_insert_simple_values ... ok\r\ntest ast::tests::ast_parse_insert_with_column_list ... ok\r\ntest ast::tests::ast_parse_select_group_by_having ... ok\r\ntest ast::tests::ast_parse_select_order_by_desc ... ok\r\ntest ast::tests::ast_parse_select_star ... ok\r\ntest ast::tests::ast_parse_select_with_limit ... ok\r\ntest ast::tests::ast_parse_select_with_where ... ok\r\ntest ast::tests::ast_parse_simple_select ... ok\r\ntest ast::tests::ast_parse_unknown_falls_through ... ok\r\ntest ast::tests::ast_parse_update ... ok\r\ntest legacy_aggregations::numeric_tests::count_and_count_distinct ... ok\r\ntest legacy_aggregations::numeric_tests::median_even_and_odd ... ok\r\ntest legacy_aggregations::numeric_tests::p2_approx_count_distinct_matches_exact ... ok\r\ntest legacy_aggregations::numeric_tests::p2_bottom_n_returns_avg_of_bottom_values ... ok\r\ntest legacy_aggregations::numeric_tests::p2_top_n_default_n_uses_three ... ok\r\ntest legacy_aggregations::numeric_tests::p2_top_n_empty_errors ... ok\r\ntest legacy_aggregations::numeric_tests::p2_top_n_returns_avg_of_top_values ... ok\r\ntest legacy_aggregations::numeric_tests::percentile_endpoints_and_mid ... ok\r\ntest legacy_aggregations::numeric_tests::percentile_requires_argument ... ok\r\ntest legacy_aggregations::numeric_tests::rejects_unsupported_name ... ok\r\ntest legacy_aggregations::numeric_tests::sum_and_avg_basic ... ok\r\ntest legacy_aggregations::numeric_tests::variance_and_stddev_match_simple_dataset ... ok\r\ntest planner::tests::planner_aggregate_routes_olap ... ok\r\ntest planner::tests::planner_begin_commit_rollback_are_oltp ... ok\r\ntest planner::tests::planner_cost_oltp_eligible_below_threshold ... ok\r\ntest planner::tests::planner_cost_total_is_sum_of_parts ... ok\r\ntest planner::tests::planner_create_table_routes_ddl ... ok\r\ntest planner::tests::planner_delete_is_write_oltp ... ok\r\ntest planner::tests::planner_detect_aggregate_functions ... ok\r\ntest planner::tests::planner_insert_is_oltp_write ... ok\r\ntest planner::tests::planner_insert_with_column_list_counts_rows ... ok\r\ntest planner::tests::planner_leaf_table_traverses_tree ... ok\r\ntest planner::tests::planner_limit_caps_estimated_rows ... ok\r\ntest planner::tests::planner_order_by_routes_olap ... ok\r\ntest planner::tests::planner_select_with_where_reduces_rows ... ok\r\ntest planner::tests::planner_simple_select_routes_oltp ... ok\r\ntest planner::tests::planner_sum_without_group_by_is_olap ... ok\r\ntest planner::tests::planner_update_is_write_oltp ... ok\r\ntest tests::analyzes_catalog_touch_and_transaction ... ok\r\ntest tests::classifies_core_statements ... ok\r\ntest tests::function_registry_registers_and_reads ... ok\r\ntest tests::function_registry_supports_polyglot_udf_contract ... ok\r\ntest tests::legacy_aggregation_parity_manifest_alignment ... ok\r\ntest tests::p2_stub_hooks_cover_expected_aggregations ... ok\r\ntest tests::parses_batch_in_order ... ok\r\ntest tests::ws11_locale_fallback_defaults_to_en_us ... ok\r\ntest tests::ws11_supports_locale_parsing_and_messages ... ok\r\ntest tests::ws11_unknown_message_key_uses_safe_fallback ... ok\r\ntest tokenizer::tests::keyword_count_correct ... ok\r\ntest tokenizer::tests::tokenizer_block_comment ... ok\r\ntest tokenizer::tests::tokenizer_ddl_create_table ... ok\r\ntest tokenizer::tests::tokenizer_insert_statement ... ok\r\ntest tokenizer::tests::tokenizer_line_comment_excluded_from_semantic ... ok\r\ntest tokenizer::tests::tokenizer_number_variants ... ok\r\ntest tokenizer::tests::tokenizer_quoted_identifier ... ok\r\ntest tokenizer::tests::tokenizer_simple_select ... ok\r\ntest tokenizer::tests::tokenizer_string_literal_with_escaped_quote ... ok\r\ntest tokenizer::tests::tokenizer_transaction_keywords ... ok\r\ntest tokenizer::tests::tokenizer_two_char_symbols ... ok\r\ntest tokenizer::tests::tokenizer_window_function ... ok\r\n\r\ntest result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\r\n\r\n   Doc-tests voltnuerongrid_sql\r\n\r\nrunning 0 tests\r\n\r\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\r\n\r\n\r\n\r\n"
+  }
+}

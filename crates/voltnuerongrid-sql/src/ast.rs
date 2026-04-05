@@ -635,3 +635,186 @@ mod tests {
         assert!(matches!(s, Statement::Unknown(_)));
     }
 }
+
+// ── S3-WS1-06: ANSI SQL conformance tests ────────────────────────────────────
+#[cfg(test)]
+mod ansi_conformance {
+    use super::*;
+
+    // SELECT — column aliases and DISTINCT (parsed as columns, alias dropped gracefully)
+    #[test]
+    fn ansi_select_with_alias_parses_as_select() {
+        let s = parse_one("SELECT id AS user_id, name AS full_name FROM users").unwrap();
+        assert!(matches!(s, Statement::Select(_)));
+    }
+
+    #[test]
+    fn ansi_select_distinct_parses_as_select() {
+        let s = parse_one("SELECT DISTINCT region FROM sales").unwrap();
+        assert!(matches!(s, Statement::Select(_)));
+    }
+
+    // SELECT — multi-column GROUP BY + HAVING
+    #[test]
+    fn ansi_select_multi_column_group_by() {
+        let s = parse_one(
+            "SELECT region, category, SUM(amount) FROM sales GROUP BY region, category HAVING SUM(amount) > 500",
+        )
+        .unwrap();
+        let Statement::Select(sel) = s else { panic!("expected Select") };
+        assert!(sel.group_by.len() >= 1, "group_by should be populated");
+        assert!(sel.having.is_some(), "having should be set");
+    }
+
+    // SELECT — ORDER BY multiple columns
+    #[test]
+    fn ansi_select_order_by_multiple_columns() {
+        let s = parse_one("SELECT id FROM orders ORDER BY created_at DESC, id ASC").unwrap();
+        let Statement::Select(sel) = s else { panic!("expected Select") };
+        assert!(sel.order_by.len() >= 1);
+    }
+
+    // SELECT — LIMIT
+    #[test]
+    fn ansi_select_limit_only() {
+        let s = parse_one("SELECT * FROM logs LIMIT 50").unwrap();
+        let Statement::Select(sel) = s else { panic!("expected Select") };
+        assert_eq!(sel.limit, Some(50));
+    }
+
+    // SELECT — WHERE with AND / OR clause (stored verbatim)
+    #[test]
+    fn ansi_select_where_and_or() {
+        let s = parse_one(
+            "SELECT id FROM customers WHERE region = 'us' AND status = 'active'",
+        )
+        .unwrap();
+        let Statement::Select(sel) = s else { panic!("expected Select") };
+        assert!(sel.where_clause.is_some());
+    }
+
+    // SELECT — WHERE with numeric comparison
+    #[test]
+    fn ansi_select_where_numeric_comparison() {
+        let s = parse_one("SELECT id FROM orders WHERE total > 100").unwrap();
+        let Statement::Select(sel) = s else { panic!("expected Select") };
+        assert!(sel.where_clause.is_some());
+    }
+
+    // INSERT — single-row without column list (positional)
+    #[test]
+    fn ansi_insert_single_row_positional() {
+        let s = parse_one("INSERT INTO events VALUES ('e1', 'click', 1712345678)").unwrap();
+        let Statement::Insert(ins) = s else { panic!("expected Insert") };
+        assert_eq!(ins.table, "events");
+        assert_eq!(ins.values.len(), 1);
+    }
+
+    // INSERT — multi-row VALUES
+    #[test]
+    fn ansi_insert_multi_row_values() {
+        let s = parse_one(
+            "INSERT INTO tags (id, label) VALUES ('t1', 'rust'), ('t2', 'sql')",
+        )
+        .unwrap();
+        let Statement::Insert(ins) = s else { panic!("expected Insert") };
+        assert_eq!(ins.table, "tags");
+        assert_eq!(ins.values.len(), 2);
+        assert_eq!(ins.values[0][1], "rust");
+        assert_eq!(ins.values[1][1], "sql");
+    }
+
+    // UPDATE — multiple SET assignments
+    #[test]
+    fn ansi_update_multiple_assignments() {
+        let s = parse_one(
+            "UPDATE users SET name = 'Bob', status = 'active' WHERE id = 'u1'",
+        )
+        .unwrap();
+        let Statement::Update(upd) = s else { panic!("expected Update") };
+        assert_eq!(upd.table, "users");
+        assert!(!upd.assignments.is_empty());
+        assert!(upd.where_clause.is_some());
+    }
+
+    // UPDATE — no WHERE (full table update)
+    #[test]
+    fn ansi_update_without_where() {
+        let s = parse_one("UPDATE settings SET active = 'true'").unwrap();
+        let Statement::Update(upd) = s else { panic!("expected Update") };
+        assert_eq!(upd.table, "settings");
+        assert!(upd.where_clause.is_none());
+    }
+
+    // DELETE — with WHERE
+    #[test]
+    fn ansi_delete_with_where_clause() {
+        let s = parse_one("DELETE FROM sessions WHERE expires < 1712345678").unwrap();
+        let Statement::Delete(del) = s else { panic!("expected Delete") };
+        assert_eq!(del.table, "sessions");
+        assert!(del.where_clause.is_some());
+    }
+
+    // DELETE — without WHERE (full delete)
+    #[test]
+    fn ansi_delete_without_where() {
+        let s = parse_one("DELETE FROM temp_cache").unwrap();
+        let Statement::Delete(del) = s else { panic!("expected Delete") };
+        assert_eq!(del.table, "temp_cache");
+        assert!(del.where_clause.is_none());
+    }
+
+    // CREATE TABLE — various data types
+    #[test]
+    fn ansi_create_table_various_types() {
+        let s = parse_one(
+            "CREATE TABLE metrics (id BIGINT, value FLOAT, label VARCHAR, ts TIMESTAMP)",
+        )
+        .unwrap();
+        let Statement::CreateTable(ct) = s else { panic!("expected CreateTable") };
+        assert_eq!(ct.table, "metrics");
+        assert_eq!(ct.columns.len(), 4);
+    }
+
+    // CREATE TABLE — with IF NOT EXISTS (graceful Unknown or CreateTable)
+    #[test]
+    fn ansi_create_table_if_not_exists_parses_without_panic() {
+        let s = parse_one(
+            "CREATE TABLE IF NOT EXISTS audit_log (id INTEGER, action VARCHAR)",
+        )
+        .unwrap();
+        // Parser may emit Unknown or CreateTable — both are valid without panic
+        assert!(
+            matches!(s, Statement::CreateTable(_) | Statement::Unknown(_)),
+            "expected CreateTable or Unknown, got: {s:?}"
+        );
+    }
+
+    // Transaction control
+    #[test]
+    fn ansi_transaction_control_statements() {
+        assert_eq!(parse_one("BEGIN TRANSACTION").unwrap(), Statement::Begin);
+        assert_eq!(parse_one("COMMIT WORK").unwrap(), Statement::Commit);
+        assert_eq!(parse_one("ROLLBACK WORK").unwrap(), Statement::Rollback);
+    }
+
+    // Unknown / unsupported — must not panic
+    #[test]
+    fn ansi_unsupported_ddl_falls_to_unknown() {
+        let stmts = [
+            "ALTER TABLE users ADD COLUMN email VARCHAR",
+            "DROP TABLE IF EXISTS temp",
+            "CREATE INDEX idx_name ON users(name)",
+            "TRUNCATE TABLE session_cache",
+            "GRANT SELECT ON orders TO analyst",
+        ];
+        for sql in &stmts {
+            let result = parse_one(sql);
+            assert!(result.is_ok(), "parse_one must not return Err for: {sql}");
+            assert!(
+                matches!(result.unwrap(), Statement::Unknown(_)),
+                "unsupported DDL should be Unknown: {sql}"
+            );
+        }
+    }
+}

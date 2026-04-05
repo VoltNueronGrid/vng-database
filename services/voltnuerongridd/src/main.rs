@@ -306,6 +306,8 @@ struct AppState {
     acid_transactions: Arc<Mutex<AcidTransactionRegistry>>,
     /// MVCC page-based row store (S2-WS2-04: PagedRowStore scaffold).
     row_store: Arc<Mutex<PagedRowStore>>,
+    /// S9-WS8-02: AI model gateway isolation policy.
+    model_gateway_policy: Arc<Mutex<ModelGatewayPolicy>>,
 }
 
 #[derive(Clone, Default)]
@@ -873,7 +875,12 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
             role.as_str(),
             ResourceGrant {
                 resource: "security.kms".to_string(),
-                scopes: vec!["security/kms".to_string(), "security/kms/outage".to_string()],
+                scopes: vec![
+                    "security/kms".to_string(),
+                    "security/kms/outage".to_string(),
+                    "security/tls/status".to_string(),
+                    "security/tde/status".to_string(),
+                ],
                 actions: vec![
                     PrivilegeAction::Read,
                     PrivilegeAction::Manage,
@@ -894,10 +901,39 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
         OperatorRole::Sre.as_str(),
         ResourceGrant {
             resource: "security.kms".to_string(),
-            scopes: vec!["security/kms".to_string()],
+            scopes: vec![
+                "security/kms".to_string(),
+                "security/tls/status".to_string(),
+                "security/tde/status".to_string(),
+            ],
             actions: vec![PrivilegeAction::Read],
         },
     );
+
+    // S9-WS8-02: AI model gateway policy enforcement.
+    for role in [OperatorRole::Dba, OperatorRole::Security, OperatorRole::AiOperator] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "ai.governance".to_string(),
+                scopes: vec!["ai/policy".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+    }
+    for role in [OperatorRole::Dba, OperatorRole::Security] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "ai.governance".to_string(),
+                scopes: vec!["ai/policy".to_string()],
+                actions: vec![PrivilegeAction::Manage],
+            },
+        );
+    }
+
+    // S6-WS5-03 / S6-WS5-04: TLS and TDE status endpoints — already covered
+    // by security.kms Read grants which we reuse for TLS/TDE status.
 
     matrix
 }
@@ -1001,7 +1037,12 @@ struct SqlRouteRequest {
 #[derive(Serialize)]
 struct RoutedStatementResponse {
     statement: String,
+    /// Routing path from `HtapQueryRouter` (heuristic).
     path: String,
+    /// Cost-model recommended path from `QueryPlanner` (S3-WS1-05).
+    planner_path: String,
+    estimated_rows: u64,
+    relative_cost: f64,
 }
 
 #[derive(Serialize)]
@@ -1010,6 +1051,9 @@ struct SqlRouteResponse {
     route_path: String,
     reason: String,
     statements: Vec<RoutedStatementResponse>,
+    /// Aggregate planner cost across all statements in the batch.
+    batch_estimated_rows: u64,
+    batch_relative_cost: f64,
 }
 
 #[derive(Deserialize)]
@@ -1044,6 +1088,17 @@ struct SqlExecuteResponse {
     udf_guard_policies: Vec<UdfLanguageGuardPolicy>,
     udf_execution_plan: Vec<UdfExecutionPlanStep>,
     legacy_agg_results: Option<Vec<LegacyAggResult>>,
+    /// Dominant cost-model recommended path for the batch (S3-WS1-05).
+    planner_path: Option<String>,
+    /// Physical OLTP executor results: actual rows from PagedRowStore for point-read SELECT (S4-WS3-02).
+    oltp_rows: Option<Vec<OltpRowResult>>,
+}
+
+/// S4-WS3-02: a single result row returned by the physical OLTP executor.
+#[derive(Serialize)]
+struct OltpRowResult {
+    key: String,
+    data: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1182,6 +1237,145 @@ struct IndexListEntry {
 struct ListIndexesResponse {
     status: &'static str,
     indexes: Vec<IndexListEntry>,
+}
+
+// S5-WS4-03 / S2-WS2-04: MVCC row store scan structs
+#[derive(Deserialize)]
+struct StoreRowsScanRequest {
+    /// MVCC snapshot Xid to read at. Defaults to current head Xid.
+    snapshot_xid: Option<u64>,
+    /// Optional key prefix filter (empty string matches all).
+    key_prefix: Option<String>,
+    /// Maximum rows returned (capped at 10 000; default 1 000).
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct StoreRowEntry {
+    key: String,
+    data: std::collections::HashMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct StoreRowsScanResponse {
+    status: &'static str,
+    snapshot_xid: u64,
+    row_count: usize,
+    rows: Vec<StoreRowEntry>,
+}
+
+// S4-WS3-04: HTAP sync export structs
+#[derive(Deserialize)]
+struct StoreHtapExportRequest {
+    /// Export mutations with sequence > this value (0 = export all).
+    since_sequence: Option<u64>,
+    /// Maximum mutations to return (capped at 5 000; default 500).
+    max_items: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct HtapMutationEntry {
+    sequence: u64,
+    table: String,
+    primary_key: String,
+    payload_json: String,
+    op: String,
+}
+
+#[derive(Serialize)]
+struct StoreHtapExportResponse {
+    status: &'static str,
+    since_sequence: u64,
+    mutation_count: usize,
+    checkpoint_last_sequence: u64,
+    mutations: Vec<HtapMutationEntry>,
+}
+
+// S9-WS8A-02: audit chain verify response
+#[derive(Serialize)]
+struct AuditChainVerifyResponse {
+    status: &'static str,
+    event_count: usize,
+    chain_valid: bool,
+    genesis_hash: &'static str,
+}
+
+// S4-WS3-03: columnar scan response (vectorized OLAP executor)
+#[derive(Serialize)]
+struct ColumnarScanColumn {
+    name: String,
+    type_hint: String,
+    row_count: usize,
+    sample_values: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ColumnarScanResponse {
+    status: &'static str,
+    rows_scanned: usize,
+    columns_materialized: usize,
+    elapsed_us: u128,
+    columns: Vec<ColumnarScanColumn>,
+}
+
+// S6-WS5-03: TLS runtime status
+#[derive(Serialize)]
+struct SecurityTlsStatusResponse {
+    status: &'static str,
+    tls_required: bool,
+    mtls_required: bool,
+    cert_source: String,
+    cert_rotation_supported: bool,
+    note: &'static str,
+}
+
+// S6-WS5-04: TDE runtime status
+#[derive(Serialize)]
+struct SecurityTdeStatusResponse {
+    status: &'static str,
+    encryption_at_rest_required: bool,
+    tde_active: bool,
+    key_env_var: String,
+    key_resolved: bool,
+    note: &'static str,
+}
+
+// S9-WS8-02: model gateway policy
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ModelGatewayPolicy {
+    /// When true, autonomous AI actions are validated against policy constraints.
+    isolation_enabled: bool,
+    /// Allowlist of model identifiers (empty = allow all).
+    allowed_models: Vec<String>,
+    /// Maximum tokens per request (0 = unlimited).
+    max_tokens_per_request: u64,
+    /// Requests-per-minute rate limit (0 = unlimited).
+    rate_limit_rpm: u32,
+}
+
+impl Default for ModelGatewayPolicy {
+    fn default() -> Self {
+        Self {
+            isolation_enabled: true,
+            allowed_models: Vec::new(),
+            max_tokens_per_request: 4096,
+            rate_limit_rpm: 60,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AiPolicyResponse {
+    status: &'static str,
+    policy: ModelGatewayPolicy,
+}
+
+#[derive(Deserialize)]
+struct AiPolicyUpdateRequest {
+    isolation_enabled: Option<bool>,
+    allowed_models: Option<Vec<String>>,
+    max_tokens_per_request: Option<u64>,
+    rate_limit_rpm: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -2079,6 +2273,7 @@ async fn main() {
         ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
         row_store: Arc::new(Mutex::new(PagedRowStore::default())),
+        model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -2136,6 +2331,8 @@ async fn main() {
             post(security_plugins_provenance_register),
         )
         .route("/api/v1/audit/events", get(audit_events))
+        // S9-WS8A-02: tamper-evident audit chain verification
+        .route("/api/v1/audit/chain/verify", get(audit_chain_verify))
         .route("/api/v1/security/kms/status", get(security_kms_status))
         .route(
             "/api/v1/security/kms/outage/simulate",
@@ -2172,6 +2369,19 @@ async fn main() {
             "/api/v1/store/constraints/validate",
             post(store_validate_constraint),
         )
+        // S5-WS4-03 / S2-WS2-04: MVCC row store scan
+        .route("/api/v1/store/rows/scan", post(store_rows_scan))
+        // S4-WS3-04: HTAP sync export for OLAP consumers
+        .route("/api/v1/store/htap/export", post(store_htap_export))
+        // S4-WS3-03: vectorized columnar scan
+        .route("/api/v1/store/columnar/scan", get(store_columnar_scan))
+        // S6-WS5-03: TLS runtime status
+        .route("/api/v1/security/tls/status", get(security_tls_status))
+        // S6-WS5-04: TDE/encryption-at-rest status
+        .route("/api/v1/security/tde/status", get(security_tde_status))
+        // S9-WS8-02: AI model gateway policy
+        .route("/api/v1/ai/policy", get(ai_policy))
+        .route("/api/v1/ai/policy/update", post(ai_policy_update))
         // WS4 Ingest endpoints
         .route("/api/v1/ingest/csv", post(ingest_csv))
         .route("/api/v1/ingest/json", post(ingest_json))
@@ -2433,6 +2643,27 @@ async fn sql_transaction(
                     }
                 }
             }
+            // S4-WS3-04: publish each committed DML mutation to RowStoreSyncOrigin for HTAP consumers.
+            {
+                use voltnuerongrid_store::htap_sync::MutationOp;
+                let mut origin = state.sync_origin.lock().expect("sync_origin lock");
+                for stmt in &req.statements {
+                    let upper = stmt.trim_start().to_ascii_uppercase();
+                    if upper.starts_with("INSERT") {
+                        if let Some((k, _d)) = extract_insert_row_from_sql(stmt) {
+                            origin.append("row_store", &k, stmt, MutationOp::Insert);
+                        }
+                    } else if upper.starts_with("DELETE") {
+                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                            origin.append("row_store", &k, stmt, MutationOp::Delete);
+                        }
+                    } else if upper.starts_with("UPDATE") {
+                        if let Some((k, _d)) = extract_update_row_from_sql(stmt) {
+                            origin.append("row_store", &k, stmt, MutationOp::Update);
+                        }
+                    }
+                }
+            }
         } else if has_rollback {
             acid.rollback(&tx_id, now_ms);
         }
@@ -2636,18 +2867,48 @@ async fn sql_route(
     let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/route")?;
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/route")?;
     let decision = HtapQueryRouter::route_batch(&req.sql_batch);
+    // S3-WS1-05: augment each routed statement with cost-model hints from QueryPlanner
+    use voltnuerongrid_exec::{QueryPlanner, QueryPath};
+    use voltnuerongrid_sql::parse_one;
+    let mut batch_estimated_rows: u64 = 0;
+    let mut batch_relative_cost: f64 = 0.0;
+    let statements: Vec<RoutedStatementResponse> = decision
+        .statements
+        .into_iter()
+        .map(|s| {
+            let (planner_path, estimated_rows, relative_cost) =
+                match parse_one(&s.statement) {
+                    Ok(stmt) => {
+                        let plan = QueryPlanner::plan(&stmt);
+                        let cost = QueryPlanner::estimate_cost(&plan);
+                        let pp = match cost.recommended_path {
+                            QueryPath::Oltp => "oltp",
+                            QueryPath::Olap => "olap",
+                            QueryPath::Hybrid => "hybrid",
+                            QueryPath::Unknown => "unknown",
+                        };
+                        (pp.to_string(), cost.estimated_rows, cost.relative_cost)
+                    }
+                    Err(_) => ("unknown".to_string(), 0u64, 0.0f64),
+                };
+            batch_estimated_rows += estimated_rows;
+            batch_relative_cost += relative_cost;
+            RoutedStatementResponse {
+                statement: s.statement,
+                path: route_path_name(s.path).to_string(),
+                planner_path,
+                estimated_rows,
+                relative_cost,
+            }
+        })
+        .collect();
     let response = SqlRouteResponse {
         status: "ok",
         route_path: route_path_name(decision.path).to_string(),
         reason: decision.reason,
-        statements: decision
-            .statements
-            .into_iter()
-            .map(|s| RoutedStatementResponse {
-                statement: s.statement,
-                path: route_path_name(s.path).to_string(),
-            })
-            .collect(),
+        statements,
+        batch_estimated_rows,
+        batch_relative_cost,
     };
     append_runtime_audit_event(
         &state,
@@ -2717,6 +2978,8 @@ async fn sql_execute(
                     udf_guard_policies,
                     udf_execution_plan,
                     legacy_agg_results: None,
+                    planner_path: None,
+                    oltp_rows: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -2753,6 +3016,8 @@ async fn sql_execute(
                 udf_guard_policies,
                 udf_execution_plan,
                 legacy_agg_results: None,
+                planner_path: None,
+                oltp_rows: None,
             }),
         ));
         release_sql_data_plane_connection(&state, &connection_id);
@@ -2809,6 +3074,8 @@ async fn sql_execute(
                     udf_guard_policies,
                     udf_execution_plan,
                     legacy_agg_results: None,
+                    planner_path: None,
+                    oltp_rows: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -2893,6 +3160,38 @@ async fn sql_execute(
         if agg_results.is_empty() { None } else { Some(agg_results) }
     };
 
+    // S3-WS1-05: derive dominant planner path for the execute batch
+    let planner_path: Option<String> = {
+        use voltnuerongrid_exec::{QueryPlanner, QueryPath};
+        use voltnuerongrid_sql::parse_one;
+        let mut max_cost: f64 = f64::NEG_INFINITY;
+        let mut dominant: Option<String> = None;
+        for stmt_str in req.sql_batch.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            if let Ok(stmt) = parse_one(stmt_str) {
+                let cost = QueryPlanner::estimate_cost(&QueryPlanner::plan(&stmt));
+                if cost.relative_cost > max_cost {
+                    max_cost = cost.relative_cost;
+                    dominant = Some(match cost.recommended_path {
+                        QueryPath::Oltp => "oltp",
+                        QueryPath::Olap => "olap",
+                        QueryPath::Hybrid => "hybrid",
+                        QueryPath::Unknown => "unknown",
+                    }.to_string());
+                }
+            }
+        }
+        dominant
+    };
+    // S4-WS3-02: physical OLTP executor dispatch — if planner says oltp, read real rows from PagedRowStore.
+    let oltp_rows: Option<Vec<OltpRowResult>> =
+        if planner_path.as_deref() == Some("oltp") && !olap_statements.is_empty() {
+            let rs = state.row_store.lock().expect("row_store lock oltp dispatch");
+            let limit = req.max_rows.unwrap_or(1_000).min(10_000);
+            let rows = execute_oltp_select(&olap_statements, &rs, limit);
+            if rows.is_empty() { None } else { Some(rows) }
+        } else {
+            None
+        };
     let response = SqlExecuteResponse {
         status: "ok",
         route_path: route_path_name(decision.path).to_string(),
@@ -2910,6 +3209,8 @@ async fn sql_execute(
         udf_guard_policies,
         udf_execution_plan,
         legacy_agg_results,
+        planner_path,
+        oltp_rows,
     };
     append_runtime_audit_event(
         &state,
@@ -4709,6 +5010,27 @@ async fn audit_events(
     }))
 }
 
+/// S9-WS8A-02: verify the tamper-evident hash chain across all audit events.
+async fn audit_chain_verify(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AuditChainVerifyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_audit_runtime_principal(&headers, &state, PrivilegeAction::Read, "audit/chain/verify")?;
+    let events = state
+        .audit_sink
+        .lock()
+        .map(|sink| sink.all().to_vec())
+        .unwrap_or_default();
+    let event_count = events.len();
+    let chain_valid = AppendOnlyAuditSink::verify_chain(&events);
+    Ok(Json(AuditChainVerifyResponse {
+        status: "ok",
+        event_count,
+        chain_valid,
+        genesis_hash: "genesis-0000000000000000",
+    }))
+}
+
 async fn autonomous_action_records(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5216,6 +5538,48 @@ fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryRespon
         elapsed_ms: elapsed,
         rows: resolved_max_rows.min(10_000),
     }
+}
+
+/// S4-WS3-02: physical OLTP executor — runs point SELECT queries against `PagedRowStore`.
+/// Extracts an optional key/prefix constraint from the WHERE clause and filters visible rows.
+fn execute_oltp_select(
+    statements: &[String],
+    rs: &voltnuerongrid_store::mvcc::PagedRowStore,
+    limit: usize,
+) -> Vec<OltpRowResult> {
+    use voltnuerongrid_sql::{parse_one, Statement};
+    let snapshot_xid = rs.current_xid();
+    // Collect all visible rows once; reuse across multiple SELECT statements.
+    let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = rs
+        .scan_at_snapshot(snapshot_xid)
+        .into_iter()
+        .map(|(k, d)| (k.to_string(), d.clone()))
+        .collect();
+    let mut results: Vec<OltpRowResult> = Vec::new();
+    for stmt_str in statements {
+        if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
+            // Try to extract a literal key/prefix from `WHERE <col> = '<val>'`
+            let prefix: Option<String> = sel.where_clause.as_deref().and_then(|w| {
+                let eq = w.find('=')?;
+                let rhs = w[eq + 1..].trim();
+                let val = rhs.trim_matches('\'').trim_matches('"').trim();
+                if val.is_empty() { None } else { Some(val.to_string()) }
+            });
+            let prefix_str = prefix.as_deref().unwrap_or("");
+            let remaining = limit.saturating_sub(results.len());
+            let batch: Vec<OltpRowResult> = all_rows
+                .iter()
+                .filter(|(k, _)| prefix_str.is_empty() || k.contains(prefix_str))
+                .take(remaining)
+                .map(|(k, d)| OltpRowResult { key: k.clone(), data: d.clone() })
+                .collect();
+            results.extend(batch);
+            if results.len() >= limit {
+                break;
+            }
+        }
+    }
+    results
 }
 
 fn execute_udf_runtime_scaffold(sql_batch: &str) -> Result<Vec<UdfExecutionResult>, String> {
@@ -7163,6 +7527,357 @@ async fn store_validate_constraint(
     })
 }
 
+// S5-WS4-03 / S2-WS2-04: scan MVCC PagedRowStore at a snapshot
+async fn store_rows_scan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<StoreRowsScanRequest>,
+) -> Result<(StatusCode, Json<StoreRowsScanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_store_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        "store/rows/scan",
+    )?;
+    let rs = state.row_store.lock().expect("row_store lock");
+    let snapshot_xid = req.snapshot_xid.unwrap_or_else(|| rs.current_xid());
+    let key_prefix = req.key_prefix.unwrap_or_default();
+    let limit = req.limit.unwrap_or(1_000).min(10_000);
+    let rows: Vec<StoreRowEntry> = rs
+        .scan_at_snapshot(snapshot_xid)
+        .into_iter()
+        .filter(|(k, _)| key_prefix.is_empty() || k.starts_with(key_prefix.as_str()))
+        .take(limit)
+        .map(|(k, d)| StoreRowEntry {
+            key: k.to_string(),
+            data: d.clone(),
+        })
+        .collect();
+    let row_count = rows.len();
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Storage,
+        &principal,
+        "store_rows_scan",
+        "ok",
+        json!({
+            "route_scope": "store/rows/scan",
+            "snapshot_xid": snapshot_xid,
+            "row_count": row_count,
+            "key_prefix": key_prefix,
+        }),
+    );
+    Ok((
+        StatusCode::OK,
+        Json(StoreRowsScanResponse {
+            status: "ok",
+            snapshot_xid,
+            row_count,
+            rows,
+        }),
+    ))
+}
+
+/// S4-WS3-04: HTAP sync export — returns pending mutations from `RowStoreSyncOrigin`.
+async fn store_htap_export(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<StoreHtapExportRequest>,
+) -> Result<(StatusCode, Json<StoreHtapExportResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_store_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        "store/htap/export",
+    )?;
+    let since = req.since_sequence.unwrap_or(0);
+    let max_items = req.max_items.unwrap_or(500).min(5_000);
+    let mutations = {
+        use voltnuerongrid_store::htap_sync::MutationOp;
+        let origin = state.sync_origin.lock().expect("sync_origin lock");
+        let checkpoint = origin.checkpoint();
+        let raw = origin.export_since(since, max_items);
+        let entries: Vec<HtapMutationEntry> = raw
+            .into_iter()
+            .map(|m| HtapMutationEntry {
+                sequence: m.sequence,
+                table: m.table,
+                primary_key: m.primary_key,
+                payload_json: m.payload_json,
+                op: match m.op {
+                    MutationOp::Insert => "insert",
+                    MutationOp::Update => "update",
+                    MutationOp::Delete => "delete",
+                }
+                .to_string(),
+            })
+            .collect();
+        (entries, checkpoint.last_sequence)
+    };
+    let (entries, last_sequence) = mutations;
+    let mutation_count = entries.len();
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Storage,
+        &principal,
+        "store_htap_export",
+        "ok",
+        json!({
+            "route_scope": "store/htap/export",
+            "since_sequence": since,
+            "mutation_count": mutation_count,
+        }),
+    );
+    Ok((
+        StatusCode::OK,
+        Json(StoreHtapExportResponse {
+            status: "ok",
+            since_sequence: since,
+            mutation_count,
+            checkpoint_last_sequence: last_sequence,
+            mutations: entries,
+        }),
+    ))
+}
+
+/// S4-WS3-03: vectorized columnar scan — reads committed rows from PagedRowStore
+/// and materialises them as typed column batches for OLAP consumers.
+async fn store_columnar_scan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ColumnarScanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_store_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        "store/columnar/scan",
+    )?;
+    let (batch, stats) = {
+        use voltnuerongrid_store::columnar::vectorized_scan;
+        let rs = state.row_store.lock().expect("row_store lock columnar_scan");
+        let snapshot_xid = rs.current_xid();
+        let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
+            .scan_at_snapshot(snapshot_xid)
+            .into_iter()
+            .map(|(k, d)| (k.to_string(), d.clone()))
+            .collect();
+        vectorized_scan(&raw_rows, 10_000)
+    };
+    let columns: Vec<ColumnarScanColumn> = batch
+        .column_names
+        .iter()
+        .filter_map(|name| {
+            batch.columns.get(name).map(|cv| {
+                use voltnuerongrid_store::columnar::ColumnVector;
+                let type_hint = match cv {
+                    ColumnVector::Int64(_) => "int64",
+                    ColumnVector::Float64(_) => "float64",
+                    ColumnVector::Bool(_) => "bool",
+                    ColumnVector::Utf8(_) => "utf8",
+                    ColumnVector::Null(_) => "null",
+                };
+                let sample_values: Vec<String> = (0..cv.len().min(3))
+                    .filter_map(|i| cv.value_as_str(i))
+                    .collect();
+                ColumnarScanColumn {
+                    name: name.clone(),
+                    type_hint: type_hint.to_string(),
+                    row_count: cv.len(),
+                    sample_values,
+                }
+            })
+        })
+        .collect();
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Storage,
+        &principal,
+        "store_columnar_scan",
+        "ok",
+        json!({
+            "route_scope": "store/columnar/scan",
+            "rows_scanned": stats.rows_scanned,
+            "columns_materialized": stats.columns_materialized,
+        }),
+    );
+    Ok((
+        StatusCode::OK,
+        Json(ColumnarScanResponse {
+            status: "ok",
+            rows_scanned: stats.rows_scanned,
+            columns_materialized: stats.columns_materialized,
+            elapsed_us: stats.elapsed_us,
+            columns,
+        }),
+    ))
+}
+
+/// S6-WS5-03: TLS runtime status — reports TLS/mTLS contract state from SecurityConfigContract.
+async fn security_tls_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SecurityTlsStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "security.kms",
+        "security/tls/status",
+        PrivilegeAction::Read,
+    )?;
+    let principal = RuntimeAccessPrincipal::Operator(operator);
+    let cert_source = std::env::var("VNG_TLS_CERT_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "not_configured".to_string());
+    let key_present = std::env::var("VNG_TLS_KEY_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some();
+    let note = if state.security_config.tls_required {
+        "TLS required — server must be started with rustls/native-tls adapter"
+    } else {
+        "TLS not required — plaintext mode (development only)"
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &principal,
+        "security_tls_status",
+        "ok",
+        json!({
+            "route_scope": "security/tls/status",
+            "tls_required": state.security_config.tls_required,
+            "mtls_required": state.security_config.mtls_required,
+        }),
+    );
+    Ok(Json(SecurityTlsStatusResponse {
+        status: "ok",
+        tls_required: state.security_config.tls_required,
+        mtls_required: state.security_config.mtls_required,
+        cert_source: if key_present { cert_source } else { "not_configured".to_string() },
+        cert_rotation_supported: false,
+        note,
+    }))
+}
+
+/// S6-WS5-04: TDE runtime status — reports encryption-at-rest state from SecurityConfigContract.
+async fn security_tde_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SecurityTdeStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "security.kms",
+        "security/tde/status",
+        PrivilegeAction::Read,
+    )?;
+    let principal = RuntimeAccessPrincipal::Operator(operator);
+    let key_env_var = state.security_config.kms_key_ref_env.clone();
+    let key_resolved = std::env::var(&key_env_var)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some();
+    // TDE is "active" when encryption-at-rest is required AND a KMS key is resolved.
+    let tde_active = state.security_config.encryption_at_rest_required && key_resolved;
+    let note = if tde_active {
+        "TDE active: encryption-at-rest required and KMS key resolved"
+    } else if state.security_config.encryption_at_rest_required {
+        "TDE contract requires encryption but KMS key env var is not set — data NOT encrypted at rest"
+    } else {
+        "TDE not required in current security contract"
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &principal,
+        "security_tde_status",
+        "ok",
+        json!({
+            "route_scope": "security/tde/status",
+            "encryption_at_rest_required": state.security_config.encryption_at_rest_required,
+            "tde_active": tde_active,
+            "key_env_var": key_env_var,
+        }),
+    );
+    Ok(Json(SecurityTdeStatusResponse {
+        status: "ok",
+        encryption_at_rest_required: state.security_config.encryption_at_rest_required,
+        tde_active,
+        key_env_var,
+        key_resolved,
+        note,
+    }))
+}
+
+/// S9-WS8-02: AI model gateway policy — read current policy.
+async fn ai_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AiPolicyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "ai.governance",
+        "ai/policy",
+        PrivilegeAction::Read,
+    )?;
+    let principal = RuntimeAccessPrincipal::Operator(operator);
+    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock").clone();
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &principal,
+        "ai_policy_read",
+        "ok",
+        json!({ "route_scope": "ai/policy", "isolation_enabled": policy.isolation_enabled }),
+    );
+    Ok(Json(AiPolicyResponse { status: "ok", policy }))
+}
+
+/// S9-WS8-02: AI model gateway policy update (admin only).
+async fn ai_policy_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AiPolicyUpdateRequest>,
+) -> Result<Json<AiPolicyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "ai.governance",
+        "ai/policy",
+        PrivilegeAction::Manage,
+    )?;
+    let principal = RuntimeAccessPrincipal::Operator(operator);
+    let policy = {
+        let mut p = state.model_gateway_policy.lock().expect("model_gateway_policy lock");
+        if let Some(v) = req.isolation_enabled { p.isolation_enabled = v; }
+        if let Some(v) = req.allowed_models { p.allowed_models = v; }
+        if let Some(v) = req.max_tokens_per_request { p.max_tokens_per_request = v; }
+        if let Some(v) = req.rate_limit_rpm { p.rate_limit_rpm = v; }
+        p.clone()
+    };
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &principal,
+        "ai_policy_update",
+        "ok",
+        json!({
+            "route_scope": "ai/policy/update",
+            "isolation_enabled": policy.isolation_enabled,
+            "allowed_models_count": policy.allowed_models.len(),
+            "max_tokens_per_request": policy.max_tokens_per_request,
+            "rate_limit_rpm": policy.rate_limit_rpm,
+        }),
+    );
+    Ok(Json(AiPolicyResponse { status: "ok", policy }))
+}
+
 async fn security_kms_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -8214,6 +8929,7 @@ mod tests {
             ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
             acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
             row_store: Arc::new(Mutex::new(PagedRowStore::default())),
+            model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
         }
     }
 
@@ -13198,6 +13914,385 @@ mod tests {
             voltnuerongrid_exec::QueryPath::Oltp,
             "filtered point selects should route to OLTP"
         );
+    }
+
+    // ── S3-WS1-05: sql_route response includes planner cost hints ────────────
+    #[test]
+    fn s3_ws1_sql_route_response_includes_planner_fields() {
+        let state = state_with_key(Some("test-key"));
+        let req = SqlRouteRequest {
+            sql_batch: "SELECT region, SUM(revenue) FROM sales GROUP BY region".to_string(),
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(sql_route(State(state), headers, Json(req)))
+            .unwrap();
+        assert_eq!(resp.0.status, "ok");
+        assert!(!resp.0.statements.is_empty(), "should have at least one routed statement");
+        let stmt = &resp.0.statements[0];
+        // Aggregate query should get planner_path == "olap"
+        assert_eq!(stmt.planner_path, "olap", "aggregate should map to olap planner path");
+        assert!(stmt.estimated_rows > 0, "estimated_rows should be positive");
+        assert!(stmt.relative_cost > 0.0, "relative_cost should be positive");
+        assert!(resp.0.batch_estimated_rows > 0);
+        assert!(resp.0.batch_relative_cost > 0.0);
+    }
+
+    #[test]
+    fn s3_ws1_sql_route_point_select_gets_oltp_planner_path() {
+        let state = state_with_key(Some("test-key"));
+        let req = SqlRouteRequest {
+            sql_batch: "SELECT id FROM orders WHERE id = 'o1'".to_string(),
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(sql_route(State(state), headers, Json(req)))
+            .unwrap();
+        let stmt = &resp.0.statements[0];
+        assert_eq!(stmt.planner_path, "oltp", "filtered select should be oltp");
+    }
+
+    // ── S3-WS1-05: sql_execute response includes planner_path ───────────────
+    #[test]
+    fn s3_ws1_sql_execute_planner_path_populated_for_aggregate() {
+        let state = state_with_key(Some("test-key"));
+        let req = SqlExecuteRequest {
+            sql_batch: "SELECT region, SUM(revenue) FROM sales GROUP BY region".to_string(),
+            max_rows: None,
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(sql_execute(State(state), headers, Json(req)))
+            .unwrap();
+        let response = resp.1.0;
+        assert!(
+            response.planner_path.is_some(),
+            "planner_path must be set for parseable SQL"
+        );
+        assert_eq!(
+            response.planner_path.as_deref(),
+            Some("olap"),
+            "aggregate batch should generate olap planner_path"
+        );
+    }
+
+    // ── S5-WS4-03 / S2-WS2-04: store/rows/scan returns committed rows ────────
+    #[test]
+    fn s5_ws4_store_rows_scan_returns_committed_rows() {
+        let state = state_with_key(Some("test-key"));
+        // Write two rows into the row store directly
+        {
+            let mut rs = state.row_store.lock().expect("row_store lock");
+            let xid = rs.begin_xid();
+            let mut d1 = std::collections::HashMap::new();
+            d1.insert("source".to_string(), "test".to_string());
+            d1.insert("payload".to_string(), "row-one".to_string());
+            rs.insert(xid, "scan-test:row1", d1);
+            let xid2 = rs.begin_xid();
+            let mut d2 = std::collections::HashMap::new();
+            d2.insert("source".to_string(), "test".to_string());
+            d2.insert("payload".to_string(), "row-two".to_string());
+            rs.insert(xid2, "scan-test:row2", d2);
+        }
+        let req = StoreRowsScanRequest {
+            snapshot_xid: None,
+            key_prefix: Some("scan-test:".to_string()),
+            limit: None,
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(store_rows_scan(State(state), headers, Json(req)))
+            .unwrap();
+        let scan = resp.1.0;
+        assert_eq!(scan.status, "ok");
+        assert_eq!(scan.row_count, 2, "should return the two inserted rows");
+        assert!(scan.rows.iter().any(|r| r.key == "scan-test:row1"));
+        assert!(scan.rows.iter().any(|r| r.key == "scan-test:row2"));
+    }
+
+    #[test]
+    fn s5_ws4_store_rows_scan_key_prefix_filters_rows() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut rs = state.row_store.lock().expect("row_store lock");
+            let xid = rs.begin_xid();
+            let mut d = std::collections::HashMap::new();
+            d.insert("x".to_string(), "1".to_string());
+            rs.insert(xid, "prefix-a:row", d.clone());
+            let xid2 = rs.begin_xid();
+            rs.insert(xid2, "prefix-b:row", d.clone());
+        }
+        let req = StoreRowsScanRequest {
+            snapshot_xid: None,
+            key_prefix: Some("prefix-a:".to_string()),
+            limit: None,
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(store_rows_scan(State(state), headers, Json(req)))
+            .unwrap();
+        let scan = resp.1.0;
+        assert_eq!(scan.row_count, 1, "prefix filter should exclude prefix-b row");
+        assert_eq!(scan.rows[0].key, "prefix-a:row");
+    }
+
+    #[test]
+    fn s5_ws4_store_rows_scan_respects_limit() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut rs = state.row_store.lock().expect("row_store lock");
+            for i in 0..10 {
+                let xid = rs.begin_xid();
+                let mut d = std::collections::HashMap::new();
+                d.insert("i".to_string(), i.to_string());
+                rs.insert(xid, &format!("limit-test:{i}"), d);
+            }
+        }
+        let req = StoreRowsScanRequest {
+            snapshot_xid: None,
+            key_prefix: Some("limit-test:".to_string()),
+            limit: Some(3),
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(store_rows_scan(State(state), headers, Json(req)))
+            .unwrap();
+        assert_eq!(resp.1.0.row_count, 3, "limit of 3 should cap the scan");
+    }
+
+    // ── S4-WS3-02: OLTP physical executor dispatch ───────────────────────────
+
+    #[tokio::test]
+    async fn s4_ws3_sql_execute_oltp_path_returns_rows_from_row_store() {
+        // Insert two rows via PagedRowStore directly
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut rs = state.row_store.lock().unwrap();
+            let xid = rs.begin_xid();
+            let mut d = std::collections::HashMap::new();
+            d.insert("value".to_string(), "42".to_string());
+            rs.insert(xid, "oltp-key-1", d.clone());
+            let xid2 = rs.begin_xid();
+            d.insert("value".to_string(), "99".to_string());
+            rs.insert(xid2, "oltp-key-2", d);
+        }
+        // Point SELECT with WHERE targeting oltp-key-1 → planner routes as oltp
+        let req = SqlExecuteRequest {
+            sql_batch: "SELECT value FROM rows WHERE id = 'oltp-key-1'".to_string(),
+            max_rows: Some(10),
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = sql_execute(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(resp.1.0.status, "ok");
+        // Planner should have routed as oltp
+        assert_eq!(resp.1.0.planner_path.as_deref(), Some("oltp"));
+        // OLTP rows should be populated and contain the matching key
+        let rows = resp.1.0.oltp_rows.expect("expected oltp_rows for oltp path");
+        assert!(!rows.is_empty(), "should return at least one oltp row");
+        assert!(rows.iter().any(|r| r.key.contains("oltp-key-1")));
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_sql_execute_olap_aggregate_has_no_oltp_rows() {
+        let state = state_with_key(Some("test-key"));
+        let req = SqlExecuteRequest {
+            sql_batch: "SELECT SUM(amount) FROM orders GROUP BY region".to_string(),
+            max_rows: None,
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = sql_execute(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(resp.1.0.status, "ok");
+        // Aggregate → olap path: oltp_rows should be None
+        assert!(resp.1.0.oltp_rows.is_none(), "aggregate query should not populate oltp_rows");
+        assert_eq!(resp.1.0.planner_path.as_deref(), Some("olap"));
+    }
+
+    // ── S4-WS3-04: HTAP sync publishes mutations on COMMIT ───────────────────
+
+    #[tokio::test]
+    async fn s4_ws3_04_commit_publishes_insert_to_sync_origin() {
+        let state = state_with_key(Some("test-key"));
+        let req = crate::SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO events VALUES ('evt-sync-1', 'login')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        let headers = operator_headers("test-key", "admin");
+        let resp = sql_transaction(State(state.clone()), headers, Json(req)).await.unwrap();
+        assert_eq!(resp.1.0.status, "committed");
+        // Sync origin should have at least one pending mutation
+        let origin = state.sync_origin.lock().unwrap();
+        assert!(origin.pending_len() >= 1, "commit should have published at least one mutation");
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_04_htap_export_returns_mutations_after_commit() {
+        let state = state_with_key(Some("test-key"));
+        // Commit an INSERT
+        let tx_req = crate::SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO metrics VALUES ('m-htap-1', 'cpu', 80)".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        let headers = operator_headers("test-key", "admin");
+        sql_transaction(State(state.clone()), headers.clone(), Json(tx_req)).await.unwrap();
+        // Export since sequence 0
+        let export_req = StoreHtapExportRequest { since_sequence: Some(0), max_items: Some(50) };
+        let resp = store_htap_export(State(state), headers, Json(export_req)).await.unwrap();
+        assert_eq!(resp.1.0.status, "ok");
+        assert!(resp.1.0.mutation_count >= 1, "at least one mutation should be exported");
+        assert!(resp.1.0.mutations.iter().any(|m| m.op == "insert"));
+    }
+
+    // ── S9-WS8A-02: tamper-evident audit chain ───────────────────────────────
+
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_chain_verify_clean_chain_is_valid() {
+        let state = state_with_key(Some("test-key"));
+        // Generate some audit events by running a SQL execute
+        let req = SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            max_rows: None,
+        };
+        let headers = operator_headers("test-key", "admin");
+        sql_execute(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
+        // Verify chain
+        let resp = audit_chain_verify(State(state), headers).await.unwrap();
+        assert_eq!(resp.0.status, "ok");
+        assert!(resp.0.chain_valid, "chain should be valid for unmodified audit log");
+    }
+
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_chain_events_have_non_empty_hashes() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Trigger an audit event
+        let req = SqlExecuteRequest { sql_batch: "SELECT now()".to_string(), max_rows: None };
+        sql_execute(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
+        // Retrieve events and check chain_hash populated
+        let sink = state.audit_sink.lock().unwrap();
+        let events = sink.all().to_vec();
+        drop(sink);
+        assert!(!events.is_empty());
+        for e in &events {
+            assert!(!e.chain_hash.is_empty(), "every event must have a chain_hash");
+            assert_ne!(e.chain_hash, "0000000000000000");
+        }
+    }
+
+    // ─── S4-WS3-03: vectorized columnar scan ─────────────────────────────────
+
+    #[tokio::test]
+    async fn s4_ws3_03_columnar_scan_returns_typed_columns_for_committed_rows() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Insert rows directly into PagedRowStore so they are visible
+        {
+            let mut rs = state.row_store.lock().unwrap();
+            let xid = rs.begin_xid();
+            rs.insert(xid, "user-1", [("age".to_string(), "30".to_string()), ("name".to_string(), "alice".to_string())].into_iter().collect());
+            rs.insert(xid, "user-2", [("age".to_string(), "25".to_string()), ("name".to_string(), "bob".to_string())].into_iter().collect());
+        }
+        let resp = store_columnar_scan(State(state), headers).await.unwrap();
+        let body = resp.1.0;
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.rows_scanned, 2);
+        assert!(body.columns_materialized >= 2, "expected at least 2 columns");
+        let age_col = body.columns.iter().find(|c| c.name == "age");
+        assert!(age_col.is_some(), "age column must be materialized");
+        let col = age_col.unwrap();
+        assert_eq!(col.type_hint, "int64", "age should be inferred as int64");
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_03_columnar_scan_empty_store_returns_zero_rows() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let resp = store_columnar_scan(State(state), headers).await.unwrap();
+        let body = resp.1.0;
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.rows_scanned, 0);
+        assert_eq!(body.columns_materialized, 0);
+    }
+
+    // ─── S6-WS5-03: TLS status ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn s6_ws5_03_tls_status_returns_contract_flags() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let resp = security_tls_status(State(state), headers).await.unwrap();
+        let body = resp.0;
+        assert_eq!(body.status, "ok");
+        // Default dev config has tls_required = false, mtls_required = false
+        assert!(!body.tls_required);
+        assert!(!body.mtls_required);
+        assert!(!body.cert_rotation_supported); // scaffold only
+    }
+
+    // ─── S6-WS5-04: TDE status ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn s6_ws5_04_tde_status_reports_encryption_at_rest_required() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let resp = security_tde_status(State(state), headers).await.unwrap();
+        let body = resp.0;
+        assert_eq!(body.status, "ok");
+        // Default config has encryption_at_rest_required = true
+        assert!(body.encryption_at_rest_required);
+        // KMS key env var not set in test env, so tde_active should be false
+        assert!(!body.tde_active);
+        assert!(!body.key_env_var.is_empty(), "key_env_var must be non-empty");
+    }
+
+    // ─── S9-WS8-02: AI model gateway policy ─────────────────────────────────
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_policy_read_returns_default_isolation_enabled() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let resp = ai_policy(State(state), headers).await.unwrap();
+        let body = resp.0;
+        assert_eq!(body.status, "ok");
+        assert!(body.policy.isolation_enabled, "isolation should be enabled by default");
+        assert_eq!(body.policy.max_tokens_per_request, 4096);
+        assert_eq!(body.policy.rate_limit_rpm, 60);
+    }
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_policy_update_persists_new_values() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let update_req = AiPolicyUpdateRequest {
+            isolation_enabled: Some(false),
+            allowed_models: Some(vec!["gpt-4o".to_string(), "claude-3".to_string()]),
+            max_tokens_per_request: Some(8192),
+            rate_limit_rpm: Some(120),
+        };
+        let resp = ai_policy_update(State(state.clone()), headers.clone(), Json(update_req)).await.unwrap();
+        let body = resp.0;
+        assert_eq!(body.status, "ok");
+        assert!(!body.policy.isolation_enabled);
+        assert_eq!(body.policy.allowed_models, vec!["gpt-4o", "claude-3"]);
+        assert_eq!(body.policy.max_tokens_per_request, 8192);
+        assert_eq!(body.policy.rate_limit_rpm, 120);
+        // Read back to confirm persistence
+        let read_resp = ai_policy(State(state), headers).await.unwrap();
+        assert!(!read_resp.0.policy.isolation_enabled);
+        assert_eq!(read_resp.0.policy.max_tokens_per_request, 8192);
     }
 
 }

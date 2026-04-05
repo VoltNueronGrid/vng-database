@@ -100,6 +100,7 @@ function Invoke-ScriptPack {
 
 $packs = @(
   @{ Name = "ws1-sql-core-tests"; Type = "cargo-test"; Detail = "cargo test -p voltnuerongrid-sql"; Arguments = @("test", "-p", "voltnuerongrid-sql") },
+  @{ Name = "ws1-ansi-conformance"; Type = "cargo-test"; Detail = "cargo test -p voltnuerongrid-sql ansi_conformance (S3-WS1-06)"; Arguments = @("test", "-p", "voltnuerongrid-sql", "ansi_conformance") },
   @{ Name = "ws1-udf-contract-smoke"; Type = "script"; Detail = "run-ws1-udf-contract-smoke.ps1"; Runner = { & "tests/kpi/scripts/run-ws1-udf-contract-smoke.ps1" -OutputPath "tests/kpi/results/ws1/ws1-udf-contract-smoke.json" } },
   @{ Name = "ws1-udf-runtime-scaffold-tests"; Type = "cargo-test"; Detail = "cargo test -p voltnuerongridd ws1_udf_ -- --nocapture"; Arguments = @("test", "-p", "voltnuerongridd", "ws1_udf_", "--", "--nocapture") },
   @{ Name = "ws1-runtime-sql-check"; Type = "cargo-check"; Detail = "cargo check -p voltnuerongridd"; Arguments = @("check", "-p", "voltnuerongridd") },
