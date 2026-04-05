@@ -55,6 +55,8 @@ impl HtapQueryRouter {
             SqlStatementKind::Select => {
                 if upper.contains("GROUP BY")
                     || upper.contains("JOIN")
+                    || upper.contains("HAVING")
+                    || upper.contains("OVER(")
                     || upper.contains("SUM(")
                     || upper.contains("COUNT(")
                     || upper.contains("AVG(")

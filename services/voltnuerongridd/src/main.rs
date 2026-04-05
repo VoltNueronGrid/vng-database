@@ -31,6 +31,7 @@ use voltnuerongrid_store::htap_sync::{
 use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, DdlCatalog};
 use voltnuerongrid_store::index::IndexManager;
+use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
 use voltnuerongrid_ingest::{
     IngestionConnector, ManagedEventBusTransport, ManagedReplayCursorStore,
@@ -303,6 +304,8 @@ struct AppState {
     guardrails: Arc<Vec<GuardrailRule>>,
     ddl_catalog: Arc<Mutex<DdlCatalog>>,
     acid_transactions: Arc<Mutex<AcidTransactionRegistry>>,
+    /// MVCC page-based row store (S2-WS2-04: PagedRowStore scaffold).
+    row_store: Arc<Mutex<PagedRowStore>>,
 }
 
 #[derive(Clone, Default)]
@@ -2075,6 +2078,7 @@ async fn main() {
         guardrails: Arc::new(default_guardrail_rules()),
         ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
+        row_store: Arc::new(Mutex::new(PagedRowStore::default())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -8041,6 +8045,7 @@ mod tests {
             guardrails: Arc::new(default_guardrail_rules()),
             ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
             acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
+            row_store: Arc::new(Mutex::new(PagedRowStore::default())),
         }
     }
 
@@ -12542,6 +12547,337 @@ mod tests {
         let elapsed_ms = start.elapsed().as_millis();
         // All 50 calls should complete in under 5 seconds on any dev machine
         assert!(elapsed_ms < 5_000, "50 sequential calls took {elapsed_ms}ms, expected < 5000ms");
+    }
+
+    // ── REQ-23: snapshot read path enforcement ────────────────────────────────
+    #[test]
+    fn ws23_acid_read_uncommitted_does_not_record_snapshot() {
+        // read_uncommitted must NOT set read_snapshot_at_ms — it sees all in-progress writes
+        let state = state_with_key(None);
+        let tx_id = "test-ru-no-snapshot";
+        let now_ms = 2_000_000_u128;
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            acid.begin(tx_id, "read_uncommitted", now_ms);
+            let entry = acid.all_transactions().into_iter()
+                .find(|t| t.transaction_id == tx_id)
+                .expect("tx must exist in registry");
+            assert!(
+                entry.read_snapshot_at_ms.is_none(),
+                "read_uncommitted must NOT record read_snapshot_at_ms"
+            );
+        }
+    }
+
+    #[test]
+    fn ws23_acid_serializable_uses_write_lock_not_snapshot() {
+        // serializable uses write-lock conflict detection rather than MVCC snapshot timestamps.
+        // It must NOT set read_snapshot_at_ms; conflict detection is done via table write tracking.
+        let state = state_with_key(None);
+        let tx_id = "test-serializable-no-snapshot";
+        let now_ms = 3_000_000_u128;
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            acid.begin(tx_id, "serializable", now_ms);
+            let entry = acid.all_transactions().into_iter()
+                .find(|t| t.transaction_id == tx_id)
+                .expect("tx must exist in registry");
+            assert_eq!(
+                entry.isolation_level, "serializable",
+                "isolation level should be recorded"
+            );
+            // serializable conflict detection is via concurrent-write tracking, not snapshot timestamps
+            assert!(
+                entry.read_snapshot_at_ms.is_none(),
+                "serializable uses write-lock detection — read_snapshot_at_ms must not be set"
+            );
+        }
+    }
+
+    // ── REQ-27: Redis-compat extended coverage ────────────────────────────────
+    #[test]
+    fn ws27_redis_compat_set_with_ttl_returns_ok() {
+        // SET with a ttl_ms should succeed — key is stored with an expiry deadline
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let req = RedisCacheCommandRequest {
+            cmd: "SET".to_string(),
+            partition_id: Some("ttl-part".to_string()),
+            key: Some("temp-key".to_string()),
+            value: Some(serde_json::json!("ephemeral")),
+            ttl_ms: Some(60_000),
+            delta: None,
+            expire_ms: None,
+            keys: None, start: None, stop: None, field: None,
+        };
+        let result = rt.block_on(cache_redis_command(
+            State(state),
+            operator_headers("secret", "automation"),
+            Json(req),
+        )).expect("SET with TTL should succeed").0;
+        assert_eq!(result.status, "ok");
+    }
+
+    #[test]
+    fn ws27_redis_compat_getset_on_missing_key_returns_null_old_value() {
+        // GETSET on a non-existent key returns null for the old value, stores the new value
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let req = RedisCacheCommandRequest {
+            cmd: "GETSET".to_string(),
+            partition_id: Some("gs-new".to_string()),
+            key: Some("brand-new-key".to_string()),
+            value: Some(serde_json::json!("first-write")),
+            ttl_ms: None, delta: None, expire_ms: None,
+            keys: None, start: None, stop: None, field: None,
+        };
+        let result = rt.block_on(cache_redis_command(
+            State(state.clone()),
+            operator_headers("secret", "automation"),
+            Json(req),
+        )).expect("GETSET on new key should succeed").0;
+        assert_eq!(result.value, None, "GETSET on missing key must return null old value");
+
+        // Subsequent GET should return the newly written value
+        let get_req = RedisCacheCommandRequest {
+            cmd: "GET".to_string(),
+            partition_id: Some("gs-new".to_string()),
+            key: Some("brand-new-key".to_string()),
+            value: None, ttl_ms: None, delta: None, expire_ms: None,
+            keys: None, start: None, stop: None, field: None,
+        };
+        let get_result = rt.block_on(cache_redis_command(
+            State(state),
+            operator_headers("secret", "automation"),
+            Json(get_req),
+        )).expect("GET should succeed").0;
+        assert_eq!(get_result.value, Some(serde_json::json!("first-write")));
+    }
+
+    // ------------------------------------------------------------------
+    // REQ-31 / WS3: Additional HTAP routing coverage
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ws3_htap_router_window_function_routed_as_olap() {
+        // OVER( signals a window function — should be classified as OLAP.
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+        let r = rt.block_on(sql_route(
+            State(state),
+            headers,
+            Json(SqlRouteRequest {
+                sql_batch: "SELECT id, SUM(amount) OVER(PARTITION BY region) FROM orders;".to_string(),
+            }),
+        )).expect("sql_route window function");
+
+        assert_eq!(r.status, "ok");
+        assert_eq!(r.route_path, "olap", "window function (OVER) must route to olap");
+    }
+
+    #[test]
+    fn ws3_htap_router_having_clause_routed_as_olap() {
+        // HAVING is an aggregation filter — definitively OLAP.
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+        let r = rt.block_on(sql_route(
+            State(state),
+            headers,
+            Json(SqlRouteRequest {
+                sql_batch: "SELECT region, COUNT(*) FROM orders GROUP BY region HAVING COUNT(*) > 5;".to_string(),
+            }),
+        )).expect("sql_route having clause");
+
+        assert_eq!(r.status, "ok");
+        assert_eq!(r.route_path, "olap", "HAVING clause must route to olap");
+    }
+
+    // ------------------------------------------------------------------
+    // REQ-21: Additional concurrency stress tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ws21_multi_tenant_ddl_catalog_isolation() {
+        // 4 threads each issue distinct CREATE TABLE DDL via sql_execute concurrently.
+        // All must succeed without corrupting the shared ddl_catalog mutex.
+        use std::sync::Arc;
+
+        let state = Arc::new(state_with_key(None));
+        let handles: Vec<_> = (0u8..4)
+            .map(|i| {
+                let state = Arc::clone(&state);
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().expect("runtime");
+                    // Use the registered admin-acme user for DDL operations
+                    let headers = tenant_user_headers("admin-acme", "acme");
+                    let req = SqlExecuteRequest {
+                        sql_batch: format!(
+                            "CREATE TABLE concurrent_table_{i} (id INT PRIMARY KEY, val FLOAT);"
+                        ),
+                        max_rows: None,
+                    };
+                    let result = rt.block_on(sql_execute(State((*state).clone()), headers, Json(req)));
+                    (i, result.is_ok())
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let (i, ok): (u8, bool) = handle.join().expect("thread panicked");
+            assert!(ok, "Thread {i} DDL execute failed");
+        }
+    }
+
+    #[test]
+    fn ws21_concurrent_pessimistic_lock_acquire_distinct_resources() {
+        // 4 threads each acquire a pessimistic lock on distinct resources simultaneously.
+        // All must succeed without deadlock or race.
+        use std::sync::Arc;
+
+        let state = Arc::new(state_with_key(None));
+        let handles: Vec<_> = (0u8..4)
+            .map(|i| {
+                let state = Arc::clone(&state);
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().expect("runtime");
+                    let req = PessimisticLockAcquireRequest {
+                        transaction_id: format!("tx-concurrent-{i}"),
+                        resource: format!("resource-{i}"),
+                        owner: Some(format!("owner-{i}")),
+                        ttl_ms: None,
+                        wait_timeout_ms: Some(500),
+                    };
+                    let (status, _) = rt.block_on(sql_pessimistic_lock_acquire(
+                        State((*state).clone()),
+                        Json(req),
+                    ));
+                    (i, status == StatusCode::OK)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let (i, ok): (u8, bool) = handle.join().expect("thread panicked");
+            assert!(ok, "Thread {i} lock acquire failed");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // S3-WS1-04: SQL Tokenizer integration tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn s3_ws1_tokenizer_counts_keywords_in_olap_query() {
+        // Verify the new tokenizer correctly identifies ANSI SQL keywords
+        // in a typical OLAP query — a real parser step beyond heuristics.
+        use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
+        let sql = "SELECT region, SUM(amount) OVER(PARTITION BY region) \
+                   FROM orders GROUP BY region HAVING SUM(amount) > 100;";
+        let tokens = semantic_tokens(sql);
+        let keywords: Vec<_> = tokens.iter()
+            .filter_map(|t| if let Token::Keyword(k) = t { Some(k.as_str()) } else { None })
+            .collect();
+        assert!(keywords.contains(&"SELECT"));
+        assert!(keywords.contains(&"SUM"));
+        assert!(keywords.contains(&"OVER"));
+        assert!(keywords.contains(&"PARTITION"));
+        assert!(keywords.contains(&"GROUP"));
+        assert!(keywords.contains(&"HAVING"));
+        // Must not count whitespace or punctuation as keywords
+        assert!(!keywords.contains(&"("));
+        assert!(!keywords.contains(&")"));
+    }
+
+    #[test]
+    fn s3_ws1_tokenizer_parses_transaction_block() {
+        use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
+        let sql = "BEGIN; INSERT INTO orders VALUES (1, 'acme', 99.99); COMMIT;";
+        let tokens = semantic_tokens(sql);
+        let keywords: Vec<_> = tokens.iter()
+            .filter_map(|t| if let Token::Keyword(k) = t { Some(k.as_str()) } else { None })
+            .collect();
+        assert!(keywords.contains(&"BEGIN"));
+        assert!(keywords.contains(&"INSERT"));
+        assert!(keywords.contains(&"INTO"));
+        assert!(keywords.contains(&"VALUES"));
+        assert!(keywords.contains(&"COMMIT"));
+        // String literal extracted correctly
+        let lits: Vec<_> = tokens.iter()
+            .filter_map(|t| if let Token::StringLiteral(s) = t { Some(s.as_str()) } else { None })
+            .collect();
+        assert!(lits.contains(&"acme"));
+    }
+
+    // ------------------------------------------------------------------
+    // S2-WS2-04: MVCC PagedRowStore integration tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn s2_ws2_mvcc_row_store_insert_and_snapshot_read() {
+        use voltnuerongrid_store::mvcc::PagedRowStore;
+        use std::collections::HashMap;
+
+        let mut store = PagedRowStore::new(64);
+        let xid1 = store.begin_xid();
+        let mut data = HashMap::new();
+        data.insert("tenant_id".to_string(), "acme".to_string());
+        data.insert("amount".to_string(), "500".to_string());
+        store.insert(xid1, "order:acme:1", data.clone());
+
+        let snap = store.current_xid();
+
+        // Future write must not pollute snapshot
+        let xid2 = store.begin_xid();
+        let mut data2 = HashMap::new();
+        data2.insert("tenant_id".to_string(), "acme".to_string());
+        data2.insert("amount".to_string(), "9999".to_string());
+        store.insert(xid2, "order:acme:1", data2);
+
+        let visible = store.read_at_snapshot("order:acme:1", snap)
+            .expect("row must be visible at snapshot");
+        assert_eq!(visible["amount"], "500", "snapshot must see the pre-update value");
+
+        let latest = store.read_latest("order:acme:1")
+            .expect("latest row must exist");
+        assert_eq!(latest["amount"], "9999", "latest read must see updated value");
+    }
+
+    #[test]
+    fn s2_ws2_mvcc_row_store_delete_creates_tombstone() {
+        use voltnuerongrid_store::mvcc::PagedRowStore;
+        use std::collections::HashMap;
+
+        let mut store = PagedRowStore::new(64);
+        let xid = store.begin_xid();
+        let mut data = HashMap::new();
+        data.insert("status".to_string(), "active".to_string());
+        store.insert(xid, "session:xyz", data);
+
+        let snap_before = store.current_xid();
+        let xid2 = store.begin_xid();
+        assert!(store.delete(xid2, "session:xyz"), "delete must return true for existing row");
+
+        // Pre-delete snapshot still sees the row
+        assert!(store.read_at_snapshot("session:xyz", snap_before).is_some());
+        // Post-delete latest read returns None
+        assert!(store.read_latest("session:xyz").is_none());
+    }
+
+    #[test]
+    fn s2_ws2_mvcc_row_store_wired_in_appstate() {
+        // Verify the row_store field is accessible via AppState and can be used.
+        let state = state_with_key(None);
+        let mut store = state.row_store.lock().unwrap();
+        let xid = store.begin_xid();
+        let mut data = std::collections::HashMap::new();
+        data.insert("key".to_string(), "value".to_string());
+        store.insert(xid, "test:1", data);
+        let result = store.read_latest("test:1").expect("row must exist");
+        assert_eq!(result["key"], "value");
     }
 
 }

@@ -1,0 +1,34 @@
+{
+  "gate": "ws1a-release-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R1"
+  ],
+  "scope": [
+    "WS1A",
+    "REQ-12"
+  ],
+  "generated_at_utc": "2026-04-05T04:04:12.6615235Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws1a/ws1a-gate-summary.json",
+    "udf_bridge": "tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json",
+    "legacy_eval": "tests/kpi/results/ws1a/ws1a-legacy-numeric-eval-smoke.json",
+    "parity": "tests/kpi/results/parity/legacy-aggregation-parity.json",
+    "gap_report": "tests/kpi/results/parity/legacy-aggregation-gap-report.json"
+  },
+  "checks": {
+    "ws1a_gate_passed": true,
+    "ws1a_udf_bridge_passed": true,
+    "ws1a_legacy_eval_passed": true,
+    "ws1a_parity_passed": true,
+    "ws1a_gap_report_passed": true
+  },
+  "highlights": {
+    "pack_count": 3,
+    "udf_bridge_status": "passed",
+    "legacy_eval_status": "passed",
+    "parity_status": "passed",
+    "gap_report_status": "passed"
+  }
+}

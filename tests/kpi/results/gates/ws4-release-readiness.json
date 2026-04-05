@@ -1,0 +1,31 @@
+{
+  "gate": "ws4-release-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R1"
+  ],
+  "scope": [
+    "WS4",
+    "REQ-06"
+  ],
+  "generated_at_utc": "2026-04-05T04:03:46.6345069Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws4/ws4-gate-summary.json",
+    "ingest_plugin": "tests/kpi/results/ws4/ingest-plugin-smoke.json",
+    "ingest_parser": "tests/kpi/results/ws4/ws4-ingest-parser-smoke.json",
+    "chunked_loader": "tests/kpi/results/ws4/ws4-chunked-loader-smoke.json"
+  },
+  "checks": {
+    "ws4_gate_passed": true,
+    "ws4_ingest_plugin_passed": true,
+    "ws4_ingest_parser_passed": true,
+    "ws4_chunked_loader_passed": true
+  },
+  "highlights": {
+    "pack_count": 2,
+    "ingest_plugin_status": "passed",
+    "ingest_parser_status": "passed",
+    "chunked_loader_status": "passed"
+  }
+}

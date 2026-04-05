@@ -1,0 +1,29 @@
+{
+  "gate": "ws4a-release-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R1"
+  ],
+  "scope": [
+    "WS4A",
+    "REQ-18",
+    "REQ-26"
+  ],
+  "generated_at_utc": "2026-04-05T04:03:57.2533523Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws4a/ws4a-gate-summary.json",
+    "streaming_path": "tests/kpi/results/ws4a/streaming-event-path-smoke.json",
+    "replay_cursor": "tests/kpi/results/ws4a/replay-cursor-smoke.json"
+  },
+  "checks": {
+    "ws4a_gate_passed": true,
+    "ws4a_streaming_passed": true,
+    "ws4a_replay_cursor_passed": true
+  },
+  "highlights": {
+    "pack_count": 2,
+    "streaming_path_status": "passed",
+    "replay_cursor_status": "passed"
+  }
+}

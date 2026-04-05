@@ -5,8 +5,10 @@ pub const CRATE_NAME: &str = "voltnuerongrid-sql";
 use std::collections::HashMap;
 
 pub mod legacy_aggregations;
+pub mod tokenizer;
 
 pub use legacy_aggregations::eval_legacy_numeric_aggregation;
+pub use tokenizer::{tokenize, semantic_tokens, keyword_count, Token};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SqlStatementKind {

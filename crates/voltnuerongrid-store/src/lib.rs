@@ -9,6 +9,7 @@ pub mod constraints;
 pub mod ddl_catalog;
 pub mod htap_sync;
 pub mod index;
+pub mod mvcc;
 pub mod wal_adapter;
 use wal_adapter::{WalAdapter, WalAdapterError};
 

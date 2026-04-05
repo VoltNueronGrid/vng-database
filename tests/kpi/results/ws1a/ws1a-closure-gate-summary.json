@@ -1,0 +1,31 @@
+{
+  "gate": "ws1a-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-04-05T04:04:07.9682632Z",
+  "finished_at_utc": "2026-04-05T04:04:08.1200244Z",
+  "duration_ms": 152,
+  "artifacts": {
+    "ws1a_gate": "tests/kpi/results/ws1a/ws1a-gate-summary.json",
+    "udf_bridge": "tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json",
+    "legacy_eval": "tests/kpi/results/ws1a/ws1a-legacy-numeric-eval-smoke.json",
+    "parity": "tests/kpi/results/parity/legacy-aggregation-parity.json",
+    "gap_report": "tests/kpi/results/parity/legacy-aggregation-gap-report.json"
+  },
+  "checks": {
+    "ws1a_gate_passed": true,
+    "ws1a_udf_bridge_passed": true,
+    "ws1a_legacy_eval_passed": true,
+    "ws1a_parity_passed": true,
+    "ws1a_gap_report_passed": true,
+    "ws1a_all_packs_present": true
+  },
+  "runs": [
+    {
+      "pack": "ws1a-artifact-validation",
+      "status": "passed",
+      "detail": "checked_existing_artifacts",
+      "artifact": "tests/kpi/results/ws1a/ws1a-gate-summary.json"
+    }
+  ]
+}

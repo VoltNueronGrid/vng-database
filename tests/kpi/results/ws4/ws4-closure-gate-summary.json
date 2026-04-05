@@ -1,0 +1,29 @@
+{
+  "gate": "ws4-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-04-05T04:03:38.1961369Z",
+  "finished_at_utc": "2026-04-05T04:03:38.3291577Z",
+  "duration_ms": 133,
+  "artifacts": {
+    "ws4_gate": "tests/kpi/results/ws4/ws4-gate-summary.json",
+    "ingest_plugin": "tests/kpi/results/ws4/ingest-plugin-smoke.json",
+    "ingest_parser": "tests/kpi/results/ws4/ws4-ingest-parser-smoke.json",
+    "chunked_loader": "tests/kpi/results/ws4/ws4-chunked-loader-smoke.json"
+  },
+  "checks": {
+    "ws4_gate_passed": true,
+    "ws4_ingest_plugin_passed": true,
+    "ws4_ingest_parser_passed": true,
+    "ws4_chunked_loader_passed": true,
+    "ws4_all_packs_present": true
+  },
+  "runs": [
+    {
+      "pack": "ws4-artifact-validation",
+      "status": "passed",
+      "detail": "checked_existing_artifacts",
+      "artifact": "tests/kpi/results/ws4/ws4-gate-summary.json"
+    }
+  ]
+}

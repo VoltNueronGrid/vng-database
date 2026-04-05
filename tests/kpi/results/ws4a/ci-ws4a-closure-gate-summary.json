@@ -1,0 +1,27 @@
+{
+  "gate": "ws4a-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-04-05T04:03:54.2675461Z",
+  "finished_at_utc": "2026-04-05T04:03:54.3613626Z",
+  "duration_ms": 94,
+  "artifacts": {
+    "ws4a_gate": "tests/kpi/results/ws4a/ws4a-gate-summary.json",
+    "streaming_path": "tests/kpi/results/ws4a/streaming-event-path-smoke.json",
+    "replay_cursor": "tests/kpi/results/ws4a/replay-cursor-smoke.json"
+  },
+  "checks": {
+    "ws4a_gate_passed": true,
+    "ws4a_streaming_passed": true,
+    "ws4a_replay_cursor_passed": true,
+    "ws4a_all_packs_present": true
+  },
+  "runs": [
+    {
+      "pack": "ws4a-artifact-validation",
+      "status": "passed",
+      "detail": "checked_existing_artifacts",
+      "artifact": "tests/kpi/results/ws4a/ws4a-gate-summary.json"
+    }
+  ]
+}
