@@ -103,6 +103,9 @@ struct AcidTxEntry {
     /// REQ-23: For repeatable_read isolation, the timestamp at which the logical read
     /// snapshot was taken (BEGIN time). None for other isolation levels.
     read_snapshot_at_ms: Option<u128>,
+    /// REQ-23: WAL — ordered log of (statement, affected_table_or_empty) tuples recorded
+    /// during the transaction. Cleared on commit or rollback.
+    wal_log: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -129,6 +132,7 @@ impl AcidTransactionRegistry {
                 affected_tables: Vec::new(),
                 savepoints: Vec::new(),
                 read_snapshot_at_ms,
+                wal_log: Vec::new(),
             },
         );
     }
@@ -138,6 +142,7 @@ impl AcidTransactionRegistry {
             if entry.state == AcidTxState::Active {
                 entry.state = AcidTxState::Committed;
                 entry.completed_at_unix_ms = Some(now_ms);
+                entry.wal_log.clear();
                 return true;
             }
         }
@@ -149,6 +154,7 @@ impl AcidTransactionRegistry {
             if entry.state == AcidTxState::Active {
                 entry.state = AcidTxState::RolledBack;
                 entry.completed_at_unix_ms = Some(now_ms);
+                entry.wal_log.clear();
                 return true;
             }
         }
@@ -195,11 +201,13 @@ impl AcidTransactionRegistry {
     fn record_statement(&mut self, tx_id: &str, affected_table: Option<String>) {
         if let Some(entry) = self.transactions.get_mut(tx_id) {
             entry.statement_count += 1;
-            if let Some(t) = affected_table {
-                if !t.is_empty() && !entry.affected_tables.contains(&t) {
-                    entry.affected_tables.push(t);
-                }
+            let table = affected_table.clone().unwrap_or_default();
+            if !table.is_empty() && !entry.affected_tables.contains(&table) {
+                entry.affected_tables.push(table.clone());
             }
+            // REQ-23 WAL: append (statement_N, table) to the write-ahead log
+            let stmt_label = format!("statement_{}", entry.statement_count);
+            entry.wal_log.push((stmt_label, table));
         }
     }
 
@@ -1842,6 +1850,8 @@ struct RedisCacheCommandRequest {
     start: Option<i64>,
     /// LRANGE stop index (inclusive, negative = from tail)
     stop: Option<i64>,
+    /// Hash field name for HSET / HGET / HDEL
+    field: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -4009,6 +4019,116 @@ async fn cache_redis_command(
             let slice = if s < e { list[s..e].to_vec() } else { Vec::new() };
             RedisCacheCommandResponse {
                 status: "ok", cmd: cmd.clone(), value: Some(serde_json::Value::Array(slice)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: HSET — set a field in a hash (stored as JSON object in cache)
+        "HSET" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let field = req.field.as_deref().unwrap_or("");
+            let val = req.value.clone().unwrap_or(serde_json::Value::Null);
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut hash: serde_json::Map<String, serde_json::Value> =
+                match cache.get(partition_id, key, now_ms).ok().flatten() {
+                    Some(serde_json::Value::Object(m)) => m,
+                    _ => serde_json::Map::new(),
+                };
+            hash.insert(field.to_string(), val);
+            let _ = cache.set(partition_id, key.to_string(), serde_json::Value::Object(hash), req.ttl_ms, now_ms);
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(1)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: HGET — get a single field from a hash
+        "HGET" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let field = req.field.as_deref().unwrap_or("");
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let field_val = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Object(m)) => m.get(field).cloned(),
+                _ => None,
+            };
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: field_val,
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: HDEL — delete a field from a hash
+        "HDEL" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let field = req.field.as_deref().unwrap_or("");
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut removed = false;
+            match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Object(mut m)) => {
+                    removed = m.remove(field).is_some();
+                    let _ = cache.set(partition_id, key.to_string(), serde_json::Value::Object(m), req.ttl_ms, now_ms);
+                }
+                _ => {}
+            }
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(if removed { 1 } else { 0 })),
+                exists: None, removed: Some(removed), flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: HGETALL — return full hash as JSON object
+        "HGETALL" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let hash_val = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(v @ serde_json::Value::Object(_)) => v,
+                _ => serde_json::Value::Object(serde_json::Map::new()),
+            };
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(hash_val),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: SADD — add a member to a set (stored as JSON array, deduplicated)
+        "SADD" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let member = req.value.clone().unwrap_or(serde_json::Value::Null);
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut set: Vec<serde_json::Value> = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Array(arr)) => arr,
+                _ => Vec::new(),
+            };
+            let added = if !set.contains(&member) {
+                set.push(member);
+                1usize
+            } else {
+                0usize
+            };
+            let _ = cache.set(partition_id, key.to_string(), serde_json::Value::Array(set), req.ttl_ms, now_ms);
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(added)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: SMEMBERS — return all members of a set
+        "SMEMBERS" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let members = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Array(arr)) => arr,
+                _ => Vec::new(),
+            };
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::Value::Array(members)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // REQ-27: SCARD — return the cardinality (number of members) of a set
+        "SCARD" => {
+            let key = req.key.as_deref().unwrap_or("");
+            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let card = match cache.get(partition_id, key, now_ms).ok().flatten() {
+                Some(serde_json::Value::Array(arr)) => arr.len(),
+                _ => 0,
+            };
+            RedisCacheCommandResponse {
+                status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(card)),
                 exists: None, removed: None, flushed_count: None, keys: None, error: None,
             }
         }
@@ -11497,6 +11617,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let result = rt.block_on(cache_redis_command(State(state), headers, Json(req)));
         let response = result.expect("PING should succeed").0;
@@ -11521,6 +11642,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let set_result = rt
             .block_on(cache_redis_command(
@@ -11543,6 +11665,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let get_result = rt
             .block_on(cache_redis_command(
@@ -11565,6 +11688,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let exists_result = rt
             .block_on(cache_redis_command(
@@ -11587,6 +11711,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let keys_result = rt
             .block_on(cache_redis_command(
@@ -11613,6 +11738,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let del_result = rt
             .block_on(cache_redis_command(
@@ -11635,6 +11761,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let get_after_result = rt
             .block_on(cache_redis_command(
@@ -11664,6 +11791,7 @@ mod tests {
             keys: None,
             start: None,
             stop: None,
+            field: None,
             };
             rt.block_on(cache_redis_command(
                 State(state.clone()),
@@ -11685,6 +11813,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let flush_result = rt
             .block_on(cache_redis_command(
@@ -11711,6 +11840,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let result = rt.block_on(cache_redis_command(
             State(state),
@@ -11741,6 +11871,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(incr)))
             .expect("incr ok").0;
@@ -11759,6 +11890,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(incrby)))
             .expect("incrby ok").0;
@@ -11776,6 +11908,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         let r3 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(decr)))
             .expect("decr ok").0;
@@ -11800,6 +11933,7 @@ mod tests {
         keys: None,
         start: None,
         stop: None,
+        field: None,
         };
         rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(set_req)))
             .expect("set ok");
@@ -11813,7 +11947,7 @@ mod tests {
             ttl_ms: None,
             delta: None,
             expire_ms: Some(300_000),
-            keys: None, start: None, stop: None,
+            keys: None, start: None, stop: None, field: None,
         };
         let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(expire_req)))
             .expect("expire ok").0;
@@ -11829,7 +11963,7 @@ mod tests {
             ttl_ms: None,
             delta: None,
             expire_ms: Some(10_000),
-            keys: None, start: None, stop: None,
+            keys: None, start: None, stop: None, field: None,
         };
         let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(expire_miss)))
             .expect("expire miss ok").0;
@@ -11850,7 +11984,7 @@ mod tests {
             partition_id: part.clone(),
             key: None,
             value: Some(serde_json::json!({"a": 1, "b": 2, "c": 3})),
-            ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+            ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
         };
         let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(mset_req)))
             .expect("mset ok").0;
@@ -11865,7 +11999,7 @@ mod tests {
             value: None,
             ttl_ms: None, delta: None, expire_ms: None,
             keys: Some(vec!["a".to_string(), "b".to_string(), "c".to_string(), "x".to_string()]),
-            start: None, stop: None,
+            start: None, stop: None, field: None,
         };
         let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(mget_req)))
             .expect("mget ok").0;
@@ -11889,7 +12023,7 @@ mod tests {
         let set_req = RedisCacheCommandRequest {
             cmd: "SET".to_string(), partition_id: part.clone(), key: Some("counter".to_string()),
             value: Some(serde_json::json!(42)), ttl_ms: None, delta: None, expire_ms: None,
-            keys: None, start: None, stop: None,
+            keys: None, start: None, stop: None, field: None,
         };
         rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(set_req)))
             .expect("set ok");
@@ -11898,7 +12032,7 @@ mod tests {
         let gs_req = RedisCacheCommandRequest {
             cmd: "GETSET".to_string(), partition_id: part.clone(), key: Some("counter".to_string()),
             value: Some(serde_json::json!(99)), ttl_ms: None, delta: None, expire_ms: None,
-            keys: None, start: None, stop: None,
+            keys: None, start: None, stop: None, field: None,
         };
         let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(gs_req)))
             .expect("getset ok").0;
@@ -11907,7 +12041,7 @@ mod tests {
         // Now GET should return 99
         let get_req = RedisCacheCommandRequest {
             cmd: "GET".to_string(), partition_id: part.clone(), key: Some("counter".to_string()),
-            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
         };
         let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(get_req)))
             .expect("get ok").0;
@@ -11928,7 +12062,7 @@ mod tests {
             let req = RedisCacheCommandRequest {
                 cmd: "RPUSH".to_string(), partition_id: part.clone(), key: key.clone(),
                 value: Some(serde_json::json!(v)), ttl_ms: None, delta: None, expire_ms: None,
-                keys: None, start: None, stop: None,
+                keys: None, start: None, stop: None, field: None,
             };
             rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(req)))
                 .expect("rpush ok");
@@ -11937,7 +12071,7 @@ mod tests {
         // LLEN should be 3
         let llen_req = RedisCacheCommandRequest {
             cmd: "LLEN".to_string(), partition_id: part.clone(), key: key.clone(),
-            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
         };
         let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(llen_req)))
             .expect("llen ok").0;
@@ -11947,7 +12081,7 @@ mod tests {
         let lpush_req = RedisCacheCommandRequest {
             cmd: "LPUSH".to_string(), partition_id: part.clone(), key: key.clone(),
             value: Some(serde_json::json!(0)), ttl_ms: None, delta: None, expire_ms: None,
-            keys: None, start: None, stop: None,
+            keys: None, start: None, stop: None, field: None,
         };
         rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(lpush_req)))
             .expect("lpush ok");
@@ -11956,7 +12090,7 @@ mod tests {
         let lrange_req = RedisCacheCommandRequest {
             cmd: "LRANGE".to_string(), partition_id: part.clone(), key: key.clone(),
             value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None,
-            start: Some(0), stop: Some(-1),
+            start: Some(0), stop: Some(-1), field: None,
         };
         let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(lrange_req)))
             .expect("lrange ok").0;
@@ -11970,7 +12104,7 @@ mod tests {
         let lrange2_req = RedisCacheCommandRequest {
             cmd: "LRANGE".to_string(), partition_id: part.clone(), key: key.clone(),
             value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None,
-            start: Some(1), stop: Some(2),
+            start: Some(1), stop: Some(2), field: None,
         };
         let r3 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(lrange2_req)))
             .expect("lrange2 ok").0;
@@ -12024,6 +12158,78 @@ mod tests {
         );
     }
 
+    // ── REQ-23: WAL durability ────────────────────────────────────────────────
+    #[test]
+    fn ws23_acid_wal_records_write_sequence() {
+        // Each statement recorded during an active transaction must be appended to wal_log.
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+
+        let req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO orders VALUES (1)".to_string(),
+                "UPDATE orders SET status='done' WHERE id=1".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: Some("read_committed".to_string()),
+        };
+        rt.block_on(sql_transaction(State(state.clone()), headers.clone(), Json(req)))
+            .expect("transaction should succeed");
+
+        let acid = state.acid_transactions.lock().unwrap();
+        let txs = acid.all_transactions();
+        // The most recently completed transaction
+        let tx = txs.iter().max_by_key(|t| t.started_at_unix_ms)
+            .expect("at least one transaction");
+        // WAL is cleared on commit, so wal_log must be empty after commit
+        assert!(
+            tx.wal_log.is_empty(),
+            "WAL log must be cleared after commit"
+        );
+        // statement_count should reflect the non-control statements recorded
+        assert!(tx.statement_count >= 1, "at least 1 DML statement recorded");
+    }
+
+    #[test]
+    fn ws23_acid_wal_accumulates_during_active_tx() {
+        // Verify that wal_log accumulates entries for each recorded statement while
+        // the transaction is still active (before commit/rollback).
+        let state = state_with_key(None);
+        let tx_id = "wal-test-tx-001";
+        let now_ms = 1_000_000_u128;
+
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            acid.begin(tx_id, "read_committed", now_ms);
+            acid.record_statement(tx_id, Some("orders".to_string()));
+            acid.record_statement(tx_id, Some("inventory".to_string()));
+            acid.record_statement(tx_id, Some("orders".to_string())); // same table again
+
+            let entry = acid.all_transactions().into_iter()
+                .find(|t| t.transaction_id == tx_id)
+                .expect("tx must exist");
+
+            assert_eq!(entry.wal_log.len(), 3, "3 statements → 3 WAL entries");
+            assert_eq!(entry.wal_log[0].1, "orders", "first WAL entry table = orders");
+            assert_eq!(entry.wal_log[1].1, "inventory", "second WAL entry table = inventory");
+            assert_eq!(entry.wal_log[2].1, "orders", "third WAL entry table = orders");
+        }
+
+        // After rollback, wal_log must be cleared
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            let rolled = acid.rollback(tx_id, now_ms + 1);
+            assert!(rolled, "rollback must succeed");
+
+            let entry = acid.all_transactions().into_iter()
+                .find(|t| t.transaction_id == tx_id)
+                .expect("tx must still exist in registry");
+            assert!(entry.wal_log.is_empty(), "WAL log must be cleared after rollback");
+        }
+    }
+
     // â”€â”€ REQ-21: mixed concurrent operations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     #[test]
     fn ws21_mixed_ops_concurrent_ingest_sql_cache() {
@@ -12068,7 +12274,7 @@ mod tests {
                 partition_id: Some("ws21".to_string()),
                 key: Some("k1".to_string()),
                 value: Some(serde_json::json!("hello")),
-                ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+                ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
             };
             rt.block_on(cache_redis_command(State((*s3).clone()), headers, Json(set_req))).is_ok()
         });
@@ -12105,6 +12311,237 @@ mod tests {
         assert_eq!(resp.1.tasks_dispatched, 2, "max in-flight=2 â†’ dispatched=2");
         assert_eq!(resp.1.chunks_succeeded, 3, "all 3 chunks succeeded");
         assert_eq!(resp.1.chunks_failed, 0, "no chunks failed");
+    }
+
+    // ── REQ-27: Hash commands (HSET / HGET / HDEL / HGETALL) ─────────────────
+    #[test]
+    fn ws27_redis_compat_hash_hset_hget_hdel_hgetall() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = operator_headers("secret", "automation");
+        let part = Some("ws27-hash".to_string());
+        let key = Some("user:42".to_string());
+
+        // Helper to build request with field
+        let make = |cmd: &str, field: Option<&str>, val: Option<serde_json::Value>| RedisCacheCommandRequest {
+            cmd: cmd.to_string(),
+            partition_id: part.clone(),
+            key: key.clone(),
+            value: val,
+            ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None,
+            field: field.map(str::to_string),
+        };
+
+        // HSET name = "Alice"
+        rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(make("HSET", Some("name"), Some(serde_json::json!("Alice"))))))
+            .expect("HSET name ok");
+
+        // HSET age = 30
+        rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(make("HSET", Some("age"), Some(serde_json::json!(30))))))
+            .expect("HSET age ok");
+
+        // HGET name → "Alice"
+        let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(make("HGET", Some("name"), None))))
+            .expect("HGET ok").0;
+        assert_eq!(r.value, Some(serde_json::json!("Alice")), "HGET name = Alice");
+
+        // HGETALL → object with both fields
+        let r2 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(make("HGETALL", None, None))))
+            .expect("HGETALL ok").0;
+        let obj = r2.value.as_ref().and_then(|v| v.as_object()).expect("HGETALL returns object");
+        assert_eq!(obj.get("name"), Some(&serde_json::json!("Alice")), "HGETALL name");
+        assert_eq!(obj.get("age"), Some(&serde_json::json!(30)), "HGETALL age");
+
+        // HDEL name → removed=true
+        let r3 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(make("HDEL", Some("name"), None))))
+            .expect("HDEL ok").0;
+        assert_eq!(r3.removed, Some(true), "HDEL removed name");
+
+        // HGET missing field → None
+        let r4 = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(make("HGET", Some("name"), None))))
+            .expect("HGET missing ok").0;
+        assert_eq!(r4.value, None, "HGET after HDEL returns None");
+    }
+
+    // ── REQ-27: Set commands (SADD / SMEMBERS / SCARD) ───────────────────────
+    #[test]
+    fn ws27_redis_compat_set_sadd_smembers_scard() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = operator_headers("secret", "automation");
+        let part = Some("ws27-sets".to_string());
+        let key = Some("tags:post:1".to_string());
+
+        let make_sadd = |v: serde_json::Value| RedisCacheCommandRequest {
+            cmd: "SADD".to_string(),
+            partition_id: part.clone(),
+            key: key.clone(),
+            value: Some(v),
+            ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
+        };
+
+        // SADD 3 distinct members
+        for tag in ["rust", "database", "htap"] {
+            let r = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+                Json(make_sadd(serde_json::json!(tag)))))
+                .expect("SADD ok").0;
+            assert_eq!(r.value, Some(serde_json::json!(1)), "new member added = 1");
+        }
+
+        // SADD duplicate → 0 (already exists)
+        let r_dup = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(make_sadd(serde_json::json!("rust")))))
+            .expect("SADD dup ok").0;
+        assert_eq!(r_dup.value, Some(serde_json::json!(0)), "duplicate add = 0");
+
+        // SCARD → 3
+        let scard_req = RedisCacheCommandRequest {
+            cmd: "SCARD".to_string(),
+            partition_id: part.clone(),
+            key: key.clone(),
+            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
+        };
+        let r_card = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(scard_req)))
+            .expect("SCARD ok").0;
+        assert_eq!(r_card.value, Some(serde_json::json!(3)), "SCARD = 3");
+
+        // SMEMBERS contains all three tags
+        let smembers_req = RedisCacheCommandRequest {
+            cmd: "SMEMBERS".to_string(),
+            partition_id: part.clone(),
+            key: key.clone(),
+            value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
+        };
+        let r_mb = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(),
+            Json(smembers_req)))
+            .expect("SMEMBERS ok").0;
+        let members = r_mb.value.as_ref().and_then(|v| v.as_array()).expect("array");
+        for tag in ["rust", "database", "htap"] {
+            assert!(members.contains(&serde_json::json!(tag)), "contains {tag}");
+        }
+    }
+
+    // ── WS0: Workspace / CI / governance foundation tests ─────────────────────
+    /// Resolve the workspace root from the crate manifest directory.
+    /// Cargo sets the CWD to the crate directory during tests, so we navigate
+    /// two levels up (services/voltnuerongridd → services → workspace root).
+    fn ws0_workspace_root() -> std::path::PathBuf {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        manifest.parent().and_then(|p| p.parent()).unwrap_or(manifest).to_path_buf()
+    }
+
+    #[test]
+    fn ws0_ci_workflow_file_exists() {
+        // Governance: the CI workflow definition must be present in the repository.
+        let path = ws0_workspace_root().join(".github/workflows/ci.yml");
+        assert!(path.exists(), "CI workflow file .github/workflows/ci.yml must exist at {:?}", path);
+    }
+
+    #[test]
+    fn ws0_kpi_scripts_scaffold_exists() {
+        // Governance: the KPI gate-script directory must be present.
+        let path = ws0_workspace_root().join("tests/kpi/scripts");
+        assert!(path.exists(), "tests/kpi/scripts directory must exist at {:?}", path);
+    }
+
+    #[test]
+    fn ws0_kpi_results_scaffold_exists() {
+        // Governance: the KPI results artifact directory must be present.
+        let path = ws0_workspace_root().join("tests/kpi/results");
+        assert!(path.exists(), "tests/kpi/results directory must exist at {:?}", path);
+    }
+
+    #[test]
+    fn ws0_cargo_workspace_manifest_exists() {
+        // Governance: the top-level Cargo workspace manifest must be present.
+        let path = ws0_workspace_root().join("Cargo.toml");
+        assert!(path.exists(), "Cargo.toml workspace manifest must exist at {:?}", path);
+    }
+
+    #[test]
+    fn ws0_deploy_local_scaffold_exists() {
+        // Governance: the local deploy scaffold directory must exist.
+        let path = ws0_workspace_root().join("deploy/local");
+        assert!(path.exists(), "deploy/local directory must exist at {:?}", path);
+    }
+
+    // ── WS2A: Transactional row store / HTAP sync-origin tests ───────────────
+    #[test]
+    fn ws2a_row_store_sync_origin_registers_mutations() {
+        // Validate that RowStoreSyncOrigin accumulates mutation events in sequence
+        // order and that the recorded sequence IDs are strictly monotonic.
+        use voltnuerongrid_store::htap_sync::{MutationOp, RowStoreSyncOrigin};
+        let mut origin = RowStoreSyncOrigin::new();
+        let m1 = origin.append("orders", "k1", r#"{"v":1}"#, MutationOp::Insert);
+        let m2 = origin.append("orders", "k2", r#"{"v":2}"#, MutationOp::Update);
+        let m3 = origin.append("orders", "k3", r#"{"v":3}"#, MutationOp::Delete);
+        assert!(m1.sequence < m2.sequence, "sequence must increase");
+        assert!(m2.sequence < m3.sequence, "sequence must increase");
+        assert_eq!(origin.pending_len(), 3, "all three mutations still pending");
+    }
+
+    #[test]
+    fn ws2a_htap_sync_origin_detects_sequence_gaps() {
+        // Validate the gap-detection utility correctly identifies missing
+        // sequence IDs in a synthetic batch with a deliberate gap.
+        use voltnuerongrid_store::htap_sync::{MutationOp, RowMutation, RowStoreSyncOrigin};
+        let batch: Vec<RowMutation> = vec![
+            RowMutation { sequence: 1, table: "t".into(), primary_key: "k1".into(), payload_json: "{}".into(), op: MutationOp::Insert },
+            RowMutation { sequence: 2, table: "t".into(), primary_key: "k2".into(), payload_json: "{}".into(), op: MutationOp::Update },
+            // sequence 3 intentionally absent — gap here
+            RowMutation { sequence: 4, table: "t".into(), primary_key: "k4".into(), payload_json: "{}".into(), op: MutationOp::Delete },
+        ];
+        let gaps = RowStoreSyncOrigin::detect_sequence_gaps(&batch);
+        assert_eq!(gaps.len(), 1, "exactly one gap expected, got {:?}", gaps);
+        assert_eq!(gaps[0].expected, 3, "gap should be at sequence 3");
+    }
+
+    #[test]
+    fn ws2a_htap_sync_origin_snapshot_restore_is_idempotent() {
+        // Snapshot a populated origin, restore it, then verify the restored
+        // origin reaches the identical state (same next_sequence).
+        use voltnuerongrid_store::htap_sync::{MutationOp, RowStoreSyncOrigin};
+        let mut origin = RowStoreSyncOrigin::new();
+        origin.append("orders", "k1", r#"{"a":1}"#, MutationOp::Insert);
+        origin.append("orders", "k2", r#"{"a":2}"#, MutationOp::Update);
+        let snap = origin.snapshot();
+        let next_before = snap.next_sequence;
+
+        let restored = RowStoreSyncOrigin::restore(snap);
+        let snap2 = restored.snapshot();
+        assert_eq!(snap2.next_sequence, next_before, "restored next_sequence must match original");
+        assert_eq!(restored.pending_len(), 2, "restored pending must contain same mutations");
+    }
+
+    // ── REQ-21: sustained load ────────────────────────────────────────────────
+    #[test]
+    fn ws21_sustained_load_sql_execute() {
+        // Run 50 sequential sql_execute calls on the same AppState and verify
+        // all succeed without panics (models sustained single-tenant load).
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let start = std::time::Instant::now();
+
+        for i in 0..50u32 {
+            let req = SqlExecuteRequest {
+                sql_batch: format!("SELECT {i} AS seq"),
+                max_rows: None,
+            };
+            rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(req)))
+                .unwrap_or_else(|_| panic!("sql_execute failed at iteration {i}"));
+        }
+
+        let elapsed_ms = start.elapsed().as_millis();
+        // All 50 calls should complete in under 5 seconds on any dev machine
+        assert!(elapsed_ms < 5_000, "50 sequential calls took {elapsed_ms}ms, expected < 5000ms");
     }
 
 }

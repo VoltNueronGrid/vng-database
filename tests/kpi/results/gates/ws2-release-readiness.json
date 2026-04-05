@@ -1,0 +1,37 @@
+{
+  "gate": "ws2-release-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R1"
+  ],
+  "scope": [
+    "WS2",
+    "REQ-02"
+  ],
+  "generated_at_utc": "2026-04-05T03:49:42.2572078Z",
+  "sources": {
+    "summary": "tests/kpi/results/ws2/ws2-gate-summary.json",
+    "store_durability": "tests/kpi/results/ws2/store-durability-smoke.json",
+    "disk_wal": "tests/kpi/results/ws2/disk-wal-adapter-smoke.json",
+    "checkpoint": "tests/kpi/results/ws2/ws2-checkpoint-restart-smoke.json",
+    "index_constraint": "tests/kpi/results/ws2/ws2-index-constraint-smoke.json",
+    "tenant_store": "tests/kpi/results/ws2/ws2-tenant-store-runtime-smoke.json"
+  },
+  "checks": {
+    "ws2_gate_passed": true,
+    "ws2_store_durability_passed": true,
+    "ws2_wal_passed": true,
+    "ws2_checkpoint_restart_passed": true,
+    "ws2_index_constraint_passed": true,
+    "ws2_tenant_store_passed": true
+  },
+  "highlights": {
+    "pack_count": 5,
+    "durability_status": "passed",
+    "wal_status": "passed",
+    "checkpoint_status": "passed",
+    "index_status": "passed",
+    "tenant_store_status": "passed"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "smoke": "ws0-ci-health",
+  "status": "passed",
+  "checks_passed": 8,
+  "checks_total": 8,
+  "generated_at_utc": "2026-04-05T03:46:01.5189156Z",
+  "checks": [
+    {
+      "name": "ci_workflow_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "kpi_scripts_dir_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "kpi_results_dir_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "deploy_local_dir_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "reference_dir_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "cargo_toml_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "services_dir_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "crates_dir_exists",
+      "passed": true,
+      "detail": "ok"
+    }
+  ]
+}

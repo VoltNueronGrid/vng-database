@@ -1,0 +1,33 @@
+{
+  "gate": "ws2-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-04-05T03:49:31.4377140Z",
+  "finished_at_utc": "2026-04-05T03:49:31.4797754Z",
+  "duration_ms": 42,
+  "artifacts": {
+    "ws2_gate": "tests/kpi/results/ws2/ws2-gate-summary.json",
+    "store_durability": "tests/kpi/results/ws2/store-durability-smoke.json",
+    "disk_wal": "tests/kpi/results/ws2/disk-wal-adapter-smoke.json",
+    "checkpoint": "tests/kpi/results/ws2/ws2-checkpoint-restart-smoke.json",
+    "index": "tests/kpi/results/ws2/ws2-index-constraint-smoke.json",
+    "tenant_store": "tests/kpi/results/ws2/ws2-tenant-store-runtime-smoke.json"
+  },
+  "checks": {
+    "ws2_gate_passed": true,
+    "ws2_store_durability_passed": true,
+    "ws2_wal_passed": true,
+    "ws2_checkpoint_restart_passed": true,
+    "ws2_index_constraint_passed": true,
+    "ws2_tenant_store_passed": true,
+    "ws2_all_packs_present": true
+  },
+  "runs": [
+    {
+      "pack": "ws2-artifact-validation",
+      "status": "passed",
+      "detail": "checked_existing_artifacts",
+      "artifact": "tests/kpi/results/ws2/ws2-gate-summary.json"
+    }
+  ]
+}

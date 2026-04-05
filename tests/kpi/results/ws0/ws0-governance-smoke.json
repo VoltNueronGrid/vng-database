@@ -1,0 +1,44 @@
+{
+  "smoke": "ws0-governance",
+  "status": "passed",
+  "checks_passed": 7,
+  "checks_total": 7,
+  "generated_at_utc": "2026-04-05T03:46:02.2051804Z",
+  "checks": [
+    {
+      "name": "status_tracker_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "status_tracker_has_ws0",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "cargo_workspace_has_service",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "main_rs_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "kpi_scripts_count_sufficient",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "license_exists",
+      "passed": true,
+      "detail": "ok"
+    },
+    {
+      "name": "readme_exists",
+      "passed": true,
+      "detail": "ok"
+    }
+  ]
+}
