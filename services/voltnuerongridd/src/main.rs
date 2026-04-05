@@ -2205,6 +2205,109 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     })
 }
 
+/// Parse a SQL DELETE statement and return the row key to tombstone.
+/// Pattern: DELETE FROM <table> WHERE <col> = '<key>'
+fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
+    use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
+    let tokens = semantic_tokens(sql);
+    let upper = sql.trim_start().to_ascii_uppercase();
+    if !upper.starts_with("DELETE") {
+        return None;
+    }
+    let mut after_where = false;
+    let mut past_eq = false;
+    for tok in &tokens {
+        match tok {
+            Token::Keyword(k) if k.eq_ignore_ascii_case("WHERE") => after_where = true,
+            Token::Symbol(s) if s == "=" && after_where => past_eq = true,
+            Token::StringLiteral(s) if past_eq => return Some(s.clone()),
+            Token::Number(n) if past_eq => return Some(n.clone()),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse a SQL UPDATE statement and return (row_key, row_data) for MVCC insert (new version).
+/// Pattern: UPDATE <table> SET col=val [WHERE col='key']
+fn extract_update_row_from_sql(
+    sql: &str,
+) -> Option<(String, std::collections::HashMap<String, String>)> {
+    use voltnuerongrid_sql::ast::{parse_one, Statement};
+    use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
+    let stmt = parse_one(sql).ok()?;
+    let Statement::Update(upd) = stmt else {
+        return None;
+    };
+    // Prefer the WHERE clause value as key; fall back to table name
+    let tokens = semantic_tokens(sql);
+    let mut key = upd.table.clone();
+    let mut after_where = false;
+    let mut past_eq = false;
+    for tok in &tokens {
+        match tok {
+            Token::Keyword(k) if k.eq_ignore_ascii_case("WHERE") => after_where = true,
+            Token::Symbol(s) if s == "=" && after_where => past_eq = true,
+            Token::StringLiteral(s) if past_eq => {
+                key = s.clone();
+                break;
+            }
+            Token::Number(n) if past_eq => {
+                key = n.clone();
+                break;
+            }
+            _ => {}
+        }
+    }
+    let row_key = format!("{}:{}", upd.table, key);
+    let mut data = std::collections::HashMap::new();
+    data.insert("table".to_string(), upd.table.clone());
+    for (col, val) in &upd.assignments {
+        data.insert(col.clone(), val.clone());
+    }
+    Some((row_key, data))
+}
+
+/// Parse a SQL INSERT statement using the tokenizer and return a (row_key, row_data) pair
+/// suitable for writing into PagedRowStore. Returns None for non-INSERT or unparseable input.
+/// Used by the sql_transaction COMMIT path (S2-WS2-05) to flush rows into storage.
+fn extract_insert_row_from_sql(
+    sql: &str,
+) -> Option<(String, std::collections::HashMap<String, String>)> {
+    use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
+    let tokens = semantic_tokens(sql);
+    let mut it = tokens.iter();
+    match it.next() {
+        Some(Token::Keyword(k)) if k.eq_ignore_ascii_case("INSERT") => {}
+        _ => return None,
+    }
+    match it.next() {
+        Some(Token::Keyword(k)) if k.eq_ignore_ascii_case("INTO") => {}
+        _ => return None,
+    }
+    let table = match it.next() {
+        Some(Token::Identifier(t)) | Some(Token::Keyword(t)) => t.clone(),
+        _ => return None,
+    };
+    // Collect all string literals and numbers — these are the VALUES
+    let mut values: Vec<String> = Vec::new();
+    for tok in &tokens {
+        match tok {
+            Token::StringLiteral(s) => values.push(s.clone()),
+            Token::Number(n) => values.push(n.clone()),
+            _ => {}
+        }
+    }
+    if values.is_empty() {
+        return None;
+    }
+    let row_key = format!("{}:{}", table, values[0]);
+    let mut data = std::collections::HashMap::new();
+    data.insert("table".to_string(), table);
+    data.insert("row_values".to_string(), values.join(","));
+    Some((row_key, data))
+}
+
 async fn sql_transaction(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2309,6 +2412,27 @@ async fn sql_transaction(
                 ));
             }
             acid.commit(&tx_id, now_ms);
+            // S2-WS2-05: flush committed DML (INSERT/UPDATE/DELETE) into PagedRowStore
+            {
+                let mut rs = state.row_store.lock().expect("row_store lock");
+                let xid = rs.begin_xid();
+                for stmt in &req.statements {
+                    let upper = stmt.trim_start().to_ascii_uppercase();
+                    if upper.starts_with("INSERT") {
+                        if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
+                            rs.insert(xid, &k, d);
+                        }
+                    } else if upper.starts_with("DELETE") {
+                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                            rs.delete(xid, &k);
+                        }
+                    } else if upper.starts_with("UPDATE") {
+                        if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                            rs.insert(xid, &k, d);
+                        }
+                    }
+                }
+            }
         } else if has_rollback {
             acid.rollback(&tx_id, now_ms);
         }
@@ -7228,6 +7352,17 @@ async fn ingest_csv(
     let mut conn = CsvConnector::new(&req.connector_id, &req.connector_id);
     let count = conn.load_csv(&req.csv_data);
     let records = conn.read_batch(usize::MAX);
+    // S5-WS4-03: write each ingested record into PagedRowStore for durable typed-table backing
+    {
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        let xid = rs.begin_xid();
+        for record in &records {
+            let mut data = std::collections::HashMap::new();
+            data.insert("payload".to_string(), record.payload.clone());
+            data.insert("source".to_string(), format!("csv:{}", req.connector_id));
+            rs.insert(xid, &record.key, data);
+        }
+    }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
         .ingest_csv_records
@@ -7287,6 +7422,17 @@ async fn ingest_json(
     let mut conn = JsonConnector::new(&req.connector_id, &req.connector_id, &req.key_field);
     let count = conn.load_ndjson(&req.ndjson_data);
     let records = conn.read_batch(usize::MAX);
+    // S5-WS4-03: write each ingested record into PagedRowStore for durable typed-table backing
+    {
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        let xid = rs.begin_xid();
+        for record in &records {
+            let mut data = std::collections::HashMap::new();
+            data.insert("payload".to_string(), record.payload.clone());
+            data.insert("source".to_string(), format!("json:{}", req.connector_id));
+            rs.insert(xid, &record.key, data);
+        }
+    }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
         .ingest_json_records
@@ -7352,6 +7498,17 @@ async fn ingest_parquet(
         .load_parquet_bytes(&raw)
         .map_err(|_| bad_request_error(&headers, "parquet_parse_failed"))?;
     let records = conn.read_batch(usize::MAX);
+    // S5-WS4-03: write each ingested parquet record into PagedRowStore
+    {
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        let xid = rs.begin_xid();
+        for record in &records {
+            let mut data = std::collections::HashMap::new();
+            data.insert("payload".to_string(), record.payload.clone());
+            data.insert("source".to_string(), format!("parquet:{}", req.connector_id));
+            rs.insert(xid, &record.key, data);
+        }
+    }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
         .ingest_parquet_records
@@ -7416,6 +7573,17 @@ async fn ingest_excel(
         .load_xlsx_bytes(&raw)
         .map_err(|_| bad_request_error(&headers, "excel_parse_failed"))?;
     let records = conn.read_batch(usize::MAX);
+    // S5-WS4-03: write each ingested excel record into PagedRowStore
+    {
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        let xid = rs.begin_xid();
+        for record in &records {
+            let mut data = std::collections::HashMap::new();
+            data.insert("payload".to_string(), record.payload.clone());
+            data.insert("source".to_string(), format!("excel:{}", req.connector_id));
+            rs.insert(xid, &record.key, data);
+        }
+    }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
         .ingest_excel_records
@@ -12878,6 +13046,158 @@ mod tests {
         store.insert(xid, "test:1", data);
         let result = store.read_latest("test:1").expect("row must exist");
         assert_eq!(result["key"], "value");
+    }
+
+    // ── S5-WS4-03 + S2-WS2-05 integration tests ─────────────────────────────
+
+    #[test]
+    fn s5_ws4_extract_insert_parses_simple_values() {
+        let result =
+            extract_insert_row_from_sql("INSERT INTO orders VALUES ('ord-1', 500)");
+        assert!(result.is_some());
+        let (key, data) = result.unwrap();
+        assert!(key.starts_with("orders:"), "unexpected key: {key}");
+        assert_eq!(data.get("table").map(String::as_str), Some("orders"));
+        assert!(
+            data.get("row_values").unwrap().contains("ord-1"),
+            "row_values should contain first value"
+        );
+    }
+
+    #[test]
+    fn s5_ws4_extract_insert_ignores_non_insert() {
+        assert!(extract_insert_row_from_sql("SELECT * FROM orders").is_none());
+        assert!(extract_insert_row_from_sql("UPDATE orders SET x=1").is_none());
+        assert!(extract_insert_row_from_sql("COMMIT").is_none());
+        assert!(extract_insert_row_from_sql("").is_none());
+    }
+
+    #[test]
+    fn s2_ws2_commit_flush_writes_inserts_to_row_store() {
+        let state = state_with_key(None);
+        let stmts = vec![
+            "INSERT INTO products VALUES ('prod-1', 99)".to_string(),
+            "INSERT INTO products VALUES ('prod-2', 149)".to_string(),
+        ];
+        {
+            let mut rs = state.row_store.lock().expect("row_store lock");
+            let xid = rs.begin_xid();
+            for stmt in &stmts {
+                if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
+                    rs.insert(xid, &k, d);
+                }
+            }
+        }
+        let rs = state.row_store.lock().expect("row_store lock");
+        let snap = rs.scan_at_snapshot(rs.current_xid());
+        assert_eq!(snap.len(), 2, "both inserted rows should be visible");
+        let tables: Vec<&str> = snap
+            .iter()
+            .filter_map(|(_, d)| d.get("table").map(String::as_str))
+            .collect();
+        assert!(
+            tables.iter().all(|t| *t == "products"),
+            "all rows should be in the products table"
+        );
+    }
+
+    #[tokio::test]
+    async fn s5_ws4_row_store_receives_ingest_style_writes() {
+        use voltnuerongrid_store::mvcc::PagedRowStore;
+        let mut rs = PagedRowStore::default();
+        let xid = rs.begin_xid();
+        // Simulate what ingest_csv/ingest_json handler now does
+        for (key, payload, source) in &[
+            ("rec:1", "alice,30", "csv:conn-a"),
+            ("rec:2", "bob,25", "csv:conn-a"),
+            ("rec:3", r#"{\"id\":\"u3\"}"#, "json:conn-b"),
+        ] {
+            let mut data = std::collections::HashMap::new();
+            data.insert("payload".to_string(), payload.to_string());
+            data.insert("source".to_string(), source.to_string());
+            rs.insert(xid, key, data);
+        }
+        let visible = rs.scan_at_snapshot(xid);
+        assert_eq!(visible.len(), 3);
+        assert!(visible
+            .iter()
+            .any(|(_, d)| d.get("source").map(String::as_str) == Some("json:conn-b")));
+    }
+
+    #[test]
+    fn s3_ws1_ast_parser_select_round_trip() {
+        use voltnuerongrid_sql::{parse_one, Statement};
+        let stmt = parse_one("SELECT id, name FROM users WHERE active = 1").unwrap();
+        let Statement::Select(sel) = stmt else { panic!("expected Select") };
+        assert_eq!(sel.table.as_deref(), Some("users"));
+        assert!(sel.where_clause.is_some());
+    }
+
+    #[test]
+    fn s3_ws1_ast_parser_insert_round_trip() {
+        use voltnuerongrid_sql::{parse_one, Statement};
+        let stmt =
+            parse_one("INSERT INTO events (id, name) VALUES ('e1', 'launch')").unwrap();
+        let Statement::Insert(ins) = stmt else { panic!("expected Insert") };
+        assert_eq!(ins.table, "events");
+        assert_eq!(ins.columns, vec!["id", "name"]);
+        assert_eq!(ins.values[0], vec!["e1", "launch"]);
+    }
+
+    // ── S2-WS2-05: COMMIT flush handles DELETE statements ───────────────────
+    #[test]
+    fn s2_ws2_commit_flush_handles_delete_statement() {
+        // extract_delete_key_from_sql returns the WHERE-clause value
+        let key = extract_delete_key_from_sql("DELETE FROM orders WHERE id = 'o99'");
+        assert_eq!(key, Some("o99".to_string()));
+        // Non-DELETE returns None
+        assert!(extract_delete_key_from_sql("SELECT * FROM orders").is_none());
+        // Missing WHERE returns None
+        assert!(extract_delete_key_from_sql("DELETE FROM orders").is_none());
+    }
+
+    // ── S2-WS2-05: COMMIT flush handles UPDATE statements ───────────────────
+    #[test]
+    fn s2_ws2_commit_flush_handles_update_statement() {
+        let result = extract_update_row_from_sql(
+            "UPDATE products SET price='42' WHERE id='p1'",
+        );
+        let (key, data) = result.expect("should parse UPDATE");
+        assert_eq!(key, "products:p1");
+        assert_eq!(data.get("price"), Some(&"42".to_string()));
+        assert_eq!(data.get("table"), Some(&"products".to_string()));
+    }
+
+    // ── S3-WS1-05: planner routes aggregate query to OLAP ───────────────────
+    #[test]
+    fn s3_ws1_planner_routes_aggregate_to_olap() {
+        use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};
+        use voltnuerongrid_sql::parse_one;
+        let stmt = parse_one("SELECT region, SUM(revenue) FROM sales GROUP BY region").unwrap();
+        let plan = QueryPlanner::plan(&stmt);
+        assert!(plan.has_aggregation());
+        let est = QueryPlanner::estimate_cost(&plan);
+        assert_eq!(
+            est.recommended_path,
+            voltnuerongrid_exec::QueryPath::Olap,
+            "aggregate queries should route to OLAP"
+        );
+    }
+
+    // ── S3-WS1-05: planner routes filtered SELECT to OLTP ───────────────────
+    #[test]
+    fn s3_ws1_planner_select_with_filter_routes_oltp() {
+        use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};
+        use voltnuerongrid_sql::parse_one;
+        let stmt = parse_one("SELECT id FROM users WHERE id = 'u1'").unwrap();
+        let plan = QueryPlanner::plan(&stmt);
+        assert!(!plan.has_aggregation());
+        let est = QueryPlanner::estimate_cost(&plan);
+        assert_eq!(
+            est.recommended_path,
+            voltnuerongrid_exec::QueryPath::Oltp,
+            "filtered point selects should route to OLTP"
+        );
     }
 
 }

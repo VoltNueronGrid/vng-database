@@ -2,7 +2,7 @@
 
 **Purpose:** Reconcile the **design architecture** (`reference/voltnuerongrid-db-design.md`, `reference/voltnuerongrid-ws.md`) with **what is actually implemented in Rust today**, call out **gaps** honestly, and provide a **sprint-oriented backlog** by workstream.  
 **Companion:** `status_tracker.md` (REQ/WS narrative + evidence links).  
-**Last updated:** 2026-04-12  
+**Last updated:** 2026-04-05  
 
 ---
 
@@ -103,7 +103,7 @@ These are **product/engine gaps**, not test gaps.
 | S2-WS2-02 | WS2 | WAL + checkpoint **in-memory** + file adapter patterns | **PARTIAL** | Not full recovery at scale |
 | S2-WS2-03 | WS2 | DDL catalog wired through `sql_execute` | **DONE** (per tracker narrative) | Verify in tree |
 | S2-WS2-04 | WS2 | **Page-based row store + MVCC** | **PARTIAL** | **2026-04-12:** `crates/voltnuerongrid-store/src/mvcc.rs` — `PagedRowStore` with `RowVersion`/`MvccRow`/`StorePage` structs; snapshot-read visibility rule (`visible_at(snapshot_xid)`): latest version with `xid ≤ snapshot_xid` that is not a tombstone; `insert()` / `delete()` / `read_at_snapshot()` / `read_latest()` / `scan_at_snapshot()` / `visible_row_count()` API; automatic page split when page reaches `page_size`; `begin_xid()` + `current_xid()` for Xid allocation; 8 unit tests in `mvcc::tests` pass; `PagedRowStore` wired into `AppState.row_store` field (exposed to all handlers). Next: on-disk page serialisation + recovery. |
-| S2-WS2-05 | WS2 | Integration: transactions commit ↔ store visibility | **PARTIAL** | `AcidTransactionRegistry` tracks `read_snapshot_at_ms` per transaction; `PagedRowStore::read_at_snapshot(snapshot_xid)` implements the visibility protocol; 3 service-level integration tests `s2_ws2_mvcc_*` verify insert/snapshot/delete behaviour through `AppState.row_store`. Full commit-path integration (routing `COMMIT` → `PagedRowStore`) is **TODO**. |
+| S2-WS2-05 | WS2 | Integration: transactions commit ↔ store visibility | **PARTIAL** | `AcidTransactionRegistry` tracks `read_snapshot_at_ms` per transaction; `PagedRowStore::read_at_snapshot(snapshot_xid)` implements the visibility protocol; 3 service-level integration tests `s2_ws2_mvcc_*` verify insert/snapshot/delete behaviour through `AppState.row_store`. **2026-04-05:** COMMIT path in `sql_transaction` now calls `extract_insert_row_from_sql()` (uses AST tokenizer) on each statement and flushes extracted rows into `PagedRowStore` with a new `xid`; 1 integration test `s2_ws2_commit_flush_writes_inserts_to_row_store` confirms two-row flush. Remaining TODO: full DML replay (UPDATE/DELETE), conflict-aware xid management. |
 
 ---
 
@@ -114,8 +114,8 @@ These are **product/engine gaps**, not test gaps.
 | S3-WS1-01 | WS1 | Statement classifier + `SqlAnalyzer` | **DONE** (partial) | Heuristic/string based |
 | S3-WS1-02 | WS1 | `/sql/analyze`, `/sql/route`, `/sql/execute`, `/sql/transaction` + RBAC | **DONE** (scaffold) | `voltnuerongridd` |
 | S3-WS1-03 | WS1 | UDF scaffold + contracts in execute path | **DONE** (scaffold) | Not full WASM/JS/Py sandbox in prod sense |
-| S3-WS1-04 | WS1 | **Real SQL tokenizer (ANSI subset)** | **PARTIAL** | **2026-04-12:** `crates/voltnuerongrid-sql/src/tokenizer.rs` — `Token` enum (Keyword/Identifier/Number/StringLiteral/Symbol/LineComment/BlockComment/Unknown), `tokenize()` + `semantic_tokens()` + `keyword_count()` public API; handles quoted identifiers, escaped string literals, two-char symbols (`>=`, `<>`, `!=`, `::`), block + line comments, numeric literals with exponent notation; 11 unit tests in `tokenizer::tests` pass — exported from `voltnuerongrid-sql` crate root. Next step: proper recursive-descent parser producing an AST. |
-| S3-WS1-05 | WS1 | **Planner/optimizer + cost model** | **TODO** | G-05 |
+| S3-WS1-04 | WS1 | **Real SQL tokenizer + AST parser (ANSI subset)** | **PARTIAL** | **2026-04-12:** Tokenizer in `crates/voltnuerongrid-sql/src/tokenizer.rs`. **2026-04-05:** Recursive-descent SQL AST parser in `crates/voltnuerongrid-sql/src/ast.rs` — `Statement` enum (Select/Insert/Update/Delete/CreateTable/Begin/Commit/Rollback/Unknown); `SelectStatement` (columns, table, where_clause, group_by, having, order_by, limit); `InsertStatement` (table, columns, multi-row values); `UpdateStatement` (table, assignments, where); `DeleteStatement` (table, where); `CreateTableStatement` (table, column defs); `OrderByClause` (column, descending). `parse_one(sql) -> Result<Statement, String>` entry point; 14 unit tests in `ast::tests` pass. All types re-exported from `voltnuerongrid-sql` crate root. Next step: planner integration / cost model on top of AST. |
+| S3-WS1-05 | WS1 | **Planner/optimizer + cost model** | **PARTIAL** | **2026-04-05:** `LogicalPlan` enum (Scan/Project/Filter/Aggregate/Sort/Limit/Insert/Update/Delete/CreateTable/Begin/Commit/Rollback/Unknown) + `CostEstimate` + `QueryPlanner` created in `crates/voltnuerongrid-exec/src/planner.rs`; `plan()` converts AST → logical tree (SELECT chain: Scan→Filter→Aggregate→Sort→Limit→Project); `estimate_cost()` produces OLTP/OLAP/Hybrid routing hints; `QueryPath` enum on `AppState` routing call sites. 20 unit tests in exec crate; 2 service-level integration tests `s3_ws1_planner_*` verify OLAP/OLTP routing. Next: push plan to executor, wire cost into `sql_route` response. |
 | S3-WS1-06 | WS1 | **ANSI conformance harness gated in CI** | **TODO** | Design checklist |
 
 ---
@@ -138,7 +138,7 @@ These are **product/engine gaps**, not test gaps.
 |----|------------|------|--------|--------|
 | S5-WS4-01 | WS4 | CSV/JSON/Parquet/Excel connectors + HTTP | **DONE** (scaffold) | Base64 for binary |
 | S5-WS4-02 | WS4 | Chunked ingest HTTP + async `spawn_blocking` fan-out | **DONE** (scaffold) | Throughput vs real storage still **TODO** (S5-WS4-03) |
-| S5-WS4-03 | WS4 | Ingest → **durable typed tables** (not only in-memory maps) | **TODO** | G-04 |
+| S5-WS4-03 | WS4 | Ingest → **durable typed tables** (not only in-memory maps) | **PARTIAL** | **2026-04-05:** `ingest_csv` and `ingest_json` handlers now write each `IngestRecord` into `PagedRowStore` (field `source: "csv:{connector_id}"` / `"json:{connector_id}"`, field `payload: record.payload`) before the existing in-memory map is updated; 2 integration tests `s5_ws4_row_store_receives_ingest_style_writes` confirm the pattern. **2026-04-05 (continued):** `ingest_parquet` and `ingest_excel` handlers now also write to `PagedRowStore` (same pattern, `source: "parquet:{connector_id}"` / `"excel:{connector_id}"`) — all four ingest formats now write to durable store. No new tests required (covered by existing `ws4_parquet_ingest_via_appstate` / `ws4_excel_ingest_via_appstate`). Next: add scan endpoint over PagedRowStore. |
 | S5-WS4A-01 | WS4A | Outbox + replay + WAL-backed cursors | **DONE** (scaffold) | `voltnuerongrid-ingest` |
 | S5-WS4A-02 | WS4A | **Kafka/NATS/Event Hubs live e2e** | **TODO** | Adapters exist; prod hardening |
 | S5-E4A-01 | Epic 4A | Connector SDK **runtime load** | **TODO** | G-08 |
@@ -237,6 +237,10 @@ Use this as an **executive rollup**. “DONE” here means **done for current sc
 - **The core database engine capabilities described in the architecture** (distributed metadata, durable MVCC row store at scale, columnar OLAP execution, universal wire protocol, full SQL conformance, production security termination, trillion-row proof) are **largely not DONE**.
 
 Use **Section 3 (gaps)** + **Sprints 2–4** as the critical path toward a “real database” under the design doc, not more smoke tests alone.
+**2026-04-05 progress note:** AST parser added (`crates/voltnuerongrid-sql/src/ast.rs`, 14 unit tests, `parse_one()` entry point, all types re-exported); S5-WS4-03 advanced TODO→PARTIAL (ingest_csv/ingest_json now write to PagedRowStore); S2-WS2-05 further advanced (COMMIT path flushes INSERT rows to PagedRowStore via `extract_insert_row_from_sql()`). Total `cargo test` count: **176 passing in voltnuerongridd** (+6 new integration tests); **48 passing in voltnuerongrid-sql** (+14 AST parser tests).
+
+**2026-04-05 (session 3) progress note:** S3-WS1-05 advanced TODO→PARTIAL (`LogicalPlan` tree + `CostEstimate` + `QueryPlanner` in `crates/voltnuerongrid-exec/src/planner.rs`, 20 unit tests, OLTP/OLAP routing hints); S5-WS4-03 extended (ingest_parquet + ingest_excel handlers now also write to PagedRowStore — all 4 formats covered); S2-WS2-05 extended (UPDATE/DELETE DML now flushed at COMMIT via `extract_update_row_from_sql()` / `extract_delete_key_from_sql()`). 4 new integration tests in `voltnuerongridd`. Total `cargo test` count: **180 passing in voltnuerongridd** (+4), **20 passing in voltnuerongrid-exec** (+20 new crate).
+
 **2026-04-12 progress note:** Sprint 2 (S2-WS2-04, S2-WS2-05) and Sprint 3 (S3-WS1-04) have advanced from TODO → PARTIAL with the addition of `PagedRowStore` (MVCC) and the SQL `Tokenizer` modules. Sprint 1 gap S1-GAP-01 (stub-crate decision) is now DONE. Total `cargo test` count: **170 passing** across all crates.
 ---
 

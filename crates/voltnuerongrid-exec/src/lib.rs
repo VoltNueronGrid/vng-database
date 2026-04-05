@@ -2,6 +2,9 @@
 
 pub const CRATE_NAME: &str = "voltnuerongrid-exec";
 
+pub mod planner;
+pub use planner::{CostEstimate, LogicalPlan, QueryPlanner};
+
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

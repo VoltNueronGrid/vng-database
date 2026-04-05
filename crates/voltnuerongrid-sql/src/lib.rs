@@ -4,11 +4,18 @@ pub const CRATE_NAME: &str = "voltnuerongrid-sql";
 
 use std::collections::HashMap;
 
+pub mod ast;
 pub mod legacy_aggregations;
+pub mod planner;
 pub mod tokenizer;
 
+pub use ast::{
+    parse_one, ColumnDef, CreateTableStatement, DeleteStatement, InsertStatement,
+    OrderByClause, SelectStatement, Statement, UpdateStatement,
+};
 pub use legacy_aggregations::eval_legacy_numeric_aggregation;
-pub use tokenizer::{tokenize, semantic_tokens, keyword_count, Token};
+pub use planner::{plan, CostEstimate, PlanNode, QueryPlan, RoutingHint};
+pub use tokenizer::{keyword_count, semantic_tokens, tokenize, Token};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SqlStatementKind {
