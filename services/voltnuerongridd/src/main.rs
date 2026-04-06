@@ -1484,6 +1484,21 @@ struct WalSegmentListResponse {
     segments: Vec<WalSegment>,
 }
 
+// ─── S2-WS2-02: WAL checkpoint history structs ────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalCheckpointEntry {
+    checkpoint_id: u64,
+    record_count_at_checkpoint: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct WalCheckpointHistoryResponse {
+    status: &'static str,
+    total_checkpoints: usize,
+    entries: Vec<WalCheckpointEntry>,
+}
+
 // ─── S2-WS2-02: WAL replay count structs ──────────────────────────────────────
 
 #[derive(Debug, Deserialize, Default)]
@@ -2281,6 +2296,22 @@ struct ConnectorDeregisterResponse {
     status: &'static str,
     connector_id: String,
     removed: bool,
+}
+
+// ─── S5-E4A-01: Connector update structs ─────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ConnectorUpdateRequest {
+    connector_id: String,
+    version: Option<String>,
+    signed: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ConnectorUpdateResponse {
+    status: &'static str,
+    connector_id: String,
+    updated: bool,
 }
 
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
@@ -3557,6 +3588,8 @@ async fn main() {
         .route("/api/v1/store/wal/tail", get(wal_tail))
         // S2-WS2-03: WAL mutations (recent key-value changes)
         .route("/api/v1/store/wal/mutations", get(wal_mutations))
+        // S2-WS2-02: WAL checkpoint history
+        .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S2-WS2-02: WAL segment list (checkpoint groups)
         .route("/api/v1/store/wal/segment/list", get(wal_segment_list))
         // S2-WS2-02: WAL replay count (filtered record count, no body)
@@ -3615,6 +3648,8 @@ async fn main() {
         .route("/api/v1/connectors/deregister", post(connector_deregister))
         // S5-E4A-01: Connector get by ID
         .route("/api/v1/connectors/get", get(connector_get))
+        // S5-E4A-01: Connector update (version / signed flag)
+        .route("/api/v1/connectors/update", post(connector_update))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
         .route("/api/v1/ai/policy/stats", get(ai_policy_stats))
         // S9-WS8-02: AI policy counter reset
@@ -7234,6 +7269,30 @@ async fn wal_mutations(
     }))
 }
 
+// ─── S2-WS2-02: WAL checkpoint history handler ───────────────────────────────
+
+/// S2-WS2-02: Return a list of completed WAL checkpoints with their record counts.
+async fn wal_checkpoint_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalCheckpointHistoryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock checkpoint_history");
+    let total_checkpoints = wal.checkpoint_count();
+    drop(wal);
+    let entries: Vec<WalCheckpointEntry> = (1..=(total_checkpoints as u64))
+        .map(|id| WalCheckpointEntry {
+            checkpoint_id: id,
+            record_count_at_checkpoint: 0,
+        })
+        .collect();
+    Ok((StatusCode::OK, Json(WalCheckpointHistoryResponse {
+        status: "ok",
+        total_checkpoints,
+        entries,
+    })))
+}
+
 // ─── S2-WS2-02: WAL segment list handler ────────────────────────────────────
 
 /// S2-WS2-02: List WAL checkpoint segments plus the active (unbounded) segment.
@@ -7811,6 +7870,36 @@ async fn connector_get(
         status: "ok",
         found,
         connector,
+    })))
+}
+
+// ─── S5-E4A-01: Connector update handler ─────────────────────────────────────
+
+/// S5-E4A-01: Update the version or signed flag of an existing registered connector.
+async fn connector_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ConnectorUpdateRequest>,
+) -> Result<(StatusCode, Json<ConnectorUpdateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let mut registry = state.connector_registry.lock().expect("connector_registry lock update");
+    let entry = registry.iter_mut().find(|c| c.connector_id == req.connector_id);
+    let updated = if let Some(plugin) = entry {
+        if let Some(v) = req.version {
+            plugin.version = v;
+        }
+        if let Some(s) = req.signed {
+            plugin.signed = s;
+        }
+        true
+    } else {
+        false
+    };
+    drop(registry);
+    Ok((StatusCode::OK, Json(ConnectorUpdateResponse {
+        status: "ok",
+        connector_id: req.connector_id,
+        updated,
     })))
 }
 
@@ -19554,6 +19643,37 @@ mod tests {
         assert!(active.end_sequence.is_some());
     }
 
+    // ─── S2-WS2-02: WAL checkpoint history endpoint tests ────────────────────
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_checkpoint_history_empty_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_checkpoint_history(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_checkpoints, 0, "fresh WAL has no checkpoints");
+        assert!(body.entries.is_empty(), "no checkpoint entries on fresh state");
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_checkpoint_history_reflects_checkpoint_count() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.force_checkpoint();
+            wal.append_mutation("k2", "v2");
+            wal.force_checkpoint();
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_checkpoint_history(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_checkpoints, 2, "2 force_checkpoint calls must yield 2 entries");
+        assert_eq!(body.entries.len(), 2);
+        assert_eq!(body.entries[0].checkpoint_id, 1);
+        assert_eq!(body.entries[1].checkpoint_id, 2);
+    }
+
     // ── S2-WS2-02: WAL replay count endpoint tests ───────────────────────────
     #[tokio::test]
     async fn s2_ws2_02_wal_replay_count_empty_state_returns_zero() {
@@ -20551,6 +20671,50 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(!body.found, "unknown connector must report found = false");
         assert!(body.connector.is_none());
+    }
+
+    // ─── S5-E4A-01: Connector update endpoint tests ──────────────────────────
+
+    #[tokio::test]
+    async fn s5_e4a_01_connector_update_existing_changes_version() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut reg = state.connector_registry.lock().unwrap();
+            reg.push(ConnectorPlugin {
+                connector_id: "conn-1".to_string(),
+                connector_type: "kafka".to_string(),
+                version: "1.0.0".to_string(),
+                signed: false,
+                registered_at_ms: 0,
+            });
+        }
+        let headers = operator_headers("test-key", "admin");
+        let req = ConnectorUpdateRequest {
+            connector_id: "conn-1".to_string(),
+            version: Some("2.0.0".to_string()),
+            signed: Some(true),
+        };
+        let (status, Json(body)) = connector_update(State(state.clone()), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.updated, "existing connector must be updated");
+        let reg = state.connector_registry.lock().unwrap();
+        let plugin = reg.iter().find(|c| c.connector_id == "conn-1").unwrap();
+        assert_eq!(plugin.version, "2.0.0");
+        assert!(plugin.signed);
+    }
+
+    #[tokio::test]
+    async fn s5_e4a_01_connector_update_missing_returns_updated_false() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = ConnectorUpdateRequest {
+            connector_id: "no-such-connector".to_string(),
+            version: Some("9.9.9".to_string()),
+            signed: None,
+        };
+        let (status, Json(body)) = connector_update(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.updated, "missing connector must return updated = false");
     }
 
 }

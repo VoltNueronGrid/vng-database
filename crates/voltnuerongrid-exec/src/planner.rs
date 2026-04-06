@@ -98,6 +98,10 @@ pub enum LogicalPlan {
     Between {
         input: Box<LogicalPlan>,
     },
+    /// LIKE / ILIKE string pattern filter (from S3-WS1-09 has_like support).
+    Like {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -151,6 +155,7 @@ impl LogicalPlan {
             LogicalPlan::Union { left, .. } => left.primary_table(),
             LogicalPlan::InList { input } => input.primary_table(),
             LogicalPlan::Between { input } => input.primary_table(),
+            LogicalPlan::Like { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -189,6 +194,7 @@ impl LogicalPlan {
             }
             LogicalPlan::InList { input } => input.has_aggregation(),
             LogicalPlan::Between { input } => input.has_aggregation(),
+            LogicalPlan::Like { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -356,6 +362,14 @@ impl QueryPlanner {
                     estimated_rows: (inner.estimated_rows as f64 * 0.75) as u64,
                     relative_cost: inner.relative_cost + 0.4,
                     recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Like { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
+                    relative_cost: inner.relative_cost + 1.2,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -569,12 +583,21 @@ impl QueryPlanner {
         };
 
         // Between wrapper (S3-WS1-08 has_between detection): outermost node.
-        if sel.has_between {
+        let after_between = if sel.has_between {
             LogicalPlan::Between {
                 input: Box::new(after_in_list),
             }
         } else {
             after_in_list
+        };
+
+        // Like wrapper (S3-WS1-09 has_like detection): outermost node.
+        if sel.has_like {
+            LogicalPlan::Like {
+                input: Box::new(after_between),
+            }
+        } else {
+            after_between
         }
     }
 
@@ -914,5 +937,23 @@ mod tests {
         let c = cost("SELECT id FROM users WHERE age BETWEEN 18 AND 65");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "BETWEEN should route to OLTP");
         assert!(c.relative_cost >= 0.4, "Between must carry at least 0.4 cost overhead");
+    }
+
+    #[test]
+    fn planner_like_select_produces_like_node() {
+        let p = plan("SELECT name FROM users WHERE name LIKE '%Alice%'");
+        assert!(
+            matches!(&p, LogicalPlan::Like { .. }),
+            "LIKE query should produce outermost Like node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_like_query_routes_to_olap() {
+        let c = cost("SELECT name FROM users WHERE name LIKE '%Alice%'");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "LIKE should route to OLAP (full scan)");
+        assert!(c.relative_cost >= 1.2, "Like must carry at least 1.2 cost overhead");
     }
 }

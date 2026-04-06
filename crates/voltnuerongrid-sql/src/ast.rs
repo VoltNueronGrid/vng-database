@@ -67,6 +67,8 @@ pub struct SelectStatement {
     pub has_in_list: bool,
     /// True when the WHERE clause contains a BETWEEN ... AND predicate (S3-WS1-08).
     pub has_between: bool,
+    /// True when the WHERE clause contains a LIKE or ILIKE predicate (S3-WS1-09).
+    pub has_like: bool,
 }
 
 /// A parsed INSERT statement.
@@ -200,6 +202,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect BETWEEN ... AND predicate in WHERE (S3-WS1-08).
                 if up.contains(" BETWEEN ") && up.contains(" AND ") {
                     stmt.has_between = true;
+                }
+                // Detect LIKE / ILIKE predicate in WHERE (S3-WS1-09).
+                if up.contains(" LIKE ") || up.contains(" ILIKE ") {
+                    stmt.has_like = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1439,5 +1445,31 @@ mod between_tests {
         let stmt = parse_one("SELECT * FROM transactions WHERE amount > 100").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_between, "plain SELECT without BETWEEN must have has_between = false");
+    }
+}
+
+#[cfg(test)]
+mod like_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_like_predicate_sets_has_like_true() {
+        let stmt = parse_one("SELECT name FROM users WHERE name LIKE '%Alice%'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_like, "LIKE predicate must set has_like = true");
+    }
+
+    #[test]
+    fn select_with_ilike_predicate_sets_has_like_true() {
+        let stmt = parse_one("SELECT email FROM users WHERE email ILIKE '%@example.com'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_like, "ILIKE predicate must set has_like = true");
+    }
+
+    #[test]
+    fn plain_select_has_like_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_like, "plain SELECT without LIKE must have has_like = false");
     }
 }
