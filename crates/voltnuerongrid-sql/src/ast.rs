@@ -45,6 +45,8 @@ pub struct SelectStatement {
     pub has_union: bool,
     /// True when the raw SQL contains a correlated or scalar subquery `(SELECT …)` (S3-WS1-04).
     pub has_subquery: bool,
+    /// True when the raw SQL contains a window function call `OVER (` (S3-WS1-04).
+    pub has_window_fn: bool,
     /// LIMIT value, if present.
     pub limit: Option<u64>,
 }
@@ -139,6 +141,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect correlated / scalar subqueries: any `(SELECT …)` (S3-WS1-04).
                 if up.contains("(SELECT") || up.contains("( SELECT") {
                     stmt.has_subquery = true;
+                }
+                // Detect window function calls: any `OVER (` or `OVER(` (S3-WS1-04).
+                if up.contains("OVER (") || up.contains("OVER(") {
+                    stmt.has_window_fn = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1033,6 +1039,45 @@ mod subquery_tests {
         let stmt = parse_one(sql).unwrap();
         if let Statement::Select(s) = stmt {
             assert!(!s.has_union, "plain SELECT must have has_union = false");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+}
+
+/// S3-WS1-04: Window function detection tests (S3-WS1-06 conformance).
+#[cfg(test)]
+mod window_fn_tests {
+    use super::*;
+
+    #[test]
+    fn select_rank_over_sets_has_window_fn_true() {
+        let sql = "SELECT id, RANK() OVER (PARTITION BY dept ORDER BY salary DESC) AS rnk FROM employees";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.has_window_fn, "RANK() OVER (...) must set has_window_fn = true");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn select_sum_over_partition_by_sets_has_window_fn_true() {
+        let sql = "SELECT region, SUM(revenue) OVER(PARTITION BY region) AS region_total FROM sales";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.has_window_fn, "SUM() OVER(...) must set has_window_fn = true");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn plain_aggregate_has_window_fn_false() {
+        let sql = "SELECT region, SUM(revenue) FROM sales GROUP BY region";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(!s.has_window_fn, "plain GROUP BY aggregate must NOT set has_window_fn");
         } else {
             panic!("expected Select statement");
         }

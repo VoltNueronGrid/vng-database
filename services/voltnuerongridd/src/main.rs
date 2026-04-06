@@ -1917,6 +1917,43 @@ struct HtapLagResponse {
     estimated_lag_mutations: usize,
 }
 
+// ─── S4-WS3-04: HTAP force-sync response ────────────────────────────────────
+
+#[derive(Serialize)]
+struct HtapForceSyncResponse {
+    status: &'static str,
+    mutations_applied: usize,
+    olap_row_count_after: usize,
+}
+
+// ─── S7-WS6-02: Raft snapshot response ───────────────────────────────────────
+
+#[derive(Serialize)]
+struct RaftSnapshotResponse {
+    status: &'static str,
+    node_id: String,
+    term: u64,
+    commit_index: u64,
+    last_applied: u64,
+    log_length: usize,
+    fencing_token: u64,
+}
+
+// ─── S2-WS2-04: Row store prefix count structs ───────────────────────────────
+
+#[derive(Deserialize, Default)]
+struct RowCountQuery {
+    key_prefix: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RowCountResponse {
+    status: &'static str,
+    snapshot_xid: u64,
+    key_prefix: Option<String>,
+    count: usize,
+}
+
 // ─── S9-WS8A-02: Audit export struct ─────────────────────────────────────────
 
 #[derive(Deserialize, Default)]
@@ -3100,6 +3137,8 @@ async fn main() {
         .route("/api/v1/store/htap/apply", post(store_htap_apply))
         .route("/api/v1/store/htap/olap/scan", get(store_htap_olap_scan))
         .route("/api/v1/store/htap/lag", get(htap_lag))
+        // S4-WS3-04: HTAP force-sync — drain sync_origin into olap_store
+        .route("/api/v1/store/htap/sync", post(htap_force_sync))
         // S9-WS8A-02: Audit export (all buffered events + file-backed status)
         .route("/api/v1/audit/export", get(audit_export))
         // S7-WS6-02: Raft consensus RPC + status endpoints
@@ -3110,6 +3149,8 @@ async fn main() {
         .route("/api/v1/cluster/raft/log", get(raft_log))
         // S7-WS6-02: raft commit progress
         .route("/api/v1/cluster/raft/commit", get(raft_commit_progress))
+        // S7-WS6-02: Raft point-in-time snapshot
+        .route("/api/v1/cluster/raft/snapshot", get(raft_snapshot))
         .route("/api/v1/cluster/raft/heartbeat", post(raft_heartbeat))
         .route("/api/v1/cluster/raft/members", get(raft_member_list))
         // S7-WS6-03: Raft fencing token
@@ -3164,6 +3205,8 @@ async fn main() {
         .route("/api/v1/store/rows/snapshot", get(row_store_snapshot))
         // S2-WS2-04: Row store operational stats
         .route("/api/v1/store/rows/stats", get(row_store_stats))
+        // S2-WS2-04: Row store key-prefix count
+        .route("/api/v1/store/rows/count", get(row_store_count))
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
@@ -6844,6 +6887,24 @@ async fn raft_commit_progress(
     }))
 }
 
+// ─── S7-WS6-02: Raft point-in-time snapshot handler ────────────────────────
+
+/// S7-WS6-02: Return a point-in-time snapshot of the Raft node state.
+async fn raft_snapshot(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<RaftSnapshotResponse>) {
+    let snap = state.raft_state.lock().expect("raft_state snapshot lock").status();
+    (StatusCode::OK, Json(RaftSnapshotResponse {
+        status: "ok",
+        node_id: snap.node_id,
+        term: snap.current_term,
+        commit_index: snap.commit_index,
+        last_applied: snap.last_applied,
+        log_length: snap.log_length,
+        fencing_token: snap.fencing_token,
+    }))
+}
+
 // ─── S7-WS6-03: Raft cluster member list endpoint ────────────────────────────
 
 /// S7-WS6-03: Return the list of known Raft cluster members (scaffold: local node only).
@@ -7160,6 +7221,33 @@ async fn row_store_stats(
         total_pages,
         total_rows,
         total_visible_rows,
+    })))
+}
+
+// ─── S2-WS2-04: Row store prefix count handler ──────────────────────────────
+
+/// S2-WS2-04: Count visible rows at current snapshot, optionally filtered by key prefix.
+async fn row_store_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<RowCountQuery>,
+) -> Result<(StatusCode, Json<RowCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock count");
+    let snapshot_xid = rs.current_xid();
+    let count = {
+        let all_rows = rs.scan_at_snapshot(snapshot_xid);
+        match &params.key_prefix {
+            Some(prefix) => all_rows.iter().filter(|(k, _)| k.starts_with(prefix.as_str())).count(),
+            None => all_rows.len(),
+        }
+    };
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowCountResponse {
+        status: "ok",
+        snapshot_xid,
+        key_prefix: params.key_prefix.clone(),
+        count,
     })))
 }
 
@@ -10173,6 +10261,54 @@ async fn htap_lag(
         sync_origin_pending,
         olap_row_count,
         estimated_lag_mutations,
+    })))
+}
+
+// ─── S4-WS3-04: HTAP force-sync handler ─────────────────────────────────────
+
+/// S4-WS3-04: Drain all pending sync_origin mutations into the in-memory OLAP replica
+/// in one atomic sweep, then acknowledge them.
+async fn htap_force_sync(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<HtapForceSyncResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_store_runtime_principal(&headers, &state, PrivilegeAction::Write, "store/htap/sync")?;
+    // Collect all pending mutations without dropping/acking yet.
+    let batch = state.sync_origin.lock().expect("sync_origin lock htap_force_sync")
+        .export_batch(usize::MAX);
+    let mut applied = 0usize;
+    let mut last_seq = 0u64;
+    {
+        let mut olap = state.olap_store.lock().expect("olap_store lock htap_force_sync");
+        for m in &batch {
+            last_seq = last_seq.max(m.sequence);
+            match m.op {
+                MutationOp::Insert | MutationOp::Update => {
+                    let data: HashMap<String, String> = serde_json::from_str(&m.payload_json)
+                        .unwrap_or_else(|_| {
+                            let mut d = HashMap::new();
+                            d.insert("payload".to_string(), m.payload_json.clone());
+                            d
+                        });
+                    olap.insert(m.primary_key.clone(), data);
+                    applied += 1;
+                }
+                MutationOp::Delete => {
+                    olap.remove(&m.primary_key);
+                    applied += 1;
+                }
+            }
+        }
+    }
+    // Acknowledge all exported mutations so they are removed from the sync_origin queue.
+    if last_seq > 0 {
+        state.sync_origin.lock().expect("sync_origin ack lock").ack_through(last_seq);
+    }
+    let olap_row_count_after = state.olap_store.lock().expect("olap_store count lock").len();
+    Ok((StatusCode::OK, Json(HtapForceSyncResponse {
+        status: "ok",
+        mutations_applied: applied,
+        olap_row_count_after,
     })))
 }
 
@@ -17379,6 +17515,34 @@ mod tests {
         assert_eq!(body.uncommitted, 1, "log has 1 entry, commit_index=0 => uncommitted=1");
     }
 
+    // ── S7-WS6-02: Raft snapshot endpoint tests ───────────────────────────
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_snapshot_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = raft_snapshot(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.term, 0, "fresh node has term 0");
+        assert_eq!(body.commit_index, 0);
+        assert_eq!(body.log_length, 0);
+        assert_eq!(body.fencing_token, 0);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_snapshot_reflects_term_update() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut node = state.raft_state.lock().unwrap();
+            node.current_term = 5;
+            node.commit_index = 3;
+        }
+        let (status, Json(body)) = raft_snapshot(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.term, 5, "snapshot must reflect updated term");
+        assert_eq!(body.commit_index, 3);
+    }
+
     // ─── S7-WS6-03: Raft fencing token tests ─────────────────────────────
 
     #[tokio::test]
@@ -17635,6 +17799,51 @@ mod tests {
         assert_eq!(body.total_visible_rows, 2, "both rows visible at head xid");
     }
 
+    // ── S2-WS2-04: Row store prefix count endpoint tests ─────────────────
+
+    #[tokio::test]
+    async fn s2_ws2_04_row_count_empty_store_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = row_store_count(
+            State(state),
+            headers,
+            Query(RowCountQuery { key_prefix: None }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.count, 0, "empty store has 0 rows");
+        assert!(body.key_prefix.is_none());
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_04_row_count_with_prefix_filters_correctly() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut rs = state.row_store.lock().unwrap();
+            let xid = rs.begin_xid();
+            rs.insert(xid, "orders:1", std::collections::HashMap::from([("v".to_string(), "a".to_string())]));
+            rs.insert(xid, "orders:2", std::collections::HashMap::from([("v".to_string(), "b".to_string())]));
+            rs.insert(xid, "products:1", std::collections::HashMap::from([("v".to_string(), "c".to_string())]));
+        }
+        let headers = operator_headers("test-key", "admin");
+        // Count all rows
+        let (_, Json(all)) = row_store_count(
+            State(state.clone()),
+            headers.clone(),
+            Query(RowCountQuery { key_prefix: None }),
+        ).await.unwrap();
+        assert_eq!(all.count, 3, "3 total rows");
+        // Count only orders:* prefix
+        let (_, Json(filtered)) = row_store_count(
+            State(state),
+            headers,
+            Query(RowCountQuery { key_prefix: Some("orders:".to_string()) }),
+        ).await.unwrap();
+        assert_eq!(filtered.count, 2, "2 orders rows match the prefix");
+        assert_eq!(filtered.key_prefix.as_deref(), Some("orders:"));
+    }
+
     #[tokio::test]
     async fn s2_ws2_04_row_snapshot_shows_inserted_rows() {
         let state = state_with_key(Some("test-key"));
@@ -17843,6 +18052,42 @@ mod tests {
         let (status, Json(body)) = result.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.olap_row_count, 1);
+    }
+
+    // ── S4-WS3-04: HTAP force-sync endpoint tests ────────────────────────────
+
+    #[tokio::test]
+    async fn s4_ws3_04_htap_force_sync_fresh_state_no_mutations() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = htap_force_sync(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.mutations_applied, 0, "no pending mutations on fresh state");
+        assert_eq!(body.olap_row_count_after, 0);
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_04_htap_force_sync_drains_pending_mutations() {
+        let state = state_with_key(Some("test-key"));
+        // Seed the sync_origin with one pending insert mutation.
+        {
+            let mut origin = state.sync_origin.lock().unwrap();
+            origin.append(
+                "products",
+                "prod:1",
+                r#"{"name":"widget","price":"9.99"}"#,
+                MutationOp::Insert,
+            );
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = htap_force_sync(State(state.clone()), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.mutations_applied, 1, "one pending mutation must be applied");
+        assert_eq!(body.olap_row_count_after, 1, "olap_store must have 1 row after sync");
+        // Verify sync_origin was drained.
+        let pending = state.sync_origin.lock().unwrap().pending_len();
+        assert_eq!(pending, 0, "sync_origin must be empty after force-sync");
     }
 
     // ── S5-WS4A-02: Broker health ─────────────────────────────────────────────
