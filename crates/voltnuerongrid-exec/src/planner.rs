@@ -96,6 +96,10 @@ pub enum LogicalPlan {
         /// The window function expression indicator (scaffold: always "OVER").
         window_func: String,
     },
+    /// Deduplication of result rows via SELECT DISTINCT (S3-WS1-04 is_distinct support).
+    Distinct {
+        input: Box<LogicalPlan>,
+    },
     /// Unrecognised or unparseable statement.
     Unknown(String),
 }
@@ -117,6 +121,7 @@ impl LogicalPlan {
             LogicalPlan::Join { left, .. } => left.primary_table(),
             LogicalPlan::Union { left, .. } => left.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
+            LogicalPlan::Distinct { input } => input.primary_table(),
             _ => None,
         }
     }
@@ -148,6 +153,7 @@ impl LogicalPlan {
                 left.has_aggregation() || right.has_aggregation()
             }
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
+            LogicalPlan::Distinct { input } => input.has_aggregation(),
             _ => false,
         }
     }
@@ -296,6 +302,14 @@ impl QueryPlanner {
                     recommended_path: QueryPath::Olap,
                 }
             }
+            LogicalPlan::Distinct { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows / 2,
+                    relative_cost: inner.relative_cost + 0.3,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
             LogicalPlan::Unknown(_) => CostEstimate {
                 estimated_rows: 0,
                 relative_cost: 0.0,
@@ -398,13 +412,22 @@ impl QueryPlanner {
         };
 
         // Window function (S3-WS1-04 has_window_fn detection): wrap outermost node.
-        if sel.has_window_fn {
+        let after_window = if sel.has_window_fn {
             LogicalPlan::WindowFn {
                 input: Box::new(after_union),
                 window_func: "OVER".to_string(),
             }
         } else {
             after_union
+        };
+
+        // SELECT DISTINCT deduplication (S3-WS1-04 is_distinct detection): wrap outermost.
+        if sel.is_distinct {
+            LogicalPlan::Distinct {
+                input: Box::new(after_window),
+            }
+        } else {
+            after_window
         }
     }
 
@@ -622,5 +645,22 @@ mod tests {
         let c = cost("SELECT region, SUM(revenue) OVER(PARTITION BY region) AS total FROM sales");
         assert_eq!(c.recommended_path, QueryPath::Olap, "window function should route to OLAP");
         assert!(c.relative_cost > 2.5, "window fn should carry extra cost >= 2.5");
+    }
+
+    #[test]
+    fn planner_distinct_wraps_outermost_in_distinct_node() {
+        let p = plan("SELECT DISTINCT id FROM users");
+        assert!(
+            matches!(&p, LogicalPlan::Distinct { .. }),
+            "expected Distinct node for SELECT DISTINCT, got {p:?}"
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_distinct_query_routes_to_oltp() {
+        let c = cost("SELECT DISTINCT name FROM employees");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "DISTINCT should route to OLTP");
     }
 }

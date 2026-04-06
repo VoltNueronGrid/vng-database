@@ -1383,6 +1383,17 @@ struct WalCompactResponse {
     compacted: bool,
 }
 
+// ─── S2-WS2-02: WAL bounds response ─────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalBoundsResponse {
+    status: &'static str,
+    record_count: usize,
+    checkpoint_count: usize,
+    oldest_sequence: Option<u64>,
+    newest_sequence: Option<u64>,
+}
+
 // ─── S2-WS2-02: WAL replay (filtered read-back) structs ─────────────────────
 
 #[derive(Debug, Deserialize, Default)]
@@ -1478,6 +1489,17 @@ struct CdcCursorResponse {
 #[derive(Debug, Deserialize)]
 struct CdcCursorRewindRequest {
     table_name: String,
+}
+
+// ─── S10-WS15-02: CDC aggregate metrics response ─────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct CdcMetricsResponse {
+    status: &'static str,
+    total_events: usize,
+    insert_count: usize,
+    delete_count: usize,
+    tables_seen: usize,
 }
 
 // ─── S5-WS4A-02: Broker adapter structs ───────────────────────────────────────
@@ -3340,6 +3362,8 @@ async fn main() {
         .route("/api/v1/store/wal/stats", get(wal_stats))
         // S2-WS2-02: WAL compact
         .route("/api/v1/store/wal/compact", post(wal_compact))
+        // S2-WS2-02: WAL bounds (oldest/newest sequence)
+        .route("/api/v1/store/wal/bounds", get(wal_bounds))
         // S2-WS2-02: WAL replay (filtered read-back)
         .route("/api/v1/store/wal/replay", get(wal_replay))
         // S7-WS6-04: Chaos/game-day fault injection
@@ -3370,6 +3394,8 @@ async fn main() {
         .route("/api/v1/store/cdc/cursor/advance", post(cdc_cursor_advance))
         // S10-WS15-02: CDC cursor rewind
         .route("/api/v1/store/cdc/cursor/rewind", post(cdc_cursor_rewind))
+        // S10-WS15-02: CDC aggregate metrics
+        .route("/api/v1/store/cdc/metrics", get(cdc_metrics))
         // S2-WS2-04: Row store point-in-time snapshot export
         .route("/api/v1/store/rows/snapshot", get(row_store_snapshot))
         // S2-WS2-04: Row store operational stats
@@ -6881,6 +6907,30 @@ async fn wal_compact(
     }))
 }
 
+// ─── S2-WS2-02: WAL bounds — oldest and newest sequence numbers ───────────────
+
+/// S2-WS2-02: Return oldest and newest WAL sequence numbers and record/checkpoint counts.
+async fn wal_bounds(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<WalBoundsResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let wal = state.wal_engine.lock().expect("wal_engine wal_bounds lock");
+    let records = wal.wal_records();
+    let record_count = records.len();
+    let checkpoint_count = wal.checkpoint_count();
+    let oldest_sequence = records.first().map(|r| r.sequence);
+    let newest_sequence = records.last().map(|r| r.sequence);
+    drop(wal);
+    (StatusCode::OK, Json(WalBoundsResponse {
+        status: "ok",
+        record_count,
+        checkpoint_count,
+        oldest_sequence,
+        newest_sequence,
+    }))
+}
+
 // ─── S
 
 // ─── S2-WS2-02: WAL replay — filtered read-back of WAL entries ───────────────
@@ -7595,6 +7645,33 @@ async fn cdc_cursor_rewind(
         table_name: req.table_name,
         cursor_position: 0,
     })))
+}
+
+// ─── S10-WS15-02: CDC aggregate metrics ──────────────────────────────────────
+
+/// S10-WS15-02: Return aggregate CDC event metrics (total/insert/delete counts, tables seen).
+async fn cdc_metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<CdcMetricsResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let wal = state.wal_engine.lock().expect("wal_engine cdc_metrics lock");
+    let records = wal.wal_records().to_vec();
+    drop(wal);
+    let total_events = records.len();
+    let insert_count = records.iter().filter(|r| r.value != "__deleted__").count();
+    let delete_count = records.iter().filter(|r| r.value == "__deleted__").count();
+    let tables_seen = records.iter()
+        .filter_map(|r| r.key.split(':').next().map(|t| t.to_string()))
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    (StatusCode::OK, Json(CdcMetricsResponse {
+        status: "ok",
+        total_events,
+        insert_count,
+        delete_count,
+        tables_seen,
+    }))
 }
 
 // ─── S2-WS2-04: Row store point-in-time snapshot export ──────────────────────
@@ -18298,6 +18375,38 @@ mod tests {
         assert_eq!(body.cursor_position, 0, "rewind on new table must create cursor at 0");
     }
 
+    // ─── S10-WS15-02: CDC metrics tests ──────────────────────────────────────
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_metrics_empty_state_returns_zero_counts() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = cdc_metrics(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.total_events, 0);
+        assert_eq!(body.insert_count, 0);
+        assert_eq!(body.delete_count, 0);
+        assert_eq!(body.tables_seen, 0);
+    }
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_metrics_after_mutations_counts_inserts() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("orders:1", "val1");
+            wal.append_mutation("orders:2", "val2");
+            wal.append_mutation("users:1", "val3");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = cdc_metrics(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_events, 3);
+        assert_eq!(body.insert_count, 3, "all are inserts (not __deleted__)");
+        assert_eq!(body.delete_count, 0);
+        assert_eq!(body.tables_seen, 2, "orders and users are 2 distinct table prefixes");
+    }
+
     // ─── S2-WS2-04: Row store snapshot export tests ───────────────────────────
 
     #[tokio::test]
@@ -18534,6 +18643,35 @@ mod tests {
         assert_eq!(body.records_before, 2, "2 mutations appended before compact");
         assert_eq!(body.records_after, 0, "compact clears WAL via checkpoint");
         assert!(body.compacted, "records were removed so compacted = true");
+    }
+
+    // ── S2-WS2-02: WAL bounds tests ───────────────────────────────────────────
+    #[tokio::test]
+    async fn s2_ws2_02_wal_bounds_empty_state_shows_none_sequences() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_bounds(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.record_count, 0);
+        assert_eq!(body.oldest_sequence, None, "no records means no oldest sequence");
+        assert_eq!(body.newest_sequence, None, "no records means no newest sequence");
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_bounds_after_mutations_shows_sequences() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "v2");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_bounds(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 2);
+        assert!(body.oldest_sequence.is_some(), "oldest sequence must be Some after mutations");
+        assert!(body.newest_sequence.is_some(), "newest sequence must be Some after mutations");
     }
 
     // ── S7-WS6-04: Chaos health check ────────────────────────────────────────

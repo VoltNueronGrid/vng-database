@@ -53,6 +53,8 @@ pub struct SelectStatement {
     pub is_distinct: bool,
     /// LIMIT value, if present.
     pub limit: Option<u64>,
+    /// OFFSET value for pagination (S3-WS1-04).
+    pub offset: Option<u64>,
 }
 
 /// A parsed INSERT statement.
@@ -309,6 +311,14 @@ fn parse_select(tokens: &[Token]) -> SelectStatement {
     if let Some(lp) = find_keyword_from(tokens, "LIMIT", pos) {
         if let Some(Token::Number(n)) = tokens.get(lp + 1) {
             stmt.limit = n.parse::<u64>().ok();
+        }
+        // OFFSET immediately after LIMIT value (S3-WS1-04).
+        if let Some(Token::Keyword(k)) = tokens.get(lp + 2) {
+            if k.eq_ignore_ascii_case("OFFSET") {
+                if let Some(Token::Number(n)) = tokens.get(lp + 3) {
+                    stmt.offset = n.parse::<u64>().ok();
+                }
+            }
         }
     }
 
@@ -1207,5 +1217,32 @@ mod select_distinct_tests {
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(s.is_distinct, "SELECT DISTINCT with WHERE must set is_distinct = true");
         assert_eq!(s.table.as_deref(), Some("orders"));
+    }
+}
+
+#[cfg(test)]
+mod offset_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_limit_and_offset_parses_both() {
+        let stmt = parse_one("SELECT * FROM t LIMIT 10 OFFSET 5").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert_eq!(s.limit, Some(10), "LIMIT 10 must be captured");
+        assert_eq!(s.offset, Some(5), "OFFSET 5 must be captured");
+    }
+
+    #[test]
+    fn select_with_offset_zero_is_stored() {
+        let stmt = parse_one("SELECT id FROM users LIMIT 100 OFFSET 0").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert_eq!(s.offset, Some(0), "OFFSET 0 must be stored");
+    }
+
+    #[test]
+    fn select_without_offset_is_none() {
+        let stmt = parse_one("SELECT name FROM employees").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert_eq!(s.offset, None, "plain SELECT must have offset = None");
     }
 }
