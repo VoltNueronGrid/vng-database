@@ -1897,6 +1897,10 @@ struct SecurityTlsStatusResponse {
     tls_required: bool,
     mtls_required: bool,
     cert_source: String,
+    key_source: String,
+    cert_present: bool,
+    key_present: bool,
+    cert_pair_configured: bool,
     cert_rotation_supported: bool,
     note: &'static str,
 }
@@ -1911,6 +1915,10 @@ struct TlsCertRotateResponse {
     status: &'static str,
     rotation_initiated: bool,
     cert_source: String,
+    key_source: String,
+    cert_present: bool,
+    key_present: bool,
+    preflight_ok: bool,
     reason: String,
 }
 
@@ -1920,6 +1928,10 @@ struct TlsCertRotateResponse {
 struct TlsCertInfoResponse {
     status: &'static str,
     cert_source: String,
+    key_source: String,
+    cert_present: bool,
+    key_present: bool,
+    preflight_ok: bool,
     tls_required: bool,
     mtls_required: bool,
     cert_rotation_supported: bool,
@@ -7198,12 +7210,23 @@ async fn security_tls_rotate(
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "not_configured".to_string());
-    let rotation_initiated = cert_source != "not_configured";
+    let key_source = std::env::var("VNG_TLS_KEY_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "not_configured".to_string());
+    let cert_present = cert_source != "not_configured" && std::path::Path::new(&cert_source).exists();
+    let key_present = key_source != "not_configured" && std::path::Path::new(&key_source).exists();
+    let preflight_ok = cert_present && key_present;
+    let rotation_initiated = preflight_ok;
     let reason = req.reason.unwrap_or_else(|| "manual_rotation".to_string());
     Ok((StatusCode::OK, Json(TlsCertRotateResponse {
         status: "ok",
         rotation_initiated,
         cert_source,
+        key_source,
+        cert_present,
+        key_present,
+        preflight_ok,
         reason,
     })))
 }
@@ -7220,10 +7243,21 @@ async fn security_tls_cert_info(
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "not_configured".to_string());
+    let key_source = std::env::var("VNG_TLS_KEY_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "not_configured".to_string());
+    let cert_present = cert_source != "not_configured" && std::path::Path::new(&cert_source).exists();
+    let key_present = key_source != "not_configured" && std::path::Path::new(&key_source).exists();
+    let preflight_ok = cert_present && key_present;
     let sc = &*state.security_config;
     Ok((StatusCode::OK, Json(TlsCertInfoResponse {
         status: "ok",
         cert_source,
+        key_source,
+        cert_present,
+        key_present,
+        preflight_ok,
         tls_required: sc.tls_required,
         mtls_required: sc.mtls_required,
         cert_rotation_supported: false,
@@ -10406,10 +10440,13 @@ async fn security_tls_status(
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "not_configured".to_string());
-    let key_present = std::env::var("VNG_TLS_KEY_PATH")
+    let key_source = std::env::var("VNG_TLS_KEY_PATH")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .is_some();
+        .unwrap_or_else(|| "not_configured".to_string());
+    let cert_present = cert_source != "not_configured" && std::path::Path::new(&cert_source).exists();
+    let key_present = key_source != "not_configured" && std::path::Path::new(&key_source).exists();
+    let cert_pair_configured = cert_present && key_present;
     let note = if state.security_config.tls_required {
         "TLS required — server must be started with rustls/native-tls adapter"
     } else {
@@ -10431,7 +10468,11 @@ async fn security_tls_status(
         status: "ok",
         tls_required: state.security_config.tls_required,
         mtls_required: state.security_config.mtls_required,
-        cert_source: if key_present { cert_source } else { "not_configured".to_string() },
+        cert_source,
+        key_source,
+        cert_present,
+        key_present,
+        cert_pair_configured,
         cert_rotation_supported: false,
         note,
     }))
@@ -17459,6 +17500,11 @@ mod tests {
         assert!(!body.tls_required);
         assert!(!body.mtls_required);
         assert!(!body.cert_rotation_supported); // scaffold only
+        assert_eq!(body.cert_source, "not_configured");
+        assert_eq!(body.key_source, "not_configured");
+        assert!(!body.cert_present);
+        assert!(!body.key_present);
+        assert!(!body.cert_pair_configured);
     }
 
     // ─── S6-WS5-04: TDE status ───────────────────────────────────────────────
@@ -19066,6 +19112,10 @@ mod tests {
         let (status, axum::extract::Json(body)) = result.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.cert_source, "not_configured");
+        assert_eq!(body.key_source, "not_configured");
+        assert!(!body.cert_present);
+        assert!(!body.key_present);
+        assert!(!body.preflight_ok);
         assert!(!body.rotation_initiated, "cert not configured so rotation_initiated=false");
         assert_eq!(body.reason, "test");
     }
@@ -19079,6 +19129,10 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert_eq!(body.cert_source, "not_configured");
+        assert_eq!(body.key_source, "not_configured");
+        assert!(!body.cert_present);
+        assert!(!body.key_present);
+        assert!(!body.preflight_ok);
         assert!(!body.cert_rotation_supported, "cert rotation is scaffold");
     }
 

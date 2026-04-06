@@ -431,6 +431,12 @@ A tracker row moves to **Done** only when:
 | H-09 | In Progress | 65% | improving | P2 | R4 | Cross-IDE parity/safety baseline drafted in `reference/h09-cross-ide-parity-test-matrix.md`, executed via `tests/kpi/scripts/run-h09-ide-parity-matrix.ps1` + `tests/kpi/scripts/run-h09-gate.ps1`, and now linked to release evidence via `tests/kpi/scripts/run-h09-release-summary.ps1` (`tests/kpi/results/gates/h09-release-readiness.json`) | Full cross-IDE runtime action parity checks (live extension operations and permission-boundary negative paths) are still pending | Extend H-09 matrix from baseline evidence checks to live runtime parity/permission scenarios and add trend/badge artifacts |
 | H-10 | In Progress | 70% | improving | P2 | R4 | Governance artifact set created (`reference/h10-arb-charter.md`, `reference/h10-deprecation-policy.md`, `reference/h10-deprecation-registry.md`, `reference/h10-governance-checklist.md`) and now wired into executable gate/release evidence via `tests/kpi/scripts/run-h10-governance-checklist.ps1`, `tests/kpi/scripts/run-h10-gate.ps1`, `tests/kpi/scripts/run-h10-release-summary.ps1` | ARB formal approval cycle pending; tooling reliability debt still open for PowerShell artifact regeneration and Codacy automation path on this Windows host | Schedule ARB sign-off session, ratify policy/registry v1, then add ARB decision-log evidence into H-10 release gate |
 
+### 9.2a Session 28 Implementation Update (WS5 TLS)
+
+- S6-WS5-03 advanced with TLS preflight hardening in `services/voltnuerongridd/src/main.rs`: `/api/v1/security/tls/status`, `/api/v1/security/tls/rotate`, and `/api/v1/security/tls/cert/info` now expose both cert/key source paths and file readiness fields (`cert_present`, `key_present`, `cert_pair_configured`, `preflight_ok`).
+- Rotation initiation now requires both `VNG_TLS_CERT_PATH` and `VNG_TLS_KEY_PATH` to be configured and to resolve to existing files.
+- Updated service tests: `s6_ws5_03_tls_status_returns_contract_flags`, `s6_ws5_03_tls_rotate_returns_not_configured_without_cert_env`, `s6_ws5_03_tls_cert_info_fresh_state_not_configured`.
+
 ### 9.3 PMO Action Queue (Week 2 Readiness)
 
 - Keep PR-007 deferred until cloud credentials, cloud endpoints, and token handoff are available; no additional execution work is planned before handoff.

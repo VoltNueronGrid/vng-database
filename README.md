@@ -15,6 +15,10 @@ It is designed for:
 - `reference/voltnuerongrid-ws.md`: work structure and phased delivery plan
 - `prompts/prompt-1.md`: source requirements prompt
 
+## Recent Implementation Updates
+
+- WS5 TLS hardening: runtime TLS endpoints now expose cert/key preflight readiness (`cert_present`, `key_present`, `cert_pair_configured`, `preflight_ok`) and rotation only proceeds when both cert/key files exist.
+
 ## High level architecture diagram
 
 ![VoltNueronGrid DB Architecture Diagram](reference/architecture-diagram-v1.png)
