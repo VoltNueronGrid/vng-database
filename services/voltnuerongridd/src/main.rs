@@ -2423,6 +2423,43 @@ struct WalSeqResponse {
     checkpoint_count: usize,
 }
 
+// ─── S11-WS1-14: WAL head structs ────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct WalHeadQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalHeadEntry {
+    sequence: u64,
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WalHeadResponse {
+    status: &'static str,
+    record_count: usize,
+    limit_applied: usize,
+    entries: Vec<WalHeadEntry>,
+}
+
+// ─── S11-WS1-14: Rows modified structs ───────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct RowsModifiedQuery {
+    since_xid: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsModifiedResponse {
+    status: &'static str,
+    modified_count: usize,
+    since_xid: u64,
+    keys: Vec<String>,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3701,6 +3738,8 @@ async fn main() {
         .route("/api/v1/store/wal/mutations", get(wal_mutations))
         // S11-WS1-13: WAL latest sequence info
         .route("/api/v1/store/wal/seq", get(wal_seq))
+        // S11-WS1-14: WAL head records (first N entries)
+        .route("/api/v1/store/wal/head", get(wal_head))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3757,6 +3796,8 @@ async fn main() {
         .route("/api/v1/store/rows/keys", get(store_rows_keys))
         // S11-WS1-11: Row store version / current transaction ID
         .route("/api/v1/store/rows/version", get(row_store_version))
+        // S11-WS1-14: Rows modified after a given transaction ID
+        .route("/api/v1/store/rows/modified", get(rows_modified))
         // S11-WS1-12: Row store page-level stats
         .route("/api/v1/store/rows/page/stats", get(rows_page_stats))
         // S5-WS4A-02: Broker adapter status + flush
@@ -8235,6 +8276,62 @@ async fn wal_seq(
         latest_sequence,
         wal_len,
         checkpoint_count,
+    })))
+}
+
+// ─── S11-WS1-14: WAL head endpoint ───────────────────────────────────────────
+
+/// S11-WS1-14: Return the first N WAL records (head of the log).
+async fn wal_head(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WalHeadQuery>,
+) -> Result<(StatusCode, Json<WalHeadResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_head");
+    let all_records = wal.wal_records();
+    let limit_applied = params.limit.unwrap_or(10).min(all_records.len());
+    let entries: Vec<WalHeadEntry> = all_records[..limit_applied]
+        .iter()
+        .map(|r| WalHeadEntry {
+            sequence: r.sequence,
+            key: r.key.clone(),
+            value: r.value.clone(),
+        })
+        .collect();
+    let record_count = entries.len();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalHeadResponse {
+        status: "ok",
+        record_count,
+        limit_applied,
+        entries,
+    })))
+}
+
+// ─── S11-WS1-14: Rows modified endpoint ──────────────────────────────────────
+
+/// S11-WS1-14: Return keys of rows modified after the given transaction ID.
+async fn rows_modified(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<RowsModifiedQuery>,
+) -> Result<(StatusCode, Json<RowsModifiedResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_modified");
+    let snapshot = rs.export_rows_snapshot();
+    let keys: Vec<String> = snapshot
+        .iter()
+        .filter(|(k, _)| rs.was_modified_after(k, params.since_xid))
+        .map(|(k, _)| k.clone())
+        .collect();
+    let modified_count = keys.len();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsModifiedResponse {
+        status: "ok",
+        modified_count,
+        since_xid: params.since_xid,
+        keys,
     })))
 }
 
@@ -21234,6 +21331,64 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = wal_seq(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-14: WAL head endpoint tests ─────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_14_wal_head_empty_wal_returns_zero_entries() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_head(
+            State(state),
+            headers,
+            Query(WalHeadQuery { limit: None }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 0, "empty WAL must return zero entries");
+        assert!(body.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_14_wal_head_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_head(
+            State(state),
+            headers,
+            Query(WalHeadQuery { limit: Some(5) }),
+        ).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-14: Rows modified endpoint tests ────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_14_rows_modified_fresh_store_returns_empty() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_modified(
+            State(state),
+            headers,
+            Query(RowsModifiedQuery { since_xid: 0 }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.modified_count, 0, "fresh row store must return zero modified rows");
+        assert_eq!(body.since_xid, 0);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_14_rows_modified_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_modified(
+            State(state),
+            headers,
+            Query(RowsModifiedQuery { since_xid: 1 }),
+        ).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

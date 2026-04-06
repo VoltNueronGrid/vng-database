@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 38 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 141→144, exec 50→52, service 381→385 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_nullif: bool` field + detection | `voltnuerongrid-sql` | Detects `NULLIF(` in query (`S3-WS1-14`) | 3 (`nullif_tests` module) |
+| `Nullif { input }` plan node | `voltnuerongrid-exec` | OLTP pass-through node; +0.15 cost | 2 |
+| `GET /api/v1/store/wal/head` | `voltnuerongridd` | First N WAL records with configurable limit (operator-auth) | 2 |
+| `GET /api/v1/store/rows/modified` | `voltnuerongridd` | Row keys modified after `since_xid` via MVCC `was_modified_after` (operator-auth) | 2 |
+
+---
+
 ## Session 37 Implementation Log
 
 **Date:** 2026-04-06 (Sprint 9 continuation)

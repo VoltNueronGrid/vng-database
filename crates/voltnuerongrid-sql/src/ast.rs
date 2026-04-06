@@ -77,6 +77,8 @@ pub struct SelectStatement {
     pub has_coalesce: bool,
     /// True when the query contains a CAST() or :: type-cast expression (S3-WS1-13).
     pub has_cast: bool,
+    /// True when the query contains a NULLIF() expression (S3-WS1-14).
+    pub has_nullif: bool,
 }
 
 /// A parsed INSERT statement.
@@ -230,6 +232,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect CAST() or :: type-cast expression anywhere in the query (S3-WS1-13).
                 if up_trim.contains("CAST(") || up.contains("::") {
                     stmt.has_cast = true;
+                }
+                // Detect NULLIF() expression anywhere in the query (S3-WS1-14).
+                if up_trim.contains("NULLIF(") {
+                    stmt.has_nullif = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1599,5 +1605,33 @@ mod cast_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_cast, "plain SELECT without CAST must have has_cast = false");
+    }
+}
+
+// ─── S3-WS1-14: has_nullif tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod nullif_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_nullif_sets_has_nullif() {
+        let stmt = parse_one("SELECT NULLIF(score, 0) FROM results").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_nullif, "NULLIF() expression must set has_nullif = true");
+    }
+
+    #[test]
+    fn nullif_detection_is_case_insensitive() {
+        let stmt = parse_one("SELECT nullif(a, b) FROM t").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_nullif, "lowercase nullif() must set has_nullif = true");
+    }
+
+    #[test]
+    fn plain_select_has_nullif_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_nullif, "plain SELECT without NULLIF must have has_nullif = false");
     }
 }

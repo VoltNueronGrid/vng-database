@@ -118,6 +118,10 @@ pub enum LogicalPlan {
     Cast {
         input: Box<LogicalPlan>,
     },
+    /// NULLIF() null-substitution expression (from S3-WS1-14 has_nullif support).
+    Nullif {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -176,6 +180,7 @@ impl LogicalPlan {
             LogicalPlan::Case { input } => input.primary_table(),
             LogicalPlan::Coalesce { input } => input.primary_table(),
             LogicalPlan::Cast { input } => input.primary_table(),
+            LogicalPlan::Nullif { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -219,6 +224,7 @@ impl LogicalPlan {
             LogicalPlan::Case { input } => input.has_aggregation(),
             LogicalPlan::Coalesce { input } => input.has_aggregation(),
             LogicalPlan::Cast { input } => input.has_aggregation(),
+            LogicalPlan::Nullif { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -425,6 +431,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.2,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Nullif { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.15,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -684,12 +698,21 @@ impl QueryPlanner {
         };
 
         // Cast wrapper (S3-WS1-13 has_cast detection): outermost node.
-        if sel.has_cast {
+        let after_cast = if sel.has_cast {
             LogicalPlan::Cast {
                 input: Box::new(after_coalesce),
             }
         } else {
             after_coalesce
+        };
+
+        // Nullif wrapper (S3-WS1-14 has_nullif detection): outermost node.
+        if sel.has_nullif {
+            LogicalPlan::Nullif {
+                input: Box::new(after_cast),
+            }
+        } else {
+            after_cast
         }
     }
 
@@ -1119,5 +1142,23 @@ mod tests {
         let c = cost("SELECT CAST(amount AS TEXT) FROM orders");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "CAST should route to OLTP");
         assert!(c.relative_cost >= 0.2, "Cast must carry at least 0.2 cost overhead");
+    }
+
+    #[test]
+    fn planner_nullif_select_produces_nullif_node() {
+        let p = plan("SELECT NULLIF(score, 0) FROM results");
+        assert!(
+            matches!(&p, LogicalPlan::Nullif { .. }),
+            "NULLIF() query should produce outermost Nullif node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("results"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_nullif_query_routes_to_oltp() {
+        let c = cost("SELECT NULLIF(score, 0) FROM results");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "NULLIF should route to OLTP");
+        assert!(c.relative_cost >= 0.15, "Nullif must carry at least 0.15 cost overhead");
     }
 }
