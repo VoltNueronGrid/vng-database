@@ -313,6 +313,22 @@ impl PagedRowStore {
     }
 
     // ------------------------------------------------------------------
+    // Snapshot export (S2-WS2-04)
+    // ------------------------------------------------------------------
+
+    /// Export a point-in-time snapshot of all currently-visible rows.
+    ///
+    /// Returns one `(key, data)` pair per distinct visible key at the
+    /// current head XID.  Tombstoned (deleted) rows are excluded.
+    pub fn export_rows_snapshot(&self) -> Vec<(String, RowData)> {
+        let snapshot_xid = self.current_xid();
+        self.scan_at_snapshot(snapshot_xid)
+            .into_iter()
+            .map(|(k, data)| (k.to_string(), data.clone()))
+            .collect()
+    }
+
+    // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
 

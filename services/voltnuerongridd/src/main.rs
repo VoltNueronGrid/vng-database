@@ -361,6 +361,8 @@ struct AppState {
     connector_registry: Arc<Mutex<Vec<ConnectorPlugin>>>,
     /// S6-WS5-04: TDE runtime toggle override.
     tde_override: Arc<Mutex<Option<bool>>>,
+    /// S10-WS15-02: Per-table CDC cursor positions (table_name → last consumed sequence).
+    cdc_cursors: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 #[derive(Clone, Default)]
@@ -1289,6 +1291,26 @@ struct CdcStreamResponse {
     events: Vec<CdcEvent>,
 }
 
+// ─── S10-WS15-02: CDC cursor tracking structs ─────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct CdcCursorQuery {
+    table: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CdcCursorAdvanceRequest {
+    table_name: String,
+    position: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct CdcCursorResponse {
+    status: &'static str,
+    table_name: String,
+    cursor_position: u64,
+}
+
 // ─── S5-WS4A-02: Broker adapter structs ───────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -1488,6 +1510,22 @@ struct StoreRowsScanResponse {
     snapshot_xid: u64,
     row_count: usize,
     rows: Vec<StoreRowEntry>,
+}
+
+// ─── S2-WS2-04: Row store snapshot export structs ────────────────────────────
+
+#[derive(Serialize)]
+struct RowSnapshotEntry {
+    key: String,
+    payload: std::collections::HashMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct RowSnapshotResponse {
+    status: &'static str,
+    snapshot_xid: u64,
+    row_count: usize,
+    rows: Vec<RowSnapshotEntry>,
 }
 
 // S4-WS3-04: HTAP sync export structs
@@ -2631,6 +2669,7 @@ async fn main() {
         ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
         connector_registry: Arc::new(Mutex::new(Vec::new())),
         tde_override: Arc::new(Mutex::new(None)),
+        cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -2764,6 +2803,10 @@ async fn main() {
         .route("/api/v1/driver/connect", post(driver_connect))
         // S10-WS15-02: CDC stream from WAL
         .route("/api/v1/store/cdc/stream", get(cdc_stream))
+        .route("/api/v1/store/cdc/cursor", get(cdc_cursor_status))
+        .route("/api/v1/store/cdc/cursor/advance", post(cdc_cursor_advance))
+        // S2-WS2-04: Row store point-in-time snapshot export
+        .route("/api/v1/store/rows/snapshot", get(row_store_snapshot))
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
@@ -6337,6 +6380,63 @@ async fn cdc_stream(
         event_count,
         events,
     }))
+}
+
+// ─── S10-WS15-02: CDC cursor tracking ────────────────────────────────────────
+
+/// S10-WS15-02: Read the current CDC cursor position for a given table.
+async fn cdc_cursor_status(
+    State(state): State<AppState>,
+    Query(q): Query<CdcCursorQuery>,
+) -> (StatusCode, Json<CdcCursorResponse>) {
+    let cursors = state.cdc_cursors.lock().expect("cdc_cursors lock");
+    let pos = *cursors.get(&q.table).unwrap_or(&0);
+    (StatusCode::OK, Json(CdcCursorResponse {
+        status: "ok",
+        table_name: q.table,
+        cursor_position: pos,
+    }))
+}
+
+/// S10-WS15-02: Advance (or initialise) the CDC cursor for a table to a given position.
+async fn cdc_cursor_advance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CdcCursorAdvanceRequest>,
+) -> Result<(StatusCode, Json<CdcCursorResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let mut cursors = state.cdc_cursors.lock().expect("cdc_cursors lock");
+    cursors.insert(req.table_name.clone(), req.position);
+    Ok((StatusCode::OK, Json(CdcCursorResponse {
+        status: "ok",
+        table_name: req.table_name,
+        cursor_position: req.position,
+    })))
+}
+
+// ─── S2-WS2-04: Row store point-in-time snapshot export ──────────────────────
+
+/// S2-WS2-04: Export a snapshot of all currently-visible rows in the
+/// `PagedRowStore` at the current head XID.
+async fn row_store_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowSnapshotResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let store = state.row_store.lock().expect("row_store lock snapshot");
+    let snapshot_xid = store.current_xid();
+    let rows: Vec<RowSnapshotEntry> = store
+        .export_rows_snapshot()
+        .into_iter()
+        .map(|(key, payload)| RowSnapshotEntry { key, payload })
+        .collect();
+    let row_count = rows.len();
+    Ok((StatusCode::OK, Json(RowSnapshotResponse {
+        status: "ok",
+        snapshot_xid,
+        row_count,
+        rows,
+    })))
 }
 
 // ─── S5-WS4A-02: Broker adapter status + flush ────────────────────────────────
@@ -10152,6 +10252,7 @@ mod tests {
             ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
             connector_registry: Arc::new(Mutex::new(Vec::new())),
             tde_override: Arc::new(Mutex::new(None)),
+            cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -16210,5 +16311,103 @@ mod tests {
             assert_eq!(resp.1.0.request_count, i,
                 "request_count should be {i} after {i} call(s)");
         }
+    }
+
+    // ─── S9-WS8-02: Model allowlist enforcement tests ────────────────────────
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_request_allowlist_rejects_unlisted_model() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut p = state.model_gateway_policy.lock().unwrap();
+            p.allowed_models = vec!["gpt-4o".to_string()];
+        }
+        let headers = operator_headers("test-key", "admin");
+        let body = AiRequestBody { model_id: "claude-3-opus".to_string(), tokens: Some(10) };
+        let resp = ai_rate_check(State(state), headers, Json(body)).await;
+        assert!(resp.is_err(), "unlisted model must be rejected");
+        assert_eq!(resp.unwrap_err().0, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_request_allowlist_permits_listed_model() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut p = state.model_gateway_policy.lock().unwrap();
+            p.allowed_models = vec!["gpt-4o".to_string(), "claude-3-opus".to_string()];
+        }
+        let headers = operator_headers("test-key", "admin");
+        let body = AiRequestBody { model_id: "gpt-4o".to_string(), tokens: Some(10) };
+        let resp = ai_rate_check(State(state), headers, Json(body)).await.unwrap();
+        assert_eq!(resp.0, StatusCode::OK);
+    }
+
+    // ─── S10-WS15-02: CDC cursor tracking tests ──────────────────────────────
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_cursor_fresh_state_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = cdc_cursor_status(
+            State(state),
+            Query(CdcCursorQuery { table: "orders".to_string() }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.table_name, "orders");
+        assert_eq!(body.cursor_position, 0, "fresh state must return cursor 0");
+    }
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_cursor_advance_and_read() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Advance cursor to position 42
+        let req = CdcCursorAdvanceRequest { table_name: "orders".to_string(), position: 42 };
+        let (status, Json(body)) = cdc_cursor_advance(
+            State(state.clone()), headers, Json(req),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.cursor_position, 42);
+        // Read it back
+        let (status2, Json(body2)) = cdc_cursor_status(
+            State(state),
+            Query(CdcCursorQuery { table: "orders".to_string() }),
+        ).await;
+        assert_eq!(status2, StatusCode::OK);
+        assert_eq!(body2.cursor_position, 42, "cursor must persist after advance");
+    }
+
+    // ─── S2-WS2-04: Row store snapshot export tests ───────────────────────────
+
+    #[tokio::test]
+    async fn s2_ws2_04_row_snapshot_empty_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = row_store_snapshot(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.row_count, 0, "empty store must return 0 rows");
+        assert!(body.rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_04_row_snapshot_shows_inserted_rows() {
+        let state = state_with_key(Some("test-key"));
+        // Insert two rows directly into the store.
+        {
+            let mut store = state.row_store.lock().unwrap();
+            let xid = store.begin_xid();
+            store.insert(xid, "tenant:1", std::collections::HashMap::from([
+                ("name".to_string(), "acme".to_string()),
+            ]));
+            store.insert(xid, "tenant:2", std::collections::HashMap::from([
+                ("name".to_string(), "beta".to_string()),
+            ]));
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = row_store_snapshot(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.row_count, 2, "snapshot must include both inserted rows");
+        let keys: Vec<&str> = body.rows.iter().map(|r| r.key.as_str()).collect();
+        assert!(keys.contains(&"tenant:1"));
+        assert!(keys.contains(&"tenant:2"));
     }
 }

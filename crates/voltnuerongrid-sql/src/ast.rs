@@ -39,6 +39,8 @@ pub struct SelectStatement {
     pub having: Option<String>,
     /// ORDER BY specifications.
     pub order_by: Vec<OrderByClause>,
+    /// Optional JOIN clause (S3-WS1-04).
+    pub join: Option<JoinClause>,
     /// LIMIT value, if present.
     pub limit: Option<u64>,
 }
@@ -92,6 +94,15 @@ pub struct ColumnDef {
 pub struct OrderByClause {
     pub column: String,
     pub descending: bool,
+}
+
+/// A JOIN clause: `[INNER] JOIN <table> ON <condition>` (S3-WS1-04).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct JoinClause {
+    /// The name of the joined table.
+    pub join_table: String,
+    /// Raw ON condition text (everything after ON up to WHERE/GROUP/HAVING/ORDER/LIMIT).
+    pub on_condition: Option<String>,
 }
 
 // ─── Parser entry point ───────────────────────────────────────────────────────
@@ -156,6 +167,33 @@ fn parse_select(tokens: &[Token]) -> SelectStatement {
         if let Some(Token::Identifier(t) | Token::Keyword(t)) = tokens.get(pos) {
             stmt.table = Some(t.clone());
             pos += 1;
+        }
+    }
+
+    // [INNER] JOIN <table> [ON <condition>]  (S3-WS1-04)
+    if let Some(jp) = find_keyword_from(tokens, "JOIN", pos) {
+        pos = jp + 1;
+        if let Some(Token::Identifier(t) | Token::Keyword(t)) = tokens.get(pos) {
+            let join_table = t.clone();
+            pos += 1;
+            let on_condition = if matches!(
+                tokens.get(pos),
+                Some(Token::Keyword(k)) if k.eq_ignore_ascii_case("ON")
+            ) {
+                pos += 1;
+                let on_end = find_any_keyword_from(
+                    tokens,
+                    &["WHERE", "GROUP", "HAVING", "ORDER", "LIMIT"],
+                    pos,
+                )
+                .unwrap_or(tokens.len());
+                let cond = tokens_to_raw(&tokens[pos..on_end]);
+                pos = on_end;
+                if cond.is_empty() { None } else { Some(cond) }
+            } else {
+                None
+            };
+            stmt.join = Some(JoinClause { join_table, on_condition });
         }
     }
 
@@ -815,6 +853,53 @@ mod ansi_conformance {
                 matches!(result.unwrap(), Statement::Unknown(_)),
                 "unsupported DDL should be Unknown: {sql}"
             );
+        }
+    }
+}
+
+// ─── S3-WS1-04: JOIN clause parsing tests ────────────────────────────────────
+
+#[cfg(test)]
+mod join_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_inner_join_and_on_condition() {
+        let sql = "SELECT id, name FROM orders JOIN customers ON orders.customer_id = customers.id";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert_eq!(s.table.as_deref(), Some("orders"));
+            let j = s.join.expect("join clause must be present");
+            assert_eq!(j.join_table, "customers");
+            assert!(j.on_condition.is_some(), "ON condition must be parsed");
+            let cond = j.on_condition.unwrap();
+            assert!(cond.contains("customer_id"), "ON condition must contain 'customer_id'");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn select_with_join_no_on_parses_table() {
+        let sql = "SELECT * FROM orders JOIN shipments";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            let j = s.join.expect("join clause must be present");
+            assert_eq!(j.join_table, "shipments");
+            assert!(j.on_condition.is_none());
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn select_without_join_leaves_join_none() {
+        let sql = "SELECT * FROM users WHERE id = 1";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.join.is_none(), "no JOIN in query — field must be None");
+        } else {
+            panic!("expected Select statement");
         }
     }
 }
