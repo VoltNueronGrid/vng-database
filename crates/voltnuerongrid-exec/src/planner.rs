@@ -110,6 +110,12 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         condition: String,
     },
+    /// Combined Sort+Limit optimisation for ORDER BY … LIMIT queries (S3-WS1-05).
+    TopN {
+        input: Box<LogicalPlan>,
+        count: u64,
+        order_by: String,
+    },
     /// Unrecognised or unparseable statement.
     Unknown(String),
 }
@@ -127,7 +133,8 @@ impl LogicalPlan {
             | LogicalPlan::Filter { input, .. }
             | LogicalPlan::Aggregate { input, .. }
             | LogicalPlan::Sort { input, .. }
-            | LogicalPlan::Limit { input, .. } => input.primary_table(),
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::TopN { input, .. } => input.primary_table(),
             LogicalPlan::Join { left, .. } => left.primary_table(),
             LogicalPlan::Union { left, .. } => left.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
@@ -157,7 +164,8 @@ impl LogicalPlan {
             LogicalPlan::Project { input, .. }
             | LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. }
-            | LogicalPlan::Limit { input, .. } => input.has_aggregation(),
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::TopN { input, .. } => input.has_aggregation(),
             LogicalPlan::Join { left, right, .. } => {
                 left.has_aggregation() || right.has_aggregation()
             }
@@ -254,6 +262,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows.min(*count),
                     relative_cost: inner.relative_cost * 0.1,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::TopN { input, count, .. } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows.min(*count),
+                    relative_cost: inner.relative_cost * 1.3,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -403,28 +419,36 @@ impl QueryPlanner {
             after_agg
         };
 
-        // Sort (ORDER BY)
-        let after_sort = if !sel.order_by.is_empty() {
-            LogicalPlan::Sort {
+        // Sort+Limit → TopN optimisation (S3-WS1-05): combine when both present.
+        let after_limit = if !sel.order_by.is_empty() && sel.limit.is_some() {
+            LogicalPlan::TopN {
                 input: Box::new(after_having),
-                order_by: sel
-                    .order_by
-                    .iter()
-                    .map(|o| (o.column.clone(), o.descending))
-                    .collect(),
+                count: sel.limit.unwrap(),
+                order_by: sel.order_by.first().map(|o| o.column.clone()).unwrap_or_default(),
             }
         } else {
-            after_having
-        };
-
-        // Limit
-        let after_limit = if let Some(n) = sel.limit {
-            LogicalPlan::Limit {
-                input: Box::new(after_sort),
-                count: n,
+            // Sort (ORDER BY only)
+            let after_sort = if !sel.order_by.is_empty() {
+                LogicalPlan::Sort {
+                    input: Box::new(after_having),
+                    order_by: sel
+                        .order_by
+                        .iter()
+                        .map(|o| (o.column.clone(), o.descending))
+                        .collect(),
+                }
+            } else {
+                after_having
+            };
+            // Limit (no ORDER BY)
+            if let Some(n) = sel.limit {
+                LogicalPlan::Limit {
+                    input: Box::new(after_sort),
+                    count: n,
+                }
+            } else {
+                after_sort
             }
-        } else {
-            after_sort
         };
 
         // Offset (S3-WS1-06 OFFSET support)
@@ -750,5 +774,23 @@ mod tests {
         let c = cost("SELECT * FROM orders GROUP BY region HAVING SUM(sales) > 100");
         assert_eq!(c.recommended_path, QueryPath::Olap, "HAVING query should route to OLAP");
         assert!(c.relative_cost >= 1.0, "HAVING should carry cost >= 1.0");
+    }
+
+    #[test]
+    fn planner_topn_produced_when_order_by_and_limit() {
+        let p = plan("SELECT * FROM employees ORDER BY salary DESC LIMIT 5");
+        assert!(
+            matches!(&p, LogicalPlan::TopN { count, .. } if *count == 5),
+            "ORDER BY … LIMIT should produce TopN node; got {p:?}"
+        );
+        assert_eq!(p.primary_table(), Some("employees"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_topn_query_routes_to_oltp() {
+        let c = cost("SELECT * FROM orders ORDER BY created_at LIMIT 20");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "TopN query should route to OLTP");
+        assert_eq!(c.estimated_rows, 20, "estimated rows capped at TopN count");
     }
 }

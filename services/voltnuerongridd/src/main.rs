@@ -1452,6 +1452,23 @@ struct WalSegmentListResponse {
     segments: Vec<WalSegment>,
 }
 
+// ─── S2-WS2-02: WAL replay count structs ──────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct WalReplayCountQuery {
+    table_filter: Option<String>,
+    op_filter: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalReplayCountResponse {
+    status: &'static str,
+    total_records: usize,
+    matched_count: usize,
+    table_filter: Option<String>,
+    op_filter: Option<String>,
+}
+
 // ─── S10-WS15-02: CDC change-data-capture structs ─────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -1517,6 +1534,21 @@ struct CdcCursorResponse {
     status: &'static str,
     table_name: String,
     cursor_position: u64,
+}
+
+// ─── S10-WS15-02: CDC cursor list structs ────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct CdcCursorEntry {
+    table_name: String,
+    cursor_position: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct CdcCursorListResponse {
+    status: &'static str,
+    cursor_count: usize,
+    cursors: Vec<CdcCursorEntry>,
 }
 
 // ─── S10-WS15-02: CDC cursor rewind struct ────────────────────────────────────
@@ -3431,6 +3463,8 @@ async fn main() {
         .route("/api/v1/store/wal/tail", get(wal_tail))
         // S2-WS2-02: WAL segment list (checkpoint groups)
         .route("/api/v1/store/wal/segment/list", get(wal_segment_list))
+        // S2-WS2-02: WAL replay count (filtered record count, no body)
+        .route("/api/v1/store/wal/replay/count", get(wal_replay_count))
         // S7-WS6-04: Chaos/game-day fault injection
         .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
@@ -3463,6 +3497,8 @@ async fn main() {
         .route("/api/v1/store/cdc/cursor/advance", post(cdc_cursor_advance))
         // S10-WS15-02: CDC cursor rewind
         .route("/api/v1/store/cdc/cursor/rewind", post(cdc_cursor_rewind))
+        // S10-WS15-02: CDC cursor list (all tracked table positions)
+        .route("/api/v1/store/cdc/cursor/list", get(cdc_cursor_list))
         // S10-WS15-02: CDC aggregate metrics
         .route("/api/v1/store/cdc/metrics", get(cdc_metrics))
         // S2-WS2-04: Row store point-in-time snapshot export
@@ -7104,6 +7140,37 @@ async fn wal_segment_list(
     }))
 }
 
+// ─── S2-WS2-02: WAL replay count ──────────────────────────────────────────────
+
+/// S2-WS2-02: Return the count of WAL records matching optional table/op filters.
+async fn wal_replay_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<WalReplayCountQuery>,
+) -> Result<(StatusCode, Json<WalReplayCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let records = wal.wal_records().to_vec();
+    drop(wal);
+    let total_records = records.len();
+    let matched_count = records.iter().filter(|r| {
+        let table_ok = query.table_filter.as_deref()
+            .map(|t| r.key.starts_with(t))
+            .unwrap_or(true);
+        let op_ok = query.op_filter.as_deref()
+            .map(|op| if op == "delete" { r.value == "__deleted__" } else { r.value != "__deleted__" })
+            .unwrap_or(true);
+        table_ok && op_ok
+    }).count();
+    Ok((StatusCode::OK, Json(WalReplayCountResponse {
+        status: "ok",
+        total_records,
+        matched_count,
+        table_filter: query.table_filter,
+        op_filter: query.op_filter,
+    })))
+}
+
 /// S2-WS2-02: replay WAL records into the row store (or dry-run).
 async fn wal_recover(
     State(state): State<AppState>,
@@ -7801,6 +7868,31 @@ async fn cdc_cursor_rewind(
         status: "ok",
         table_name: req.table_name,
         cursor_position: 0,
+    })))
+}
+
+// ─── S10-WS15-02: CDC cursor list ─────────────────────────────────────────────
+
+/// S10-WS15-02: List all tracked CDC cursor positions across tables.
+async fn cdc_cursor_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<CdcCursorListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let cursors = state.cdc_cursors.lock().expect("cdc_cursors lock");
+    let mut entries: Vec<CdcCursorEntry> = cursors
+        .iter()
+        .map(|(table, pos)| CdcCursorEntry {
+            table_name: table.clone(),
+            cursor_position: *pos,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.table_name.cmp(&b.table_name));
+    let cursor_count = entries.len();
+    Ok((StatusCode::OK, Json(CdcCursorListResponse {
+        status: "ok",
+        cursor_count,
+        cursors: entries,
     })))
 }
 
@@ -18956,6 +19048,41 @@ mod tests {
         assert!(active.end_sequence.is_some());
     }
 
+    // ── S2-WS2-02: WAL replay count endpoint tests ───────────────────────────
+    #[tokio::test]
+    async fn s2_ws2_02_wal_replay_count_empty_state_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_replay_count(
+            State(state),
+            headers,
+            axum::extract::Query(WalReplayCountQuery::default()),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_records, 0);
+        assert_eq!(body.matched_count, 0);
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_replay_count_filters_by_op() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "__deleted__");
+            wal.append_mutation("k3", "v3");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_replay_count(
+            State(state),
+            headers,
+            axum::extract::Query(WalReplayCountQuery { table_filter: None, op_filter: Some("delete".to_string()) }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_records, 3);
+        assert_eq!(body.matched_count, 1, "only 1 delete record");
+    }
+
     // ── S7-WS6-04: Chaos health check ────────────────────────────────────────
     #[tokio::test]
     async fn s7_ws6_04_chaos_health_fresh_state_is_healthy() {
@@ -19407,6 +19534,33 @@ mod tests {
         assert!(result.is_err(), "wrong api key must return auth error");
         let Err((status, _)) = result else { panic!("expected error") };
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    // ── S10-WS15-02: CDC cursor list ──────────────────────────────────────────
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_cursor_list_empty_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = cdc_cursor_list(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.cursor_count, 0);
+        assert!(body.cursors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_cursor_list_reflects_advanced_cursors() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut cursors = state.cdc_cursors.lock().unwrap();
+            cursors.insert("orders".to_string(), 42);
+            cursors.insert("users".to_string(), 7);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = cdc_cursor_list(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.cursor_count, 2);
+        let orders = body.cursors.iter().find(|c| c.table_name == "orders").unwrap();
+        assert_eq!(orders.cursor_position, 42);
     }
 
     // ── S10-WS15-02: CDC stream filter ────────────────────────────────────────

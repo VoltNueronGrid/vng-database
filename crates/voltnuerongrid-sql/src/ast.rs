@@ -59,6 +59,8 @@ pub struct SelectStatement {
     pub has_null_literal: bool,
     /// True when the query contains a GROUP BY clause (S3-WS1-06).
     pub has_group_by: bool,
+    /// True when the query contains an ORDER BY clause (S3-WS1-06).
+    pub has_order_by: bool,
 }
 
 /// A parsed INSERT statement.
@@ -175,6 +177,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect GROUP BY clause (S3-WS1-06).
                 if up.contains("GROUP BY") {
                     stmt.has_group_by = true;
+                }
+                // Detect ORDER BY clause (S3-WS1-06).
+                if up.contains("ORDER BY") {
+                    stmt.has_order_by = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1308,5 +1314,32 @@ mod group_by_detection_tests {
         let stmt = parse_one("SELECT region, SUM(sales) FROM orders GROUP BY region HAVING SUM(sales) > 100").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(s.has_group_by, "GROUP BY ... HAVING must set has_group_by = true");
+    }
+}
+
+#[cfg(test)]
+mod order_by_detection_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_order_by_sets_has_order_by_true() {
+        let stmt = parse_one("SELECT id, name FROM users ORDER BY name").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_order_by, "ORDER BY must set has_order_by = true");
+    }
+
+    #[test]
+    fn select_without_order_by_has_order_by_false() {
+        let stmt = parse_one("SELECT name FROM users WHERE active = 1").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_order_by, "query without ORDER BY must have has_order_by = false");
+    }
+
+    #[test]
+    fn select_order_by_with_limit_sets_has_order_by_true() {
+        let stmt = parse_one("SELECT * FROM orders ORDER BY created_at DESC LIMIT 10").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_order_by, "ORDER BY ... LIMIT must set has_order_by = true");
+        assert_eq!(s.limit, Some(10), "LIMIT 10 must be parsed");
     }
 }
