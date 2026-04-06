@@ -1374,6 +1374,22 @@ struct BrokerFlushResponse {
     total_flush_count: u64,
 }
 
+/// Response for `GET /api/v1/ingest/outbox/broker/health`.
+#[derive(Serialize)]
+struct BrokerHealthEntry {
+    broker_type: &'static str,
+    flush_count: u64,
+    wal_len: usize,
+    healthy: bool,
+}
+
+#[derive(Serialize)]
+struct BrokerHealthResponse {
+    status: &'static str,
+    broker_count: usize,
+    brokers: Vec<BrokerHealthEntry>,
+}
+
 /// Response for `GET /api/v1/cluster/chaos/status`.
 #[derive(Serialize)]
 struct ChaosStatusResponse {
@@ -1381,6 +1397,15 @@ struct ChaosStatusResponse {
     active_fault_count: usize,
     total_injected: usize,
     active_faults: Vec<ChaosEvent>,
+}
+
+/// Response for `GET /api/v1/cluster/chaos/health`.
+#[derive(Serialize)]
+struct ChaosHealthResponse {
+    status: &'static str,
+    cluster_healthy: bool,
+    active_fault_count: usize,
+    history_len: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -1709,6 +1734,15 @@ struct StoreHtapOlapScanResponse {
     status: &'static str,
     row_count: usize,
     rows: Vec<OlapScanRow>,
+}
+
+/// Response for `GET /api/v1/store/htap/lag`.
+#[derive(Serialize)]
+struct HtapLagResponse {
+    status: &'static str,
+    sync_origin_pending: usize,
+    olap_row_count: usize,
+    estimated_lag_mutations: usize,
 }
 
 // ─── S9-WS8A-02: Audit export struct ─────────────────────────────────────────
@@ -2802,6 +2836,7 @@ async fn main() {
         // S4-WS3-04: HTAP OLAP consumer apply + scan
         .route("/api/v1/store/htap/apply", post(store_htap_apply))
         .route("/api/v1/store/htap/olap/scan", get(store_htap_olap_scan))
+        .route("/api/v1/store/htap/lag", get(htap_lag))
         // S9-WS8A-02: Audit export (all buffered events + file-backed status)
         .route("/api/v1/audit/export", get(audit_export))
         // S7-WS6-02: Raft consensus RPC + status endpoints
@@ -2833,6 +2868,7 @@ async fn main() {
         .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
         .route("/api/v1/cluster/chaos/status", get(chaos_status))
+        .route("/api/v1/cluster/chaos/health", get(chaos_health))
         .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
         // S8-WS10-02: Driver wire protocol info + session connect + disconnect
         .route("/api/v1/driver/protocol/info", get(driver_protocol_info))
@@ -2847,10 +2883,12 @@ async fn main() {
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
+        .route("/api/v1/ingest/outbox/broker/health", get(outbox_broker_health))
         // S5-E4A-01: Connector SDK runtime load
         .route("/api/v1/connectors", get(connector_list))
         .route("/api/v1/connectors/register", post(connector_register))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
+        .route("/api/v1/ai/policy/stats", get(ai_policy_stats))
         .route("/api/v1/ai/request", post(ai_rate_check))
         // WS4 Ingest endpoints
         .route("/api/v1/ingest/csv", post(ingest_csv))
@@ -6277,6 +6315,21 @@ async fn chaos_status(State(state): State<AppState>) -> (StatusCode, Json<ChaosS
     }))
 }
 
+/// S7-WS6-04: return cluster health based on active chaos faults.
+async fn chaos_health(State(state): State<AppState>) -> (StatusCode, Json<ChaosHealthResponse>) {
+    let cs = state.chaos_state.lock().expect("chaos_state lock");
+    let active_fault_count = cs.active_faults.len();
+    let history_len = cs.event_history.len();
+    drop(cs);
+    let cluster_healthy = active_fault_count == 0;
+    (StatusCode::OK, Json(ChaosHealthResponse {
+        status: "ok",
+        cluster_healthy,
+        active_fault_count,
+        history_len,
+    }))
+}
+
 // ─── S8-WS10-02: Driver wire protocol handlers ────────────────────────────────
 
 /// S8-WS10-02: Return the current wire protocol capabilities.
@@ -6585,6 +6638,29 @@ async fn outbox_broker_flush(
         broker_type: req.broker_type,
         events_flushed,
         total_flush_count,
+    }))
+}
+
+/// S5-WS4A-02: Return per-broker health: flush count vs WAL length.
+async fn outbox_broker_health(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<BrokerHealthResponse>) {
+    let wal_len = state.wal_engine.lock().expect("wal_engine lock health").wal_records().len();
+    let counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock health");
+    let brokers: Vec<BrokerHealthEntry> = ["kafka", "nats", "event_hubs"].iter().map(|bt| {
+        let flush_count = counts.get(*bt).copied().unwrap_or(0);
+        BrokerHealthEntry {
+            broker_type: bt,
+            flush_count,
+            wal_len,
+            healthy: flush_count > 0 || wal_len == 0,
+        }
+    }).collect();
+    let broker_count = brokers.len();
+    (StatusCode::OK, Json(BrokerHealthResponse {
+        status: "ok",
+        broker_count,
+        brokers,
     }))
 }
 
@@ -9012,6 +9088,22 @@ struct AiRequestResponse {
     tokens_checked: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct ModelRequestStat {
+    model_id: String,
+    request_count: u64,
+}
+
+/// Response for `GET /api/v1/ai/policy/stats`.
+#[derive(Debug, Serialize)]
+struct AiPolicyStatsResponse {
+    status: &'static str,
+    model_count: usize,
+    total_requests: u64,
+    allowed_models_enforced: bool,
+    per_model: Vec<ModelRequestStat>,
+}
+
 async fn ai_rate_check(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -9087,6 +9179,31 @@ async fn ai_rate_check(
         request_count,
         rate_limit_rpm: policy.rate_limit_rpm,
         tokens_checked,
+    })))
+}
+
+/// S9-WS8-02: Return per-model request counts and policy enforcement state.
+async fn ai_policy_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AiPolicyStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock stats").clone();
+    let counters = state.ai_request_counters.lock().expect("ai_request_counters lock stats");
+    let per_model: Vec<ModelRequestStat> = counters
+        .iter()
+        .map(|(k, v)| ModelRequestStat { model_id: k.clone(), request_count: *v })
+        .collect();
+    let model_count = per_model.len();
+    let total_requests: u64 = per_model.iter().map(|m| m.request_count).sum();
+    let allowed_models_enforced = !policy.allowed_models.is_empty();
+    drop(counters);
+    Ok((StatusCode::OK, Json(AiPolicyStatsResponse {
+        status: "ok",
+        model_count,
+        total_requests,
+        allowed_models_enforced,
+        per_model,
     })))
 }
 
@@ -9170,6 +9287,28 @@ async fn store_htap_olap_scan(
         StatusCode::OK,
         Json(StoreHtapOlapScanResponse { status: "ok", row_count, rows }),
     ))
+}
+
+/// S4-WS3-04: Return HTAP sync lag — pending mutations in sync_origin vs OLAP row count.
+async fn htap_lag(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<HtapLagResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _principal = require_store_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        "store/htap/lag",
+    )?;
+    let sync_origin_pending = state.sync_origin.lock().expect("sync_origin lock htap_lag").pending_len();
+    let olap_row_count = state.olap_store.lock().expect("olap_store lock htap_lag").len();
+    let estimated_lag_mutations = sync_origin_pending.saturating_sub(olap_row_count);
+    Ok((StatusCode::OK, Json(HtapLagResponse {
+        status: "ok",
+        sync_origin_pending,
+        olap_row_count,
+        estimated_lag_mutations,
+    })))
 }
 
 // ─── S9-WS8A-02: Audit export endpoint ───────────────────────────────────────
@@ -16604,6 +16743,118 @@ mod tests {
         assert_eq!(body.wal_len_before, 0);
         assert_eq!(body.wal_len_after, 0);
         assert_eq!(body.checkpoint_count, 1, "checkpoint taken even on empty WAL");
+    }
+
+    // ── S7-WS6-04: Chaos health check ────────────────────────────────────────
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_health_fresh_state_is_healthy() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = chaos_health(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.cluster_healthy, "fresh state should be healthy");
+        assert_eq!(body.active_fault_count, 0);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_health_with_faults_is_unhealthy() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut cs = state.chaos_state.lock().unwrap();
+            cs.active_faults.push(ChaosEvent {
+                fault_type: "node_crash".to_string(),
+                target_node: Some("node-1".to_string()),
+                parameters: std::collections::HashMap::new(),
+                injected_at_ms: 0,
+                cleared_at_ms: None,
+            });
+        }
+        let (status, Json(body)) = chaos_health(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.cluster_healthy, "active faults should mark unhealthy");
+        assert_eq!(body.active_fault_count, 1);
+    }
+
+    // ── S4-WS3-04: HTAP lag ────────────────────────────────────────────────────
+    #[tokio::test]
+    async fn s4_ws3_04_htap_lag_fresh_state_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let result = htap_lag(State(state), headers).await;
+        let (status, Json(body)) = result.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.sync_origin_pending, 0);
+        assert_eq!(body.olap_row_count, 0);
+        assert_eq!(body.estimated_lag_mutations, 0);
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_04_htap_lag_after_olap_apply_shows_rows() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut olap = state.olap_store.lock().unwrap();
+            let mut row = std::collections::HashMap::new();
+            row.insert("k".to_string(), "v".to_string());
+            olap.insert("row-1".to_string(), row);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let result = htap_lag(State(state), headers).await;
+        let (status, Json(body)) = result.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.olap_row_count, 1);
+    }
+
+    // ── S5-WS4A-02: Broker health ─────────────────────────────────────────────
+    #[tokio::test]
+    async fn s5_ws4a_02_broker_health_fresh_state_lists_three_brokers() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = outbox_broker_health(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.broker_count, 3, "should list kafka, nats, event_hubs");
+        // All healthy on empty WAL (no pending data means no lag)
+        assert!(body.brokers.iter().all(|b| b.healthy));
+    }
+
+    #[tokio::test]
+    async fn s5_ws4a_02_broker_health_after_flush_shows_count() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut counts = state.broker_flush_counts.lock().unwrap();
+            counts.insert("kafka".to_string(), 3);
+        }
+        let (status, Json(body)) = outbox_broker_health(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        let kafka = body.brokers.iter().find(|b| b.broker_type == "kafka").unwrap();
+        assert_eq!(kafka.flush_count, 3);
+        assert!(kafka.healthy);
+    }
+
+    // ── S9-WS8-02: AI policy stats ────────────────────────────────────────────
+    #[tokio::test]
+    async fn s9_ws8_02_ai_policy_stats_fresh_state_no_requests() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let result = ai_policy_stats(State(state), headers).await;
+        let (status, Json(body)) = result.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.model_count, 0);
+        assert_eq!(body.total_requests, 0);
+        assert!(!body.allowed_models_enforced, "default policy has empty allowed_models");
+    }
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_policy_stats_after_request_shows_count() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut counters = state.ai_request_counters.lock().unwrap();
+            counters.insert("gpt-4".to_string(), 5);
+            counters.insert("gpt-3.5".to_string(), 2);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let result = ai_policy_stats(State(state), headers).await;
+        let (status, Json(body)) = result.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.model_count, 2);
+        assert_eq!(body.total_requests, 7);
     }
 
 }
