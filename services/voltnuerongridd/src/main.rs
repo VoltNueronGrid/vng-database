@@ -1432,6 +1432,26 @@ struct WalTailResponse {
     entries: Vec<WalReplayEntry>,
 }
 
+// ─── S2-WS2-02: WAL segment list structs ─────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalSegment {
+    segment_id: u64,
+    is_active: bool,
+    record_count: usize,
+    start_sequence: Option<u64>,
+    end_sequence: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalSegmentListResponse {
+    status: &'static str,
+    segment_count: usize,
+    completed_segments: usize,
+    active_record_count: usize,
+    segments: Vec<WalSegment>,
+}
+
 // ─── S10-WS15-02: CDC change-data-capture structs ─────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -3409,6 +3429,8 @@ async fn main() {
         .route("/api/v1/store/wal/replay", get(wal_replay))
         // S2-WS2-02: WAL tail (last N records)
         .route("/api/v1/store/wal/tail", get(wal_tail))
+        // S2-WS2-02: WAL segment list (checkpoint groups)
+        .route("/api/v1/store/wal/segment/list", get(wal_segment_list))
         // S7-WS6-04: Chaos/game-day fault injection
         .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
@@ -3430,6 +3452,8 @@ async fn main() {
         .route("/api/v1/driver/query", post(driver_query))
         // S8-WS10-02: driver session ping/keepalive
         .route("/api/v1/driver/ping", post(driver_ping))
+        // S8-WS10-02: driver pool stats (operator-facing)
+        .route("/api/v1/driver/pool/stats", get(driver_pool_stats))
         // S10-WS15-02: CDC stream from WAL
         .route("/api/v1/store/cdc/stream", get(cdc_stream))
         .route("/api/v1/store/cdc/stream/filter", get(cdc_stream_filter))
@@ -7041,6 +7065,45 @@ async fn wal_tail(
     }))
 }
 
+// ─── S2-WS2-02: WAL segment list handler ────────────────────────────────────
+
+/// S2-WS2-02: List WAL checkpoint segments plus the active (unbounded) segment.
+async fn wal_segment_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<WalSegmentListResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let completed = wal.checkpoint_count();
+    let active_records = wal.wal_records().to_vec();
+    drop(wal);
+    let active_record_count = active_records.len();
+    let mut segments: Vec<WalSegment> = (1..=(completed as u64))
+        .map(|id| WalSegment {
+            segment_id: id,
+            is_active: false,
+            record_count: 0,
+            start_sequence: None,
+            end_sequence: None,
+        })
+        .collect();
+    segments.push(WalSegment {
+        segment_id: completed as u64 + 1,
+        is_active: true,
+        record_count: active_record_count,
+        start_sequence: active_records.first().map(|r| r.sequence),
+        end_sequence: active_records.last().map(|r| r.sequence),
+    });
+    let segment_count = segments.len();
+    (StatusCode::OK, Json(WalSegmentListResponse {
+        status: "ok",
+        segment_count,
+        completed_segments: completed,
+        active_record_count,
+        segments,
+    }))
+}
+
 /// S2-WS2-02: replay WAL records into the row store (or dry-run).
 async fn wal_recover(
     State(state): State<AppState>,
@@ -8048,6 +8111,19 @@ async fn driver_ping(
         session_token: req.session_token,
         pinged_at_ms,
     })))
+}
+
+// ─── S8-WS10-02: Driver pool stats (operator-facing) ────────────────────────
+
+/// S8-WS10-02: Return driver connection pool statistics.
+async fn driver_pool_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<PoolStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let now_ms = now_unix_ms_u64();
+    let stats = state.driver_pool.lock().expect("driver_pool stats lock").pool_stats(now_ms);
+    Ok((StatusCode::OK, Json(pool_stats_response(&stats))))
 }
 
 // ─── S8-WS10-02: Driver health handler ──────────────────────────────────────
@@ -18849,6 +18925,37 @@ mod tests {
         assert_eq!(body.limit_applied, 3);
     }
 
+    // ── S2-WS2-02: WAL segment list ───────────────────────────────────────────
+    #[tokio::test]
+    async fn s2_ws2_02_wal_segment_list_empty_returns_one_active_segment() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_segment_list(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.segment_count, 1, "fresh state has exactly 1 active segment");
+        assert_eq!(body.completed_segments, 0);
+        assert_eq!(body.active_record_count, 0);
+        assert!(body.segments.last().unwrap().is_active, "last segment must be active");
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_segment_list_shows_active_segment_record_count() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "v2");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_segment_list(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.active_record_count, 2, "2 mutations in active segment");
+        let active = body.segments.iter().find(|s| s.is_active).unwrap();
+        assert_eq!(active.record_count, 2);
+        assert!(active.start_sequence.is_some());
+        assert!(active.end_sequence.is_some());
+    }
+
     // ── S7-WS6-04: Chaos health check ────────────────────────────────────────
     #[tokio::test]
     async fn s7_ws6_04_chaos_health_fresh_state_is_healthy() {
@@ -19279,6 +19386,27 @@ mod tests {
         assert_eq!(body.status, "pong");
         assert_eq!(body.session_token, "drv-sess-42");
         assert!(body.pinged_at_ms > 0, "pinged_at_ms should be non-zero");
+    }
+
+    // ── S8-WS10-02: Driver pool stats ────────────────────────────────────────
+    #[tokio::test]
+    async fn s8_ws10_02_driver_pool_stats_fresh_state_shows_closed_circuit_breaker() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = driver_pool_stats(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.circuit_breaker_state, "closed", "fresh pool circuit breaker must be closed");
+        assert_eq!(body.active_connections, 0);
+    }
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_pool_stats_requires_operator_auth() {
+        let state = state_with_key(Some("test-key"));
+        let bad_headers = operator_headers("wrong-key", "admin");
+        let result = driver_pool_stats(State(state), bad_headers).await;
+        assert!(result.is_err(), "wrong api key must return auth error");
+        let Err((status, _)) = result else { panic!("expected error") };
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     // ── S10-WS15-02: CDC stream filter ────────────────────────────────────────

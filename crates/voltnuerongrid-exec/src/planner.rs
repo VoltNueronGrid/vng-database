@@ -105,6 +105,11 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         offset: u64,
     },
+    /// Post-aggregate HAVING filter (S3-WS1-06 has_group_by support).
+    Having {
+        input: Box<LogicalPlan>,
+        condition: String,
+    },
     /// Unrecognised or unparseable statement.
     Unknown(String),
 }
@@ -128,6 +133,7 @@ impl LogicalPlan {
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
+            LogicalPlan::Having { input, .. } => input.primary_table(),
             _ => None,
         }
     }
@@ -161,6 +167,7 @@ impl LogicalPlan {
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
+            LogicalPlan::Having { input, .. } => input.has_aggregation(),
             _ => false,
         }
     }
@@ -325,6 +332,14 @@ impl QueryPlanner {
                     recommended_path: QueryPath::Oltp,
                 }
             }
+            LogicalPlan::Having { input, .. } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows / 2,
+                    relative_cost: inner.relative_cost + 1.0,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
             LogicalPlan::Unknown(_) => CostEstimate {
                 estimated_rows: 0,
                 relative_cost: 0.0,
@@ -378,10 +393,20 @@ impl QueryPlanner {
             after_filter
         };
 
+        // HAVING (post-aggregate filter, S3-WS1-06 has_group_by support)
+        let after_having = if let Some(cond) = &sel.having {
+            LogicalPlan::Having {
+                input: Box::new(after_agg),
+                condition: cond.clone(),
+            }
+        } else {
+            after_agg
+        };
+
         // Sort (ORDER BY)
         let after_sort = if !sel.order_by.is_empty() {
             LogicalPlan::Sort {
-                input: Box::new(after_agg),
+                input: Box::new(after_having),
                 order_by: sel
                     .order_by
                     .iter()
@@ -389,7 +414,7 @@ impl QueryPlanner {
                     .collect(),
             }
         } else {
-            after_agg
+            after_having
         };
 
         // Limit
@@ -707,5 +732,23 @@ mod tests {
     fn cost_offset_query_routes_to_oltp() {
         let c = cost("SELECT * FROM t LIMIT 10 OFFSET 5");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "OFFSET query should route to OLTP");
+    }
+
+    #[test]
+    fn planner_having_produces_having_node() {
+        // SELECT * avoids Project wrapper so Having is outermost plan node.
+        let p = plan("SELECT * FROM employees GROUP BY dept HAVING COUNT(*) > 5");
+        assert!(
+            matches!(&p, LogicalPlan::Having { condition, .. } if condition.to_uppercase().contains("COUNT")),
+            "GROUP BY ... HAVING should produce a Having node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("employees"));
+    }
+
+    #[test]
+    fn cost_having_query_routes_to_olap() {
+        let c = cost("SELECT * FROM orders GROUP BY region HAVING SUM(sales) > 100");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "HAVING query should route to OLAP");
+        assert!(c.relative_cost >= 1.0, "HAVING should carry cost >= 1.0");
     }
 }

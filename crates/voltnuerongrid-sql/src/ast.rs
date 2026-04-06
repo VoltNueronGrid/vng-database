@@ -57,6 +57,8 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
     /// True when the WHERE clause contains IS NULL or IS NOT NULL (S3-WS1-06).
     pub has_null_literal: bool,
+    /// True when the query contains a GROUP BY clause (S3-WS1-06).
+    pub has_group_by: bool,
 }
 
 /// A parsed INSERT statement.
@@ -169,6 +171,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect IS NULL / IS NOT NULL predicates (S3-WS1-06).
                 if up.contains("IS NULL") || up.contains("IS NOT NULL") {
                     stmt.has_null_literal = true;
+                }
+                // Detect GROUP BY clause (S3-WS1-06).
+                if up.contains("GROUP BY") {
+                    stmt.has_group_by = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1276,5 +1282,31 @@ mod null_literal_tests {
         let stmt = parse_one("SELECT name FROM users").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_null_literal, "plain SELECT must have has_null_literal = false");
+    }
+}
+
+#[cfg(test)]
+mod group_by_detection_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_group_by_sets_has_group_by_true() {
+        let stmt = parse_one("SELECT dept, COUNT(*) FROM employees GROUP BY dept").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_group_by, "GROUP BY must set has_group_by = true");
+    }
+
+    #[test]
+    fn select_without_group_by_has_group_by_false() {
+        let stmt = parse_one("SELECT name FROM users WHERE active = 1").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_group_by, "query without GROUP BY must have has_group_by = false");
+    }
+
+    #[test]
+    fn select_group_by_with_having_sets_has_group_by_true() {
+        let stmt = parse_one("SELECT region, SUM(sales) FROM orders GROUP BY region HAVING SUM(sales) > 100").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_group_by, "GROUP BY ... HAVING must set has_group_by = true");
     }
 }
