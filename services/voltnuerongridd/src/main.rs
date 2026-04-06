@@ -52,6 +52,8 @@ static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
 static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
+/// S8-WS10-02: Counter for issuing deterministic driver session tokens.
+static DRIVER_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 const DEADLOCK_SCAN_MAX_HOPS: usize = 8;
 
 const CONTROL_PLANE_OPERATOR_ROLES: [OperatorRole; 4] = [
@@ -349,6 +351,12 @@ struct AppState {
     wal_engine: Arc<Mutex<InMemoryDurabilityEngine>>,
     /// S7-WS6-04: Chaos/game-day fault injection state.
     chaos_state: Arc<Mutex<ChaosState>>,
+    /// S8-WS10-02: Driver wire protocol session registry.
+    driver_sessions: Arc<Mutex<HashMap<String, DriverSession>>>,
+    /// S5-WS4A-02: Broker adapter flush counters (broker_type → flush_count).
+    broker_flush_counts: Arc<Mutex<HashMap<String, u64>>>,
+    /// S9-WS8-02: Sliding-window rate limiter — per-model window start timestamp (ms).
+    ai_rate_window_starts: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 #[derive(Clone, Default)]
@@ -1222,6 +1230,87 @@ struct ChaosInjectRequest {
     target_node: Option<String>,
     #[serde(default)]
     parameters: HashMap<String, String>,
+}
+
+// ─── S8-WS10-02: Driver wire protocol structs ─────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct DriverSession {
+    driver_name: String,
+    driver_version: String,
+    connected_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct DriverProtocolInfo {
+    protocol_version: &'static str,
+    encoding: &'static str,
+    auth_modes: Vec<String>,
+    supported_statements: Vec<String>,
+    max_batch_size: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct DriverConnectRequest {
+    driver_name: String,
+    driver_version: String,
+    requested_capabilities: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+struct DriverConnectResponse {
+    status: &'static str,
+    session_token: String,
+    negotiated_capabilities: Vec<String>,
+    max_batch_size: usize,
+}
+
+// ─── S10-WS15-02: CDC change-data-capture structs ─────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+struct CdcEvent {
+    sequence: u64,
+    op: String,
+    table_name: String,
+    key: String,
+    payload: String,
+    captured_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct CdcStreamResponse {
+    status: &'static str,
+    event_count: usize,
+    events: Vec<CdcEvent>,
+}
+
+// ─── S5-WS4A-02: Broker adapter structs ───────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct BrokerAdapterInfo {
+    broker_type: String,
+    enabled: bool,
+    flush_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct BrokerAdapterStatus {
+    status: &'static str,
+    adapters: Vec<BrokerAdapterInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrokerFlushRequest {
+    broker_type: String,
+    max_events: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct BrokerFlushResponse {
+    status: &'static str,
+    broker_type: String,
+    events_flushed: usize,
+    total_flush_count: u64,
 }
 
 /// Response for `GET /api/v1/cluster/chaos/status`.
@@ -2466,6 +2555,9 @@ async fn main() {
         audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
         raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
+        driver_sessions: Arc::new(Mutex::new(HashMap::new())),
+        broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
+        ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -2590,6 +2682,14 @@ async fn main() {
         .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
         .route("/api/v1/cluster/chaos/status", get(chaos_status))
+        // S8-WS10-02: Driver wire protocol info + session connect
+        .route("/api/v1/driver/protocol/info", get(driver_protocol_info))
+        .route("/api/v1/driver/connect", post(driver_connect))
+        // S10-WS15-02: CDC stream from WAL
+        .route("/api/v1/store/cdc/stream", get(cdc_stream))
+        // S5-WS4A-02: Broker adapter status + flush
+        .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
+        .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
         .route("/api/v1/ai/request", post(ai_rate_check))
         // WS4 Ingest endpoints
@@ -5995,6 +6095,138 @@ async fn chaos_status(State(state): State<AppState>) -> (StatusCode, Json<ChaosS
     }))
 }
 
+// ─── S8-WS10-02: Driver wire protocol handlers ────────────────────────────────
+
+/// S8-WS10-02: Return the current wire protocol capabilities.
+async fn driver_protocol_info() -> (StatusCode, Json<DriverProtocolInfo>) {
+    (StatusCode::OK, Json(DriverProtocolInfo {
+        protocol_version: "1.0",
+        encoding: "json",
+        auth_modes: vec![
+            "admin_key".to_string(),
+            "operator_id".to_string(),
+            "tenant".to_string(),
+        ],
+        supported_statements: vec![
+            "SELECT".to_string(), "INSERT".to_string(),
+            "UPDATE".to_string(), "DELETE".to_string(),
+            "BEGIN".to_string(), "COMMIT".to_string(), "ROLLBACK".to_string(),
+        ],
+        max_batch_size: 500,
+    }))
+}
+
+/// S8-WS10-02: Negotiate a driver connection session and return a session token.
+async fn driver_connect(
+    State(state): State<AppState>,
+    Json(req): Json<DriverConnectRequest>,
+) -> (StatusCode, Json<DriverConnectResponse>) {
+    let sid = DRIVER_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let session_token = format!("drv-sess-{sid}");
+    let mut sessions = state.driver_sessions.lock().expect("driver_sessions lock");
+    sessions.insert(session_token.clone(), DriverSession {
+        driver_name: req.driver_name,
+        driver_version: req.driver_version,
+        connected_at_ms: now_epoch_ms_chaos(),
+    });
+    let negotiated: Vec<String> = req.requested_capabilities
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| matches!(c.as_str(), "batch_execute" | "streaming" | "prepared_statements"))
+        .collect();
+    (StatusCode::OK, Json(DriverConnectResponse {
+        status: "connected",
+        session_token,
+        negotiated_capabilities: negotiated,
+        max_batch_size: 500,
+    }))
+}
+
+// ─── S10-WS15-02: CDC stream from WAL ─────────────────────────────────────────
+
+/// S10-WS15-02: Stream committed mutations as CDC events derived from the WAL.
+async fn cdc_stream(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<CdcStreamResponse>) {
+    let wal = state.wal_engine.lock().expect("wal_engine lock cdc");
+    let events: Vec<CdcEvent> = wal.wal_records()
+        .iter()
+        .map(|r| CdcEvent {
+            sequence: r.sequence,
+            op: if r.value == "__deleted__" {
+                "delete".to_string()
+            } else {
+                "insert".to_string()
+            },
+            table_name: "row_store".to_string(),
+            key: r.key.clone(),
+            payload: r.value.clone(),
+            captured_at_ms: 0,
+        })
+        .collect();
+    let event_count = events.len();
+    drop(wal);
+    (StatusCode::OK, Json(CdcStreamResponse {
+        status: "ok",
+        event_count,
+        events,
+    }))
+}
+
+// ─── S5-WS4A-02: Broker adapter status + flush ────────────────────────────────
+
+/// S5-WS4A-02: Report the status of all registered broker adapters.
+async fn outbox_broker_status(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<BrokerAdapterStatus>) {
+    let counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock");
+    let adapters: Vec<BrokerAdapterInfo> = ["kafka", "nats", "event_hubs"]
+        .iter()
+        .map(|b| BrokerAdapterInfo {
+            broker_type: b.to_string(),
+            enabled: false, // scaffold: no live broker connection
+            flush_count: *counts.get(*b).unwrap_or(&0),
+        })
+        .collect();
+    drop(counts);
+    (StatusCode::OK, Json(BrokerAdapterStatus {
+        status: "ok",
+        adapters,
+    }))
+}
+
+/// S5-WS4A-02: Flush pending outbox events to the specified broker adapter (scaffold).
+async fn outbox_broker_flush(
+    State(state): State<AppState>,
+    Json(req): Json<BrokerFlushRequest>,
+) -> (StatusCode, Json<BrokerFlushResponse>) {
+    if !["kafka", "nats", "event_hubs"].contains(&req.broker_type.as_str()) {
+        return (StatusCode::BAD_REQUEST, Json(BrokerFlushResponse {
+            status: "error",
+            broker_type: req.broker_type,
+            events_flushed: 0,
+            total_flush_count: 0,
+        }));
+    }
+    let max_events = req.max_events.unwrap_or(100).min(10_000);
+    // Derive flush count from WAL length (scaffold: no live broker write).
+    let wal = state.wal_engine.lock().expect("wal_engine lock broker_flush");
+    let events_available = wal.wal_records().len();
+    drop(wal);
+    let events_flushed = events_available.min(max_events);
+    let mut counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock flush");
+    let cnt = counts.entry(req.broker_type.clone()).or_insert(0);
+    *cnt += 1;
+    let total_flush_count = *cnt;
+    drop(counts);
+    (StatusCode::OK, Json(BrokerFlushResponse {
+        status: "ok",
+        broker_type: req.broker_type,
+        events_flushed,
+        total_flush_count,
+    }))
+}
+
 fn evaluate_deadlock_scan_outcome(
     wait_graph: &HashMap<String, String>,
     lock_table: &HashMap<String, PessimisticLockRecord>,
@@ -8455,12 +8687,27 @@ async fn ai_rate_check(
     } else {
         false
     };
-    // Rate limit check.
+    // Rate limit check — sliding window (60s).
     let request_count = {
-        let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock");
-        let cnt = counters.entry(req.model_id.clone()).or_insert(0);
-        *cnt += 1;
-        *cnt
+        let now_ms = now_epoch_ms_chaos();
+        let window_ms: u64 = 60_000;
+        let mut w_starts = state.ai_rate_window_starts.lock().expect("ai_rate_window_starts lock");
+        let start = w_starts.entry(req.model_id.clone()).or_insert(now_ms);
+        if now_ms.saturating_sub(*start) >= window_ms {
+            // Window elapsed: reset counter and window start.
+            *start = now_ms;
+            drop(w_starts);
+            let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock");
+            let cnt = counters.entry(req.model_id.clone()).or_insert(0);
+            *cnt = 1;
+            1u64
+        } else {
+            drop(w_starts);
+            let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock");
+            let cnt = counters.entry(req.model_id.clone()).or_insert(0);
+            *cnt += 1;
+            *cnt
+        }
     };
     if policy.rate_limit_rpm > 0 && request_count > policy.rate_limit_rpm as u64 {
         return Err((
@@ -9726,6 +9973,9 @@ mod tests {
             audit_log_path: None,
             raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
             ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
+            driver_sessions: Arc::new(Mutex::new(HashMap::new())),
+            broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
+            ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -15519,5 +15769,126 @@ mod tests {
         let err = resp.unwrap_err();
         assert_eq!(err.0, StatusCode::TOO_MANY_REQUESTS);
         assert!(err.1.0.reason.contains("token_limit_exceeded"));
+    }
+
+    // ─── S8-WS10-02: Driver wire protocol integration tests ──────────────────
+
+    #[tokio::test]
+    async fn s8_ws10_02_protocol_info_returns_version() {
+        let (status, Json(body)) = driver_protocol_info().await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.protocol_version, "1.0");
+        assert_eq!(body.encoding, "json");
+        assert!(body.max_batch_size >= 100);
+        assert!(body.auth_modes.contains(&"admin_key".to_string()));
+        assert!(body.supported_statements.contains(&"SELECT".to_string()));
+    }
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_connect_issues_session_token() {
+        let state = state_with_key(Some("test-key"));
+        let req = DriverConnectRequest {
+            driver_name: "rust-driver".to_string(),
+            driver_version: "0.1.0".to_string(),
+            requested_capabilities: Some(vec![
+                "batch_execute".to_string(),
+                "unknown_cap".to_string(),
+            ]),
+        };
+        let (status, Json(body)) = driver_connect(State(state.clone()), Json(req)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "connected");
+        assert!(body.session_token.starts_with("drv-sess-"), "token should have drv-sess- prefix");
+        // unknown_cap should be filtered out; only batch_execute negotiated
+        assert_eq!(body.negotiated_capabilities, vec!["batch_execute".to_string()]);
+        // Session should be stored
+        let sessions = state.driver_sessions.lock().unwrap();
+        assert!(sessions.contains_key(&body.session_token));
+    }
+
+    // ─── S10-WS15-02: CDC stream integration tests ───────────────────────────
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_stream_returns_empty_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = cdc_stream(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.event_count, 0);
+        assert!(body.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_stream_returns_events_after_commit() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let tx_req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO cdc_test (id, val) VALUES ('cdc:1', 'alpha')".to_string(),
+                "INSERT INTO cdc_test (id, val) VALUES ('cdc:2', 'beta')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        sql_transaction(State(state.clone()), headers, Json(tx_req)).await.ok();
+        let (status, Json(body)) = cdc_stream(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.event_count >= 2, "CDC stream should have at least 2 events after COMMIT");
+        assert!(body.events.iter().all(|e| !e.key.is_empty()));
+    }
+
+    // ─── S5-WS4A-02: Broker adapter integration tests ────────────────────────
+
+    #[tokio::test]
+    async fn s5_ws4a_02_broker_status_lists_adapters() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = outbox_broker_status(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.adapters.len(), 3);
+        let types: Vec<&str> = body.adapters.iter().map(|a| a.broker_type.as_str()).collect();
+        assert!(types.contains(&"kafka"));
+        assert!(types.contains(&"nats"));
+        assert!(types.contains(&"event_hubs"));
+        // All disabled in scaffold
+        assert!(body.adapters.iter().all(|a| !a.enabled));
+        // All flush counts zero on fresh state
+        assert!(body.adapters.iter().all(|a| a.flush_count == 0));
+    }
+
+    #[tokio::test]
+    async fn s5_ws4a_02_broker_flush_increments_count() {
+        let state = state_with_key(Some("test-key"));
+        // Flush kafka twice
+        for _ in 0..2 {
+            let req = BrokerFlushRequest { broker_type: "kafka".to_string(), max_events: Some(10) };
+            let (status, Json(body)) = outbox_broker_flush(State(state.clone()), Json(req)).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body.status, "ok");
+            assert_eq!(body.broker_type, "kafka");
+        }
+        // Status should now show flush_count == 2 for kafka
+        let (_, Json(status_body)) = outbox_broker_status(State(state)).await;
+        let kafka = status_body.adapters.iter().find(|a| a.broker_type == "kafka").unwrap();
+        assert_eq!(kafka.flush_count, 2);
+    }
+
+    // ─── S9-WS8-02: Sliding window rate limiter test ─────────────────────────
+
+    #[tokio::test]
+    async fn s9_ws8_02_rate_window_counter_increments_within_window() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Make two requests for the same model — counter should increment.
+        for i in 1u64..=2 {
+            let body = AiRequestBody { model_id: "test-model".to_string(), tokens: Some(10) };
+            let resp = ai_rate_check(State(state.clone()), headers.clone(), Json(body))
+                .await
+                .unwrap();
+            assert_eq!(resp.0, StatusCode::OK);
+            assert_eq!(resp.1.0.request_count, i,
+                "request_count should be {i} after {i} call(s)");
+        }
     }
 }

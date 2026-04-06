@@ -2,7 +2,7 @@
 
 **Purpose:** Reconcile the **design architecture** (`reference/voltnuerongrid-db-design.md`, `reference/voltnuerongrid-ws.md`) with **what is actually implemented in Rust today**, call out **gaps** honestly, and provide a **sprint-oriented backlog** by workstream.  
 **Companion:** `status_tracker.md` (REQ/WS narrative + evidence links).  
-**Last updated:** 2026-04-06  
+**Last updated:** 2026-04-06 (session 10)  
 
 ---
 
@@ -140,7 +140,7 @@ These are **product/engine gaps**, not test gaps.
 | S5-WS4-02 | WS4 | Chunked ingest HTTP + async `spawn_blocking` fan-out | **DONE** (scaffold) | Throughput vs real storage still **TODO** (S5-WS4-03) |
 | S5-WS4-03 | WS4 | Ingest → **durable typed tables** (not only in-memory maps) | **PARTIAL** | **2026-04-05:** `ingest_csv` and `ingest_json` handlers now write each `IngestRecord` into `PagedRowStore` (field `source: "csv:{connector_id}"` / `"json:{connector_id}"`, field `payload: record.payload`) before the existing in-memory map is updated; 2 integration tests `s5_ws4_row_store_receives_ingest_style_writes` confirm the pattern. **2026-04-05 (continued):** `ingest_parquet` and `ingest_excel` handlers now also write to `PagedRowStore` (same pattern, `source: "parquet:{connector_id}"` / `"excel:{connector_id}"`) — all four ingest formats now write to durable store. **2026-04-05 (session 4):** `POST /api/v1/store/rows/scan` endpoint added — `StoreRowsScanRequest` accepts `snapshot_xid`, `key_prefix`, `limit` (default 1 000, max 10 000); calls `PagedRowStore::scan_at_snapshot()`; requires `store` runtime principal; returns `StoreRowsScanResponse {status, snapshot_xid, row_count, rows}`; 3 new integration tests `s5_ws4_store_rows_scan_*` verify committed-row visibility, prefix filtering, and limit cap. |
 | S5-WS4A-01 | WS4A | Outbox + replay + WAL-backed cursors | **DONE** (scaffold) | `voltnuerongrid-ingest` |
-| S5-WS4A-02 | WS4A | **Kafka/NATS/Event Hubs live e2e** | **TODO** | Adapters exist; prod hardening |
+| S5-WS4A-02 | WS4A | **Kafka/NATS/Event Hubs live e2e** | **PARTIAL** | **Session 10:** Broker adapter scaffold — `BrokerAdapterInfo {broker_type, enabled, flush_count}`, `BrokerAdapterStatus`, `BrokerFlushRequest`, `BrokerFlushResponse` structs; `broker_flush_counts: Arc<Mutex<HashMap<String,u64>>>` in AppState; `GET /api/v1/ingest/outbox/broker/status` lists kafka/nats/event_hubs adapters with per-broker flush counts; `POST /api/v1/ingest/outbox/broker/flush` dispatches flush (scaffold: derives event count from WAL, increments counter); 2 integration tests `s5_ws4a_02_*`. Gap: live broker client connections; exactly-once semantics; retry/backoff. |
 | S5-E4A-01 | Epic 4A | Connector SDK **runtime load** | **TODO** | G-08 |
 
 ---
@@ -172,7 +172,7 @@ These are **product/engine gaps**, not test gaps.
 | ID | Workstream | Task | Status | Notes |
 |----|------------|------|--------|--------|
 | S8-WS10-01 | WS10 | Rust driver contracts + pool behaviors | **DONE** (scaffold) | HTTP-oriented |
-| S8-WS10-02 | WS10 | **Stable wire protocol + multi-language SDKs** | **TODO** | G-06 |
+| S8-WS10-02 | WS10 | **Stable wire protocol + multi-language SDKs** | **PARTIAL** | **Session 10:** Driver wire protocol info + session negotiation scaffold — `DriverProtocolInfo {protocol_version, encoding, auth_modes, supported_statements, max_batch_size}`, `DriverConnectRequest`, `DriverConnectResponse`, `DriverSession {driver_name, driver_version, connected_at_ms}` structs; `driver_sessions: Arc<Mutex<HashMap<String,DriverSession>>>` in AppState; `GET /api/v1/driver/protocol/info` returns protocol v1.0 / json encoding / 3 auth modes / 7 statement types / max_batch=500; `POST /api/v1/driver/connect` issues deterministic `drv-sess-{n}` session token and negotiates capabilities (`batch_execute`/`streaming`/`prepared_statements`); 2 integration tests `s8_ws10_02_*` verify version fields and token issuance with capability filtering. Gap: binary framing; TLS channel; multi-language SDK codegen. |
 | S8-WS9-01 | WS9 | Studio API contract scripts | **DONE** (harness) | UI separate repo |
 | S8-WS9A-01 | WS9A | IDE adapter manifests + smoke | **DONE** (harness) | |
 | S8-REQ08-01 | REQ-08 | Deploy profile smoke (files/Helm) | **DONE** (per tracker) | Live cloud **DEFERRED** (credentials) |
@@ -195,7 +195,7 @@ These are **product/engine gaps**, not test gaps.
 | ID | Workstream | Task | Status | Notes |
 |----|------------|------|--------|--------|
 | S10-WS15-01 | WS15 | Competitive matrix + backlog scoring | **DONE** (harness) | `reference/competitive/*` |
-| S10-WS15-02 | WS15 | **CDC, follower reads, vector/graph** | **TODO** | Design competitive row |
+| S10-WS15-02 | WS15 | **CDC, follower reads, vector/graph** | **PARTIAL** | **Session 10:** CDC stream scaffold — `CdcEvent {sequence, op, table_name, key, payload, captured_at_ms}`, `CdcStreamResponse` structs; `GET /api/v1/store/cdc/stream` reads WAL engine records and maps each WAL record to a `CdcEvent` (op=`"delete"` when value=`"__deleted__"`, else `"insert"`); 2 integration tests `s10_ws15_02_*` verify empty stream on fresh state and ≥2 events after a 2-INSERT COMMIT. Gap: update/upsert CDC op detection; per-table CDC cursor; follower reads; vector/graph indexes. |
 
 ---
 
@@ -254,6 +254,8 @@ Use **Section 3 (gaps)** + **Sprints 2–4** as the critical path toward a “re
 **2026-04-05 (session 8) progress note:** S2-WS2-05 extended (COMMIT path now calls `begin_write_intent(xid,key)` before each store write + `release_write_intents(xid)` after all DML — completing write-intent register+release protocol); S4-WS3-02 advanced (OLAP vectorized executor wired: `sql_execute` dispatches to `vectorized_scan()`+`aggregate_batch()` for olap/hybrid planner paths; `olap_agg_results` field in `SqlExecuteResponse`); S7-WS6-03 advanced TODO→PARTIAL (Raft election timeout: `ticks_since_heartbeat`/`election_timeout_ticks` fields, `tick()` method, heartbeat reset, `POST /api/v1/cluster/raft/tick` endpoint, 4 new raft unit tests); S9-WS8-02 extended (per-model rate limiter: `ai_request_counters` in AppState, `POST /api/v1/ai/request` endpoint with token budget check + 429 rejection). Service: **221 tests total** (+9 new tests).
 
 **2026-04-06 (session 9) progress note:** S4-WS3-03 extended PARTIAL (predicate pushdown: `FilterOp` enum + `VectorizedFilter` struct + `filter_batch()` function in `columnar.rs`; 6 new unit tests; store crate **70 tests**); S7-WS6-04 advanced TODO→PARTIAL (chaos inject/clear/status scaffold: `ChaosEvent`/`ChaosState`/`ChaosInjectRequest`/`ChaosStatusResponse`; `chaos_state` in AppState; 3 endpoints; 3 integration tests `s7_ws6_04_*`); S2-WS2-02 extended PARTIAL (WAL COMMIT path writes: `wal.append_mutation()` after each INSERT/UPDATE/DELETE at COMMIT; `wal_records()`/`checkpoint_count()` accessors in `InMemoryDurabilityEngine`; `wal_engine` in AppState; `GET /api/v1/store/wal/status` + `POST /api/v1/store/wal/recover` endpoints; 3 integration tests `s2_ws2_02_*`); S3-WS1-05 extended PARTIAL (WHERE predicate pushdown in OLAP execute: `parse_where_predicates()` helper; first SELECT where_clause pushed into `filter_batch()` before aggregation; 1 integration test `s3_ws1_05_olap_filter_pushdown_reduces_batch`). Service: **228 tests total** (+7 new integration tests). Store crate: **70 tests** (+6 filter_batch tests).
+
+**2026-04-06 (session 10) progress note:** S8-WS10-02 advanced TODO→PARTIAL (driver protocol info + session connect: `DriverProtocolInfo`/`DriverConnectRequest`/`DriverConnectResponse`/`DriverSession`; `driver_sessions` in AppState; `GET /api/v1/driver/protocol/info` + `POST /api/v1/driver/connect`; 2 integration tests `s8_ws10_02_*`); S10-WS15-02 advanced TODO→PARTIAL (CDC stream: `CdcEvent`/`CdcStreamResponse`; `GET /api/v1/store/cdc/stream` from WAL; 2 integration tests `s10_ws15_02_*`); S5-WS4A-02 advanced TODO→PARTIAL (broker adapter scaffold: `BrokerAdapterInfo`/`BrokerAdapterStatus`/`BrokerFlushRequest`/`BrokerFlushResponse`; `broker_flush_counts` in AppState; `GET /api/v1/ingest/outbox/broker/status` + `POST /api/v1/ingest/outbox/broker/flush`; 2 integration tests `s5_ws4a_02_*`); S9-WS8-02 extended (sliding-window rate limiter: `ai_rate_window_starts` in AppState; `ai_rate_check` now resets counter when 60s window elapses; 1 integration test `s9_ws8_02_rate_window_counter_increments_within_window`). Service: **235 tests total** (+7 new integration tests).
 ---
 
 ## 7) How to maintain this file

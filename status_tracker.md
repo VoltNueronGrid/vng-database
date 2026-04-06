@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-06 (session 9)
+**Last updated:** 2026-04-06 (session 10)
 
 ---
 
@@ -328,7 +328,7 @@ Actual gate artifact status verified by code/artifact inspection and live runs. 
 - `voltnuerongrid-meta` — 3-line stub (crate name constant only)
 - All other crates have real implementations.
 
-**Not-started requirements (0 total):** All requirements have active implementation. REQ-10/19 benchmark smoke script + artifact (2026-04-10). REQ-21: **9 ws21 tests** as of 2026-04-05 (+2: DDL catalog isolation + pessimistic lock concurrency). REQ-23: **11 ws23 tests** as of 2026-04-05 (+2: read_uncommitted snapshot edge case + serializable write-lock validation). REQ-27: **13 ws27 tests** as of 2026-04-05 (+2: SET-with-TTL + GETSET-on-missing-key). REQ-31: **18 ws3_ tests** as of 2026-04-05 (+2: window function OVER( routing + HAVING clause routing). REQ-07: async Tokio fan-out wired as of 2026-04-10. Total cargo test count: **228 passing in voltnuerongridd** as of 2026-04-06 (session 9); **70 passing in voltnuerongrid-store** (+6 filter_batch predicate pushdown tests); **48 passing in voltnuerongrid-sql**. Session 9 additions: S4-WS3-03 predicate pushdown (`FilterOp`/`VectorizedFilter`/`filter_batch()` in `columnar.rs`, 6 unit tests); S7-WS6-04 chaos scaffold (`ChaosEvent`/`ChaosState`/`chaos_inject`/`chaos_clear`/`chaos_status`, 3 endpoints, 3 integration tests); S2-WS2-02 WAL COMMIT path (`wal.append_mutation()` per DML at COMMIT, `wal_records()`/`checkpoint_count()` accessors, `wal_engine` in AppState, `GET /api/v1/store/wal/status` + `POST /api/v1/store/wal/recover`, 3 integration tests); S3-WS1-05 WHERE predicate pushdown in OLAP executor (`parse_where_predicates()` + `filter_batch()` integration, 1 integration test).
+**Not-started requirements (0 total):** All requirements have active implementation. REQ-10/19 benchmark smoke script + artifact (2026-04-10). REQ-21: **9 ws21 tests** as of 2026-04-05. REQ-23: **11 ws23 tests** as of 2026-04-05. REQ-27: **13 ws27 tests** as of 2026-04-05. REQ-31: **18 ws3_ tests** as of 2026-04-05. REQ-07: async Tokio fan-out wired as of 2026-04-10. Total cargo test count: **235 passing in voltnuerongridd** as of 2026-04-06 (session 10); **70 passing in voltnuerongrid-store**; **48 passing in voltnuerongrid-sql**. Session 10 additions: S8-WS10-02 wire protocol scaffold (`DriverProtocolInfo`/`DriverConnectRequest`/`DriverConnectResponse`/`DriverSession`, `GET /api/v1/driver/protocol/info` + `POST /api/v1/driver/connect`, 2 tests, TODO→PARTIAL); S10-WS15-02 CDC stream scaffold (`CdcEvent`/`CdcStreamResponse`, `GET /api/v1/store/cdc/stream` from WAL, 2 tests, TODO→PARTIAL); S5-WS4A-02 broker adapter scaffold (`BrokerAdapterInfo`/`BrokerAdapterStatus`/`BrokerFlushRequest`/`BrokerFlushResponse`, `broker_flush_counts` in AppState, `GET /api/v1/ingest/outbox/broker/status` + `POST /api/v1/ingest/outbox/broker/flush`, 2 tests, TODO→PARTIAL); S9-WS8-02 sliding-window rate limiter (`ai_rate_window_starts` in AppState, 60s window reset in `ai_rate_check`, 1 test).
 
 ---
 
