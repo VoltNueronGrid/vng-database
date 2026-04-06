@@ -114,6 +114,10 @@ pub enum LogicalPlan {
     Coalesce {
         input: Box<LogicalPlan>,
     },
+    /// CAST() / :: type-cast expression (from S3-WS1-13 has_cast support).
+    Cast {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -171,6 +175,7 @@ impl LogicalPlan {
             LogicalPlan::Not { input } => input.primary_table(),
             LogicalPlan::Case { input } => input.primary_table(),
             LogicalPlan::Coalesce { input } => input.primary_table(),
+            LogicalPlan::Cast { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -213,6 +218,7 @@ impl LogicalPlan {
             LogicalPlan::Not { input } => input.has_aggregation(),
             LogicalPlan::Case { input } => input.has_aggregation(),
             LogicalPlan::Coalesce { input } => input.has_aggregation(),
+            LogicalPlan::Cast { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -411,6 +417,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.3,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Cast { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.2,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -661,12 +675,21 @@ impl QueryPlanner {
         };
 
         // Coalesce wrapper (S3-WS1-12 has_coalesce detection): outermost node.
-        if sel.has_coalesce {
+        let after_coalesce = if sel.has_coalesce {
             LogicalPlan::Coalesce {
                 input: Box::new(after_case),
             }
         } else {
             after_case
+        };
+
+        // Cast wrapper (S3-WS1-13 has_cast detection): outermost node.
+        if sel.has_cast {
+            LogicalPlan::Cast {
+                input: Box::new(after_coalesce),
+            }
+        } else {
+            after_coalesce
         }
     }
 
@@ -1078,5 +1101,23 @@ mod tests {
         let c = cost("SELECT COALESCE(name, 'unknown') FROM users");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "COALESCE should route to OLTP");
         assert!(c.relative_cost >= 0.3, "Coalesce must carry at least 0.3 cost overhead");
+    }
+
+    #[test]
+    fn planner_cast_select_produces_cast_node() {
+        let p = plan("SELECT CAST(amount AS TEXT) FROM orders");
+        assert!(
+            matches!(&p, LogicalPlan::Cast { .. }),
+            "CAST() query should produce outermost Cast node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("orders"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_cast_query_routes_to_oltp() {
+        let c = cost("SELECT CAST(amount AS TEXT) FROM orders");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "CAST should route to OLTP");
+        assert!(c.relative_cost >= 0.2, "Cast must carry at least 0.2 cost overhead");
     }
 }

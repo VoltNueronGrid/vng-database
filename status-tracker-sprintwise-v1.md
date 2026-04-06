@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 37 Implementation Log
+
+**Date:** 2026-04-06 (Sprint 9 continuation)
+**Test Baseline → New:** sql 138→141, exec 48→50, service 377→381 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_cast: bool` field + detection | `voltnuerongrid-sql` | Detects `CAST(` and `::` type-cast operator (`S3-WS1-13`) | 3 (`cast_tests` module) |
+| `Cast { input }` plan node | `voltnuerongrid-exec` | OLTP pass-through node; +0.2 cost | 2 |
+| `GET /api/v1/ingest/schema/fields` | `voltnuerongridd` | Inferred field/type list for connector schema (operator-auth) | 2 |
+| `GET /api/v1/store/wal/seq` | `voltnuerongridd` | WAL latest_sequence, wal_len, checkpoint_count (operator-auth) | 2 |
+
+---
+
 ## Session 36 Implementation Log
 
 **Date:** 2026-04-06 (Sprint 9 continuation)

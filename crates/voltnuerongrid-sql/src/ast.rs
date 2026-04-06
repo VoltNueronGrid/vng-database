@@ -75,6 +75,8 @@ pub struct SelectStatement {
     pub has_case: bool,
     /// True when the query contains a COALESCE() expression (S3-WS1-12).
     pub has_coalesce: bool,
+    /// True when the query contains a CAST() or :: type-cast expression (S3-WS1-13).
+    pub has_cast: bool,
 }
 
 /// A parsed INSERT statement.
@@ -224,6 +226,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect COALESCE() expression anywhere in the query (S3-WS1-12).
                 if up_trim.contains("COALESCE(") {
                     stmt.has_coalesce = true;
+                }
+                // Detect CAST() or :: type-cast expression anywhere in the query (S3-WS1-13).
+                if up_trim.contains("CAST(") || up.contains("::") {
+                    stmt.has_cast = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1567,5 +1573,31 @@ mod coalesce_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_coalesce, "plain SELECT without COALESCE must have has_coalesce = false");
+    }
+}
+
+#[cfg(test)]
+mod cast_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_cast_sets_has_cast_true() {
+        let stmt = parse_one("SELECT CAST(amount AS TEXT) FROM orders").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_cast, "CAST() expression must set has_cast = true");
+    }
+
+    #[test]
+    fn select_with_pg_cast_operator_sets_has_cast_true() {
+        let stmt = parse_one("SELECT amount::TEXT FROM orders").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_cast, ":: cast operator must set has_cast = true");
+    }
+
+    #[test]
+    fn plain_select_has_cast_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_cast, "plain SELECT without CAST must have has_cast = false");
     }
 }

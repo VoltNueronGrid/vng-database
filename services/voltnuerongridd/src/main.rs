@@ -2392,6 +2392,37 @@ struct RowsPageStatsResponse {
     current_xid: u64,
 }
 
+// ─── S11-WS1-13: Ingest schema fields structs ───────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct IngestSchemaFieldsQuery {
+    schema_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SchemaFieldEntry {
+    field_name: String,
+    field_type: String,
+}
+
+#[derive(Debug, Serialize)]
+struct IngestSchemaFieldsResponse {
+    status: &'static str,
+    schema_id: String,
+    field_count: usize,
+    fields: Vec<SchemaFieldEntry>,
+}
+
+// ─── S11-WS1-13: WAL sequence info structs ───────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalSeqResponse {
+    status: &'static str,
+    latest_sequence: u64,
+    wal_len: usize,
+    checkpoint_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3668,6 +3699,8 @@ async fn main() {
         .route("/api/v1/store/wal/tail", get(wal_tail))
         // S2-WS2-03: WAL mutations (recent key-value changes)
         .route("/api/v1/store/wal/mutations", get(wal_mutations))
+        // S11-WS1-13: WAL latest sequence info
+        .route("/api/v1/store/wal/seq", get(wal_seq))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3758,6 +3791,8 @@ async fn main() {
         .route("/api/v1/ingest/schema", get(ingest_schema_registry))
         // S5-WS4-03: ingest schema list (format-filtered)
         .route("/api/v1/ingest/schema/list", get(ingest_schema_list))
+        // S11-WS1-13: Ingest schema field details
+        .route("/api/v1/ingest/schema/fields", get(ingest_schema_fields))
         // S5-WS4-03: ingest format auto-detection
         .route("/api/v1/ingest/format/detect", post(ingest_format_detect))
         // S5-WS4-04: ingest connector configuration validation
@@ -8145,6 +8180,61 @@ async fn rows_page_stats(
         total_rows,
         visible_rows,
         current_xid,
+    })))
+}
+
+// ─── S11-WS1-13: Ingest schema fields endpoint ──────────────────────────────
+
+/// S11-WS1-13: Return field definitions for a specific ingest schema entry.
+async fn ingest_schema_fields(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<IngestSchemaFieldsQuery>,
+) -> Result<(StatusCode, Json<IngestSchemaFieldsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    // Build schema on the fly from ingest records — match by connector_id (schema_id param).
+    let csv_map = state.ingest_csv_records.lock().expect("csv_records lock ingest_schema_fields");
+    let json_map = state.ingest_json_records.lock().expect("json_records lock ingest_schema_fields");
+    let columns = if let Some(records) = csv_map.get(params.schema_id.as_str()) {
+        ingest_infer_columns(records)
+    } else if let Some(records) = json_map.get(params.schema_id.as_str()) {
+        ingest_infer_columns(records)
+    } else {
+        vec![]
+    };
+    drop(csv_map);
+    drop(json_map);
+    let fields: Vec<SchemaFieldEntry> = columns.iter().map(|c| SchemaFieldEntry {
+        field_name: c.name.clone(),
+        field_type: c.inferred_type.to_string(),
+    }).collect();
+    let field_count = fields.len();
+    Ok((StatusCode::OK, Json(IngestSchemaFieldsResponse {
+        status: "ok",
+        schema_id: params.schema_id,
+        field_count,
+        fields,
+    })))
+}
+
+// ─── S11-WS1-13: WAL sequence info endpoint ──────────────────────────────────
+
+/// S11-WS1-13: Return the latest WAL sequence number and record count.
+async fn wal_seq(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalSeqResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_seq");
+    let latest_sequence = wal.latest_sequence();
+    let wal_len = wal.wal_records().len();
+    let checkpoint_count = wal.checkpoint_count();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalSeqResponse {
+        status: "ok",
+        latest_sequence,
+        wal_len,
+        checkpoint_count,
     })))
 }
 
@@ -21094,6 +21184,56 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_page_stats(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-13: Ingest schema fields endpoint tests ──────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_13_ingest_schema_fields_unknown_schema_returns_empty() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = ingest_schema_fields(
+            State(state),
+            headers,
+            Query(IngestSchemaFieldsQuery { schema_id: "no-such-schema".to_string() }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.field_count, 0, "unknown schema must return zero fields");
+        assert!(body.fields.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_13_ingest_schema_fields_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = ingest_schema_fields(
+            State(state),
+            headers,
+            Query(IngestSchemaFieldsQuery { schema_id: "s1".to_string() }),
+        ).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-13: WAL seq endpoint tests ───────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_13_wal_seq_fresh_state_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_seq(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.latest_sequence, 0, "fresh WAL must have sequence 0");
+        assert_eq!(body.wal_len, 0);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_13_wal_seq_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_seq(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
