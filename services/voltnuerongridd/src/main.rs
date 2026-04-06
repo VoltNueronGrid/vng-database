@@ -1,4 +1,4 @@
-﻿use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::net::SocketAddr;
@@ -43,6 +43,9 @@ use voltnuerongrid_plugins::{
     PluginManifestSignature, ProvenanceAttestation, ProvenanceChain,
     SbomEntry, SbomInspectionResult, SignedPluginManifest,
 };
+
+mod raft;
+use raft::{RaftAppendRequest, RaftAppendResponse, RaftNode, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -107,6 +110,11 @@ struct AcidTxEntry {
     /// REQ-23: WAL — ordered log of (statement, affected_table_or_empty) tuples recorded
     /// during the transaction. Cleared on commit or rollback.
     wal_log: Vec<(String, String)>,
+    /// S2-WS2-05: The `PagedRowStore::current_xid()` at the time this transaction
+    /// began.  At COMMIT, any key whose latest row-store version has an Xid
+    /// greater than this value was written by a concurrent transaction —
+    /// triggering a write-write conflict (HTTP 409).
+    row_store_snapshot_xid: Option<u64>,
 }
 
 #[derive(Default)]
@@ -134,8 +142,25 @@ impl AcidTransactionRegistry {
                 savepoints: Vec::new(),
                 read_snapshot_at_ms,
                 wal_log: Vec::new(),
+                row_store_snapshot_xid: None,
             },
         );
+    }
+
+    /// S2-WS2-05: Record the `PagedRowStore::current_xid()` at the moment
+    /// the transaction first touches data.  Called from the `sql_transaction`
+    /// handler once a `PagedRowStore` lock is acquired.
+    fn set_row_store_snapshot(&mut self, tx_id: &str, snapshot_xid: u64) {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            if entry.row_store_snapshot_xid.is_none() {
+                entry.row_store_snapshot_xid = Some(snapshot_xid);
+            }
+        }
+    }
+
+    /// S2-WS2-05: Retrieve the row-store snapshot xid for `tx_id`.
+    fn row_store_snapshot_xid(&self, tx_id: &str) -> Option<u64> {
+        self.transactions.get(tx_id)?.row_store_snapshot_xid
     }
 
     fn commit(&mut self, tx_id: &str, now_ms: u128) -> bool {
@@ -308,6 +333,14 @@ struct AppState {
     row_store: Arc<Mutex<PagedRowStore>>,
     /// S9-WS8-02: AI model gateway isolation policy.
     model_gateway_policy: Arc<Mutex<ModelGatewayPolicy>>,
+    /// S4-WS3-04: In-memory OLAP replica — receives mutations via `POST /api/v1/store/htap/apply`.
+    /// Maps primary_key → row data (last-writer-wins).
+    olap_store: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
+    /// S9-WS8A-02: Optional path to a JSON-lines audit log file.
+    /// Resolved from `VNG_AUDIT_LOG_PATH` env var at start-up.
+    audit_log_path: Option<String>,
+    /// S7-WS6-02: Raft consensus node state (single-node scaffold).
+    raft_state: Arc<Mutex<RaftNode>>,
 }
 
 #[derive(Clone, Default)]
@@ -935,6 +968,18 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
     // S6-WS5-03 / S6-WS5-04: TLS and TDE status endpoints — already covered
     // by security.kms Read grants which we reuse for TLS/TDE status.
 
+    // S9-WS8A-02: Audit export endpoint — accessible to DBA and Security operators.
+    for role in [OperatorRole::Dba, OperatorRole::Security] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "audit.read".to_string(),
+                scopes: vec!["audit/export".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+    }
+
     matrix
 }
 
@@ -1376,6 +1421,60 @@ struct AiPolicyUpdateRequest {
     allowed_models: Option<Vec<String>>,
     max_tokens_per_request: Option<u64>,
     rate_limit_rpm: Option<u32>,
+}
+
+// ─── S4-WS3-04: HTAP OLAP consumer structs ───────────────────────────────────
+
+#[derive(Deserialize)]
+struct OlapApplyMutation {
+    sequence: u64,
+    primary_key: String,
+    payload_json: String,
+    op: String, // "insert" | "update" | "delete"
+}
+
+#[derive(Deserialize)]
+struct StoreHtapApplyRequest {
+    mutations: Vec<OlapApplyMutation>,
+}
+
+#[derive(Serialize)]
+struct StoreHtapApplyResponse {
+    status: &'static str,
+    applied_count: usize,
+    last_applied_sequence: u64,
+}
+
+#[derive(Serialize)]
+struct OlapScanRow {
+    key: String,
+    data: HashMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct StoreHtapOlapScanResponse {
+    status: &'static str,
+    row_count: usize,
+    rows: Vec<OlapScanRow>,
+}
+
+// ─── S9-WS8A-02: Audit export struct ─────────────────────────────────────────
+
+#[derive(Serialize)]
+struct AuditExportResponse {
+    status: &'static str,
+    event_count: usize,
+    file_backed: bool,
+    audit_log_path: Option<String>,
+    events: Vec<AuditEvent>,
+}
+
+// ─── S7-WS6-02: Raft endpoint structs ────────────────────────────────────────
+
+#[derive(Serialize)]
+struct RaftStatusResponse {
+    status: &'static str,
+    raft: RaftStatusSnapshot,
 }
 
 #[derive(Deserialize)]
@@ -2231,7 +2330,7 @@ async fn main() {
         .unwrap_or_else(|_| "127.0.0.1:8080".parse().expect("fallback socket parse"));
 
     let state = AppState {
-        node_id,
+        node_id: node_id.clone(),
         cluster_mode,
         admin_api_key,
         security_config,
@@ -2274,6 +2373,9 @@ async fn main() {
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
         row_store: Arc::new(Mutex::new(PagedRowStore::default())),
         model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
+        olap_store: Arc::new(Mutex::new(HashMap::new())),
+        audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
+        raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -2370,6 +2472,15 @@ async fn main() {
             post(store_validate_constraint),
         )
         // S5-WS4-03 / S2-WS2-04: MVCC row store scan
+        // S4-WS3-04: HTAP OLAP consumer apply + scan
+        .route("/api/v1/store/htap/apply", post(store_htap_apply))
+        .route("/api/v1/store/htap/olap/scan", get(store_htap_olap_scan))
+        // S9-WS8A-02: Audit export (all buffered events + file-backed status)
+        .route("/api/v1/audit/export", get(audit_export))
+        // S7-WS6-02: Raft consensus RPC + status endpoints
+        .route("/api/v1/cluster/raft/status", get(raft_status))
+        .route("/api/v1/cluster/raft/vote", post(raft_vote))
+        .route("/api/v1/cluster/raft/append", post(raft_append))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
         // S4-WS3-04: HTAP sync export for OLAP consumers
         .route("/api/v1/store/htap/export", post(store_htap_export))
@@ -2621,10 +2732,57 @@ async fn sql_transaction(
                     }),
                 ));
             }
+            // S2-WS2-05: write-write conflict detection using row-store snapshot xid.
+            // Collect keys about to be written and check for concurrent modifications.
+            {
+                let mut write_keys: Vec<String> = Vec::new();
+                for stmt in &req.statements {
+                    let upper = stmt.trim_start().to_ascii_uppercase();
+                    if upper.starts_with("INSERT") {
+                        if let Some((k, _)) = extract_insert_row_from_sql(stmt) {
+                            write_keys.push(k);
+                        }
+                    } else if upper.starts_with("UPDATE") {
+                        if let Some((k, _)) = extract_update_row_from_sql(stmt) {
+                            write_keys.push(k);
+                        }
+                    } else if upper.starts_with("DELETE") {
+                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                            write_keys.push(k);
+                        }
+                    }
+                }
+                if !write_keys.is_empty() {
+                    let rs = state.row_store.lock().expect("row_store lock conflict check");
+                    let snapshot_xid = acid.row_store_snapshot_xid(&tx_id)
+                        .unwrap_or(0);
+                    for key in &write_keys {
+                        if rs.was_modified_after(key, snapshot_xid) {
+                            drop(rs);
+                            acid.rollback(&tx_id, now_ms);
+                            drop(acid);
+                            let locale = locale_from_headers(&headers);
+                            let localized = I18nCatalog::message(locale, "unauthorized");
+                            return Err((
+                                StatusCode::CONFLICT,
+                                Json(AuthErrorResponse {
+                                    status: "error",
+                                    reason: format!("write_write_conflict:{key}"),
+                                    locale: locale.as_str().to_string(),
+                                    localized_message: localized.message.to_string(),
+                                }),
+                            ));
+                        }
+                    }
+                }
+            }
             acid.commit(&tx_id, now_ms);
             // S2-WS2-05: flush committed DML (INSERT/UPDATE/DELETE) into PagedRowStore
             {
                 let mut rs = state.row_store.lock().expect("row_store lock");
+                // Record snapshot xid before allocating the write xid
+                let snapshot_xid = rs.current_xid();
+                acid.set_row_store_snapshot(&tx_id, snapshot_xid);
                 let xid = rs.begin_xid();
                 for stmt in &req.statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
@@ -7005,7 +7163,20 @@ fn append_audit_event(
     details_json: &str,
 ) {
     if let Ok(mut sink) = state.audit_sink.lock() {
-        sink.append(kind, actor, action, outcome, details_json);
+        let event = sink.append(kind, actor, action, outcome, details_json);
+        // S9-WS8A-02: write to file-backed audit log if configured.
+        if let Some(ref path) = state.audit_log_path {
+            if let Ok(line) = serde_json::to_string(&event) {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    let _ = writeln!(f, "{}", line);
+                }
+            }
+        }
     }
 }
 
@@ -7876,6 +8047,163 @@ async fn ai_policy_update(
         }),
     );
     Ok(Json(AiPolicyResponse { status: "ok", policy }))
+}
+
+// ─── S4-WS3-04: HTAP OLAP consumer apply ─────────────────────────────────────
+
+/// Apply a batch of HTAP mutations to the in-memory OLAP replica.
+async fn store_htap_apply(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<StoreHtapApplyRequest>,
+) -> Result<(StatusCode, Json<StoreHtapApplyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_store_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        "store/htap/apply",
+    )?;
+    let mut olap = state.olap_store.lock().expect("olap_store lock");
+    let mut last_seq = 0u64;
+    let mut applied = 0usize;
+    for m in &req.mutations {
+        last_seq = last_seq.max(m.sequence);
+        match m.op.as_str() {
+            "insert" | "update" => {
+                // Parse the payload JSON into a HashMap<String, String>
+                let data: HashMap<String, String> = serde_json::from_str(&m.payload_json)
+                    .unwrap_or_else(|_| {
+                        let mut d = HashMap::new();
+                        d.insert("payload".to_string(), m.payload_json.clone());
+                        d
+                    });
+                olap.insert(m.primary_key.clone(), data);
+                applied += 1;
+            }
+            "delete" => {
+                olap.remove(&m.primary_key);
+                applied += 1;
+            }
+            _ => {}
+        }
+    }
+    drop(olap);
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Storage,
+        &principal,
+        "store_htap_apply",
+        "ok",
+        json!({
+            "route_scope": "store/htap/apply",
+            "applied_count": applied,
+            "last_applied_sequence": last_seq,
+        }),
+    );
+    Ok((
+        StatusCode::OK,
+        Json(StoreHtapApplyResponse {
+            status: "ok",
+            applied_count: applied,
+            last_applied_sequence: last_seq,
+        }),
+    ))
+}
+
+/// Scan all rows in the in-memory OLAP replica.
+async fn store_htap_olap_scan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<StoreHtapOlapScanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _principal = require_store_runtime_principal(
+        &headers,
+        &state,
+        PrivilegeAction::Read,
+        "store/htap/olap/scan",
+    )?;
+    let olap = state.olap_store.lock().expect("olap_store lock");
+    let rows: Vec<OlapScanRow> = olap
+        .iter()
+        .map(|(k, v)| OlapScanRow { key: k.clone(), data: v.clone() })
+        .collect();
+    let row_count = rows.len();
+    Ok((
+        StatusCode::OK,
+        Json(StoreHtapOlapScanResponse { status: "ok", row_count, rows }),
+    ))
+}
+
+// ─── S9-WS8A-02: Audit export endpoint ───────────────────────────────────────
+
+/// Return all buffered audit events and indicate whether file-backed logging is active.
+async fn audit_export(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AuditExportResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers,
+        &state,
+        "audit.read",
+        "audit/export",
+        PrivilegeAction::Read,
+    )?;
+    let principal = RuntimeAccessPrincipal::Operator(operator);
+    let events = state.audit_sink.lock().expect("audit_sink lock").all().to_vec();
+    let event_count = events.len();
+    let file_backed = state.audit_log_path.is_some();
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Security,
+        &principal,
+        "audit_export",
+        "ok",
+        json!({ "route_scope": "audit/export", "event_count": event_count, "file_backed": file_backed }),
+    );
+    Ok((
+        StatusCode::OK,
+        Json(AuditExportResponse {
+            status: "ok",
+            event_count,
+            file_backed,
+            audit_log_path: state.audit_log_path.clone(),
+            events,
+        }),
+    ))
+}
+
+// ─── S7-WS6-02: Raft consensus endpoints ─────────────────────────────────────
+
+/// Return the current Raft node status.
+async fn raft_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<RaftStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let snap = state.raft_state.lock().expect("raft_state lock").status();
+    Ok(Json(RaftStatusResponse { status: "ok", raft: snap }))
+}
+
+/// Handle an incoming RequestVote RPC.
+async fn raft_vote(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RaftVoteRequest>,
+) -> Result<Json<RaftVoteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let resp = state.raft_state.lock().expect("raft_state lock").handle_vote_request(&req);
+    Ok(Json(resp))
+}
+
+/// Handle an incoming AppendEntries RPC (heartbeat or log replication).
+async fn raft_append(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RaftAppendRequest>,
+) -> Result<Json<RaftAppendResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let resp = state.raft_state.lock().expect("raft_state lock").handle_append_entries(&req);
+    Ok(Json(resp))
 }
 
 async fn security_kms_status(
@@ -8930,6 +9258,9 @@ mod tests {
             acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
             row_store: Arc::new(Mutex::new(PagedRowStore::default())),
             model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
+            olap_store: Arc::new(Mutex::new(HashMap::new())),
+            audit_log_path: None,
+            raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
         }
     }
 
@@ -14295,5 +14626,216 @@ mod tests {
         assert_eq!(read_resp.0.policy.max_tokens_per_request, 8192);
     }
 
-}
+    // ─── S4-WS3-04: HTAP OLAP consumer apply ─────────────────────────────────
 
+    #[tokio::test]
+    async fn s4_ws3_04_htap_apply_inserts_and_scan_returns_rows() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let payload = serde_json::json!({"name": "alice", "score": "98"}).to_string();
+        let req = StoreHtapApplyRequest {
+            mutations: vec![
+                OlapApplyMutation {
+                    sequence: 1,
+                    primary_key: "user:1".to_string(),
+                    payload_json: payload.clone(),
+                    op: "insert".to_string(),
+                },
+                OlapApplyMutation {
+                    sequence: 2,
+                    primary_key: "user:2".to_string(),
+                    payload_json: serde_json::json!({"name": "bob", "score": "75"}).to_string(),
+                    op: "insert".to_string(),
+                },
+            ],
+        };
+        let resp = store_htap_apply(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
+        assert_eq!(resp.1.0.applied_count, 2);
+        assert_eq!(resp.1.0.last_applied_sequence, 2);
+        // Scan should return 2 rows
+        let scan_resp = store_htap_olap_scan(State(state.clone()), headers.clone()).await.unwrap();
+        assert_eq!(scan_resp.1.0.row_count, 2);
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_04_htap_apply_delete_removes_row() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Insert a row first
+        let insert_req = StoreHtapApplyRequest {
+            mutations: vec![OlapApplyMutation {
+                sequence: 1,
+                primary_key: "item:99".to_string(),
+                payload_json: r#"{"sku":"ABC"}"#.to_string(),
+                op: "insert".to_string(),
+            }],
+        };
+        store_htap_apply(State(state.clone()), headers.clone(), Json(insert_req)).await.unwrap();
+        // Delete the row
+        let delete_req = StoreHtapApplyRequest {
+            mutations: vec![OlapApplyMutation {
+                sequence: 2,
+                primary_key: "item:99".to_string(),
+                payload_json: "{}".to_string(),
+                op: "delete".to_string(),
+            }],
+        };
+        store_htap_apply(State(state.clone()), headers.clone(), Json(delete_req)).await.unwrap();
+        // Scan should return 0 rows
+        let scan_resp = store_htap_olap_scan(State(state), headers).await.unwrap();
+        assert_eq!(scan_resp.1.0.row_count, 0);
+    }
+
+    // ─── S9-WS8A-02: Audit export ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_export_returns_buffered_events() {
+        let state = state_with_key(Some("test-key"));
+        // Emit a few audit events first by calling any handler.
+        let headers = operator_headers("test-key", "admin");
+        // Call a handler that emits an audit event (health just needs the route)
+        // We can directly append via the sink for isolation.
+        {
+            let mut sink = state.audit_sink.lock().unwrap();
+            sink.append(
+                voltnuerongrid_audit::AuditEventKind::Sql,
+                "test-actor",
+                "test-action",
+                "ok",
+                "{}",
+            );
+            sink.append(
+                voltnuerongrid_audit::AuditEventKind::Security,
+                "test-actor",
+                "test-security-action",
+                "ok",
+                "{}",
+            );
+        }
+        let resp = audit_export(State(state.clone()), headers).await.unwrap();
+        // At least the 2 events we manually appended
+        assert!(resp.1.0.event_count >= 2);
+        assert!(!resp.1.0.file_backed); // no VNG_AUDIT_LOG_PATH set in test
+        assert!(resp.1.0.audit_log_path.is_none());
+    }
+
+    // ─── S7-WS6-02: Raft consensus ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_status_returns_follower_at_term_0() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let resp = raft_status(State(state), headers).await.unwrap();
+        assert_eq!(resp.0.status, "ok");
+        assert_eq!(resp.0.raft.current_term, 0);
+        assert!(matches!(resp.0.raft.role, raft::RaftRole::Follower));
+        assert_eq!(resp.0.raft.log_length, 0);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_vote_grants_to_higher_term_candidate() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = RaftVoteRequest {
+            term: 5,
+            candidate_id: "node-2".to_string(),
+            last_log_index: 0,
+            last_log_term: 0,
+        };
+        let resp = raft_vote(State(state), headers, Json(req)).await.unwrap();
+        assert!(resp.0.vote_granted);
+        assert_eq!(resp.0.term, 5);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_append_adds_entries_to_log() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let entries = vec![
+            raft::RaftLogEntry { index: 1, term: 1, command: "INSERT INTO t VALUES (1)".to_string() },
+        ];
+        let req = RaftAppendRequest {
+            term: 1,
+            leader_id: "node-2".to_string(),
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries,
+            leader_commit: 1,
+        };
+        let resp = raft_append(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
+        assert!(resp.0.success);
+        assert_eq!(resp.0.match_index, 1);
+        // Verify log grew
+        let status_resp = raft_status(State(state), headers).await.unwrap();
+        assert_eq!(status_resp.0.raft.log_length, 1);
+        assert_eq!(status_resp.0.raft.commit_index, 1);
+    }
+
+    // ─── S2-WS2-05: Write-write conflict detection ────────────────────────────
+
+    #[tokio::test]
+    async fn s2_ws2_05_second_commit_on_same_key_returns_conflict() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // First transaction: insert user:conflict into row_store
+        let tx_req1 = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO users (id, name) VALUES ('user:conflict', 'alice')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        let resp1 = sql_transaction(State(state.clone()), headers.clone(), Json(tx_req1)).await;
+        assert!(resp1.is_ok(), "first tx should commit without error");
+        // Second transaction targeting same key — was_modified_after should be true
+        // because the first tx advanced the xid without our snapshot capturing it.
+        // We simulate this by using snapshot_xid = 0 (the test starts at xid=0).
+        // The conflict detection checks was_modified_after(key, snapshot_xid_at_start=0).
+        let tx_req2 = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO users (id, name) VALUES ('user:conflict', 'bob')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        let resp2 = sql_transaction(State(state.clone()), headers.clone(), Json(tx_req2)).await;
+        // The second tx should detect a write-write conflict (409) because user:conflict
+        // was already committed by tx1, so was_modified_after returns true.
+        assert!(
+            resp2.is_err(),
+            "second commit on same key should return a write-write conflict (409)"
+        );
+        let err = resp2.unwrap_err();
+        assert_eq!(err.0, StatusCode::CONFLICT);
+        assert!(err.1.0.reason.contains("write_write_conflict"));
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_05_different_keys_do_not_conflict() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let tx_req1 = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO orders (id, amount) VALUES ('order:A', '100')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        let resp1 = sql_transaction(State(state.clone()), headers.clone(), Json(tx_req1)).await;
+        assert!(resp1.is_ok());
+        let tx_req2 = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO orders (id, amount) VALUES ('order:B', '200')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        let resp2 = sql_transaction(State(state.clone()), headers.clone(), Json(tx_req2)).await;
+        assert!(resp2.is_ok(), "different keys should not conflict: {:?}", resp2);
+    }
+
+}

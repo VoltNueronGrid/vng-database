@@ -133,6 +133,10 @@ pub struct PagedRowStore {
     page_size: usize,
     next_page_id: u64,
     next_xid: Xid,
+    /// S2-WS2-05: Write-intent table — maps row key → the Xid that currently
+    /// holds an uncommitted write intent for that key.  Used to detect
+    /// write-write conflicts before a COMMIT is applied.
+    write_intents: HashMap<String, Xid>,
 }
 
 impl Default for PagedRowStore {
@@ -151,6 +155,7 @@ impl PagedRowStore {
             page_size,
             next_page_id: 1,
             next_xid: 1,
+            write_intents: HashMap::new(),
         }
     }
 
@@ -266,6 +271,45 @@ impl PagedRowStore {
     /// Count of rows visible at `snapshot_xid` (excludes tombstones).
     pub fn visible_row_count(&self, snapshot_xid: Xid) -> usize {
         self.scan_at_snapshot(snapshot_xid).len()
+    }
+
+    // ------------------------------------------------------------------
+    // Write-intent concurrency control (S2-WS2-05)
+    // ------------------------------------------------------------------
+
+    /// Register a write intent for `key` under transaction `xid`.
+    ///
+    /// Returns `Ok(())` if the intent was registered successfully.
+    /// Returns `Err(blocking_xid)` if a **different** transaction already
+    /// holds a write intent for the same key, indicating a write-write
+    /// conflict that the caller should surface as HTTP 409.
+    pub fn begin_write_intent(&mut self, xid: Xid, key: &str) -> Result<(), Xid> {
+        match self.write_intents.get(key) {
+            Some(&other) if other != xid => Err(other),
+            _ => {
+                self.write_intents.insert(key.to_string(), xid);
+                Ok(())
+            }
+        }
+    }
+
+    /// Remove all write intents owned by `xid`.
+    /// Call this on both COMMIT and ROLLBACK so intents do not linger.
+    pub fn release_write_intents(&mut self, xid: Xid) {
+        self.write_intents.retain(|_, &mut v| v != xid);
+    }
+
+    /// Returns `true` if any version of `key` was committed with an Xid
+    /// strictly greater than `since_xid`.  Used for optimistic conflict
+    /// detection at COMMIT: if another transaction snuck in a write after
+    /// the current transaction took its read snapshot, the commit should fail.
+    pub fn was_modified_after(&self, key: &str, since_xid: Xid) -> bool {
+        for page in &self.pages {
+            if let Some(row) = page.find_row(key) {
+                return row.versions.iter().any(|v| v.xid > since_xid);
+            }
+        }
+        false
     }
 
     // ------------------------------------------------------------------
@@ -417,5 +461,42 @@ mod tests {
         assert_eq!(store.visible_row_count(store.current_xid()), 1);
         // total_row_count includes logical rows (not versions)
         assert_eq!(store.total_row_count(), 2);
+    }
+
+    // ─── S2-WS2-05: Write-intent concurrency control ──────────────────────────
+
+    #[test]
+    fn write_intent_registers_and_releases() {
+        let mut store = PagedRowStore::new(256);
+        let xid = store.begin_xid();
+        assert!(store.begin_write_intent(xid, "user:1").is_ok());
+        assert!(store.begin_write_intent(xid, "user:1").is_ok()); // idempotent same xid
+        store.release_write_intents(xid);
+        // After release, a new xid can acquire the intent.
+        let xid2 = store.begin_xid();
+        assert!(store.begin_write_intent(xid2, "user:1").is_ok());
+    }
+
+    #[test]
+    fn write_intent_conflict_returns_blocking_xid() {
+        let mut store = PagedRowStore::new(256);
+        let xid1 = store.begin_xid();
+        let xid2 = store.begin_xid();
+        store.begin_write_intent(xid1, "order:99").unwrap();
+        // xid2 attempting the same key → should get Err(xid1)
+        let result = store.begin_write_intent(xid2, "order:99");
+        assert_eq!(result, Err(xid1));
+    }
+
+    #[test]
+    fn was_modified_after_detects_concurrent_write() {
+        let mut store = PagedRowStore::new(256);
+        let snapshot = store.current_xid(); // 0 — nothing committed yet
+        let xid = store.begin_xid();
+        store.insert(xid, "item:1", row(&[("qty", "10")]));
+        // snapshot=0; item:1 now has a version with xid=1 > 0
+        assert!(store.was_modified_after("item:1", snapshot));
+        // For a key that was not modified, should return false.
+        assert!(!store.was_modified_after("item:99", snapshot));
     }
 }
