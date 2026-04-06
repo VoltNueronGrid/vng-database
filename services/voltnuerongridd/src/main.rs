@@ -1392,6 +1392,21 @@ struct CdcStreamFilterResponse {
     events: Vec<CdcEvent>,
 }
 
+/// Query params for `GET /api/v1/store/cdc/stream/latest`.
+#[derive(Debug, Deserialize, Default)]
+struct CdcLatestQuery {
+    limit: Option<usize>,
+}
+
+/// Response for `GET /api/v1/store/cdc/stream/latest`.
+#[derive(Serialize)]
+struct CdcLatestResponse {
+    status: &'static str,
+    event_count: usize,
+    limit_applied: usize,
+    events: Vec<CdcEvent>,
+}
+
 // ─── S10-WS15-02: CDC cursor tracking structs ─────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -1473,6 +1488,14 @@ struct ChaosHealthResponse {
     cluster_healthy: bool,
     active_fault_count: usize,
     history_len: usize,
+}
+
+/// Response for `GET /api/v1/cluster/chaos/history`.
+#[derive(Serialize)]
+struct ChaosHistoryResponse {
+    status: &'static str,
+    history_len: usize,
+    events: Vec<ChaosEvent>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1652,6 +1675,16 @@ struct RowSnapshotResponse {
     snapshot_xid: u64,
     row_count: usize,
     rows: Vec<RowSnapshotEntry>,
+}
+
+/// Response for `GET /api/v1/store/rows/stats`.
+#[derive(Serialize)]
+struct RowStoreStatsResponse {
+    status: &'static str,
+    current_xid: u64,
+    total_pages: usize,
+    total_rows: usize,
+    total_visible_rows: usize,
 }
 
 // S4-WS3-04: HTAP sync export structs
@@ -2997,6 +3030,8 @@ async fn main() {
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
         .route("/api/v1/cluster/chaos/status", get(chaos_status))
         .route("/api/v1/cluster/chaos/health", get(chaos_health))
+        // S7-WS6-04: Chaos event history
+        .route("/api/v1/cluster/chaos/history", get(chaos_history))
         .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
         // S8-WS10-02: Driver wire protocol info + session connect + disconnect
         .route("/api/v1/driver/protocol/info", get(driver_protocol_info))
@@ -3006,10 +3041,14 @@ async fn main() {
         // S10-WS15-02: CDC stream from WAL
         .route("/api/v1/store/cdc/stream", get(cdc_stream))
         .route("/api/v1/store/cdc/stream/filter", get(cdc_stream_filter))
+        // S10-WS15-02: CDC stream latest N events
+        .route("/api/v1/store/cdc/stream/latest", get(cdc_stream_latest))
         .route("/api/v1/store/cdc/cursor", get(cdc_cursor_status))
         .route("/api/v1/store/cdc/cursor/advance", post(cdc_cursor_advance))
         // S2-WS2-04: Row store point-in-time snapshot export
         .route("/api/v1/store/rows/snapshot", get(row_store_snapshot))
+        // S2-WS2-04: Row store operational stats
+        .route("/api/v1/store/rows/stats", get(row_store_stats))
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
@@ -3020,6 +3059,8 @@ async fn main() {
         .route("/api/v1/connectors/deregister", post(connector_deregister))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
         .route("/api/v1/ai/policy/stats", get(ai_policy_stats))
+        // S9-WS8-02: AI policy counter reset
+        .route("/api/v1/ai/policy/reset", post(ai_policy_reset))
         .route("/api/v1/ai/request", post(ai_rate_check))
         // WS4 Ingest endpoints
         .route("/api/v1/ingest/csv", post(ingest_csv))
@@ -6508,6 +6549,19 @@ async fn chaos_health(State(state): State<AppState>) -> (StatusCode, Json<ChaosH
     }))
 }
 
+/// S7-WS6-04: Return the full fault event history (cleared faults).
+async fn chaos_history(State(state): State<AppState>) -> (StatusCode, Json<ChaosHistoryResponse>) {
+    let cs = state.chaos_state.lock().expect("chaos_state lock history");
+    let events = cs.event_history.clone();
+    let history_len = events.len();
+    drop(cs);
+    (StatusCode::OK, Json(ChaosHistoryResponse {
+        status: "ok",
+        history_len,
+        events,
+    }))
+}
+
 /// S6-WS5-03: Initiate a TLS cert rotation (scaffold — records attempt, does not hot-swap certs).
 async fn security_tls_rotate(
     State(state): State<AppState>,
@@ -6832,6 +6886,37 @@ async fn cdc_stream_filter(
     }))
 }
 
+/// S10-WS15-02: Return the latest N CDC events from the WAL stream.
+async fn cdc_stream_latest(
+    State(state): State<AppState>,
+    Query(query): Query<CdcLatestQuery>,
+) -> (StatusCode, Json<CdcLatestResponse>) {
+    let limit = query.limit.unwrap_or(10).min(1000);
+    let wal = state.wal_engine.lock().expect("wal_engine lock cdc_latest");
+    let all_events: Vec<CdcEvent> = wal.wal_records()
+        .iter()
+        .map(|r| CdcEvent {
+            sequence: r.sequence,
+            op: if r.value == "__deleted__" { "delete".to_string() } else { "insert".to_string() },
+            table_name: "row_store".to_string(),
+            key: r.key.clone(),
+            payload: r.value.clone(),
+            captured_at_ms: 0,
+        })
+        .collect();
+    drop(wal);
+    let total = all_events.len();
+    let skip = if total > limit { total - limit } else { 0 };
+    let events: Vec<CdcEvent> = all_events.into_iter().skip(skip).collect();
+    let event_count = events.len();
+    (StatusCode::OK, Json(CdcLatestResponse {
+        status: "ok",
+        event_count,
+        limit_applied: limit,
+        events,
+    }))
+}
+
 /// S10-WS15-02: Read the current CDC cursor position for a given table.
 async fn cdc_cursor_status(
     State(state): State<AppState>,
@@ -6884,6 +6969,29 @@ async fn row_store_snapshot(
         snapshot_xid,
         row_count,
         rows,
+    })))
+}
+
+// ─── S2-WS2-04: Row store operational stats ─────────────────────────────────────
+
+/// S2-WS2-04: Return operational statistics for the MVCC page-based row store.
+async fn row_store_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowStoreStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock stats");
+    let current_xid = rs.current_xid();
+    let total_pages = rs.page_count();
+    let total_rows = rs.total_row_count();
+    let total_visible_rows = rs.visible_row_count(current_xid);
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowStoreStatsResponse {
+        status: "ok",
+        current_xid,
+        total_pages,
+        total_rows,
+        total_visible_rows,
     })))
 }
 
@@ -9498,6 +9606,13 @@ struct AiPolicyStatsResponse {
     per_model: Vec<ModelRequestStat>,
 }
 
+/// Response for `POST /api/v1/ai/policy/reset`.
+#[derive(Debug, Serialize)]
+struct AiPolicyResetResponse {
+    status: &'static str,
+    models_cleared: usize,
+}
+
 async fn ai_rate_check(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -9598,6 +9713,22 @@ async fn ai_policy_stats(
         total_requests,
         allowed_models_enforced,
         per_model,
+    })))
+}
+
+/// S9-WS8-02: Reset all per-model AI request counters.
+async fn ai_policy_reset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AiPolicyResetResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock reset");
+    let models_cleared = counters.len();
+    counters.clear();
+    drop(counters);
+    Ok((StatusCode::OK, Json(AiPolicyResetResponse {
+        status: "ok",
+        models_cleared,
     })))
 }
 
@@ -17017,6 +17148,36 @@ mod tests {
         assert!(body.rows.is_empty());
     }
 
+    // ── S2-WS2-04: Row store stats endpoint ─────────────────────────────────
+    #[tokio::test]
+    async fn s2_ws2_04_row_store_stats_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = row_store_stats(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.total_visible_rows, 0, "fresh store has no visible rows");
+        assert!(body.total_pages >= 1, "store always has at least one page");
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_04_row_store_stats_reflects_inserted_rows() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut rs = state.row_store.lock().unwrap();
+            let xid = rs.begin_xid();
+            let mut d = std::collections::HashMap::new();
+            d.insert("col".to_string(), "val".to_string());
+            rs.insert(xid, "stats-row-1", d.clone());
+            rs.insert(xid, "stats-row-2", d);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = row_store_stats(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_rows, 2, "two rows inserted");
+        assert_eq!(body.total_visible_rows, 2, "both rows visible at head xid");
+    }
+
     #[tokio::test]
     async fn s2_ws2_04_row_snapshot_shows_inserted_rows() {
         let state = state_with_key(Some("test-key"));
@@ -17149,6 +17310,36 @@ mod tests {
         assert_eq!(body.active_fault_count, 0);
     }
 
+    // ── S7-WS6-04: Chaos history endpoint ───────────────────────────────────
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_history_empty_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = chaos_history(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.history_len, 0, "no history on fresh state");
+        assert!(body.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_history_shows_cleared_events() {
+        let state = state_with_key(Some("test-key"));
+        // Inject a fault.
+        let req = ChaosInjectRequest {
+            fault_type: "node_crash".to_string(),
+            target_node: None,
+            parameters: HashMap::new(),
+        };
+        chaos_inject(State(state.clone()), axum::extract::Json(req)).await;
+        // Clear it (moves to history).
+        chaos_clear(State(state.clone())).await;
+        // Now check history.
+        let (status, Json(body)) = chaos_history(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.history_len, 1, "one cleared event in history");
+        assert_eq!(body.events[0].fault_type, "node_crash");
+    }
+
     #[tokio::test]
     async fn s7_ws6_04_chaos_health_with_faults_is_unhealthy() {
         let state = state_with_key(Some("test-key"));
@@ -17233,6 +17424,35 @@ mod tests {
         assert_eq!(body.model_count, 0);
         assert_eq!(body.total_requests, 0);
         assert!(!body.allowed_models_enforced, "default policy has empty allowed_models");
+    }
+
+    // ── S9-WS8-02: AI policy reset endpoint ─────────────────────────────────
+    #[tokio::test]
+    async fn s9_ws8_02_ai_policy_reset_clears_counters() {
+        let state = state_with_key(Some("test-key"));
+        // Seed a counter directly.
+        {
+            let mut counters = state.ai_request_counters.lock().unwrap();
+            counters.insert("gpt-4".to_string(), 42);
+            counters.insert("llama-3".to_string(), 7);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = ai_policy_reset(State(state.clone()), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.models_cleared, 2, "two models were cleared");
+        // Verify counters are actually empty.
+        let counters = state.ai_request_counters.lock().unwrap();
+        assert!(counters.is_empty(), "counters must be empty after reset");
+    }
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_policy_reset_on_empty_state_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = ai_policy_reset(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.models_cleared, 0, "nothing to clear in fresh state");
     }
 
     #[tokio::test]
@@ -17328,6 +17548,38 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.event_count, 2, "row_store table should match all WAL events");
         assert_eq!(body.table_filter.as_deref(), Some("row_store"));
+    }
+
+    // ── S10-WS15-02: CDC stream latest endpoint ──────────────────────────────
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_stream_latest_returns_empty_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let query = CdcLatestQuery { limit: None };
+        let (status, axum::extract::Json(body)) =
+            cdc_stream_latest(State(state), axum::extract::Query(query)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.event_count, 0, "no events on fresh state");
+        assert_eq!(body.limit_applied, 10, "default limit is 10");
+    }
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_stream_latest_respects_limit() {
+        let state = state_with_key(Some("test-key"));
+        // Add 5 WAL mutations.
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            for i in 0..5 {
+                wal.append_mutation(&format!("k{i}"), &format!("v{i}"));
+            }
+        }
+        // Request only latest 3.
+        let query = CdcLatestQuery { limit: Some(3) };
+        let (status, axum::extract::Json(body)) =
+            cdc_stream_latest(State(state), axum::extract::Query(query)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.event_count, 3, "limit=3 returns 3 events");
+        assert_eq!(body.limit_applied, 3);
     }
 
     #[tokio::test]
