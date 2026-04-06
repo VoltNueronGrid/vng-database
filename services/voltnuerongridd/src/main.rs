@@ -1372,6 +1372,17 @@ struct WalStatsResponse {
     mutation_rate_estimate: f64,
 }
 
+// ─── S2-WS2-02: WAL compact response ─────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalCompactResponse {
+    status: &'static str,
+    records_before: usize,
+    records_after: usize,
+    checkpoint_count: usize,
+    compacted: bool,
+}
+
 // ─── S2-WS2-02: WAL replay (filtered read-back) structs ─────────────────────
 
 #[derive(Debug, Deserialize, Default)]
@@ -2357,6 +2368,18 @@ struct RaftCommitProgressResponse {
     uncommitted: usize,
 }
 
+// ─── S7-WS6-02: Raft election status response ─────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RaftElectionStatusResponse {
+    status: &'static str,
+    role: RaftRole,
+    ticks_since_heartbeat: u64,
+    election_timeout_ticks: u64,
+    remaining_ticks: u64,
+    is_election_pending: bool,
+}
+
 // ─── S8-WS10-02: Driver health struct ────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -3282,6 +3305,8 @@ async fn main() {
         // S7-WS6-02: Raft point-in-time snapshot
         .route("/api/v1/cluster/raft/snapshot", get(raft_snapshot))
         .route("/api/v1/cluster/raft/heartbeat", post(raft_heartbeat))
+        // S7-WS6-02: Raft election timer status
+        .route("/api/v1/cluster/raft/election/status", get(raft_election_status))
         .route("/api/v1/cluster/raft/members", get(raft_member_list))
         // S7-WS6-03: Raft current leader
         .route("/api/v1/cluster/raft/leader", get(raft_leader))
@@ -3313,6 +3338,8 @@ async fn main() {
         .route("/api/v1/store/wal/recover", post(wal_recover))
         .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
         .route("/api/v1/store/wal/stats", get(wal_stats))
+        // S2-WS2-02: WAL compact
+        .route("/api/v1/store/wal/compact", post(wal_compact))
         // S2-WS2-02: WAL replay (filtered read-back)
         .route("/api/v1/store/wal/replay", get(wal_replay))
         // S7-WS6-04: Chaos/game-day fault injection
@@ -3363,6 +3390,8 @@ async fn main() {
         .route("/api/v1/ai/policy/stats", get(ai_policy_stats))
         // S9-WS8-02: AI policy counter reset
         .route("/api/v1/ai/policy/reset", post(ai_policy_reset))
+        // S9-WS8-02: AI governance audit
+        .route("/api/v1/ai/governance/audit", get(ai_governance_audit))
         .route("/api/v1/ai/request", post(ai_rate_check))
         // WS4 Ingest endpoints
         .route("/api/v1/ingest/csv", post(ingest_csv))
@@ -6824,6 +6853,34 @@ async fn wal_stats(
     }))
 }
 
+/// S2-WS2-02: Compact the WAL — force a checkpoint and return compaction stats.
+async fn wal_compact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<WalCompactResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let records_before = {
+        let wal = state.wal_engine.lock().expect("wal_engine wal_compact lock");
+        wal.wal_records().len()
+    };
+    {
+        let mut wal = state.wal_engine.lock().expect("wal_engine compact_checkpoint");
+        wal.force_checkpoint();
+    }
+    let (records_after, checkpoint_count) = {
+        let wal = state.wal_engine.lock().expect("wal_engine compact_post");
+        (wal.wal_records().len(), wal.checkpoint_count())
+    };
+    let compacted = records_before > records_after;
+    (StatusCode::OK, Json(WalCompactResponse {
+        status: "ok",
+        records_before,
+        records_after,
+        checkpoint_count,
+        compacted,
+    }))
+}
+
 // ─── S
 
 // ─── S2-WS2-02: WAL replay — filtered read-back of WAL entries ───────────────
@@ -7146,6 +7203,29 @@ async fn raft_heartbeat(
         term,
         ticks_reset_to: 0,
         heartbeat_accepted: true,
+    }))
+}
+
+// ─── S7-WS6-02: Raft election status handler ─────────────────────────────────
+
+/// S7-WS6-02: Return the current election timer status for this Raft node.
+async fn raft_election_status(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<RaftElectionStatusResponse>) {
+    let node = state.raft_state.lock().expect("raft_state election_status lock");
+    let role = node.role;
+    let ticks = node.ticks_since_heartbeat;
+    let timeout = node.election_timeout_ticks;
+    let remaining = timeout.saturating_sub(ticks);
+    let is_election_pending = matches!(node.role, RaftRole::Candidate);
+    drop(node);
+    (StatusCode::OK, Json(RaftElectionStatusResponse {
+        status: "ok",
+        role,
+        ticks_since_heartbeat: ticks,
+        election_timeout_ticks: timeout,
+        remaining_ticks: remaining,
+        is_election_pending,
     }))
 }
 
@@ -10382,6 +10462,22 @@ struct AiPolicyResetResponse {
     models_cleared: usize,
 }
 
+// ─── S9-WS8-02: AI governance audit response ──────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct AiGovernanceAuditEntry {
+    model_id: String,
+    request_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct AiGovernanceAuditResponse {
+    status: &'static str,
+    total_models: usize,
+    total_requests: u64,
+    entries: Vec<AiGovernanceAuditEntry>,
+}
+
 async fn ai_rate_check(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -10498,6 +10594,34 @@ async fn ai_policy_reset(
     Ok((StatusCode::OK, Json(AiPolicyResetResponse {
         status: "ok",
         models_cleared,
+    })))
+}
+
+// ─── S9-WS8-02: AI governance audit handler ──────────────────────────────────
+
+/// S9-WS8-02: Return a read-only audit view of all model request counts.
+async fn ai_governance_audit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AiGovernanceAuditResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let counters = state.ai_request_counters.lock().expect("ai_request_counters audit lock");
+    let mut entries: Vec<AiGovernanceAuditEntry> = counters
+        .iter()
+        .map(|(model_id, &count)| AiGovernanceAuditEntry {
+            model_id: model_id.clone(),
+            request_count: count,
+        })
+        .collect();
+    entries.sort_by(|a, b| b.request_count.cmp(&a.request_count));
+    let total_models = entries.len();
+    let total_requests: u64 = entries.iter().map(|e| e.request_count).sum();
+    drop(counters);
+    Ok((StatusCode::OK, Json(AiGovernanceAuditResponse {
+        status: "ok",
+        total_models,
+        total_requests,
+        entries,
     })))
 }
 
@@ -18383,6 +18507,35 @@ mod tests {
         assert_eq!(body.checkpoint_count, 1, "checkpoint taken even on empty WAL");
     }
 
+    // ── S2-WS2-02: WAL compact tests ──────────────────────────────────────────
+    #[tokio::test]
+    async fn s2_ws2_02_wal_compact_empty_wal_returns_compacted_false() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_compact(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.records_before, 0);
+        assert_eq!(body.records_after, 0);
+        assert!(!body.compacted, "empty WAL has nothing to compact");
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_compact_after_mutations_clears_wal() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "v2");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_compact(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.records_before, 2, "2 mutations appended before compact");
+        assert_eq!(body.records_after, 0, "compact clears WAL via checkpoint");
+        assert!(body.compacted, "records were removed so compacted = true");
+    }
+
     // ── S7-WS6-04: Chaos health check ────────────────────────────────────────
     #[tokio::test]
     async fn s7_ws6_04_chaos_health_fresh_state_is_healthy() {
@@ -18572,6 +18725,35 @@ mod tests {
         let (status, Json(body)) = ai_policy_reset(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.models_cleared, 0, "nothing to clear in fresh state");
+    }
+
+    // ─── S9-WS8-02: AI governance audit tests ────────────────────────────────
+    #[tokio::test]
+    async fn s9_ws8_02_ai_governance_audit_empty_state_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = ai_governance_audit(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.total_models, 0);
+        assert_eq!(body.total_requests, 0);
+        assert!(body.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_governance_audit_reflects_request_counts() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut counters = state.ai_request_counters.lock().unwrap();
+            counters.insert("model-a".to_string(), 10);
+            counters.insert("model-b".to_string(), 5);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = ai_governance_audit(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_models, 2);
+        assert_eq!(body.total_requests, 15);
+        assert!(!body.entries.is_empty(), "entries must be populated");
     }
 
     #[tokio::test]
@@ -18894,6 +19076,35 @@ mod tests {
         let (status, Json(body)) = raft_heartbeat(State(state)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.term, 3);
+    }
+
+    // ─── S7-WS6-02: Raft election status tests ───────────────────────────────
+    #[tokio::test]
+    async fn s7_ws6_02_raft_election_status_fresh_state_is_follower() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = raft_election_status(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(matches!(body.role, RaftRole::Follower), "fresh state must be Follower");
+        assert!(!body.is_election_pending, "Follower is not in election");
+        assert!(body.election_timeout_ticks > 0);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_election_status_remaining_ticks_decrements() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut node = state.raft_state.lock().unwrap();
+            node.ticks_since_heartbeat = 3;
+        }
+        let (status, Json(body)) = raft_election_status(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.ticks_since_heartbeat, 3);
+        assert_eq!(
+            body.remaining_ticks,
+            body.election_timeout_ticks.saturating_sub(3),
+            "remaining = timeout - ticks_used"
+        );
     }
 
     // ─── S4-WS3-04: HTAP status tests ────────────────────────────────────────

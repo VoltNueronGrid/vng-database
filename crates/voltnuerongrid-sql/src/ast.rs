@@ -49,6 +49,8 @@ pub struct SelectStatement {
     pub has_window_fn: bool,
     /// True when the raw SQL contains an aggregate function call (COUNT, SUM, AVG, MIN, MAX) (S3-WS1-04).
     pub has_agg_fn: bool,
+    /// True when `SELECT DISTINCT` is used (S3-WS1-04).
+    pub is_distinct: bool,
     /// LIMIT value, if present.
     pub limit: Option<u64>,
 }
@@ -155,6 +157,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     || up_trim.contains("MAX(")
                 {
                     stmt.has_agg_fn = true;
+                }
+                // Detect SELECT DISTINCT keyword (S3-WS1-04).
+                if up_trim.starts_with("SELECTDISTINCT") {
+                    stmt.is_distinct = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1174,5 +1180,32 @@ mod extended_conformance_tests {
         } else {
             panic!("expected CreateTable");
         }
+    }
+}
+
+#[cfg(test)]
+mod select_distinct_tests {
+    use super::*;
+
+    #[test]
+    fn select_distinct_sets_is_distinct_true() {
+        let stmt = parse_one("SELECT DISTINCT name FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.is_distinct, "SELECT DISTINCT must set is_distinct = true");
+    }
+
+    #[test]
+    fn select_without_distinct_has_is_distinct_false() {
+        let stmt = parse_one("SELECT name FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.is_distinct, "plain SELECT must have is_distinct = false");
+    }
+
+    #[test]
+    fn select_distinct_with_where_sets_flag_and_table() {
+        let stmt = parse_one("SELECT DISTINCT status FROM orders WHERE active = 'true'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.is_distinct, "SELECT DISTINCT with WHERE must set is_distinct = true");
+        assert_eq!(s.table.as_deref(), Some("orders"));
     }
 }
