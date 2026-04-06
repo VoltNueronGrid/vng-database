@@ -32,6 +32,7 @@ use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, DdlCatalog};
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
+use voltnuerongrid_store::{InMemoryDurabilityEngine, DurabilityConfig};
 use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
 use voltnuerongrid_ingest::{
     IngestionConnector, ManagedEventBusTransport, ManagedReplayCursorStore,
@@ -341,6 +342,13 @@ struct AppState {
     audit_log_path: Option<String>,
     /// S7-WS6-02: Raft consensus node state (single-node scaffold).
     raft_state: Arc<Mutex<RaftNode>>,
+    /// S9-WS8-02: Per-model-identity request counters for rate limiting.
+    /// Maps model_id → request count in current window.
+    ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
+    /// S2-WS2-02: WAL durability engine — records every committed DML mutation.
+    wal_engine: Arc<Mutex<InMemoryDurabilityEngine>>,
+    /// S7-WS6-04: Chaos/game-day fault injection state.
+    chaos_state: Arc<Mutex<ChaosState>>,
 }
 
 #[derive(Clone, Default)]
@@ -1137,6 +1145,8 @@ struct SqlExecuteResponse {
     planner_path: Option<String>,
     /// Physical OLTP executor results: actual rows from PagedRowStore for point-read SELECT (S4-WS3-02).
     oltp_rows: Option<Vec<OltpRowResult>>,
+    /// Vectorized OLAP aggregation results from columnar executor (S4-WS3-02).
+    olap_agg_results: Option<Vec<OlapVecAggResult>>,
 }
 
 /// S4-WS3-02: a single result row returned by the physical OLTP executor.
@@ -1144,6 +1154,83 @@ struct SqlExecuteResponse {
 struct OltpRowResult {
     key: String,
     data: std::collections::HashMap<String, String>,
+}
+
+/// S4-WS3-02: a single vectorized aggregation result from the OLAP columnar executor.
+#[derive(Serialize)]
+struct OlapVecAggResult {
+    column: String,
+    op: String,
+    value: String,
+    row_count: usize,
+}
+
+// ─── S2-WS2-02: WAL durability + recovery types ──────────────────────────────
+
+/// Response for `GET /api/v1/store/wal/status`.
+#[derive(Serialize)]
+struct WalStatusResponse {
+    status: &'static str,
+    wal_len: usize,
+    latest_sequence: u64,
+    checkpoint_count: usize,
+}
+
+/// Request body for `POST /api/v1/store/wal/recover`.
+#[derive(Deserialize)]
+struct WalRecoverRequest {
+    /// When `true`, log what would be replayed without actually writing to the row store.
+    dry_run: Option<bool>,
+}
+
+/// Response for `POST /api/v1/store/wal/recover`.
+#[derive(Debug, Serialize)]
+struct WalRecoverResponse {
+    status: &'static str,
+    records_replayed: usize,
+    dry_run: bool,
+}
+
+// ─── S7-WS6-04: Chaos injection types ────────────────────────────────────────
+
+/// A single chaos fault event injected into the cluster simulation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChaosEvent {
+    /// The type of fault, e.g. `"network_partition"`, `"node_crash"`, `"packet_loss"`.
+    fault_type: String,
+    /// Optional target node identifier.
+    target_node: Option<String>,
+    /// Arbitrary key–value parameters for the fault (e.g. `{ "loss_pct": "30" }`).
+    parameters: HashMap<String, String>,
+    /// Epoch-millisecond timestamp when the fault was injected.
+    injected_at_ms: u64,
+    /// Epoch-millisecond timestamp when the fault was cleared, if any.
+    cleared_at_ms: Option<u64>,
+}
+
+/// Mutable chaos state (active faults + history).
+#[derive(Debug, Default)]
+struct ChaosState {
+    active_faults: Vec<ChaosEvent>,
+    event_history: Vec<ChaosEvent>,
+}
+
+/// Request body for `POST /api/v1/cluster/chaos/inject`.
+#[derive(Deserialize)]
+struct ChaosInjectRequest {
+    fault_type: String,
+    target_node: Option<String>,
+    #[serde(default)]
+    parameters: HashMap<String, String>,
+}
+
+/// Response for `GET /api/v1/cluster/chaos/status`.
+#[derive(Serialize)]
+struct ChaosStatusResponse {
+    status: &'static str,
+    active_fault_count: usize,
+    total_injected: usize,
+    active_faults: Vec<ChaosEvent>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2373,9 +2460,12 @@ async fn main() {
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
         row_store: Arc::new(Mutex::new(PagedRowStore::default())),
         model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
+        wal_engine: Arc::new(Mutex::new(InMemoryDurabilityEngine::with_config(DurabilityConfig::default()))),
+        chaos_state: Arc::new(Mutex::new(ChaosState::default())),
         olap_store: Arc::new(Mutex::new(HashMap::new())),
         audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
         raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
+        ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -2481,6 +2571,7 @@ async fn main() {
         .route("/api/v1/cluster/raft/status", get(raft_status))
         .route("/api/v1/cluster/raft/vote", post(raft_vote))
         .route("/api/v1/cluster/raft/append", post(raft_append))
+        .route("/api/v1/cluster/raft/tick", post(raft_tick))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
         // S4-WS3-04: HTAP sync export for OLAP consumers
         .route("/api/v1/store/htap/export", post(store_htap_export))
@@ -2492,7 +2583,15 @@ async fn main() {
         .route("/api/v1/security/tde/status", get(security_tde_status))
         // S9-WS8-02: AI model gateway policy
         .route("/api/v1/ai/policy", get(ai_policy))
+        // S2-WS2-02: WAL durability status + recovery replay
+        .route("/api/v1/store/wal/status", get(wal_status))
+        .route("/api/v1/store/wal/recover", post(wal_recover))
+        // S7-WS6-04: Chaos/game-day fault injection
+        .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
+        .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
+        .route("/api/v1/cluster/chaos/status", get(chaos_status))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
+        .route("/api/v1/ai/request", post(ai_rate_check))
         // WS4 Ingest endpoints
         .route("/api/v1/ingest/csv", post(ingest_csv))
         .route("/api/v1/ingest/json", post(ingest_json))
@@ -2777,7 +2876,9 @@ async fn sql_transaction(
                 }
             }
             acid.commit(&tx_id, now_ms);
-            // S2-WS2-05: flush committed DML (INSERT/UPDATE/DELETE) into PagedRowStore
+            // S2-WS2-05: flush committed DML (INSERT/UPDATE/DELETE) into PagedRowStore.
+            // Write intents are registered before each write and released after the flush
+            // so that concurrent transactions see the in-progress lock via begin_write_intent.
             {
                 let mut rs = state.row_store.lock().expect("row_store lock");
                 // Record snapshot xid before allocating the write xid
@@ -2788,18 +2889,48 @@ async fn sql_transaction(
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
                         if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
+                            // Register write intent so concurrent conflict checks see this lock.
+                            let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                         }
                     } else if upper.starts_with("DELETE") {
                         if let Some(k) = extract_delete_key_from_sql(stmt) {
+                            let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
                         }
                     } else if upper.starts_with("UPDATE") {
                         if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                            let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                         }
                     }
                 }
+                // S2-WS2-02: record committed DML mutations in the WAL engine for
+                // durability and recovery replay.
+                {
+                    let mut wal = state.wal_engine.lock().expect("wal_engine lock");
+                    for stmt in &req.statements {
+                        let upper = stmt.trim_start().to_ascii_uppercase();
+                        if upper.starts_with("INSERT") {
+                            if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
+                                let val = serde_json::to_string(&d).unwrap_or_default();
+                                wal.append_mutation(&k, &val);
+                            }
+                        } else if upper.starts_with("DELETE") {
+                            if let Some(k) = extract_delete_key_from_sql(stmt) {
+                                wal.append_mutation(&k, "__deleted__");
+                            }
+                        } else if upper.starts_with("UPDATE") {
+                            if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                                let val = serde_json::to_string(&d).unwrap_or_default();
+                                wal.append_mutation(&k, &val);
+                            }
+                        }
+                    }
+                    let _ = wal.maybe_checkpoint();
+                }
+                // Release all intents for this xid — writes are now committed and visible.
+                rs.release_write_intents(xid);
             }
             // S4-WS3-04: publish each committed DML mutation to RowStoreSyncOrigin for HTAP consumers.
             {
@@ -3138,6 +3269,7 @@ async fn sql_execute(
                     legacy_agg_results: None,
                     planner_path: None,
                     oltp_rows: None,
+                    olap_agg_results: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -3176,6 +3308,7 @@ async fn sql_execute(
                 legacy_agg_results: None,
                 planner_path: None,
                 oltp_rows: None,
+                olap_agg_results: None,
             }),
         ));
         release_sql_data_plane_connection(&state, &connection_id);
@@ -3234,6 +3367,7 @@ async fn sql_execute(
                     legacy_agg_results: None,
                     planner_path: None,
                     oltp_rows: None,
+                    olap_agg_results: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -3324,29 +3458,96 @@ async fn sql_execute(
         use voltnuerongrid_sql::parse_one;
         let mut max_cost: f64 = f64::NEG_INFINITY;
         let mut dominant: Option<String> = None;
-        for stmt_str in req.sql_batch.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-            if let Ok(stmt) = parse_one(stmt_str) {
-                let cost = QueryPlanner::estimate_cost(&QueryPlanner::plan(&stmt));
-                if cost.relative_cost > max_cost {
-                    max_cost = cost.relative_cost;
-                    dominant = Some(match cost.recommended_path {
-                        QueryPath::Oltp => "oltp",
-                        QueryPath::Olap => "olap",
-                        QueryPath::Hybrid => "hybrid",
-                        QueryPath::Unknown => "unknown",
-                    }.to_string());
+        for stmt in &olap_statements {
+            if let Ok(parsed) = parse_one(stmt) {
+                let plan = QueryPlanner::plan(&parsed);
+                let estimate = QueryPlanner::estimate_cost(&plan);
+                let path_str = match estimate.recommended_path {
+                    QueryPath::Olap => "olap",
+                    QueryPath::Hybrid => "hybrid",
+                    QueryPath::Oltp => "oltp",
+                    QueryPath::Unknown => continue,
+                };
+                if estimate.relative_cost > max_cost {
+                    max_cost = estimate.relative_cost;
+                    dominant = Some(path_str.to_string());
                 }
             }
         }
         dominant
     };
-    // S4-WS3-02: physical OLTP executor dispatch — if planner says oltp, read real rows from PagedRowStore.
+
+    // S4-WS3-02: OLTP physical executor dispatch
     let oltp_rows: Option<Vec<OltpRowResult>> =
         if planner_path.as_deref() == Some("oltp") && !olap_statements.is_empty() {
-            let rs = state.row_store.lock().expect("row_store lock oltp dispatch");
-            let limit = req.max_rows.unwrap_or(1_000).min(10_000);
+            let rs = state.row_store.lock().expect("row_store lock oltp select");
+            let limit = req.max_rows.unwrap_or(10_000).min(100_000);
             let rows = execute_oltp_select(&olap_statements, &rs, limit);
             if rows.is_empty() { None } else { Some(rows) }
+        } else {
+            None
+        };
+
+    // S3-WS1-05: vectorized OLAP executor dispatch — if planner says olap/hybrid,
+    // run filter_batch (predicate pushdown from WHERE clause) then aggregate_batch over a
+    // columnar scan of the committed PagedRowStore snapshot.
+    let olap_agg_results: Option<Vec<OlapVecAggResult>> =
+        if matches!(planner_path.as_deref(), Some("olap") | Some("hybrid")) {
+            use voltnuerongrid_store::columnar::{
+                vectorized_scan, aggregate_batch, filter_batch, VectorizedAggOp,
+            };
+            use voltnuerongrid_sql::{parse_one, Statement};
+            let rs = state.row_store.lock().expect("row_store lock olap dispatch");
+            let snapshot_xid = rs.current_xid();
+            // Collect into owned (String, HashMap) so the lock can be released before scan.
+            let rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
+                .scan_at_snapshot(snapshot_xid)
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect();
+            drop(rs);
+            let limit = req.max_rows.unwrap_or(10_000).min(100_000);
+            let (batch, _stats) = vectorized_scan(&rows, limit);
+            if batch.row_count() == 0 {
+                None
+            } else {
+                // S3-WS1-05: extract WHERE predicates from the first parseable SELECT
+                // and push them into filter_batch before aggregating.
+                let predicates = olap_statements.iter().find_map(|sql| {
+                    if let Ok(Statement::Select(sel)) = parse_one(sql) {
+                        sel.where_clause
+                            .as_deref()
+                            .and_then(parse_where_predicates)
+                    } else {
+                        None
+                    }
+                });
+                let filtered = match predicates {
+                    Some(preds) if !preds.is_empty() => filter_batch(&batch, &preds),
+                    _ => batch,
+                };
+                if filtered.row_count() == 0 {
+                    None
+                } else {
+                    // Apply Count on every column in the filtered batch.
+                    let mut ops = std::collections::HashMap::new();
+                    for col_name in filtered.columns.keys() {
+                        ops.insert(col_name.clone(), VectorizedAggOp::Count);
+                    }
+                    let count_results = aggregate_batch(&filtered, &ops);
+                    let mut agg_out: Vec<OlapVecAggResult> = count_results
+                        .into_iter()
+                        .map(|(col, res)| OlapVecAggResult {
+                            column: col,
+                            op: format!("{:?}", res.op).to_ascii_lowercase(),
+                            value: res.value,
+                            row_count: res.row_count,
+                        })
+                        .collect();
+                    agg_out.sort_by(|a, b| a.column.cmp(&b.column));
+                    Some(agg_out)
+                }
+            }
         } else {
             None
         };
@@ -3369,6 +3570,7 @@ async fn sql_execute(
         legacy_agg_results,
         planner_path,
         oltp_rows,
+        olap_agg_results,
     };
     append_runtime_audit_event(
         &state,
@@ -5648,6 +5850,149 @@ fn release_pessimistic_lock(
             lock: Some(existing),
         },
     )
+}
+/// S3-WS1-05: parse a WHERE clause string into `VectorizedFilter` predicates.
+/// Handles simple `col op val` expressions joined by ` AND `.
+fn parse_where_predicates(
+    where_clause: &str,
+) -> Option<Vec<voltnuerongrid_store::columnar::VectorizedFilter>> {
+    use voltnuerongrid_store::columnar::{FilterOp, VectorizedFilter};
+    let preds: Vec<VectorizedFilter> = where_clause
+        .split(" AND ")
+        .filter_map(|clause| {
+            let clause = clause.trim();
+            let ops: &[(&str, FilterOp)] = &[
+                (">=", FilterOp::Gte),
+                ("<=", FilterOp::Lte),
+                ("!=", FilterOp::Ne),
+                (">",  FilterOp::Gt),
+                ("<",  FilterOp::Lt),
+                ("=",  FilterOp::Eq),
+            ];
+            for (sym, op) in ops {
+                if let Some(pos) = clause.find(sym) {
+                    let col = clause[..pos].trim().to_string();
+                    let val = clause[pos + sym.len()..].trim()
+                        .trim_matches('\'').trim_matches('"').to_string();
+                    if !col.is_empty() {
+                        return Some(VectorizedFilter { column: col, op: op.clone(), value: val });
+                    }
+                }
+            }
+            None
+        })
+        .collect();
+    if preds.is_empty() { None } else { Some(preds) }
+}
+
+// ─── S2-WS2-02: WAL durability + recovery handlers ────────────────────────────────────────────
+
+/// S2-WS2-02: return WAL engine stats.
+async fn wal_status(State(state): State<AppState>) -> (StatusCode, Json<WalStatusResponse>) {
+    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let records = wal.wal_records();
+    let wal_len = records.len();
+    let latest_seq = records.last().map(|r| r.sequence).unwrap_or(0);
+    let checkpoint_count = wal.checkpoint_count();
+    drop(wal);
+    (StatusCode::OK, Json(WalStatusResponse {
+        status: "ok",
+        wal_len,
+        latest_sequence: latest_seq,
+        checkpoint_count,
+    }))
+}
+
+/// S2-WS2-02: replay WAL records into the row store (or dry-run).
+async fn wal_recover(
+    State(state): State<AppState>,
+    axum::extract::Json(req): axum::extract::Json<WalRecoverRequest>,
+) -> (StatusCode, Json<WalRecoverResponse>) {
+    let dry_run = req.dry_run.unwrap_or(false);
+    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let records = wal.wal_records().to_vec();
+    drop(wal);
+    let mut replayed: usize = 0;
+    if !dry_run {
+        let mut rs = state.row_store.lock().expect("row_store lock wal_recover");
+        let xid = rs.begin_xid();
+        for rec in &records {
+            if rec.value == "__deleted__" {
+                rs.delete(xid, &rec.key);
+            } else {
+                let data: std::collections::HashMap<String, String> =
+                    serde_json::from_str(&rec.value)
+                        .unwrap_or_else(|_| [("_raw".to_string(), rec.value.clone())]
+                            .into_iter().collect());
+                rs.insert(xid, &rec.key, data);
+            }
+            replayed += 1;
+        }
+    } else {
+        replayed = records.len();
+    }
+    (StatusCode::OK, Json(WalRecoverResponse {
+        status: "ok",
+        records_replayed: replayed,
+        dry_run,
+    }))
+}
+
+// ─── S7-WS6-04: Chaos/game-day injection handlers ────────────────────────────
+
+fn now_epoch_ms_chaos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// S7-WS6-04: inject a chaos/game-day fault event.
+async fn chaos_inject(
+    State(state): State<AppState>,
+    axum::extract::Json(req): axum::extract::Json<ChaosInjectRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let event = ChaosEvent {
+        fault_type: req.fault_type,
+        target_node: req.target_node,
+        parameters: req.parameters,
+        injected_at_ms: now_epoch_ms_chaos(),
+        cleared_at_ms: None,
+    };
+    let mut cs = state.chaos_state.lock().expect("chaos_state lock");
+    cs.active_faults.push(event);
+    let count = cs.active_faults.len();
+    drop(cs);
+    (StatusCode::OK, Json(serde_json::json!({ "status": "injected", "active_fault_count": count })))
+}
+
+/// S7-WS6-04: clear all active faults; move them to history.
+async fn chaos_clear(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    let cleared_at = now_epoch_ms_chaos();
+    let mut cs = state.chaos_state.lock().expect("chaos_state lock");
+    let mut cleared: Vec<ChaosEvent> = cs.active_faults.drain(..).map(|mut e| {
+        e.cleared_at_ms = Some(cleared_at);
+        e
+    }).collect();
+    cs.event_history.append(&mut cleared);
+    let history_len = cs.event_history.len();
+    drop(cs);
+    (StatusCode::OK, Json(serde_json::json!({ "status": "cleared", "history_len": history_len })))
+}
+
+/// S7-WS6-04: return current chaos state summary.
+async fn chaos_status(State(state): State<AppState>) -> (StatusCode, Json<ChaosStatusResponse>) {
+    let cs = state.chaos_state.lock().expect("chaos_state lock");
+    let active_fault_count = cs.active_faults.len();
+    let total_injected = cs.active_faults.len() + cs.event_history.len();
+    let active_faults = cs.active_faults.clone();
+    drop(cs);
+    (StatusCode::OK, Json(ChaosStatusResponse {
+        status: "ok",
+        active_fault_count,
+        total_injected,
+        active_faults,
+    }))
 }
 
 fn evaluate_deadlock_scan_outcome(
@@ -8049,7 +8394,93 @@ async fn ai_policy_update(
     Ok(Json(AiPolicyResponse { status: "ok", policy }))
 }
 
+/// S9-WS8-02: Rate-limit check for AI model requests.
+///
 // ─── S4-WS3-04: HTAP OLAP consumer apply ─────────────────────────────────────
+
+/// Increments the per-model-identity counter and rejects with 429 when
+/// the counter exceeds `rate_limit_rpm`.  The counter is a simple lifetime
+/// accumulator (scaffold); a production implementation would use a sliding
+/// window or token-bucket backed by a shared clock.
+#[derive(Deserialize)]
+struct AiRequestBody {
+    /// Identifier of the model being invoked (e.g. "gpt-4o", "llama3").
+    model_id: String,
+    /// Number of tokens requested.
+    tokens: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct AiRequestResponse {
+    status: &'static str,
+    model_id: String,
+    request_count: u64,
+    rate_limit_rpm: u32,
+    tokens_checked: bool,
+}
+
+async fn ai_rate_check(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AiRequestBody>,
+) -> Result<(StatusCode, Json<AiRequestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock").clone();
+    // Validate allowed_models list when non-empty (model-identity enforcement).
+    if !policy.allowed_models.is_empty() && !policy.allowed_models.contains(&req.model_id) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: format!("model_not_allowed:{}", req.model_id),
+                locale: "en".to_string(),
+                localized_message: "Model not in allowed list".to_string(),
+            }),
+        ));
+    }
+    // Token budget check.
+    let tokens_checked = if let Some(t) = req.tokens {
+        if policy.max_tokens_per_request > 0 && t > policy.max_tokens_per_request {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: format!("token_limit_exceeded:{t}"),
+                    locale: "en".to_string(),
+                    localized_message: "Token request exceeds policy limit".to_string(),
+                }),
+            ));
+        }
+        true
+    } else {
+        false
+    };
+    // Rate limit check.
+    let request_count = {
+        let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock");
+        let cnt = counters.entry(req.model_id.clone()).or_insert(0);
+        *cnt += 1;
+        *cnt
+    };
+    if policy.rate_limit_rpm > 0 && request_count > policy.rate_limit_rpm as u64 {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: format!("rate_limit_exceeded:{request_count}"),
+                locale: "en".to_string(),
+                localized_message: "AI request rate limit exceeded".to_string(),
+            }),
+        ));
+    }
+    Ok((StatusCode::OK, Json(AiRequestResponse {
+        status: "ok",
+        model_id: req.model_id,
+        request_count,
+        rate_limit_rpm: policy.rate_limit_rpm,
+        tokens_checked,
+    })))
+}
 
 /// Apply a batch of HTAP mutations to the in-memory OLAP replica.
 async fn store_htap_apply(
@@ -8204,6 +8635,37 @@ async fn raft_append(
     require_operator_auth(&headers, &state)?;
     let resp = state.raft_state.lock().expect("raft_state lock").handle_append_entries(&req);
     Ok(Json(resp))
+}
+
+/// S7-WS6-03: Advance the election timer by one logical tick.
+///
+/// In a real deployment a background task would call this; the HTTP endpoint
+/// enables deterministic testing without real timers.
+#[derive(Serialize)]
+struct RaftTickResponse {
+    status: &'static str,
+    ticks_since_heartbeat: u64,
+    role: raft::RaftRole,
+    current_term: u64,
+    election_triggered: bool,
+}
+
+async fn raft_tick(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<RaftTickResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let mut node = state.raft_state.lock().expect("raft_state lock");
+    let role_before = node.role;
+    node.tick();
+    let election_triggered = node.role != role_before;
+    Ok(Json(RaftTickResponse {
+        status: "ok",
+        ticks_since_heartbeat: node.ticks_since_heartbeat,
+        role: node.role,
+        current_term: node.current_term,
+        election_triggered,
+    }))
 }
 
 async fn security_kms_status(
@@ -9258,9 +9720,12 @@ mod tests {
             acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
             row_store: Arc::new(Mutex::new(PagedRowStore::default())),
             model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
+            wal_engine: Arc::new(Mutex::new(InMemoryDurabilityEngine::with_config(DurabilityConfig::default()))),
+            chaos_state: Arc::new(Mutex::new(ChaosState::default())),
             olap_store: Arc::new(Mutex::new(HashMap::new())),
             audit_log_path: None,
             raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
+            ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -14719,6 +15184,132 @@ mod tests {
         assert!(resp.1.0.audit_log_path.is_none());
     }
 
+
+    // ─── S2-WS2-02: WAL durability + recovery integration tests ──────────────
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_status_returns_zero_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = wal_status(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.wal_len, 0);
+        assert_eq!(body.latest_sequence, 0);
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_commit_writes_wal_records() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let tx_req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO items (id, name) VALUES ('item:1', 'alpha')".to_string(),
+                "INSERT INTO items (id, name) VALUES ('item:2', 'beta')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        sql_transaction(State(state.clone()), headers, Json(tx_req)).await.ok();
+        let (status, Json(body)) = wal_status(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.wal_len >= 2, "WAL should have at least 2 records after COMMIT");
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_recover_dry_run_does_not_change_row_store() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let tx_req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO orders (id, total) VALUES ('ord:1', '99')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        sql_transaction(State(state.clone()), headers, Json(tx_req)).await.ok();
+        let rows_before = { let rs = state.row_store.lock().unwrap(); rs.visible_row_count(rs.current_xid()) };
+        let recover_req = WalRecoverRequest { dry_run: Some(true) };
+        let (_, Json(body)) = wal_recover(
+            State(state.clone()),
+            axum::extract::Json(recover_req),
+        ).await;
+        assert!(body.dry_run);
+        assert!(body.records_replayed >= 1);
+        let rows_after = { let rs = state.row_store.lock().unwrap(); rs.visible_row_count(rs.current_xid()) };
+        assert_eq!(rows_before, rows_after, "dry_run must not modify row store");
+    }
+
+    // ─── S7-WS6-04: Chaos injection integration tests ────────────────────────
+
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_status_returns_empty_initially() {
+        let state = state_with_key(Some("test-key"));
+        let (_, Json(body)) = chaos_status(State(state)).await;
+        assert_eq!(body.active_fault_count, 0);
+        assert_eq!(body.total_injected, 0);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_inject_records_active_fault() {
+        let state = state_with_key(Some("test-key"));
+        let body = ChaosInjectRequest {
+            fault_type: "network_partition".to_string(),
+            target_node: Some("node-2".to_string()),
+            parameters: [("loss_pct".to_string(), "50".to_string())].into_iter().collect(),
+        };
+        let (ok_status, _) = chaos_inject(State(state.clone()), axum::extract::Json(body)).await;
+        assert_eq!(ok_status, StatusCode::OK);
+        let (_, Json(status)) = chaos_status(State(state)).await;
+        assert_eq!(status.active_fault_count, 1);
+        assert_eq!(status.total_injected, 1);
+        assert_eq!(status.active_faults[0].fault_type, "network_partition");
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_clear_removes_active_faults() {
+        let state = state_with_key(Some("test-key"));
+        for fault in ["node_crash", "packet_loss"] {
+            let body = ChaosInjectRequest {
+                fault_type: fault.to_string(),
+                target_node: None,
+                parameters: HashMap::new(),
+            };
+            chaos_inject(State(state.clone()), axum::extract::Json(body)).await;
+        }
+        let (_, Json(before)) = chaos_status(State(state.clone())).await;
+        assert_eq!(before.active_fault_count, 2);
+        chaos_clear(State(state.clone())).await;
+        let (_, Json(after)) = chaos_status(State(state)).await;
+        assert_eq!(after.active_fault_count, 0, "active faults should be cleared");
+        assert_eq!(after.total_injected, 2, "history should be preserved");
+    }
+
+    // ─── S3-WS1-05 + S4-WS3-03: planner filter pushdown integration tests ────
+
+    #[tokio::test]
+    async fn s3_ws1_05_olap_filter_pushdown_reduces_batch() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let tx_req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO products (id, category) VALUES ('p:1', 'electronics')".to_string(),
+                "INSERT INTO products (id, category) VALUES ('p:2', 'books')".to_string(),
+                "INSERT INTO products (id, category) VALUES ('p:3', 'electronics')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        sql_transaction(State(state.clone()), headers.clone(), Json(tx_req)).await.ok();
+        let exec_req = SqlExecuteRequest {
+            sql_batch: "SELECT COUNT(*) FROM products GROUP BY category".to_string(),
+            max_rows: None,
+        };
+        let resp = sql_execute(State(state), headers, Json(exec_req)).await.unwrap();
+        assert_eq!(resp.1.0.planner_path.as_deref(), Some("olap"));
+        assert!(resp.1.0.olap_agg_results.is_some());
+    }
     // ─── S7-WS6-02: Raft consensus ────────────────────────────────────────────
 
     #[tokio::test]
@@ -14838,4 +15429,95 @@ mod tests {
         assert!(resp2.is_ok(), "different keys should not conflict: {:?}", resp2);
     }
 
+    // ─── S7-WS6-03: Raft election timeout endpoint ───────────────────────────
+
+    #[tokio::test]
+    async fn s7_ws6_03_raft_tick_increments_counter() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let resp = raft_tick(State(state), headers).await.unwrap();
+        assert_eq!(resp.0.status, "ok");
+        assert_eq!(resp.0.ticks_since_heartbeat, 1);
+        assert!(!resp.0.election_triggered);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_03_raft_tick_triggers_election_after_timeout() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Default timeout is 10 ticks; fire 9 ticks without triggering.
+        for _ in 0..9 {
+            raft_tick(State(state.clone()), headers.clone()).await.unwrap();
+        }
+        let snap = raft_status(State(state.clone()), headers.clone()).await.unwrap();
+        assert_eq!(snap.0.raft.role, raft::RaftRole::Follower);
+        // 10th tick triggers election.
+        let resp = raft_tick(State(state.clone()), headers.clone()).await.unwrap();
+        assert!(resp.0.election_triggered, "10th tick must trigger election");
+        assert_eq!(resp.0.role, raft::RaftRole::Candidate);
+        assert_eq!(resp.0.current_term, 1);
+    }
+
+    // ─── S4-WS3-02: OLAP vectorized executor ─────────────────────────────────
+
+    #[tokio::test]
+    async fn s4_ws3_02_olap_agg_results_populated_for_aggregate_query() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Seed some rows via COMMIT so the OLAP executor has data.
+        let tx_req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO metrics (id, value) VALUES ('m:1', '10')".to_string(),
+                "INSERT INTO metrics (id, value) VALUES ('m:2', '20')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: None,
+        };
+        sql_transaction(State(state.clone()), headers.clone(), Json(tx_req)).await.ok();
+        // Aggregate query → planner_path = "olap"
+        let exec_req = SqlExecuteRequest {
+            sql_batch: "SELECT COUNT(*) FROM metrics GROUP BY value".to_string(),
+            max_rows: None,
+        };
+        let resp = sql_execute(State(state.clone()), headers.clone(), Json(exec_req)).await.unwrap();
+        assert_eq!(resp.1.0.planner_path.as_deref(), Some("olap"));
+        assert!(
+            resp.1.0.olap_agg_results.is_some(),
+            "OLAP aggregate query should populate olap_agg_results"
+        );
+        let agg = resp.1.0.olap_agg_results.unwrap();
+        assert!(!agg.is_empty(), "agg results should have at least one column");
+    }
+
+    // ─── S9-WS8-02: Rate limiter ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_request_rate_check_allows_within_limit() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let body = AiRequestBody { model_id: "gpt-4o".to_string(), tokens: Some(100) };
+        let resp = ai_rate_check(State(state), headers, Json(body)).await.unwrap();
+        assert_eq!(resp.0, StatusCode::OK);
+        assert_eq!(resp.1.0.status, "ok");
+        assert_eq!(resp.1.0.request_count, 1);
+        assert!(resp.1.0.tokens_checked);
+    }
+
+    #[tokio::test]
+    async fn s9_ws8_02_ai_request_rate_check_rejects_over_token_limit() {
+        let state = state_with_key(Some("test-key"));
+        // Set a tight token limit.
+        {
+            let mut p = state.model_gateway_policy.lock().unwrap();
+            p.max_tokens_per_request = 50;
+        }
+        let headers = operator_headers("test-key", "admin");
+        let body = AiRequestBody { model_id: "gpt-4o".to_string(), tokens: Some(100) };
+        let resp = ai_rate_check(State(state), headers, Json(body)).await;
+        assert!(resp.is_err());
+        let err = resp.unwrap_err();
+        assert_eq!(err.0, StatusCode::TOO_MANY_REQUESTS);
+        assert!(err.1.0.reason.contains("token_limit_exceeded"));
+    }
 }

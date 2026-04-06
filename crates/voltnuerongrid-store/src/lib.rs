@@ -147,6 +147,16 @@ impl InMemoryDurabilityEngine {
     pub fn latest_checkpoint(&self) -> Option<&CheckpointManifest> {
         self.checkpoints.last()
     }
+
+    /// Returns the current WAL record list (in append order).
+    pub fn wal_records(&self) -> &[WalRecord] {
+        &self.wal
+    }
+
+    /// Returns the number of checkpoints taken so far.
+    pub fn checkpoint_count(&self) -> usize {
+        self.checkpoints.len()
+    }
 }
 
 fn now_epoch_millis() -> u128 {

@@ -330,6 +330,133 @@ pub fn aggregate_batch(
         .collect()
 }
 
+// ─── Vectorized filter (predicate pushdown) ──────────────────────────────────
+
+/// Comparison operator for a vectorized filter predicate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilterOp {
+    /// Equality: column value equals predicate value.
+    Eq,
+    /// Inequality: column value does not equal predicate value.
+    Ne,
+    /// Greater-than (numeric and string lexicographic).
+    Gt,
+    /// Less-than (numeric and string lexicographic).
+    Lt,
+    /// Greater-than-or-equal.
+    Gte,
+    /// Less-than-or-equal.
+    Lte,
+    /// String containment (Utf8 columns only).
+    Contains,
+}
+
+/// A single vectorized filter predicate: `column op value`.
+#[derive(Debug, Clone)]
+pub struct VectorizedFilter {
+    /// Name of the column to filter.
+    pub column: String,
+    /// The comparison operation.
+    pub op: FilterOp,
+    /// Right-hand side value (coerced to the column type at evaluation time).
+    pub value: String,
+}
+
+/// Filter a [`ColumnBatch`] using AND-semantics predicates.
+///
+/// Returns a new batch containing only the rows where *all* supplied predicates
+/// evaluate to `true`.  Predicates that reference columns absent from the batch
+/// are silently ignored (they do not eliminate any rows).
+pub fn filter_batch(batch: &ColumnBatch, predicates: &[VectorizedFilter]) -> ColumnBatch {
+    if predicates.is_empty() || batch.is_empty() {
+        return batch.clone();
+    }
+    let n = batch.row_count();
+    let mut keep = vec![true; n];
+    for pred in predicates {
+        let col = match batch.columns.get(&pred.column) {
+            Some(c) => c,
+            None => continue, // missing column — predicate is ignored
+        };
+        for i in 0..n {
+            if keep[i] {
+                keep[i] = evaluate_predicate(col, i, &pred.op, &pred.value);
+            }
+        }
+    }
+    let kept: Vec<usize> = (0..n).filter(|&i| keep[i]).collect();
+    let mut out = ColumnBatch::new();
+    out.row_keys = kept.iter().map(|&i| batch.row_keys[i].clone()).collect();
+    for col_name in &batch.column_names {
+        let col = match batch.columns.get(col_name) {
+            Some(c) => c,
+            None => continue,
+        };
+        out.column_names.push(col_name.clone());
+        out.columns.insert(col_name.clone(), project_rows(col, &kept));
+    }
+    out
+}
+
+/// Evaluate a single predicate at row `idx`.
+fn evaluate_predicate(col: &ColumnVector, idx: usize, op: &FilterOp, rhs: &str) -> bool {
+    match col {
+        ColumnVector::Int64(v) => {
+            let lhs = *v.get(idx).unwrap_or(&0);
+            let rhs_v: i64 = rhs.parse().unwrap_or(0);
+            cmp_ord(lhs.cmp(&rhs_v), op)
+        }
+        ColumnVector::Float64(v) => {
+            let lhs = *v.get(idx).unwrap_or(&0.0);
+            let rhs_v: f64 = rhs.parse().unwrap_or(0.0);
+            let ord = lhs.partial_cmp(&rhs_v).unwrap_or(std::cmp::Ordering::Equal);
+            cmp_ord(ord, op)
+        }
+        ColumnVector::Bool(v) => {
+            let lhs = *v.get(idx).unwrap_or(&false);
+            let rhs_v = rhs.to_ascii_lowercase() == "true";
+            cmp_ord(lhs.cmp(&rhs_v), op)
+        }
+        ColumnVector::Utf8(v) => {
+            let lhs = v.get(idx).map(String::as_str).unwrap_or("");
+            match op {
+                FilterOp::Contains => lhs.contains(rhs),
+                FilterOp::Eq      => lhs == rhs,
+                FilterOp::Ne      => lhs != rhs,
+                FilterOp::Gt      => lhs > rhs,
+                FilterOp::Lt      => lhs < rhs,
+                FilterOp::Gte     => lhs >= rhs,
+                FilterOp::Lte     => lhs <= rhs,
+            }
+        }
+        ColumnVector::Null(_) => false,
+    }
+}
+
+fn cmp_ord(ord: std::cmp::Ordering, op: &FilterOp) -> bool {
+    use std::cmp::Ordering::*;
+    match op {
+        FilterOp::Eq       => ord == Equal,
+        FilterOp::Ne       => ord != Equal,
+        FilterOp::Gt       => ord == Greater,
+        FilterOp::Lt       => ord == Less,
+        FilterOp::Gte      => ord != Less,
+        FilterOp::Lte      => ord != Greater,
+        FilterOp::Contains => false,
+    }
+}
+
+/// Project a [`ColumnVector`] to only the row indices in `indices`.
+fn project_rows(col: &ColumnVector, indices: &[usize]) -> ColumnVector {
+    match col {
+        ColumnVector::Int64(v)   => ColumnVector::Int64(indices.iter().map(|&i| v[i]).collect()),
+        ColumnVector::Float64(v) => ColumnVector::Float64(indices.iter().map(|&i| v[i]).collect()),
+        ColumnVector::Bool(v)    => ColumnVector::Bool(indices.iter().map(|&i| v[i]).collect()),
+        ColumnVector::Utf8(v)    => ColumnVector::Utf8(indices.iter().map(|&i| v[i].clone()).collect()),
+        ColumnVector::Null(_)    => ColumnVector::Null(indices.len()),
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -490,5 +617,84 @@ mod tests {
         // "name" is a Utf8 column — sum should return "null"
         let result = aggregate_column(batch.columns.get("name").unwrap(), VectorizedAggOp::Sum);
         assert_eq!(result.value, "null");
+    }
+
+    // ─── Filter predicate tests ──────────────────────────────────────────────
+
+    #[test]
+    fn filter_batch_eq_returns_matching_rows() {
+        let rows = sample_rows(); // alice/30, bob/25, carol/40
+        let (batch, _) = vectorized_scan(&rows, 100);
+        let predicates = vec![VectorizedFilter {
+            column: "name".to_string(),
+            op: FilterOp::Eq,
+            value: "alice".to_string(),
+        }];
+        let filtered = filter_batch(&batch, &predicates);
+        assert_eq!(filtered.row_count(), 1);
+        assert_eq!(filtered.row_keys[0], "row-1");
+    }
+
+    #[test]
+    fn filter_batch_gt_int64_returns_correct_rows() {
+        let rows = sample_rows(); // ages: 30, 25, 40
+        let (batch, _) = vectorized_scan(&rows, 100);
+        let predicates = vec![VectorizedFilter {
+            column: "age".to_string(),
+            op: FilterOp::Gt,
+            value: "29".to_string(),
+        }];
+        let filtered = filter_batch(&batch, &predicates);
+        // ages 30 and 40 are > 29
+        assert_eq!(filtered.row_count(), 2);
+    }
+
+    #[test]
+    fn filter_batch_contains_utf8_works() {
+        let rows = sample_rows();
+        let (batch, _) = vectorized_scan(&rows, 100);
+        let predicates = vec![VectorizedFilter {
+            column: "name".to_string(),
+            op: FilterOp::Contains,
+            value: "bo".to_string(),
+        }];
+        let filtered = filter_batch(&batch, &predicates);
+        assert_eq!(filtered.row_count(), 1);
+        assert_eq!(filtered.row_keys[0], "row-2");
+    }
+
+    #[test]
+    fn filter_batch_empty_predicates_returns_all_rows() {
+        let rows = sample_rows();
+        let (batch, _) = vectorized_scan(&rows, 100);
+        let filtered = filter_batch(&batch, &[]);
+        assert_eq!(filtered.row_count(), 3);
+    }
+
+    #[test]
+    fn filter_batch_and_semantics_narrows_result() {
+        let rows = sample_rows(); // alice/30, bob/25, carol/40
+        let (batch, _) = vectorized_scan(&rows, 100);
+        let predicates = vec![
+            VectorizedFilter { column: "age".to_string(), op: FilterOp::Gte, value: "30".to_string() },
+            VectorizedFilter { column: "age".to_string(), op: FilterOp::Lt,  value: "40".to_string() },
+        ];
+        let filtered = filter_batch(&batch, &predicates);
+        // Only age=30 (alice) matches age >= 30 AND age < 40
+        assert_eq!(filtered.row_count(), 1);
+    }
+
+    #[test]
+    fn filter_batch_missing_column_predicate_is_ignored() {
+        let rows = sample_rows();
+        let (batch, _) = vectorized_scan(&rows, 100);
+        let predicates = vec![VectorizedFilter {
+            column: "nonexistent".to_string(),
+            op: FilterOp::Eq,
+            value: "x".to_string(),
+        }];
+        // Predicate on missing column is ignored — all rows returned.
+        let filtered = filter_batch(&batch, &predicates);
+        assert_eq!(filtered.row_count(), 3);
     }
 }

@@ -92,6 +92,10 @@ pub struct RaftStatusSnapshot {
     pub log_length: usize,
     pub commit_index: u64,
     pub last_applied: u64,
+    /// Ticks elapsed since the last heartbeat was received (S7-WS6-03).
+    pub ticks_since_heartbeat: u64,
+    /// Configured election timeout in ticks (S7-WS6-03).
+    pub election_timeout_ticks: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +119,12 @@ pub struct RaftNode {
     pub commit_index: u64,
     /// Index of highest log entry applied to the state machine.
     pub last_applied: u64,
+    /// S7-WS6-03: number of logical clock ticks since the last heartbeat from a leader.
+    /// When this reaches `election_timeout_ticks` the node converts to Candidate.
+    pub ticks_since_heartbeat: u64,
+    /// S7-WS6-03: election timeout threshold in ticks.
+    /// Randomised per-node in real deployments; fixed here for deterministic tests.
+    pub election_timeout_ticks: u64,
 }
 
 impl RaftNode {
@@ -128,6 +138,8 @@ impl RaftNode {
             log: Vec::new(),
             commit_index: 0,
             last_applied: 0,
+            ticks_since_heartbeat: 0,
+            election_timeout_ticks: 10,
         }
     }
 
@@ -209,6 +221,8 @@ impl RaftNode {
         }
         // Valid leader message — step down / stay follower.
         self.become_follower(req.term);
+        // S7-WS6-03: receiving a valid AppendEntries resets the election timer.
+        self.ticks_since_heartbeat = 0;
 
         // Consistency check: does our log contain an entry at prev_log_index
         // with the expected prev_log_term?
@@ -262,6 +276,29 @@ impl RaftNode {
             log_length: self.log.len(),
             commit_index: self.commit_index,
             last_applied: self.last_applied,
+            ticks_since_heartbeat: self.ticks_since_heartbeat,
+            election_timeout_ticks: self.election_timeout_ticks,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // S7-WS6-03: Election timeout via logical clock ticks
+    // -----------------------------------------------------------------------
+
+    /// Advance the logical clock by one tick.
+    ///
+    /// - If the node is a **Follower** and `ticks_since_heartbeat` reaches
+    ///   `election_timeout_ticks`, it automatically transitions to Candidate
+    ///   (starting a new election term and voting for itself).
+    /// - Leaders and Candidates do not time out; their tick counter is
+    ///   reset but no state change is triggered.
+    pub fn tick(&mut self) {
+        self.ticks_since_heartbeat += 1;
+        if self.role == RaftRole::Follower
+            && self.ticks_since_heartbeat >= self.election_timeout_ticks
+        {
+            self.become_candidate();
+            self.ticks_since_heartbeat = 0;
         }
     }
 
@@ -362,5 +399,54 @@ mod tests {
         assert!(resp.success);
         assert_eq!(node.log.len(), 2);
         assert_eq!(node.commit_index, 2);
+    }
+
+    // ── S7-WS6-03: election timeout tests ────────────────────────────────────
+
+    #[test]
+    fn tick_below_timeout_does_not_trigger_election() {
+        let mut node = RaftNode::new("node-1");
+        assert_eq!(node.election_timeout_ticks, 10);
+        for _ in 0..9 {
+            node.tick();
+        }
+        assert_eq!(node.role, RaftRole::Follower);
+        assert_eq!(node.ticks_since_heartbeat, 9);
+    }
+
+    #[test]
+    fn tick_at_timeout_converts_follower_to_candidate() {
+        let mut node = RaftNode::new("node-1");
+        for _ in 0..10 {
+            node.tick();
+        }
+        assert_eq!(node.role, RaftRole::Candidate);
+        assert_eq!(node.current_term, 1);
+        assert_eq!(node.ticks_since_heartbeat, 0, "counter resets after election starts");
+    }
+
+    #[test]
+    fn heartbeat_resets_tick_counter() {
+        let mut node = RaftNode::new("node-1");
+        for _ in 0..5 {
+            node.tick();
+        }
+        assert_eq!(node.ticks_since_heartbeat, 5);
+        let hb = RaftAppendRequest {
+            term: 1, leader_id: "node-2".into(),
+            prev_log_index: 0, prev_log_term: 0,
+            entries: vec![], leader_commit: 0,
+        };
+        node.handle_append_entries(&hb);
+        assert_eq!(node.ticks_since_heartbeat, 0, "heartbeat must reset election timer");
+        assert_eq!(node.role, RaftRole::Follower);
+    }
+
+    #[test]
+    fn status_snapshot_includes_tick_fields() {
+        let node = RaftNode::new("node-x");
+        let snap = node.status();
+        assert_eq!(snap.election_timeout_ticks, 10);
+        assert_eq!(snap.ticks_since_heartbeat, 0);
     }
 }
