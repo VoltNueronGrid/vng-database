@@ -1417,6 +1417,21 @@ struct WalReplayResponse {
     entries: Vec<WalReplayEntry>,
 }
 
+// ─── S2-WS2-02: WAL tail structs ─────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct WalTailQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalTailResponse {
+    status: &'static str,
+    record_count: usize,
+    limit_applied: usize,
+    entries: Vec<WalReplayEntry>,
+}
+
 // ─── S10-WS15-02: CDC change-data-capture structs ─────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -2431,6 +2446,20 @@ struct DriverQueryResponse {
     executed_at_ms: u64,
 }
 
+// ─── S8-WS10-02: Driver session ping structs ─────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct DriverPingRequest {
+    session_token: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DriverPingResponse {
+    status: &'static str,
+    session_token: String,
+    pinged_at_ms: u64,
+}
+
 #[derive(Serialize)]
 struct IngestOutboxStatusResponse {
     status: &'static str,
@@ -3366,6 +3395,8 @@ async fn main() {
         .route("/api/v1/store/wal/bounds", get(wal_bounds))
         // S2-WS2-02: WAL replay (filtered read-back)
         .route("/api/v1/store/wal/replay", get(wal_replay))
+        // S2-WS2-02: WAL tail (last N records)
+        .route("/api/v1/store/wal/tail", get(wal_tail))
         // S7-WS6-04: Chaos/game-day fault injection
         .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
@@ -3385,6 +3416,8 @@ async fn main() {
         .route("/api/v1/driver/health", get(driver_health))
         // S8-WS10-02: driver query pass-through
         .route("/api/v1/driver/query", post(driver_query))
+        // S8-WS10-02: driver session ping/keepalive
+        .route("/api/v1/driver/ping", post(driver_ping))
         // S10-WS15-02: CDC stream from WAL
         .route("/api/v1/store/cdc/stream", get(cdc_stream))
         .route("/api/v1/store/cdc/stream/filter", get(cdc_stream_filter))
@@ -6969,6 +7002,33 @@ async fn wal_replay(
     }))
 }
 
+/// S2-WS2-02: Return the last N WAL records (tail view).
+async fn wal_tail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WalTailQuery>,
+) -> (StatusCode, Json<WalTailResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let limit_applied = params.limit.unwrap_or(10).max(1).min(1_000);
+    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let all_records = wal.wal_records().to_vec();
+    drop(wal);
+    let total = all_records.len();
+    let skip = if total > limit_applied { total - limit_applied } else { 0 };
+    let entries: Vec<WalReplayEntry> = all_records
+        .into_iter()
+        .skip(skip)
+        .map(|r| WalReplayEntry { sequence: r.sequence, key: r.key, value: r.value })
+        .collect();
+    let record_count = entries.len();
+    (StatusCode::OK, Json(WalTailResponse {
+        status: "ok",
+        record_count,
+        limit_applied,
+        entries,
+    }))
+}
+
 /// S2-WS2-02: replay WAL records into the row store (or dry-run).
 async fn wal_recover(
     State(state): State<AppState>,
@@ -7922,6 +7982,37 @@ async fn driver_query(
         sql: req.sql,
         rows_returned: 0,
         executed_at_ms,
+    })))
+}
+
+// ─── S8-WS10-02: Driver session ping/keepalive ──────────────────────────────
+
+/// S8-WS10-02: Ping/keepalive for an existing driver session.
+async fn driver_ping(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DriverPingRequest>,
+) -> Result<(StatusCode, Json<DriverPingResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let sessions = state.driver_sessions.lock().expect("driver_sessions lock");
+    let session_exists = sessions.contains_key(&req.session_token);
+    drop(sessions);
+    if !session_exists {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: "invalid_session_token".to_string(),
+                locale: "en".to_string(),
+                localized_message: "Invalid or expired session token".to_string(),
+            }),
+        ));
+    }
+    let pinged_at_ms = now_unix_ms_u64();
+    Ok((StatusCode::OK, Json(DriverPingResponse {
+        status: "pong",
+        session_token: req.session_token,
+        pinged_at_ms,
     })))
 }
 
@@ -18674,6 +18765,44 @@ mod tests {
         assert!(body.newest_sequence.is_some(), "newest sequence must be Some after mutations");
     }
 
+    // ── S2-WS2-02: WAL tail ───────────────────────────────────────────────────
+    #[tokio::test]
+    async fn s2_ws2_02_wal_tail_empty_returns_zero_entries() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_tail(
+            State(state),
+            headers,
+            axum::extract::Query(WalTailQuery::default()),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 0);
+        assert!(body.entries.is_empty());
+        assert_eq!(body.limit_applied, 10);
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_tail_respects_limit() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "v2");
+            wal.append_mutation("k3", "v3");
+            wal.append_mutation("k4", "v4");
+            wal.append_mutation("k5", "v5");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_tail(
+            State(state),
+            headers,
+            axum::extract::Query(WalTailQuery { limit: Some(3) }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 3, "limit=3 means only 3 newest entries");
+        assert_eq!(body.limit_applied, 3);
+    }
+
     // ── S7-WS6-04: Chaos health check ────────────────────────────────────────
     #[tokio::test]
     async fn s7_ws6_04_chaos_health_fresh_state_is_healthy() {
@@ -19064,6 +19193,38 @@ mod tests {
         assert_eq!(body.session_token, "drv-sess-99");
         assert_eq!(body.sql, "SELECT COUNT(*) FROM events");
         assert_eq!(body.rows_returned, 0);
+    }
+
+    // ── S8-WS10-02: Driver ping ───────────────────────────────────────────────
+    #[tokio::test]
+    async fn s8_ws10_02_driver_ping_invalid_session_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = DriverPingRequest { session_token: "ghost-token".to_string() };
+        let result = driver_ping(State(state), headers, Json(req)).await;
+        assert!(result.is_err());
+        let (status, _) = result.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_ping_valid_session_returns_pong() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut sessions = state.driver_sessions.lock().unwrap();
+            sessions.insert("drv-sess-42".to_string(), DriverSession {
+                driver_name: "test-drv".to_string(),
+                driver_version: "1.0.0".to_string(),
+                connected_at_ms: 0,
+            });
+        }
+        let headers = operator_headers("test-key", "admin");
+        let req = DriverPingRequest { session_token: "drv-sess-42".to_string() };
+        let (status, Json(body)) = driver_ping(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "pong");
+        assert_eq!(body.session_token, "drv-sess-42");
+        assert!(body.pinged_at_ms > 0, "pinged_at_ms should be non-zero");
     }
 
     // ── S10-WS15-02: CDC stream filter ────────────────────────────────────────

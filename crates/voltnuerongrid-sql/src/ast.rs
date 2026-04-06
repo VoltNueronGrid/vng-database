@@ -55,6 +55,8 @@ pub struct SelectStatement {
     pub limit: Option<u64>,
     /// OFFSET value for pagination (S3-WS1-04).
     pub offset: Option<u64>,
+    /// True when the WHERE clause contains IS NULL or IS NOT NULL (S3-WS1-06).
+    pub has_null_literal: bool,
 }
 
 /// A parsed INSERT statement.
@@ -163,6 +165,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect SELECT DISTINCT keyword (S3-WS1-04).
                 if up_trim.starts_with("SELECTDISTINCT") {
                     stmt.is_distinct = true;
+                }
+                // Detect IS NULL / IS NOT NULL predicates (S3-WS1-06).
+                if up.contains("IS NULL") || up.contains("IS NOT NULL") {
+                    stmt.has_null_literal = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1244,5 +1250,31 @@ mod offset_tests {
         let stmt = parse_one("SELECT name FROM employees").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert_eq!(s.offset, None, "plain SELECT must have offset = None");
+    }
+}
+
+#[cfg(test)]
+mod null_literal_tests {
+    use super::*;
+
+    #[test]
+    fn where_is_null_sets_has_null_literal_true() {
+        let stmt = parse_one("SELECT * FROM t WHERE col IS NULL").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_null_literal, "IS NULL must set has_null_literal");
+    }
+
+    #[test]
+    fn where_is_not_null_sets_has_null_literal_true() {
+        let stmt = parse_one("SELECT id FROM orders WHERE deleted_at IS NOT NULL").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_null_literal, "IS NOT NULL must set has_null_literal");
+    }
+
+    #[test]
+    fn plain_select_has_null_literal_false() {
+        let stmt = parse_one("SELECT name FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_null_literal, "plain SELECT must have has_null_literal = false");
     }
 }

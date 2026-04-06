@@ -100,6 +100,11 @@ pub enum LogicalPlan {
     Distinct {
         input: Box<LogicalPlan>,
     },
+    /// Pagination skip-N rows (S3-WS1-06 offset support).
+    Offset {
+        input: Box<LogicalPlan>,
+        offset: u64,
+    },
     /// Unrecognised or unparseable statement.
     Unknown(String),
 }
@@ -122,6 +127,7 @@ impl LogicalPlan {
             LogicalPlan::Union { left, .. } => left.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
+            LogicalPlan::Offset { input, .. } => input.primary_table(),
             _ => None,
         }
     }
@@ -154,6 +160,7 @@ impl LogicalPlan {
             }
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
+            LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             _ => false,
         }
     }
@@ -310,6 +317,14 @@ impl QueryPlanner {
                     recommended_path: QueryPath::Oltp,
                 }
             }
+            LogicalPlan::Offset { input, .. } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.1,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
             LogicalPlan::Unknown(_) => CostEstimate {
                 estimated_rows: 0,
                 relative_cost: 0.0,
@@ -387,14 +402,28 @@ impl QueryPlanner {
             after_sort
         };
 
-        // Project (only when not SELECT *)
-        let after_project = if sel.columns != vec!["*".to_string()] && !sel.columns.is_empty() {
-            LogicalPlan::Project {
-                input: Box::new(after_limit),
-                columns: sel.columns.clone(),
+        // Offset (S3-WS1-06 OFFSET support)
+        let after_offset = if let Some(off) = sel.offset {
+            if off > 0 {
+                LogicalPlan::Offset {
+                    input: Box::new(after_limit),
+                    offset: off,
+                }
+            } else {
+                after_limit
             }
         } else {
             after_limit
+        };
+
+        // Project (only when not SELECT *)
+        let after_project = if sel.columns != vec!["*".to_string()] && !sel.columns.is_empty() {
+            LogicalPlan::Project {
+                input: Box::new(after_offset),
+                columns: sel.columns.clone(),
+            }
+        } else {
+            after_offset
         };
 
         // UNION (S3-WS1-04 has_union detection): wrap in Union node with synthetic rhs
@@ -662,5 +691,21 @@ mod tests {
     fn cost_distinct_query_routes_to_oltp() {
         let c = cost("SELECT DISTINCT name FROM employees");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "DISTINCT should route to OLTP");
+    }
+
+    #[test]
+    fn planner_select_with_offset_produces_offset_node() {
+        let plan = plan("SELECT * FROM t LIMIT 10 OFFSET 5");
+        // The outermost plan node should be Offset wrapping a Limit
+        assert!(
+            matches!(&plan, LogicalPlan::Offset { offset, .. } if *offset == 5),
+            "LIMIT 10 OFFSET 5 should produce an Offset node with offset=5, got: {:?}", plan
+        );
+    }
+
+    #[test]
+    fn cost_offset_query_routes_to_oltp() {
+        let c = cost("SELECT * FROM t LIMIT 10 OFFSET 5");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "OFFSET query should route to OLTP");
     }
 }
