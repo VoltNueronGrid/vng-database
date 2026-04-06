@@ -2362,6 +2362,36 @@ struct HtapStatsResponse {
     total_entries: usize,
 }
 
+// ─── S11-WS1-12: Connector health structs ───────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct ConnectorHealthEntry {
+    connector_id: String,
+    connector_type: String,
+    version: String,
+    signed: bool,
+    healthy: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ConnectorHealthResponse {
+    status: &'static str,
+    total: usize,
+    healthy: usize,
+    entries: Vec<ConnectorHealthEntry>,
+}
+
+// ─── S11-WS1-12: Row store page stats structs ────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowsPageStatsResponse {
+    status: &'static str,
+    page_count: usize,
+    total_rows: usize,
+    visible_rows: usize,
+    current_xid: u64,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3694,6 +3724,8 @@ async fn main() {
         .route("/api/v1/store/rows/keys", get(store_rows_keys))
         // S11-WS1-11: Row store version / current transaction ID
         .route("/api/v1/store/rows/version", get(row_store_version))
+        // S11-WS1-12: Row store page-level stats
+        .route("/api/v1/store/rows/page/stats", get(rows_page_stats))
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
@@ -3706,6 +3738,8 @@ async fn main() {
         .route("/api/v1/connectors/get", get(connector_get))
         // S5-E4A-01: Connector update (version / signed flag)
         .route("/api/v1/connectors/update", post(connector_update))
+        // S11-WS1-12: Connector health check
+        .route("/api/v1/connectors/health", get(connectors_health))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
         .route("/api/v1/ai/policy/stats", get(ai_policy_stats))
         // S9-WS8-02: AI policy counter reset
@@ -8060,6 +8094,57 @@ async fn htap_stats(
         status: "ok",
         table_count,
         total_entries,
+    })))
+}
+
+// ─── S11-WS1-12: Connector health check endpoint ────────────────────────────
+
+/// S11-WS1-12: Return health status for all registered connectors.
+async fn connectors_health(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ConnectorHealthResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let registry = state.connector_registry.lock().expect("connector_registry lock connectors_health");
+    let entries: Vec<ConnectorHealthEntry> = registry.iter().map(|c| ConnectorHealthEntry {
+        connector_id: c.connector_id.clone(),
+        connector_type: c.connector_type.clone(),
+        version: c.version.clone(),
+        signed: c.signed,
+        // Scaffold: signed connectors are considered healthy; unsigned ones are degraded.
+        healthy: c.signed,
+    }).collect();
+    let total = entries.len();
+    let healthy = entries.iter().filter(|e| e.healthy).count();
+    drop(registry);
+    Ok((StatusCode::OK, Json(ConnectorHealthResponse {
+        status: "ok",
+        total,
+        healthy,
+        entries,
+    })))
+}
+
+// ─── S11-WS1-12: Row store page stats endpoint ───────────────────────────────
+
+/// S11-WS1-12: Return page-level statistics from the MVCC row store.
+async fn rows_page_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsPageStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_page_stats");
+    let page_count = rs.page_count();
+    let total_rows = rs.total_row_count();
+    let current_xid = rs.current_xid();
+    let visible_rows = rs.visible_row_count(current_xid);
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsPageStatsResponse {
+        status: "ok",
+        page_count,
+        total_rows,
+        visible_rows,
+        current_xid,
     })))
 }
 
@@ -20967,6 +21052,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = htap_stats(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-12: Connector health endpoint tests ──────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_12_connectors_health_empty_registry() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = connectors_health(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total, 0, "fresh registry must have no connectors");
+        assert_eq!(body.healthy, 0);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_12_connectors_health_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = connectors_health(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-12: Row store page stats endpoint tests ──────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_12_rows_page_stats_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_page_stats(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.visible_rows, 0, "fresh row store must have no visible rows");
+        assert_eq!(body.current_xid, 0);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_12_rows_page_stats_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_page_stats(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

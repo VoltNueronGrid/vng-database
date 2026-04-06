@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 36 Implementation Log
+
+**Date:** 2026-04-06 (Sprint 9 continuation)
+**Test Baseline → New:** sql 135→138, exec 46→48, service 373→377 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_coalesce: bool` field + detection | `voltnuerongrid-sql` | Detects `COALESCE(` in query (`S3-WS1-12`) | 3 (`coalesce_tests` module) |
+| `Coalesce { input }` plan node | `voltnuerongrid-exec` | OLTP-routed pass-through node; +0.3 cost | 2 |
+| `GET /api/v1/connectors/health` | `voltnuerongridd` | Health status for all registered connectors (operator-auth) | 2 |
+| `GET /api/v1/store/rows/page/stats` | `voltnuerongridd` | Page-level MVCC row store stats: page_count, total/visible rows (operator-auth) | 2 |
+
+---
+
 ## Session 35 Implementation Log
 
 **Date:** 2026-04-06 (Sprint 9 continuation)

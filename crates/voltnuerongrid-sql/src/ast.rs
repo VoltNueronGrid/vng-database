@@ -73,6 +73,8 @@ pub struct SelectStatement {
     pub has_not: bool,
     /// True when the query contains a CASE WHEN expression (S3-WS1-11).
     pub has_case: bool,
+    /// True when the query contains a COALESCE() expression (S3-WS1-12).
+    pub has_coalesce: bool,
 }
 
 /// A parsed INSERT statement.
@@ -218,6 +220,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect CASE WHEN expression anywhere in the query (S3-WS1-11).
                 if up.contains("CASE WHEN") {
                     stmt.has_case = true;
+                }
+                // Detect COALESCE() expression anywhere in the query (S3-WS1-12).
+                if up_trim.contains("COALESCE(") {
+                    stmt.has_coalesce = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1535,5 +1541,31 @@ mod case_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_case, "plain SELECT without CASE WHEN must have has_case = false");
+    }
+}
+
+#[cfg(test)]
+mod coalesce_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_coalesce_sets_has_coalesce_true() {
+        let stmt = parse_one("SELECT COALESCE(name, 'unknown') FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_coalesce, "COALESCE() expression must set has_coalesce = true");
+    }
+
+    #[test]
+    fn select_with_coalesce_in_where_sets_has_coalesce_true() {
+        let stmt = parse_one("SELECT id FROM orders WHERE COALESCE(status, 'pending') = 'active'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_coalesce, "COALESCE() in WHERE clause must set has_coalesce = true");
+    }
+
+    #[test]
+    fn plain_select_has_coalesce_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_coalesce, "plain SELECT without COALESCE must have has_coalesce = false");
     }
 }

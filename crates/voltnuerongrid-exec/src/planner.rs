@@ -110,6 +110,10 @@ pub enum LogicalPlan {
     Case {
         input: Box<LogicalPlan>,
     },
+    /// COALESCE() null-coalescing expression (from S3-WS1-12 has_coalesce support).
+    Coalesce {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -166,6 +170,7 @@ impl LogicalPlan {
             LogicalPlan::Like { input } => input.primary_table(),
             LogicalPlan::Not { input } => input.primary_table(),
             LogicalPlan::Case { input } => input.primary_table(),
+            LogicalPlan::Coalesce { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -207,6 +212,7 @@ impl LogicalPlan {
             LogicalPlan::Like { input } => input.has_aggregation(),
             LogicalPlan::Not { input } => input.has_aggregation(),
             LogicalPlan::Case { input } => input.has_aggregation(),
+            LogicalPlan::Coalesce { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -398,6 +404,14 @@ impl QueryPlanner {
                     estimated_rows: (inner.estimated_rows as f64 * 0.9) as u64,
                     relative_cost: inner.relative_cost + 1.5,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Coalesce { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.3,
+                    recommended_path: QueryPath::Oltp,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -638,12 +652,21 @@ impl QueryPlanner {
         };
 
         // Case wrapper (S3-WS1-11 has_case detection): outermost node.
-        if sel.has_case {
+        let after_case = if sel.has_case {
             LogicalPlan::Case {
                 input: Box::new(after_not),
             }
         } else {
             after_not
+        };
+
+        // Coalesce wrapper (S3-WS1-12 has_coalesce detection): outermost node.
+        if sel.has_coalesce {
+            LogicalPlan::Coalesce {
+                input: Box::new(after_case),
+            }
+        } else {
+            after_case
         }
     }
 
@@ -1037,5 +1060,23 @@ mod tests {
         let c = cost("SELECT id, CASE WHEN age > 18 THEN 'adult' ELSE 'minor' END FROM users");
         assert_eq!(c.recommended_path, QueryPath::Olap, "CASE WHEN should route to OLAP");
         assert!(c.relative_cost >= 1.5, "Case must carry at least 1.5 cost overhead");
+    }
+
+    #[test]
+    fn planner_coalesce_select_produces_coalesce_node() {
+        let p = plan("SELECT COALESCE(name, 'unknown') FROM users");
+        assert!(
+            matches!(&p, LogicalPlan::Coalesce { .. }),
+            "COALESCE() query should produce outermost Coalesce node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_coalesce_query_routes_to_oltp() {
+        let c = cost("SELECT COALESCE(name, 'unknown') FROM users");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "COALESCE should route to OLTP");
+        assert!(c.relative_cost >= 0.3, "Coalesce must carry at least 0.3 cost overhead");
     }
 }
