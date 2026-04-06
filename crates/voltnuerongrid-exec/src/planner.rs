@@ -6,7 +6,8 @@
 //! Advances sprint backlog item S3-WS1-05 (planner/optimizer + cost model).
 
 use voltnuerongrid_sql::{
-    DeleteStatement, InsertStatement, SelectStatement, Statement, UpdateStatement,
+    DeleteStatement, InsertStatement, JoinClause as SqlJoinClause, SelectStatement, Statement,
+    UpdateStatement,
 };
 
 use crate::QueryPath;
@@ -77,6 +78,13 @@ pub enum LogicalPlan {
     Begin,
     Commit,
     Rollback,
+    /// JOIN of two tables (from S3-WS1-04 JoinClause support).
+    Join {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+        join_table: String,
+        condition: Option<String>,
+    },
     /// Unrecognised or unparseable statement.
     Unknown(String),
 }
@@ -95,6 +103,7 @@ impl LogicalPlan {
             | LogicalPlan::Aggregate { input, .. }
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::Limit { input, .. } => input.primary_table(),
+            LogicalPlan::Join { left, .. } => left.primary_table(),
             _ => None,
         }
     }
@@ -119,6 +128,9 @@ impl LogicalPlan {
             | LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::Limit { input, .. } => input.has_aggregation(),
+            LogicalPlan::Join { left, right, .. } => {
+                left.has_aggregation() || right.has_aggregation()
+            }
             _ => false,
         }
     }
@@ -241,6 +253,15 @@ impl QueryPlanner {
                 relative_cost: 0.05,
                 recommended_path: QueryPath::Oltp,
             },
+            LogicalPlan::Join { left, right, .. } => {
+                let lc = Self::estimate_cost(left);
+                let rc = Self::estimate_cost(right);
+                CostEstimate {
+                    estimated_rows: lc.estimated_rows.saturating_add(rc.estimated_rows),
+                    relative_cost: lc.relative_cost + rc.relative_cost + 3.0,
+                    recommended_path: QueryPath::Hybrid,
+                }
+            }
             LogicalPlan::Unknown(_) => CostEstimate {
                 estimated_rows: 0,
                 relative_cost: 0.0,
@@ -258,14 +279,29 @@ impl QueryPlanner {
             filter: None,
         };
 
-        // Filter
-        let after_filter = if let Some(pred) = &sel.where_clause {
-            LogicalPlan::Filter {
-                input: Box::new(scan),
-                predicate: pred.clone(),
+        // JOIN (S3-WS1-05)
+        let after_join = if let Some(SqlJoinClause { join_table, on_condition }) = &sel.join {
+            LogicalPlan::Join {
+                left: Box::new(scan),
+                right: Box::new(LogicalPlan::Scan {
+                    table: join_table.clone(),
+                    filter: on_condition.clone(),
+                }),
+                join_table: join_table.clone(),
+                condition: on_condition.clone(),
             }
         } else {
             scan
+        };
+
+        // Filter
+        let after_filter = if let Some(pred) = &sel.where_clause {
+            LogicalPlan::Filter {
+                input: Box::new(after_join),
+                predicate: pred.clone(),
+            }
+        } else {
+            after_join
         };
 
         // Aggregate (GROUP BY)
@@ -471,5 +507,22 @@ mod tests {
     fn cost_unknown_path_for_unrecognised_statement() {
         let c = cost("TRUNCATE TABLE foo");
         assert_eq!(c.recommended_path, QueryPath::Unknown);
+    }
+
+    // ── S3-WS1-05: JOIN planner tests ───────────────────────────────────────
+
+    #[test]
+    fn planner_select_with_join_produces_join_node() {
+        let p = plan("SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id");
+        assert!(matches!(&p, LogicalPlan::Join { join_table, .. } if join_table == "customers"), "expected Join node, got {p:?}");
+        assert_eq!(p.primary_table(), Some("orders"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_join_query_is_hybrid_path() {
+        let c = cost("SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id");
+        assert_eq!(c.recommended_path, QueryPath::Hybrid);
+        assert!(c.relative_cost > 3.0, "join should have extra cost");
     }
 }

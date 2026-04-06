@@ -11,7 +11,7 @@ pub mod tokenizer;
 
 pub use ast::{
     parse_one, ColumnDef, CreateTableStatement, DeleteStatement, InsertStatement,
-    OrderByClause, SelectStatement, Statement, UpdateStatement,
+    JoinClause, OrderByClause, SelectStatement, Statement, UpdateStatement,
 };
 pub use legacy_aggregations::eval_legacy_numeric_aggregation;
 pub use planner::{plan, CostEstimate, PlanNode, QueryPlan, RoutingHint};

@@ -10,5 +10,7 @@
 			"path": "../maas/maas-v2/prompts-and-design"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"diffEditor.maxComputationTime": 0
+	}
 }

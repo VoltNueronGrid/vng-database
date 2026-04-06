@@ -46,7 +46,7 @@ use voltnuerongrid_plugins::{
 };
 
 mod raft;
-use raft::{RaftAppendRequest, RaftAppendResponse, RaftNode, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+use raft::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftNode, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -1270,6 +1270,40 @@ struct DriverConnectResponse {
     session_token: String,
     negotiated_capabilities: Vec<String>,
     max_batch_size: usize,
+}
+
+// ─── S8-WS10-02: Driver disconnect structs ────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct DriverDisconnectRequest {
+    session_token: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DriverDisconnectResponse {
+    status: &'static str,
+    session_token: String,
+    disconnected: bool,
+}
+
+// ─── S7-WS6-02: Raft log entries response ─────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RaftLogResponse {
+    status: &'static str,
+    log_length: usize,
+    commit_index: u64,
+    entries: Vec<RaftLogEntry>,
+}
+
+// ─── S2-WS2-02: WAL forced checkpoint response ────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalForceCheckpointResponse {
+    status: &'static str,
+    wal_len_before: usize,
+    wal_len_after: usize,
+    checkpoint_count: usize,
 }
 
 // ─── S10-WS15-02: CDC change-data-capture structs ─────────────────────────────
@@ -2765,7 +2799,6 @@ async fn main() {
             "/api/v1/store/constraints/validate",
             post(store_validate_constraint),
         )
-        // S5-WS4-03 / S2-WS2-04: MVCC row store scan
         // S4-WS3-04: HTAP OLAP consumer apply + scan
         .route("/api/v1/store/htap/apply", post(store_htap_apply))
         .route("/api/v1/store/htap/olap/scan", get(store_htap_olap_scan))
@@ -2776,6 +2809,7 @@ async fn main() {
         .route("/api/v1/cluster/raft/vote", post(raft_vote))
         .route("/api/v1/cluster/raft/append", post(raft_append))
         .route("/api/v1/cluster/raft/tick", post(raft_tick))
+        .route("/api/v1/cluster/raft/log", get(raft_log))
         // S7-WS6-03: Raft fencing token
         .route("/api/v1/cluster/raft/fence", get(raft_fence))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
@@ -2794,13 +2828,16 @@ async fn main() {
         // S2-WS2-02: WAL durability status + recovery replay
         .route("/api/v1/store/wal/status", get(wal_status))
         .route("/api/v1/store/wal/recover", post(wal_recover))
+        .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
         // S7-WS6-04: Chaos/game-day fault injection
         .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
         .route("/api/v1/cluster/chaos/status", get(chaos_status))
-        // S8-WS10-02: Driver wire protocol info + session connect
+        .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
+        // S8-WS10-02: Driver wire protocol info + session connect + disconnect
         .route("/api/v1/driver/protocol/info", get(driver_protocol_info))
         .route("/api/v1/driver/connect", post(driver_connect))
+        .route("/api/v1/driver/disconnect", post(driver_disconnect))
         // S10-WS15-02: CDC stream from WAL
         .route("/api/v1/store/cdc/stream", get(cdc_stream))
         .route("/api/v1/store/cdc/cursor", get(cdc_cursor_status))
@@ -6126,6 +6163,28 @@ async fn wal_status(State(state): State<AppState>) -> (StatusCode, Json<WalStatu
     }))
 }
 
+// ─── S2-WS2-02: WAL forced checkpoint ────────────────────────────────────────
+
+async fn wal_force_checkpoint(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<WalForceCheckpointResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let mut wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal_len_before = wal.wal_records().len();
+    wal.force_checkpoint();
+    let wal_len_after = wal.wal_records().len();
+    let checkpoint_count = wal.checkpoint_count();
+    (StatusCode::OK, Json(WalForceCheckpointResponse {
+        status: "ok",
+        wal_len_before,
+        wal_len_after,
+        checkpoint_count,
+    }))
+}
+
+// ─── S
+
 /// S2-WS2-02: replay WAL records into the row store (or dry-run).
 async fn wal_recover(
     State(state): State<AppState>,
@@ -6262,6 +6321,42 @@ async fn driver_connect(
         session_token,
         negotiated_capabilities: negotiated,
         max_batch_size: 500,
+    }))
+}
+
+
+// ─── S7-WS6-02: Raft log entries endpoint ────────────────────────────────────────────
+
+async fn raft_log(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<RaftLogResponse>) {
+    let node = state.raft_state.lock().expect("raft_state lock");
+    let log_length = node.log.len();
+    let commit_index = node.commit_index;
+    let entries = node.log.clone();
+    drop(node);
+    (StatusCode::OK, Json(RaftLogResponse {
+        status: "ok",
+        log_length,
+        commit_index,
+        entries,
+    }))
+}
+
+// ─── S8-WS10-02: Driver session disconnect ────────────────────────────────────
+
+async fn driver_disconnect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DriverDisconnectRequest>,
+) -> (StatusCode, Json<DriverDisconnectResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let mut sessions = state.driver_sessions.lock().expect("driver_sessions lock");
+    let disconnected = sessions.remove(&req.session_token).is_some();
+    (StatusCode::OK, Json(DriverDisconnectResponse {
+        status: "ok",
+        session_token: req.session_token,
+        disconnected,
     }))
 }
 
@@ -16350,11 +16445,12 @@ mod tests {
         let (status, Json(body)) = cdc_cursor_status(
             State(state),
             Query(CdcCursorQuery { table: "orders".to_string() }),
-        ).await;
+    ).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.table_name, "orders");
         assert_eq!(body.cursor_position, 0, "fresh state must return cursor 0");
     }
+
 
     #[tokio::test]
     async fn s10_ws15_02_cdc_cursor_advance_and_read() {
@@ -16410,4 +16506,104 @@ mod tests {
         assert!(keys.contains(&"tenant:1"));
         assert!(keys.contains(&"tenant:2"));
     }
+
+
+    // ── S8-WS10-02: driver disconnect ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_disconnect_removes_session() {
+        let state = state_with_key(Some("test-key"));
+        // First connect to create a session.
+        let connect_req = DriverConnectRequest {
+            driver_name: "test-driver".to_string(),
+            driver_version: "1.0".to_string(),
+            requested_capabilities: None,
+        };
+        let (_, Json(conn_body)) = driver_connect(State(state.clone()), Json(connect_req)).await;
+        let token = conn_body.session_token.clone();
+        // Verify session exists.
+        assert!(state.driver_sessions.lock().unwrap().contains_key(&token));
+        // Disconnect.
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = driver_disconnect(
+            State(state.clone()),
+            headers,
+            Json(DriverDisconnectRequest { session_token: token.clone() }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.disconnected);
+        assert_eq!(body.session_token, token);
+        assert!(!state.driver_sessions.lock().unwrap().contains_key(&token));
+    }
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_disconnect_missing_session_returns_false() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = driver_disconnect(
+            State(state),
+            headers,
+            Json(DriverDisconnectRequest { session_token: "nonexistent-token".to_string() }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.disconnected);
+    }
+
+    // ── S7-WS6-02: raft log entries endpoint ───────────────────────────────
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_log_fresh_state_empty() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = raft_log(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.log_length, 0);
+        assert_eq!(body.commit_index, 0);
+        assert!(body.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_log_after_append_has_entries() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut node = state.raft_state.lock().unwrap();
+            node.log.push(crate::raft::RaftLogEntry { index: 1, term: 1, command: "INSERT INTO t VALUES (1)".to_string() });
+            node.commit_index = 1;
+        }
+        let (status, Json(body)) = raft_log(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.log_length, 1);
+        assert_eq!(body.commit_index, 1);
+        assert_eq!(body.entries[0].command, "INSERT INTO t VALUES (1)");
+    }
+
+    // ── S2-WS2-02: WAL forced checkpoint endpoint ──────────────────────────
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_force_checkpoint_increments_count() {
+        let state = state_with_key(Some("test-key"));
+        // Add some WAL records.
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "v2");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_force_checkpoint(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.wal_len_before, 2);
+        assert_eq!(body.wal_len_after, 0);
+        assert_eq!(body.checkpoint_count, 1);
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_force_checkpoint_on_empty_wal() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_force_checkpoint(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.wal_len_before, 0);
+        assert_eq!(body.wal_len_after, 0);
+        assert_eq!(body.checkpoint_count, 1, "checkpoint taken even on empty WAL");
+    }
+
 }
