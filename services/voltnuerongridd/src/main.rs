@@ -1360,6 +1360,29 @@ struct WalStatsResponse {
     mutation_rate_estimate: f64,
 }
 
+// ─── S2-WS2-02: WAL replay (filtered read-back) structs ─────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct WalReplayQuery {
+    table_filter: Option<String>,
+    op_filter: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalReplayEntry {
+    sequence: u64,
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WalReplayResponse {
+    status: &'static str,
+    total_records: usize,
+    matched_records: usize,
+    entries: Vec<WalReplayEntry>,
+}
+
 // ─── S10-WS15-02: CDC change-data-capture structs ─────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -1831,6 +1854,17 @@ struct TlsCertRotateResponse {
     reason: String,
 }
 
+// ─── S6-WS5-03: TLS certificate info struct ─────────────────────────────────
+
+#[derive(Serialize)]
+struct TlsCertInfoResponse {
+    status: &'static str,
+    cert_source: String,
+    tls_required: bool,
+    mtls_required: bool,
+    cert_rotation_supported: bool,
+}
+
 // S6-WS5-04: TDE runtime status
 #[derive(Serialize)]
 struct SecurityTdeStatusResponse {
@@ -2293,6 +2327,23 @@ struct DriverHealthResponse {
     pool_active_connections: usize,
     pool_total_acquired: u64,
     healthy: bool,
+}
+
+// ─── S8-WS10-02: Driver query structs ─────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct DriverQueryRequest {
+    session_token: String,
+    sql: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DriverQueryResponse {
+    status: &'static str,
+    session_token: String,
+    sql: String,
+    rows_returned: usize,
+    executed_at_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -3203,6 +3254,8 @@ async fn main() {
         // S6-WS5-03: TLS runtime status
         .route("/api/v1/security/tls/status", get(security_tls_status))
         .route("/api/v1/security/tls/rotate", post(security_tls_rotate))
+        // S6-WS5-03: TLS certificate info
+        .route("/api/v1/security/tls/cert/info", get(security_tls_cert_info))
         // S6-WS5-04: TDE/encryption-at-rest status
         .route("/api/v1/security/tde/status", get(security_tde_status))
         // S6-WS5-04: TDE toggle override
@@ -3216,6 +3269,8 @@ async fn main() {
         .route("/api/v1/store/wal/recover", post(wal_recover))
         .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
         .route("/api/v1/store/wal/stats", get(wal_stats))
+        // S2-WS2-02: WAL replay (filtered read-back)
+        .route("/api/v1/store/wal/replay", get(wal_replay))
         // S7-WS6-04: Chaos/game-day fault injection
         .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
@@ -3231,6 +3286,8 @@ async fn main() {
         .route("/api/v1/driver/sessions", get(driver_session_list))
         // S8-WS10-02: driver pool health
         .route("/api/v1/driver/health", get(driver_health))
+        // S8-WS10-02: driver query pass-through
+        .route("/api/v1/driver/query", post(driver_query))
         // S10-WS15-02: CDC stream from WAL
         .route("/api/v1/store/cdc/stream", get(cdc_stream))
         .route("/api/v1/store/cdc/stream/filter", get(cdc_stream_filter))
@@ -6696,6 +6753,42 @@ async fn wal_stats(
 
 // ─── S
 
+// ─── S2-WS2-02: WAL replay — filtered read-back of WAL entries ───────────────
+
+/// S2-WS2-02: Return WAL records with optional key/op filters (read-only).
+async fn wal_replay(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WalReplayQuery>,
+) -> (StatusCode, Json<WalReplayResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let all_records = wal.wal_records().to_vec();
+    drop(wal);
+    let total_records = all_records.len();
+    let entries: Vec<WalReplayEntry> = all_records
+        .into_iter()
+        .filter(|r| {
+            let key_ok = params.table_filter.as_ref()
+                .map(|f| r.key.contains(f.as_str()))
+                .unwrap_or(true);
+            let op_type = if r.value == "__deleted__" { "delete" } else { "insert" };
+            let op_ok = params.op_filter.as_ref()
+                .map(|f| op_type == f.as_str())
+                .unwrap_or(true);
+            key_ok && op_ok
+        })
+        .map(|r| WalReplayEntry { sequence: r.sequence, key: r.key, value: r.value })
+        .collect();
+    let matched_records = entries.len();
+    (StatusCode::OK, Json(WalReplayResponse {
+        status: "ok",
+        total_records,
+        matched_records,
+        entries,
+    }))
+}
+
 /// S2-WS2-02: replay WAL records into the row store (or dry-run).
 async fn wal_recover(
     State(state): State<AppState>,
@@ -6841,6 +6934,28 @@ async fn security_tls_rotate(
         rotation_initiated,
         cert_source,
         reason,
+    })))
+}
+
+// ─── S6-WS5-03: TLS certificate info ─────────────────────────────────────────
+
+/// S6-WS5-03: Return TLS certificate configuration details.
+async fn security_tls_cert_info(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<TlsCertInfoResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let cert_source = std::env::var("VNG_TLS_CERT_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "not_configured".to_string());
+    let sc = &*state.security_config;
+    Ok((StatusCode::OK, Json(TlsCertInfoResponse {
+        status: "ok",
+        cert_source,
+        tls_required: sc.tls_required,
+        mtls_required: sc.mtls_required,
+        cert_rotation_supported: false,
     })))
 }
 
@@ -7497,6 +7612,34 @@ fn ingest_infer_columns(
         IngestSchemaColumn { name: "key".to_string(), inferred_type: "utf8" },
         IngestSchemaColumn { name: "payload".to_string(), inferred_type: "utf8" },
     ]
+}
+
+// ─── S8-WS10-02: driver query pass-through ──────────────────────────────────
+
+/// S8-WS10-02: Execute a simple query through a driver session (scaffold).
+async fn driver_query(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DriverQueryRequest>,
+) -> Result<(StatusCode, Json<DriverQueryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let sessions = state.driver_sessions.lock().expect("driver_sessions lock");
+    let session_exists = sessions.contains_key(&req.session_token);
+    drop(sessions);
+    if !session_exists {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(AuthErrorResponse { status: "error", reason: "invalid_session_token".to_string(), locale: "en".to_string(), localized_message: "Invalid or expired session token".to_string() }),
+        ));
+    }
+    let executed_at_ms = now_unix_ms_u64();
+    Ok((StatusCode::OK, Json(DriverQueryResponse {
+        status: "ok",
+        session_token: req.session_token,
+        sql: req.sql,
+        rows_returned: 0,
+        executed_at_ms,
+    })))
 }
 
 // ─── S8-WS10-02: Driver health handler ──────────────────────────────────────
@@ -18327,6 +18470,29 @@ mod tests {
         assert_eq!(body.reason, "test");
     }
 
+    // ── S6-WS5-03: TLS cert info tests ───────────────────────────────────────
+    #[tokio::test]
+    async fn s6_ws5_03_tls_cert_info_fresh_state_not_configured() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = security_tls_cert_info(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.cert_source, "not_configured");
+        assert!(!body.cert_rotation_supported, "cert rotation is scaffold");
+    }
+
+    #[tokio::test]
+    async fn s6_ws5_03_tls_cert_info_reflects_security_config() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = security_tls_cert_info(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        // Default dev config has tls_required=false, mtls_required=false
+        assert!(!body.tls_required, "default dev config has tls_required=false");
+        assert!(!body.mtls_required, "default dev config has mtls_required=false");
+    }
+
     // ── S8-WS10-02: Driver session list ──────────────────────────────────────
     #[tokio::test]
     async fn s8_ws10_02_driver_session_list_fresh_state_empty() {
@@ -18389,6 +18555,44 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.active_sessions, 1);
         assert!(body.healthy);
+    }
+
+    // ── S8-WS10-02: Driver query tests ───────────────────────────────────────
+    #[tokio::test]
+    async fn s8_ws10_02_driver_query_invalid_session_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = DriverQueryRequest {
+            session_token: "no-such-session".to_string(),
+            sql: "SELECT * FROM orders".to_string(),
+        };
+        let result = driver_query(State(state), headers, Json(req)).await;
+        assert!(result.is_err(), "invalid session token must fail");
+        let (status, _) = result.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_query_valid_session_returns_ok() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut sessions = state.driver_sessions.lock().unwrap();
+            sessions.insert("drv-sess-99".to_string(), DriverSession {
+                driver_name: "test-drv".to_string(),
+                driver_version: "2.0.0".to_string(),
+                connected_at_ms: 0,
+            });
+        }
+        let headers = operator_headers("test-key", "admin");
+        let req = DriverQueryRequest {
+            session_token: "drv-sess-99".to_string(),
+            sql: "SELECT COUNT(*) FROM events".to_string(),
+        };
+        let (status, Json(body)) = driver_query(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.session_token, "drv-sess-99");
+        assert_eq!(body.sql, "SELECT COUNT(*) FROM events");
+        assert_eq!(body.rows_returned, 0);
     }
 
     // ── S10-WS15-02: CDC stream filter ────────────────────────────────────────
@@ -18477,6 +18681,42 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.record_count, 3);
         assert_eq!(body.checkpoint_count, 0, "no checkpoint performed yet");
+    }
+
+    // ── S2-WS2-02: WAL replay endpoint tests ─────────────────────────────────
+    #[tokio::test]
+    async fn s2_ws2_02_wal_replay_empty_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_replay(
+            State(state),
+            headers,
+            axum::extract::Query(WalReplayQuery::default()),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_records, 0);
+        assert_eq!(body.matched_records, 0);
+        assert!(body.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_replay_filters_by_op_type() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "__deleted__");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_replay(
+            State(state),
+            headers,
+            axum::extract::Query(WalReplayQuery { table_filter: None, op_filter: Some("delete".to_string()) }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_records, 2);
+        assert_eq!(body.matched_records, 1, "only 1 delete record should match");
+        assert_eq!(body.entries[0].value, "__deleted__");
     }
 
     // ── S7-WS6-02: Raft heartbeat endpoint ───────────────────────────────────

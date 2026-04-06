@@ -90,6 +90,12 @@ pub enum LogicalPlan {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
     },
+    /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
+    WindowFn {
+        input: Box<LogicalPlan>,
+        /// The window function expression indicator (scaffold: always "OVER").
+        window_func: String,
+    },
     /// Unrecognised or unparseable statement.
     Unknown(String),
 }
@@ -110,6 +116,7 @@ impl LogicalPlan {
             | LogicalPlan::Limit { input, .. } => input.primary_table(),
             LogicalPlan::Join { left, .. } => left.primary_table(),
             LogicalPlan::Union { left, .. } => left.primary_table(),
+            LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             _ => None,
         }
     }
@@ -140,6 +147,7 @@ impl LogicalPlan {
             LogicalPlan::Union { left, right } => {
                 left.has_aggregation() || right.has_aggregation()
             }
+            LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             _ => false,
         }
     }
@@ -280,6 +288,14 @@ impl QueryPlanner {
                     recommended_path: QueryPath::Olap,
                 }
             }
+            LogicalPlan::WindowFn { input, .. } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 2.5,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
             LogicalPlan::Unknown(_) => CostEstimate {
                 estimated_rows: 0,
                 relative_cost: 0.0,
@@ -368,7 +384,7 @@ impl QueryPlanner {
         };
 
         // UNION (S3-WS1-04 has_union detection): wrap in Union node with synthetic rhs
-        if sel.has_union {
+        let after_union = if sel.has_union {
             let rhs_table = sel.table.clone().unwrap_or_else(|| "<union_rhs>".to_string());
             LogicalPlan::Union {
                 left: Box::new(after_project),
@@ -379,6 +395,16 @@ impl QueryPlanner {
             }
         } else {
             after_project
+        };
+
+        // Window function (S3-WS1-04 has_window_fn detection): wrap outermost node.
+        if sel.has_window_fn {
+            LogicalPlan::WindowFn {
+                input: Box::new(after_union),
+                window_func: "OVER".to_string(),
+            }
+        } else {
+            after_union
         }
     }
 
@@ -576,5 +602,25 @@ mod tests {
         let c = cost("SELECT * FROM t1 UNION SELECT * FROM t2");
         assert_eq!(c.recommended_path, QueryPath::Olap, "UNION should route to OLAP");
         assert!(c.relative_cost > 2.0, "union should carry extra cost");
+    }
+
+    // ── S3-WS1-05: WindowFn plan node tests ──────────────────────────────────
+
+    #[test]
+    fn planner_window_fn_produces_window_fn_node() {
+        let p = plan("SELECT id, RANK() OVER (PARTITION BY dept ORDER BY salary DESC) AS rnk FROM employees");
+        assert!(
+            matches!(&p, LogicalPlan::WindowFn { window_func, .. } if window_func == "OVER"),
+            "expected WindowFn node for window function query, got {p:?}"
+        );
+        assert_eq!(p.primary_table(), Some("employees"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_window_fn_query_is_olap_path() {
+        let c = cost("SELECT region, SUM(revenue) OVER(PARTITION BY region) AS total FROM sales");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "window function should route to OLAP");
+        assert!(c.relative_cost > 2.5, "window fn should carry extra cost >= 2.5");
     }
 }
