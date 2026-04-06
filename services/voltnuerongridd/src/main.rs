@@ -1340,6 +1340,18 @@ struct RaftMemberListResponse {
     members: Vec<RaftMemberEntry>,
 }
 
+// ─── S7-WS6-03: Raft current leader response ────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RaftLeaderResponse {
+    status: &'static str,
+    node_id: String,
+    role: String,
+    current_term: u64,
+    is_leader: bool,
+    fencing_token: u64,
+}
+
 // ─── S2-WS2-02: WAL forced checkpoint response ────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -1967,6 +1979,18 @@ struct HtapForceSyncResponse {
     olap_row_count_after: usize,
 }
 
+// ─── S4-WS3-04: HTAP detailed status response ───────────────────────────────
+
+#[derive(Serialize)]
+struct HtapStatusResponse {
+    status: &'static str,
+    sync_origin_pending: usize,
+    olap_row_count: usize,
+    last_sync_ms: u64,
+    sync_lag_estimate: i64,
+    is_synchronized: bool,
+}
+
 // ─── S7-WS6-02: Raft snapshot response ───────────────────────────────────────
 
 #[derive(Serialize)]
@@ -2099,6 +2123,22 @@ struct ConnectorDeregisterResponse {
     status: &'static str,
     connector_id: String,
     removed: bool,
+}
+
+// ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ChaosFireDrillRequest {
+    drill_type: String,
+    target_node: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChaosFireDrillResponse {
+    status: &'static str,
+    drill_type: String,
+    faults_injected: usize,
+    target_node: String,
 }
 
 // ─── S7-WS6-03: Raft fencing token struct ──────────────────────────────────────────
@@ -3225,6 +3265,8 @@ async fn main() {
         .route("/api/v1/store/htap/lag", get(htap_lag))
         // S4-WS3-04: HTAP force-sync — drain sync_origin into olap_store
         .route("/api/v1/store/htap/sync", post(htap_force_sync))
+        // S4-WS3-04: HTAP detailed status
+        .route("/api/v1/store/htap/status", get(htap_status))
         // S9-WS8A-02: Audit export (all buffered events + file-backed status)
         .route("/api/v1/audit/export", get(audit_export))
         // S9-WS8A-02: Audit purge — flush in-memory audit sink
@@ -3241,6 +3283,8 @@ async fn main() {
         .route("/api/v1/cluster/raft/snapshot", get(raft_snapshot))
         .route("/api/v1/cluster/raft/heartbeat", post(raft_heartbeat))
         .route("/api/v1/cluster/raft/members", get(raft_member_list))
+        // S7-WS6-03: Raft current leader
+        .route("/api/v1/cluster/raft/leader", get(raft_leader))
         // S7-WS6-03: Raft fencing token
         .route("/api/v1/cluster/raft/fence", get(raft_fence))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
@@ -3278,6 +3322,8 @@ async fn main() {
         .route("/api/v1/cluster/chaos/health", get(chaos_health))
         // S7-WS6-04: Chaos event history
         .route("/api/v1/cluster/chaos/history", get(chaos_history))
+        // S7-WS6-04: Chaos fire drill
+        .route("/api/v1/cluster/chaos/fire-drill", post(chaos_fire_drill))
         .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
         // S8-WS10-02: Driver wire protocol info + session connect + disconnect
         .route("/api/v1/driver/protocol/info", get(driver_protocol_info))
@@ -6149,6 +6195,33 @@ async fn audit_snapshot(
     })))
 }
 
+// ─── S4-WS3-04: HTAP detailed status handler ─────────────────────────────────
+
+/// S4-WS3-04: Return detailed HTAP sync status — pending queue depth, OLAP row count,
+/// and estimated lag.
+async fn htap_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<HtapStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let sync_origin_pending = {
+        let so = state.sync_origin.lock().expect("sync_origin lock");
+        so.pending_len()
+    };
+    let olap_row_count = state.olap_store.lock().expect("olap_store lock").len();
+    let last_sync_ms = now_unix_ms_u64();
+    let sync_lag_estimate = sync_origin_pending as i64 - olap_row_count as i64;
+    let is_synchronized = sync_origin_pending == 0;
+    Ok((StatusCode::OK, Json(HtapStatusResponse {
+        status: "ok",
+        sync_origin_pending,
+        olap_row_count,
+        last_sync_ms,
+        sync_lag_estimate,
+        is_synchronized,
+    })))
+}
+
 // ─── S9-WS8A-02: Audit purge — flush the in-memory audit sink ────────────────
 
 /// S9-WS8A-02: Purge all buffered audit events (requires operator auth).
@@ -6909,6 +6982,37 @@ async fn chaos_history(State(state): State<AppState>) -> (StatusCode, Json<Chaos
     }))
 }
 
+// ─── S7-WS6-04: Chaos fire-drill handler ────────────────────────────────────
+
+/// S7-WS6-04: Execute a scheduled chaos fire drill — injects a fault and marks it as
+/// a drill (not a real failure); clears immediately after injection.
+async fn chaos_fire_drill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ChaosFireDrillRequest>,
+) -> Result<(StatusCode, Json<ChaosFireDrillResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let target_node = req.target_node.unwrap_or_else(|| "local".to_string());
+    let now_ms = now_unix_ms_u64();
+    let drill_event = ChaosEvent {
+        fault_type: format!("fire_drill:{}", req.drill_type),
+        target_node: Some(target_node.clone()),
+        parameters: std::collections::HashMap::new(),
+        injected_at_ms: now_ms,
+        cleared_at_ms: Some(now_ms),
+    };
+    {
+        let mut cs = state.chaos_state.lock().expect("chaos_state fire_drill lock");
+        cs.event_history.push(drill_event);
+    }
+    Ok((StatusCode::OK, Json(ChaosFireDrillResponse {
+        status: "ok",
+        drill_type: req.drill_type,
+        faults_injected: 1,
+        target_node,
+    })))
+}
+
 /// S6-WS5-03: Initiate a TLS cert rotation (scaffold — records attempt, does not hot-swap certs).
 async fn security_tls_rotate(
     State(state): State<AppState>,
@@ -7102,6 +7206,28 @@ async fn raft_member_list(
         member_count: 1,
         members: vec![member],
     }))
+}
+
+// ─── S7-WS6-03: Raft current leader endpoint ────────────────────────────────
+
+/// S7-WS6-03: Return this node's view of the current Raft leader.
+async fn raft_leader(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftLeaderResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let node = state.raft_state.lock().expect("raft_state lock");
+    let is_leader = matches!(node.role, RaftRole::Leader);
+    let response = RaftLeaderResponse {
+        status: "ok",
+        node_id: node.node_id.clone(),
+        role: format!("{:?}", node.role),
+        current_term: node.current_term,
+        is_leader,
+        fencing_token: node.fencing_token,
+    };
+    drop(node);
+    Ok((StatusCode::OK, Json(response)))
 }
 
 // ─── S8-WS10-02: Driver session disconnect ────────────────────────────────────
@@ -17786,6 +17912,31 @@ mod tests {
         assert_eq!(body.commit_index, 3);
     }
 
+    // ─── S7-WS6-03: Raft leader endpoint tests ───────────────────────────
+    #[tokio::test]
+    async fn s7_ws6_03_raft_leader_fresh_state_is_follower() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_leader(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.is_leader, "fresh node starts as Follower, not leader");
+        assert_eq!(body.current_term, 0);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_03_raft_leader_reflects_term_after_vote() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut node = state.raft_state.lock().unwrap();
+            node.current_term = 5;
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_leader(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.current_term, 5, "leader response must reflect updated term");
+    }
+
     // ─── S7-WS6-03: Raft fencing token tests ─────────────────────────────
 
     #[tokio::test]
@@ -18745,6 +18896,32 @@ mod tests {
         assert_eq!(body.term, 3);
     }
 
+    // ─── S4-WS3-04: HTAP status tests ────────────────────────────────────────
+    #[tokio::test]
+    async fn s4_ws3_04_htap_status_empty_state_is_synchronized() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = htap_status(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.sync_origin_pending, 0);
+        assert!(body.is_synchronized, "no pending mutations means synchronized");
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_04_htap_status_reflects_olap_row_count() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut olap = state.olap_store.lock().unwrap();
+            olap.insert("k1".to_string(), std::collections::HashMap::new());
+            olap.insert("k2".to_string(), std::collections::HashMap::new());
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = htap_status(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.olap_row_count, 2, "olap_store row count must be visible");
+    }
+
     // ── S9-WS8A-02: Audit integrity snapshot ─────────────────────────────────
     #[tokio::test]
     async fn s9_ws8a_02_audit_snapshot_fresh_state_valid_chain() {
@@ -18770,6 +18947,35 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.event_count, 2);
         assert!(body.chain_valid, "2-event chain should be valid");
+    }
+
+    // ─── S7-WS6-04: Chaos fire drill tests ────────────────────────────────────────
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_fire_drill_adds_to_history() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = ChaosFireDrillRequest { drill_type: "network-partition".to_string(), target_node: None };
+        let (status, Json(body)) = chaos_fire_drill(State(state.clone()), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.faults_injected, 1);
+        let cs = state.chaos_state.lock().unwrap();
+        assert_eq!(cs.event_history.len(), 1, "fire drill must appear in history");
+        assert!(cs.active_faults.is_empty(), "fire drill must not leave active faults");
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_04_chaos_fire_drill_with_target_node() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = ChaosFireDrillRequest {
+            drill_type: "cpu-spike".to_string(),
+            target_node: Some("node-2".to_string()),
+        };
+        let (status, Json(body)) = chaos_fire_drill(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.target_node, "node-2");
+        assert_eq!(body.drill_type, "cpu-spike");
     }
 
     // ─── S9-WS8A-02: Audit purge tests ──────────────────────────────────────

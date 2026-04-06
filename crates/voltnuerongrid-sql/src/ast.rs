@@ -1132,3 +1132,47 @@ mod agg_fn_tests {
         }
     }
 }
+
+/// S3-WS1-06: Extended ANSI conformance tests — ORDER BY + LIMIT combos and
+/// multi-column table operations.
+#[cfg(test)]
+mod extended_conformance_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_with_limit_parses_both() {
+        let sql = "SELECT id, name FROM products ORDER BY name ASC LIMIT 50";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(!s.order_by.is_empty(), "ORDER BY must be captured");
+            assert_eq!(s.limit, Some(50), "LIMIT 50 must be captured");
+        } else {
+            panic!("expected Select");
+        }
+    }
+
+    #[test]
+    fn insert_multi_row_parses_correct_column_count() {
+        let sql = "INSERT INTO log (ts, msg, level) VALUES (1, 'boot', 'info'), (2, 'ready', 'info')";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Insert(ins) = stmt {
+            assert_eq!(ins.table, "log");
+            assert_eq!(ins.columns, vec!["ts", "msg", "LEVEL"]);
+            assert_eq!(ins.values.len(), 2, "two rows must be parsed");
+        } else {
+            panic!("expected Insert");
+        }
+    }
+
+    #[test]
+    fn create_table_with_five_columns_parses_all_columns() {
+        let sql = "CREATE TABLE metrics (id BIGINT, name TEXT, value FLOAT, recorded_at TIMESTAMP, source VARCHAR(64))";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::CreateTable(ct) = stmt {
+            assert_eq!(ct.table, "metrics");
+            assert_eq!(ct.columns.len(), 5, "all 5 columns must be parsed");
+        } else {
+            panic!("expected CreateTable");
+        }
+    }
+}
