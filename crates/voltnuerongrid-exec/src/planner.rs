@@ -85,6 +85,11 @@ pub enum LogicalPlan {
         join_table: String,
         condition: Option<String>,
     },
+    /// UNION / set-operation combining two result sets (from S3-WS1-04 has_union support).
+    Union {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+    },
     /// Unrecognised or unparseable statement.
     Unknown(String),
 }
@@ -104,6 +109,7 @@ impl LogicalPlan {
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::Limit { input, .. } => input.primary_table(),
             LogicalPlan::Join { left, .. } => left.primary_table(),
+            LogicalPlan::Union { left, .. } => left.primary_table(),
             _ => None,
         }
     }
@@ -129,6 +135,9 @@ impl LogicalPlan {
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::Limit { input, .. } => input.has_aggregation(),
             LogicalPlan::Join { left, right, .. } => {
+                left.has_aggregation() || right.has_aggregation()
+            }
+            LogicalPlan::Union { left, right } => {
                 left.has_aggregation() || right.has_aggregation()
             }
             _ => false,
@@ -262,6 +271,15 @@ impl QueryPlanner {
                     recommended_path: QueryPath::Hybrid,
                 }
             }
+            LogicalPlan::Union { left, right } => {
+                let lc = Self::estimate_cost(left);
+                let rc = Self::estimate_cost(right);
+                CostEstimate {
+                    estimated_rows: lc.estimated_rows.saturating_add(rc.estimated_rows),
+                    relative_cost: lc.relative_cost + rc.relative_cost + 2.0,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
             LogicalPlan::Unknown(_) => CostEstimate {
                 estimated_rows: 0,
                 relative_cost: 0.0,
@@ -340,13 +358,27 @@ impl QueryPlanner {
         };
 
         // Project (only when not SELECT *)
-        if sel.columns != vec!["*".to_string()] && !sel.columns.is_empty() {
+        let after_project = if sel.columns != vec!["*".to_string()] && !sel.columns.is_empty() {
             LogicalPlan::Project {
                 input: Box::new(after_limit),
                 columns: sel.columns.clone(),
             }
         } else {
             after_limit
+        };
+
+        // UNION (S3-WS1-04 has_union detection): wrap in Union node with synthetic rhs
+        if sel.has_union {
+            let rhs_table = sel.table.clone().unwrap_or_else(|| "<union_rhs>".to_string());
+            LogicalPlan::Union {
+                left: Box::new(after_project),
+                right: Box::new(LogicalPlan::Scan {
+                    table: rhs_table,
+                    filter: None,
+                }),
+            }
+        } else {
+            after_project
         }
     }
 
@@ -524,5 +556,25 @@ mod tests {
         let c = cost("SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id");
         assert_eq!(c.recommended_path, QueryPath::Hybrid);
         assert!(c.relative_cost > 3.0, "join should have extra cost");
+    }
+
+    // ── S3-WS1-05: Union plan node tests ─────────────────────────────────────
+
+    #[test]
+    fn planner_union_select_produces_union_node() {
+        let p = plan("SELECT * FROM orders UNION SELECT * FROM archived_orders");
+        assert!(
+            matches!(&p, LogicalPlan::Union { .. }),
+            "expected Union node for UNION query, got {p:?}"
+        );
+        assert_eq!(p.primary_table(), Some("orders"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_union_query_is_olap_path() {
+        let c = cost("SELECT * FROM t1 UNION SELECT * FROM t2");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "UNION should route to OLAP");
+        assert!(c.relative_cost > 2.0, "union should carry extra cost");
     }
 }

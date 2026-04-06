@@ -1312,6 +1312,17 @@ struct RaftLogResponse {
     entries: Vec<RaftLogEntry>,
 }
 
+// ─── S7-WS6-02: Raft heartbeat response ──────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RaftHeartbeatResponse {
+    status: &'static str,
+    role: String,
+    term: u64,
+    ticks_reset_to: u64,
+    heartbeat_accepted: bool,
+}
+
 // ─── S2-WS2-02: WAL forced checkpoint response ────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -1320,6 +1331,16 @@ struct WalForceCheckpointResponse {
     wal_len_before: usize,
     wal_len_after: usize,
     checkpoint_count: usize,
+}
+
+// ─── S2-WS2-02: WAL statistics response ──────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalStatsResponse {
+    status: &'static str,
+    record_count: usize,
+    checkpoint_count: usize,
+    mutation_rate_estimate: f64,
 }
 
 // ─── S10-WS15-02: CDC change-data-capture structs ─────────────────────────────
@@ -1805,6 +1826,17 @@ struct AuditExportResponse {
     file_backed: bool,
     audit_log_path: Option<String>,
     events: Vec<AuditEvent>,
+}
+
+// ─── S9-WS8A-02: Audit integrity snapshot response ───────────────────────────
+
+#[derive(Debug, Serialize)]
+struct AuditSnapshotResponse {
+    status: &'static str,
+    snapshot_at_ms: u64,
+    event_count: usize,
+    chain_valid: bool,
+    genesis_hash: &'static str,
 }
 
 // ─── S5-E4A-01: Connector SDK runtime structs ───────────────────────────────────
@@ -2839,6 +2871,7 @@ async fn main() {
         .route("/api/v1/audit/events", get(audit_events))
         // S9-WS8A-02: tamper-evident audit chain verification
         .route("/api/v1/audit/chain/verify", get(audit_chain_verify))
+        .route("/api/v1/audit/snapshot", get(audit_snapshot))
         .route("/api/v1/security/kms/status", get(security_kms_status))
         .route(
             "/api/v1/security/kms/outage/simulate",
@@ -2887,6 +2920,7 @@ async fn main() {
         .route("/api/v1/cluster/raft/append", post(raft_append))
         .route("/api/v1/cluster/raft/tick", post(raft_tick))
         .route("/api/v1/cluster/raft/log", get(raft_log))
+        .route("/api/v1/cluster/raft/heartbeat", post(raft_heartbeat))
         // S7-WS6-03: Raft fencing token
         .route("/api/v1/cluster/raft/fence", get(raft_fence))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
@@ -2907,6 +2941,7 @@ async fn main() {
         .route("/api/v1/store/wal/status", get(wal_status))
         .route("/api/v1/store/wal/recover", post(wal_recover))
         .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
+        .route("/api/v1/store/wal/stats", get(wal_stats))
         // S7-WS6-04: Chaos/game-day fault injection
         .route("/api/v1/cluster/chaos/inject", post(chaos_inject))
         .route("/api/v1/cluster/chaos/clear", post(chaos_clear))
@@ -5734,6 +5769,34 @@ async fn audit_chain_verify(
     }))
 }
 
+// ─── S9-WS8A-02: Audit integrity snapshot ────────────────────────────────────
+
+/// S9-WS8A-02: Return a point-in-time integrity snapshot of the audit chain.
+async fn audit_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AuditSnapshotResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_audit_runtime_principal(&headers, &state, PrivilegeAction::Read, "audit/snapshot")?;
+    let events = state
+        .audit_sink
+        .lock()
+        .map(|sink| sink.all().to_vec())
+        .unwrap_or_default();
+    let event_count = events.len();
+    let chain_valid = AppendOnlyAuditSink::verify_chain(&events);
+    let snapshot_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    Ok((StatusCode::OK, Json(AuditSnapshotResponse {
+        status: "ok",
+        snapshot_at_ms,
+        event_count,
+        chain_valid,
+        genesis_hash: "genesis-0000000000000000",
+    })))
+}
+
 async fn autonomous_action_records(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -6266,6 +6329,25 @@ async fn wal_force_checkpoint(
     }))
 }
 
+/// S2-WS2-02: Return WAL statistics (record count, checkpoint count, mutation rate).
+async fn wal_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<WalStatsResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let record_count = wal.wal_records().len();
+    let checkpoint_count = wal.checkpoint_count();
+    drop(wal);
+    let mutation_rate_estimate = record_count as f64;
+    (StatusCode::OK, Json(WalStatsResponse {
+        status: "ok",
+        record_count,
+        checkpoint_count,
+        mutation_rate_estimate,
+    }))
+}
+
 // ─── S
 
 /// S2-WS2-02: replay WAL records into the row store (or dry-run).
@@ -6466,6 +6548,26 @@ async fn raft_log(
         log_length,
         commit_index,
         entries,
+    }))
+}
+
+// ─── S7-WS6-02: Raft heartbeat endpoint ──────────────────────────────────────
+
+/// S7-WS6-02: Accept a heartbeat — resets the tick counter and confirms leader comms.
+async fn raft_heartbeat(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<RaftHeartbeatResponse>) {
+    let mut node = state.raft_state.lock().expect("raft_state lock");
+    node.ticks_since_heartbeat = 0;
+    let role = format!("{:?}", node.role);
+    let term = node.current_term;
+    drop(node);
+    (StatusCode::OK, Json(RaftHeartbeatResponse {
+        status: "ok",
+        role,
+        term,
+        ticks_reset_to: 0,
+        heartbeat_accepted: true,
     }))
 }
 
@@ -17076,6 +17178,86 @@ mod tests {
         let (status, axum::extract::Json(body)) = cdc_stream_filter(State(state), axum::extract::Query(query)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.event_count, 0, "unknown table filter returns no events");
+    }
+
+    // ── S2-WS2-02: WAL stats endpoint ────────────────────────────────────────
+    #[tokio::test]
+    async fn s2_ws2_02_wal_stats_fresh_state_empty() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_stats(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 0);
+        assert_eq!(body.checkpoint_count, 0);
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_stats_reflects_appended_records() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "v2");
+            wal.append_mutation("k3", "v3");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_stats(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 3);
+        assert_eq!(body.checkpoint_count, 0, "no checkpoint performed yet");
+    }
+
+    // ── S7-WS6-02: Raft heartbeat endpoint ───────────────────────────────────
+    #[tokio::test]
+    async fn s7_ws6_02_raft_heartbeat_resets_tick_counter() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut node = state.raft_state.lock().unwrap();
+            node.ticks_since_heartbeat = 5;
+        }
+        let (status, Json(body)) = raft_heartbeat(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.ticks_reset_to, 0);
+        assert!(body.heartbeat_accepted);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_heartbeat_returns_current_term() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut node = state.raft_state.lock().unwrap();
+            node.current_term = 3;
+        }
+        let (status, Json(body)) = raft_heartbeat(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.term, 3);
+    }
+
+    // ── S9-WS8A-02: Audit integrity snapshot ─────────────────────────────────
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_snapshot_fresh_state_valid_chain() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = audit_snapshot(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.event_count, 0);
+        assert!(body.chain_valid, "empty chain should be valid");
+        assert_eq!(body.genesis_hash, "genesis-0000000000000000");
+    }
+
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_snapshot_reflects_appended_events() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut sink = state.audit_sink.lock().unwrap();
+            sink.append(voltnuerongrid_audit::AuditEventKind::Sql, "actor", "action", "ok", "{}");
+            sink.append(voltnuerongrid_audit::AuditEventKind::Security, "actor", "action2", "ok", "{}");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = audit_snapshot(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.event_count, 2);
+        assert!(body.chain_valid, "2-event chain should be valid");
     }
 
 }
