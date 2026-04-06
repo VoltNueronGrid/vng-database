@@ -1758,6 +1758,48 @@ struct ColumnarProjectResponse {
     columns: Vec<ColumnarScanColumn>,
 }
 
+// ─── S4-WS3-03: Columnar aggregate query/response ───────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct ColumnarAggregateQuery {
+    /// Column name to aggregate; defaults to the first column in the batch.
+    column: Option<String>,
+    /// Aggregation operation: "count" (default), "sum", "avg", "min", "max".
+    op: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ColumnarAggregateResponse {
+    status: &'static str,
+    op: String,
+    column: String,
+    result: String,
+    rows_scanned: usize,
+}
+
+// ─── S6-WS5-04: TDE override status response ─────────────────────────────────
+
+/// Response for `GET /api/v1/security/tde/override-status`.
+#[derive(Serialize)]
+struct TdeOverrideStatusResponse {
+    status: &'static str,
+    override_set: bool,
+    override_value: Option<bool>,
+    effective_tde_active: bool,
+}
+
+// ─── S9-WS8A-01: Audit CLI summary response ──────────────────────────────────
+
+/// Response for `GET /api/v1/audit/cli/summary`.
+#[derive(Serialize)]
+struct AuditCliSummaryResponse {
+    status: &'static str,
+    total_events: usize,
+    chain_valid: bool,
+    last_event_kind: String,
+    export_hint: &'static str,
+}
+
 // S6-WS5-03: TLS runtime status
 #[derive(Serialize)]
 struct SecurityTlsStatusResponse {
@@ -2953,6 +2995,8 @@ async fn main() {
         // S9-WS8A-02: tamper-evident audit chain verification
         .route("/api/v1/audit/chain/verify", get(audit_chain_verify))
         .route("/api/v1/audit/snapshot", get(audit_snapshot))
+        // S9-WS8A-01: Audit CLI summary
+        .route("/api/v1/audit/cli/summary", get(audit_cli_summary))
         .route("/api/v1/security/kms/status", get(security_kms_status))
         .route(
             "/api/v1/security/kms/outage/simulate",
@@ -3011,6 +3055,8 @@ async fn main() {
         // S4-WS3-03: vectorized columnar scan
         .route("/api/v1/store/columnar/scan", get(store_columnar_scan))
         .route("/api/v1/store/columnar/project", get(store_columnar_project))
+        // S4-WS3-03: Columnar vectorized aggregate
+        .route("/api/v1/store/columnar/aggregate", get(store_columnar_aggregate))
         // S6-WS5-03: TLS runtime status
         .route("/api/v1/security/tls/status", get(security_tls_status))
         .route("/api/v1/security/tls/rotate", post(security_tls_rotate))
@@ -3018,6 +3064,8 @@ async fn main() {
         .route("/api/v1/security/tde/status", get(security_tde_status))
         // S6-WS5-04: TDE toggle override
         .route("/api/v1/security/tde/toggle", post(security_tde_toggle))
+        // S6-WS5-04: TDE runtime override status
+        .route("/api/v1/security/tde/override-status", get(security_tde_override_status))
         // S9-WS8-02: AI model gateway policy
         .route("/api/v1/ai/policy", get(ai_policy))
         // S2-WS2-02: WAL durability status + recovery replay
@@ -5886,6 +5934,35 @@ async fn audit_snapshot(
         event_count,
         chain_valid,
         genesis_hash: "genesis-0000000000000000",
+    })))
+}
+
+// ─── S9-WS8A-01: Audit CLI summary ──────────────────────────────────────────
+
+/// S9-WS8A-01: Return a CLI-friendly summary of the current audit chain state.
+async fn audit_cli_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AuditCliSummaryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_audit_runtime_principal(&headers, &state, PrivilegeAction::Read, "audit/cli/summary")?;
+    let events = state
+        .audit_sink
+        .lock()
+        .map(|sink| sink.all().to_vec())
+        .unwrap_or_default();
+    let total_events = events.len();
+    let chain_valid = AppendOnlyAuditSink::verify_chain(&events);
+    let last_event_kind = events
+        .last()
+        .map(|e| format!("{:?}", e.kind))
+        .unwrap_or_else(|| "none".to_string());
+    let export_hint = "Use GET /api/v1/audit/export to download the full event log";
+    Ok((StatusCode::OK, Json(AuditCliSummaryResponse {
+        status: "ok",
+        total_events,
+        chain_valid,
+        last_event_kind,
+        export_hint,
     })))
 }
 
@@ -9399,6 +9476,55 @@ async fn store_columnar_project(
     ))
 }
 
+// ─── S4-WS3-03: Columnar vectorized aggregate ───────────────────────────────
+
+/// S4-WS3-03: Run a vectorized aggregate over the OLAP columnar snapshot.
+async fn store_columnar_aggregate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<ColumnarAggregateQuery>,
+) -> Result<(StatusCode, Json<ColumnarAggregateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_store_runtime_principal(&headers, &state, PrivilegeAction::Read, "store/columnar/aggregate")?;
+    use voltnuerongrid_store::columnar::{vectorized_scan, VectorizedAggOp, aggregate_batch};
+    let (batch, stats) = {
+        let rs = state.row_store.lock().expect("row_store lock columnar_aggregate");
+        let snapshot_xid = rs.current_xid();
+        let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
+            .scan_at_snapshot(snapshot_xid)
+            .into_iter()
+            .map(|(k, d)| (k.to_string(), d.clone()))
+            .collect();
+        vectorized_scan(&raw_rows, 10_000)
+    };
+    // Resolve the target column (default: first available column).
+    let col_name = params.column
+        .filter(|c| !c.trim().is_empty())
+        .or_else(|| batch.column_names.first().cloned())
+        .unwrap_or_else(|| "payload".to_string());
+    // Resolve the operation (default: count).
+    let agg_op = match params.op.as_deref().unwrap_or("count") {
+        "sum" => VectorizedAggOp::Sum,
+        "avg" => VectorizedAggOp::Avg,
+        "min" => VectorizedAggOp::Min,
+        "max" => VectorizedAggOp::Max,
+        _ => VectorizedAggOp::Count,
+    };
+    let op_str = format!("{:?}", agg_op).to_lowercase();
+    let mut ops = std::collections::HashMap::new();
+    ops.insert(col_name.clone(), agg_op);
+    let results = aggregate_batch(&batch, &ops);
+    let result_val = results
+        .get(&col_name)
+        .map_or("null".to_string(), |r| r.value.clone());
+    Ok((StatusCode::OK, Json(ColumnarAggregateResponse {
+        status: "ok",
+        op: op_str,
+        column: col_name,
+        result: result_val,
+        rows_scanned: stats.rows_scanned,
+    })))
+}
+
 /// S6-WS5-03: TLS runtime status — reports TLS/mTLS contract state from SecurityConfigContract.
 async fn security_tls_status(
     State(state): State<AppState>,
@@ -9497,6 +9623,34 @@ async fn security_tde_status(
         key_resolved,
         note,
     }))
+}
+
+// ─── S6-WS5-04: TDE runtime override status ─────────────────────────────────
+
+/// S6-WS5-04: Return the current TDE runtime override state.
+async fn security_tde_override_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<TdeOverrideStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    require_operator_privilege(
+        &headers,
+        &state,
+        "security.kms",
+        "security/tde/status",
+        PrivilegeAction::Read,
+    )?;
+    let override_value = *state.tde_override.lock().expect("tde_override lock override");
+    let override_set = override_value.is_some();
+    // Effective TDE = override (if set) else config default
+    let effective_tde_active = override_value
+        .unwrap_or(state.security_config.encryption_at_rest_required);
+    Ok((StatusCode::OK, Json(TdeOverrideStatusResponse {
+        status: "ok",
+        override_set,
+        override_value,
+        effective_tde_active,
+    })))
 }
 
 /// S9-WS8-02: AI model gateway policy — read current policy.
@@ -17054,6 +17208,35 @@ mod tests {
         assert_eq!(stored, Some(false));
     }
 
+    // ─── S6-WS5-04: TDE override-status endpoint ─────────────────────────────
+
+    #[tokio::test]
+    async fn s6_ws5_04_tde_override_status_no_override_set() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = security_tde_override_status(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.override_set, "override not set on fresh state");
+        assert_eq!(body.override_value, None);
+        // encryption_at_rest_required defaults to true in state_with_key
+        assert!(body.effective_tde_active, "effective = config default when no override");
+    }
+
+    #[tokio::test]
+    async fn s6_ws5_04_tde_override_status_after_toggle_reflects_override() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Disable TDE via toggle first.
+        let toggle_req = TdeToggleRequest { enable: false };
+        security_tde_toggle(State(state.clone()), headers.clone(), Json(toggle_req)).await.unwrap();
+        // Now check override status.
+        let (status, Json(body)) = security_tde_override_status(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.override_set, "override must be set after toggle");
+        assert_eq!(body.override_value, Some(false));
+        assert!(!body.effective_tde_active, "effective must be false after disable toggle");
+    }
+
     // ─── S9-WS8-02: Sliding window rate limiter test ─────────────────────────
 
     #[tokio::test]
@@ -17675,6 +17858,37 @@ mod tests {
         assert!(body.chain_valid, "2-event chain should be valid");
     }
 
+    // ── S9-WS8A-01: Audit CLI summary endpoint ───────────────────────────────
+    #[tokio::test]
+    async fn s9_ws8a_01_audit_cli_summary_empty_state() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = audit_cli_summary(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.total_events, 0, "no events on fresh state");
+        assert!(body.chain_valid, "empty chain is valid");
+        assert_eq!(body.last_event_kind, "none", "no events means kind = none");
+    }
+
+    #[tokio::test]
+    async fn s9_ws8a_01_audit_cli_summary_reflects_appended_events() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut sink = state.audit_sink.lock().unwrap();
+            sink.append(voltnuerongrid_audit::AuditEventKind::Sql, "actor", "q1", "ok", "{}");
+            sink.append(voltnuerongrid_audit::AuditEventKind::Security, "actor", "auth", "ok", "{}");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = audit_cli_summary(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_events, 2, "two appended events");
+        assert!(body.chain_valid);
+        // last event was Security kind
+        assert!(body.last_event_kind.to_lowercase().contains("security"),
+            "last event kind must be Security, got: {}", body.last_event_kind);
+    }
+
     // ── S7-WS6-03: Raft member list endpoint ─────────────────────────────────
     #[tokio::test]
     async fn s7_ws6_03_raft_member_list_single_node() {
@@ -17728,6 +17942,43 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(body.rows_scanned > 0, "should have scanned rows");
         assert!(body.columns_projected > 0, "should project all columns when no filter");
+    }
+
+    // ── S4-WS3-03: Columnar aggregate endpoint ──────────────────────────────
+    #[tokio::test]
+    async fn s4_ws3_03_columnar_aggregate_count_on_empty_store() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let params = ColumnarAggregateQuery { column: None, op: None };
+        let (status, Json(body)) =
+            store_columnar_aggregate(State(state), headers, Query(params)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.op, "count", "default op must be count");
+        assert_eq!(body.rows_scanned, 0, "empty store has no rows");
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_03_columnar_aggregate_count_reflects_inserted_rows() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut rs = state.row_store.lock().unwrap();
+            let xid = rs.begin_xid();
+            for i in 0..3 {
+                let mut d = std::collections::HashMap::new();
+                d.insert("payload".to_string(), format!("val-{i}"));
+                rs.insert(xid, &format!("agg-row-{i}"), d);
+            }
+        }
+        let headers = operator_headers("test-key", "admin");
+        let params = ColumnarAggregateQuery { column: Some("payload".to_string()), op: Some("count".to_string()) };
+        let (status, Json(body)) =
+            store_columnar_aggregate(State(state), headers, Query(params)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.op, "count");
+        assert_eq!(body.column, "payload");
+        assert_eq!(body.result, "3", "count of 3 rows should be 3");
+        assert_eq!(body.rows_scanned, 3);
     }
 
     // ── S5-E4A-01: Connector deregister endpoint ──────────────────────────────

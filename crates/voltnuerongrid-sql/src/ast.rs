@@ -852,6 +852,48 @@ mod ansi_conformance {
         assert_eq!(parse_one("ROLLBACK WORK").unwrap(), Statement::Rollback);
     }
 
+    // HAVING clause on a GROUP BY aggregate query
+    #[test]
+    fn ansi_select_with_having_clause_parses() {
+        let sql = "SELECT dept, COUNT(*) FROM employees GROUP BY dept HAVING COUNT(*) > 5";
+        let result = parse_one(sql);
+        assert!(result.is_ok(), "parse_one must not error on HAVING query");
+        if let Ok(Statement::Select(s)) = result {
+            assert!(s.group_by.contains(&"dept".to_string()),
+                "GROUP BY dept must be parsed; got: {:?}", s.group_by);
+        } else {
+            panic!("expected Select statement for HAVING query");
+        }
+    }
+
+    // LIMIT + OFFSET on ordered SELECT
+    #[test]
+    fn ansi_select_with_limit_and_offset_parses() {
+        let sql = "SELECT id, name FROM users ORDER BY created_at DESC LIMIT 25 OFFSET 100";
+        let result = parse_one(sql);
+        assert!(result.is_ok(), "parse_one must not error on LIMIT+OFFSET");
+        if let Ok(Statement::Select(s)) = result {
+            assert_eq!(s.limit, Some(25), "LIMIT 25 must be parsed");
+            assert!(!s.order_by.is_empty(), "ORDER BY must be captured");
+        } else {
+            panic!("expected Select statement for LIMIT+OFFSET query");
+        }
+    }
+
+    // Subquery detection via has_subquery flag
+    #[test]
+    fn ansi_select_with_subquery_sets_has_subquery_flag() {
+        let sql = "SELECT * FROM (SELECT id FROM users WHERE active = 1) AS active_users";
+        let result = parse_one(sql);
+        assert!(result.is_ok(), "parse_one must not error on subquery-style SELECT");
+        if let Ok(Statement::Select(s)) = result {
+            assert!(s.has_subquery,
+                "SELECT containing (SELECT … must set has_subquery=true");
+        } else {
+            panic!("expected Select statement for subquery SELECT");
+        }
+    }
+
     // Unknown / unsupported — must not panic
     #[test]
     fn ansi_unsupported_ddl_falls_to_unknown() {
