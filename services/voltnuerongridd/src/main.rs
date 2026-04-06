@@ -46,7 +46,7 @@ use voltnuerongrid_plugins::{
 };
 
 mod raft;
-use raft::{RaftAppendRequest, RaftAppendResponse, RaftNode, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+use raft::{RaftAppendRequest, RaftAppendResponse, RaftNode, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -357,6 +357,10 @@ struct AppState {
     broker_flush_counts: Arc<Mutex<HashMap<String, u64>>>,
     /// S9-WS8-02: Sliding-window rate limiter — per-model window start timestamp (ms).
     ai_rate_window_starts: Arc<Mutex<HashMap<String, u64>>>,
+    /// S5-E4A-01: Connector SDK runtime registry.
+    connector_registry: Arc<Mutex<Vec<ConnectorPlugin>>>,
+    /// S6-WS5-04: TDE runtime toggle override.
+    tde_override: Arc<Mutex<Option<bool>>>,
 }
 
 #[derive(Clone, Default)]
@@ -929,6 +933,7 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                     "security/kms/outage".to_string(),
                     "security/tls/status".to_string(),
                     "security/tde/status".to_string(),
+                    "security/tde/toggle".to_string(),
                 ],
                 actions: vec![
                     PrivilegeAction::Read,
@@ -1636,13 +1641,79 @@ struct StoreHtapOlapScanResponse {
 
 // ─── S9-WS8A-02: Audit export struct ─────────────────────────────────────────
 
+#[derive(Deserialize, Default)]
+struct AuditExportQuery {
+    cursor: Option<usize>,
+    limit: Option<usize>,
+}
+
 #[derive(Serialize)]
 struct AuditExportResponse {
     status: &'static str,
     event_count: usize,
+    total_event_count: usize,
+    cursor: usize,
+    limit: usize,
     file_backed: bool,
     audit_log_path: Option<String>,
     events: Vec<AuditEvent>,
+}
+
+// ─── S5-E4A-01: Connector SDK runtime structs ───────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConnectorPlugin {
+    connector_id: String,
+    connector_type: String,
+    version: String,
+    signed: bool,
+    registered_at_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct ConnectorRegisterRequest {
+    connector_id: String,
+    connector_type: String,
+    version: String,
+    signed: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ConnectorRegisterResponse {
+    status: &'static str,
+    connector_id: String,
+    registered_at_ms: u64,
+}
+
+#[derive(Serialize)]
+struct ConnectorListResponse {
+    status: &'static str,
+    connector_count: usize,
+    connectors: Vec<ConnectorPlugin>,
+}
+
+// ─── S7-WS6-03: Raft fencing token struct ──────────────────────────────────────────
+
+#[derive(Serialize)]
+struct RaftFenceResponse {
+    status: &'static str,
+    fencing_token: u64,
+    role: RaftRole,
+    current_term: u64,
+}
+
+// ─── S6-WS5-04: TDE toggle structs ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct TdeToggleRequest {
+    enable: bool,
+}
+
+#[derive(Serialize)]
+struct TdeToggleResponse {
+    status: &'static str,
+    tde_active: bool,
+    override_applied: bool,
 }
 
 // ─── S7-WS6-02: Raft endpoint structs ────────────────────────────────────────
@@ -2558,6 +2629,8 @@ async fn main() {
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
         ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
+        connector_registry: Arc::new(Mutex::new(Vec::new())),
+        tde_override: Arc::new(Mutex::new(None)),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -2664,6 +2737,8 @@ async fn main() {
         .route("/api/v1/cluster/raft/vote", post(raft_vote))
         .route("/api/v1/cluster/raft/append", post(raft_append))
         .route("/api/v1/cluster/raft/tick", post(raft_tick))
+        // S7-WS6-03: Raft fencing token
+        .route("/api/v1/cluster/raft/fence", get(raft_fence))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
         // S4-WS3-04: HTAP sync export for OLAP consumers
         .route("/api/v1/store/htap/export", post(store_htap_export))
@@ -2673,6 +2748,8 @@ async fn main() {
         .route("/api/v1/security/tls/status", get(security_tls_status))
         // S6-WS5-04: TDE/encryption-at-rest status
         .route("/api/v1/security/tde/status", get(security_tde_status))
+        // S6-WS5-04: TDE toggle override
+        .route("/api/v1/security/tde/toggle", post(security_tde_toggle))
         // S9-WS8-02: AI model gateway policy
         .route("/api/v1/ai/policy", get(ai_policy))
         // S2-WS2-02: WAL durability status + recovery replay
@@ -2690,6 +2767,9 @@ async fn main() {
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
+        // S5-E4A-01: Connector SDK runtime load
+        .route("/api/v1/connectors", get(connector_list))
+        .route("/api/v1/connectors/register", post(connector_register))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
         .route("/api/v1/ai/request", post(ai_rate_check))
         // WS4 Ingest endpoints
@@ -6142,6 +6222,92 @@ async fn driver_connect(
     }))
 }
 
+// ─── S5-E4A-01: Connector SDK runtime load ───────────────────────────────────
+
+/// Register a connector plugin manifest at runtime.
+async fn connector_register(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ConnectorRegisterRequest>,
+) -> Result<(StatusCode, Json<ConnectorRegisterResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let registered_at_ms = now_epoch_ms_chaos();
+    let plugin = ConnectorPlugin {
+        connector_id: req.connector_id.clone(),
+        connector_type: req.connector_type.clone(),
+        version: req.version.clone(),
+        signed: req.signed.unwrap_or(false),
+        registered_at_ms,
+    };
+    state.connector_registry.lock().expect("connector_registry lock").push(plugin);
+    Ok((
+        StatusCode::OK,
+        Json(ConnectorRegisterResponse {
+            status: "ok",
+            connector_id: req.connector_id,
+            registered_at_ms,
+        }),
+    ))
+}
+
+/// List all registered connector plugins.
+async fn connector_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ConnectorListResponse>) {
+    require_operator_auth(&headers, &state).ok();
+    let connectors = state.connector_registry.lock().expect("connector_registry lock").clone();
+    let connector_count = connectors.len();
+    (StatusCode::OK, Json(ConnectorListResponse { status: "ok", connector_count, connectors }))
+}
+
+// ─── S7-WS6-03: Raft fencing token endpoint ──────────────────────────────────────────
+
+/// Return the current fencing token for the Raft node.
+async fn raft_fence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftFenceResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let snap = state.raft_state.lock().expect("raft_state lock").status();
+    Ok((
+        StatusCode::OK,
+        Json(RaftFenceResponse {
+            status: "ok",
+            fencing_token: snap.fencing_token,
+            role: snap.role,
+            current_term: snap.current_term,
+        }),
+    ))
+}
+
+// ─── S6-WS5-04: TDE toggle override ───────────────────────────────────────────────────
+
+/// Override the TDE (Transparent Data Encryption) active state at runtime.
+async fn security_tde_toggle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<TdeToggleRequest>,
+) -> Result<(StatusCode, Json<TdeToggleResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    require_operator_privilege(
+        &headers,
+        &state,
+        "security.kms",
+        "security/tde/toggle",
+        PrivilegeAction::Manage,
+    )?;
+    *state.tde_override.lock().expect("tde_override lock") = Some(req.enable);
+    Ok((
+        StatusCode::OK,
+        Json(TdeToggleResponse {
+            status: "ok",
+            tde_active: req.enable,
+            override_applied: true,
+        }),
+    ))
+}
+
 // ─── S10-WS15-02: CDC stream from WAL ─────────────────────────────────────────
 
 /// S10-WS15-02: Stream committed mutations as CDC events derived from the WAL.
@@ -8817,6 +8983,7 @@ async fn store_htap_olap_scan(
 async fn audit_export(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(params): Query<AuditExportQuery>,
 ) -> Result<(StatusCode, Json<AuditExportResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let operator = require_operator_privilege(
@@ -8827,7 +8994,11 @@ async fn audit_export(
         PrivilegeAction::Read,
     )?;
     let principal = RuntimeAccessPrincipal::Operator(operator);
-    let events = state.audit_sink.lock().expect("audit_sink lock").all().to_vec();
+    let all_events = state.audit_sink.lock().expect("audit_sink lock").all().to_vec();
+    let total_event_count = all_events.len();
+    let cursor = params.cursor.unwrap_or(0).min(total_event_count);
+    let limit = params.limit.unwrap_or(1000).max(1).min(10000);
+    let events: Vec<AuditEvent> = all_events.into_iter().skip(cursor).take(limit).collect();
     let event_count = events.len();
     let file_backed = state.audit_log_path.is_some();
     append_runtime_audit_event(
@@ -8843,6 +9014,9 @@ async fn audit_export(
         Json(AuditExportResponse {
             status: "ok",
             event_count,
+            total_event_count,
+            cursor,
+            limit,
             file_backed,
             audit_log_path: state.audit_log_path.clone(),
             events,
@@ -9976,6 +10150,8 @@ mod tests {
             driver_sessions: Arc::new(Mutex::new(HashMap::new())),
             broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
             ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
+            connector_registry: Arc::new(Mutex::new(Vec::new())),
+            tde_override: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -15427,7 +15603,7 @@ mod tests {
                 "{}",
             );
         }
-        let resp = audit_export(State(state.clone()), headers).await.unwrap();
+        let resp = audit_export(State(state.clone()), headers, Query(AuditExportQuery::default())).await.unwrap();
         // At least the 2 events we manually appended
         assert!(resp.1.0.event_count >= 2);
         assert!(!resp.1.0.file_backed); // no VNG_AUDIT_LOG_PATH set in test
@@ -15872,6 +16048,150 @@ mod tests {
         let (_, Json(status_body)) = outbox_broker_status(State(state)).await;
         let kafka = status_body.adapters.iter().find(|a| a.broker_type == "kafka").unwrap();
         assert_eq!(kafka.flush_count, 2);
+    }
+
+
+    // ─── S5-E4A-01: Connector SDK runtime load tests ────────────────────────────
+
+    #[tokio::test]
+    async fn s5_e4a_01_register_connector_ok() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = ConnectorRegisterRequest {
+            connector_id: "my-kafka-src".to_string(),
+            connector_type: "kafka-source".to_string(),
+            version: "1.0.0".to_string(),
+            signed: Some(true),
+        };
+        let (status, Json(body)) = connector_register(State(state.clone()), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.connector_id, "my-kafka-src");
+        assert!(body.registered_at_ms > 0);
+    }
+
+    #[tokio::test]
+    async fn s5_e4a_01_list_connectors_includes_registered() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        for (id, ctype) in &[("conn-1", "csv-source"), ("conn-2", "nats-sink")] {
+            let req = ConnectorRegisterRequest {
+                connector_id: id.to_string(),
+                connector_type: ctype.to_string(),
+                version: "0.1.0".to_string(),
+                signed: None,
+            };
+            connector_register(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
+        }
+        let (status, Json(body)) = connector_list(State(state), headers).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.connector_count, 2);
+        let ids: Vec<&str> = body.connectors.iter().map(|c| c.connector_id.as_str()).collect();
+        assert!(ids.contains(&"conn-1"));
+        assert!(ids.contains(&"conn-2"));
+    }
+
+    // ─── S7-WS6-03: Raft fencing token tests ─────────────────────────────
+
+    #[tokio::test]
+    async fn s7_ws6_03_fencing_token_zero_on_follower() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_fence(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.fencing_token, 0, "fresh follower fencing token must be 0");
+        assert_eq!(body.current_term, 0);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_03_fencing_token_advances_on_election() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        {
+            let mut raft = state.raft_state.lock().unwrap();
+            raft.become_candidate();
+            raft.become_leader();
+        }
+        let (status, Json(body)) = raft_fence(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.fencing_token, 1, "fencing token must advance after becoming leader");
+    }
+
+    // ─── S9-WS8A-02: Audit export pagination tests ─────────────────────────
+
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_export_pagination_limit_respected() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        {
+            let mut sink = state.audit_sink.lock().unwrap();
+            for i in 0..5 {
+                sink.append(
+                    voltnuerongrid_audit::AuditEventKind::Sql,
+                    "test-actor",
+                    &format!("action-{i}"),
+                    "ok",
+                    "{}",
+                );
+            }
+        }
+        let params = AuditExportQuery { cursor: Some(0), limit: Some(2) };
+        let resp = audit_export(State(state), headers, Query(params)).await.unwrap();
+        assert_eq!(resp.1.0.event_count, 2, "limit=2 should return exactly 2 events");
+        assert_eq!(resp.1.0.total_event_count, 5, "total should still be 5");
+        assert_eq!(resp.1.0.limit, 2);
+        assert_eq!(resp.1.0.cursor, 0);
+    }
+
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_export_pagination_cursor_advances() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        {
+            let mut sink = state.audit_sink.lock().unwrap();
+            for i in 0..4 {
+                sink.append(
+                    voltnuerongrid_audit::AuditEventKind::Security,
+                    "actor",
+                    &format!("op-{i}"),
+                    "ok",
+                    "{}",
+                );
+            }
+        }
+        let params = AuditExportQuery { cursor: Some(2), limit: Some(10) };
+        let resp = audit_export(State(state), headers, Query(params)).await.unwrap();
+        assert_eq!(resp.1.0.event_count, 2, "cursor=2 leaves 2 remaining events");
+        assert_eq!(resp.1.0.cursor, 2);
+        assert_eq!(resp.1.0.total_event_count, 4);
+    }
+
+    // ─── S6-WS5-04: TDE toggle tests ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn s6_ws5_04_tde_toggle_enables_tde() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = TdeToggleRequest { enable: true };
+        let (status, Json(body)) = security_tde_toggle(State(state.clone()), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.tde_active);
+        assert!(body.override_applied);
+        let stored = *state.tde_override.lock().unwrap();
+        assert_eq!(stored, Some(true));
+    }
+
+    #[tokio::test]
+    async fn s6_ws5_04_tde_toggle_disables_tde() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = TdeToggleRequest { enable: false };
+        let (status, Json(body)) = security_tde_toggle(State(state.clone()), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.tde_active);
+        assert!(body.override_applied);
+        let stored = *state.tde_override.lock().unwrap();
+        assert_eq!(stored, Some(false));
     }
 
     // ─── S9-WS8-02: Sliding window rate limiter test ─────────────────────────

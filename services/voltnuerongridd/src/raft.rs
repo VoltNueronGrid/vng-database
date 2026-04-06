@@ -96,6 +96,8 @@ pub struct RaftStatusSnapshot {
     pub ticks_since_heartbeat: u64,
     /// Configured election timeout in ticks (S7-WS6-03).
     pub election_timeout_ticks: u64,
+    /// S7-WS6-03: Monotonically incrementing fencing token; advances on each leader election.
+    pub fencing_token: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +127,8 @@ pub struct RaftNode {
     /// S7-WS6-03: election timeout threshold in ticks.
     /// Randomised per-node in real deployments; fixed here for deterministic tests.
     pub election_timeout_ticks: u64,
+    /// S7-WS6-03: Fencing token — increments each time this node becomes Leader.
+    pub fencing_token: u64,
 }
 
 impl RaftNode {
@@ -140,6 +144,7 @@ impl RaftNode {
             last_applied: 0,
             ticks_since_heartbeat: 0,
             election_timeout_ticks: 10,
+            fencing_token: 0,
         }
     }
 
@@ -156,6 +161,7 @@ impl RaftNode {
 
     /// The leader won an election; transition to Leader.
     pub fn become_leader(&mut self) {
+        self.fencing_token += 1;
         self.role = RaftRole::Leader;
     }
 
@@ -278,6 +284,7 @@ impl RaftNode {
             last_applied: self.last_applied,
             ticks_since_heartbeat: self.ticks_since_heartbeat,
             election_timeout_ticks: self.election_timeout_ticks,
+            fencing_token: self.fencing_token,
         }
     }
 
