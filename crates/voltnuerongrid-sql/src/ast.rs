@@ -71,6 +71,8 @@ pub struct SelectStatement {
     pub has_like: bool,
     /// True when the WHERE clause contains a NOT keyword predicate (S3-WS1-10).
     pub has_not: bool,
+    /// True when the query contains a CASE WHEN expression (S3-WS1-11).
+    pub has_case: bool,
 }
 
 /// A parsed INSERT statement.
@@ -212,6 +214,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect NOT keyword predicate in WHERE (S3-WS1-10); exclude IS NOT NULL patterns.
                 if up.contains(" NOT ") && !up.contains("IS NOT") {
                     stmt.has_not = true;
+                }
+                // Detect CASE WHEN expression anywhere in the query (S3-WS1-11).
+                if up.contains("CASE WHEN") {
+                    stmt.has_case = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1503,5 +1509,31 @@ mod not_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_not, "plain SELECT without NOT must have has_not = false");
+    }
+}
+
+#[cfg(test)]
+mod case_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_case_when_sets_has_case_true() {
+        let stmt = parse_one("SELECT id, CASE WHEN age > 18 THEN 'adult' ELSE 'minor' END AS category FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_case, "CASE WHEN expression must set has_case = true");
+    }
+
+    #[test]
+    fn select_with_case_when_in_where_sets_has_case_true() {
+        let stmt = parse_one("SELECT id FROM orders WHERE CASE WHEN status = 'active' THEN 1 ELSE 0 END = 1").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_case, "CASE WHEN in WHERE clause must set has_case = true");
+    }
+
+    #[test]
+    fn plain_select_has_case_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_case, "plain SELECT without CASE WHEN must have has_case = false");
     }
 }

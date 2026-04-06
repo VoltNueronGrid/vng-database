@@ -106,6 +106,10 @@ pub enum LogicalPlan {
     Not {
         input: Box<LogicalPlan>,
     },
+    /// CASE WHEN analytical expression (from S3-WS1-11 has_case support).
+    Case {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -161,6 +165,7 @@ impl LogicalPlan {
             LogicalPlan::Between { input } => input.primary_table(),
             LogicalPlan::Like { input } => input.primary_table(),
             LogicalPlan::Not { input } => input.primary_table(),
+            LogicalPlan::Case { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -201,6 +206,7 @@ impl LogicalPlan {
             LogicalPlan::Between { input } => input.has_aggregation(),
             LogicalPlan::Like { input } => input.has_aggregation(),
             LogicalPlan::Not { input } => input.has_aggregation(),
+            LogicalPlan::Case { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -384,6 +390,14 @@ impl QueryPlanner {
                     estimated_rows: (inner.estimated_rows as f64 * 0.85) as u64,
                     relative_cost: inner.relative_cost + 0.6,
                     recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Case { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.9) as u64,
+                    relative_cost: inner.relative_cost + 1.5,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -615,12 +629,21 @@ impl QueryPlanner {
         };
 
         // Not wrapper (S3-WS1-10 has_not detection): outermost node.
-        if sel.has_not {
+        let after_not = if sel.has_not {
             LogicalPlan::Not {
                 input: Box::new(after_like),
             }
         } else {
             after_like
+        };
+
+        // Case wrapper (S3-WS1-11 has_case detection): outermost node.
+        if sel.has_case {
+            LogicalPlan::Case {
+                input: Box::new(after_not),
+            }
+        } else {
+            after_not
         }
     }
 
@@ -996,5 +1019,23 @@ mod tests {
         let c = cost("SELECT id FROM users WHERE id NOT IN (1, 2, 3)");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "NOT predicate should route to OLTP");
         assert!(c.relative_cost >= 0.6, "Not must carry at least 0.6 cost overhead");
+    }
+
+    #[test]
+    fn planner_case_select_produces_case_node() {
+        let p = plan("SELECT id, CASE WHEN age > 18 THEN 'adult' ELSE 'minor' END AS cat FROM users");
+        assert!(
+            matches!(&p, LogicalPlan::Case { .. }),
+            "CASE WHEN query should produce outermost Case node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_case_query_routes_to_olap() {
+        let c = cost("SELECT id, CASE WHEN age > 18 THEN 'adult' ELSE 'minor' END FROM users");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "CASE WHEN should route to OLAP");
+        assert!(c.relative_cost >= 1.5, "Case must carry at least 1.5 cost overhead");
     }
 }

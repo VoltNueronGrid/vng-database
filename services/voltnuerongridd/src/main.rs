@@ -2343,6 +2343,25 @@ struct WalTruncateResponse {
     truncated: bool,
 }
 
+// ─── S11-WS1-11: Row store version structs ──────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowStoreVersionResponse {
+    status: &'static str,
+    current_xid: u64,
+    page_count: usize,
+    total_rows: usize,
+}
+
+// ─── S11-WS1-11: HTAP stats structs ─────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct HtapStatsResponse {
+    status: &'static str,
+    table_count: usize,
+    total_entries: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3557,6 +3576,8 @@ async fn main() {
         .route("/api/v1/store/htap/sync", post(htap_force_sync))
         // S4-WS3-04: HTAP detailed status
         .route("/api/v1/store/htap/status", get(htap_status))
+        // S11-WS1-11: HTAP OLAP store statistics
+        .route("/api/v1/store/htap/stats", get(htap_stats))
         // S9-WS8A-02: Audit export (all buffered events + file-backed status)
         .route("/api/v1/audit/export", get(audit_export))
         // S9-WS8A-02: Audit purge — flush in-memory audit sink
@@ -3671,6 +3692,8 @@ async fn main() {
         .route("/api/v1/store/rows/delete", post(row_store_delete))
         // S11-WS1-10: Row store key list
         .route("/api/v1/store/rows/keys", get(store_rows_keys))
+        // S11-WS1-11: Row store version / current transaction ID
+        .route("/api/v1/store/rows/version", get(row_store_version))
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
@@ -7997,6 +8020,46 @@ async fn wal_truncate(
         records_removed,
         new_record_count,
         truncated,
+    })))
+}
+
+// ─── S11-WS1-11: Row store version endpoint ─────────────────────────────────
+
+/// S11-WS1-11: Return the current transaction ID and basic stats for the MVCC row store.
+async fn row_store_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowStoreVersionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock row_store_version");
+    let current_xid = rs.current_xid();
+    let page_count = rs.page_count();
+    let total_rows = rs.total_row_count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowStoreVersionResponse {
+        status: "ok",
+        current_xid,
+        page_count,
+        total_rows,
+    })))
+}
+
+// ─── S11-WS1-11: HTAP stats endpoint ─────────────────────────────────────────
+
+/// S11-WS1-11: Return entry counts from the in-memory OLAP replica store.
+async fn htap_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<HtapStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let olap = state.olap_store.lock().expect("olap_store lock htap_stats");
+    let table_count = olap.len();
+    let total_entries: usize = olap.values().map(|rows| rows.len()).sum();
+    drop(olap);
+    Ok((StatusCode::OK, Json(HtapStatsResponse {
+        status: "ok",
+        table_count,
+        total_entries,
     })))
 }
 
@@ -20862,6 +20925,48 @@ mod tests {
         let headers = HeaderMap::new();
         let req = WalTruncateRequest { up_to_sequence: 100 };
         let result = wal_truncate(State(state), headers, Json(req)).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-11: Row store version endpoint tests ─────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_11_row_store_version_fresh_state_returns_zero_xid() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = row_store_version(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.current_xid, 0, "fresh row store must have xid 0");
+        assert_eq!(body.total_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_11_row_store_version_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = row_store_version(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-11: HTAP stats endpoint tests ────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_11_htap_stats_empty_olap_store() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = htap_stats(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.table_count, 0, "fresh OLAP store must have no tables");
+        assert_eq!(body.total_entries, 0);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_11_htap_stats_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = htap_stats(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

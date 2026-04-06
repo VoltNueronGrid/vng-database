@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 35 Implementation Log
+
+**Date:** 2026-04-06 (Sprint 9 continuation)
+**Test Baseline → New:** sql 132→135, exec 44→46, service 369→373 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_case: bool` field + detection | `voltnuerongrid-sql` | Detects `CASE WHEN` expressions anywhere in query (`S3-WS1-11`) | 3 (`case_tests` module) |
+| `Case { input }` plan node | `voltnuerongrid-exec` | OLAP-routed CASE WHEN node; 0.9× row estimate, +1.5 cost | 2 |
+| `GET /api/v1/store/rows/version` | `voltnuerongridd` | Returns MVCC row store current_xid, page_count, total_rows (operator-auth) | 2 |
+| `GET /api/v1/store/htap/stats` | `voltnuerongridd` | Returns OLAP store table_count and total_entries (operator-auth) | 2 |
+
+---
+
 ## Session 34 Implementation Log
 
 **Date:** 2025 (Sprint 9 continuation)
