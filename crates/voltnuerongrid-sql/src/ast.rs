@@ -41,6 +41,8 @@ pub struct SelectStatement {
     pub order_by: Vec<OrderByClause>,
     /// Optional JOIN clause (S3-WS1-04).
     pub join: Option<JoinClause>,
+    /// True when the raw SQL contains a UNION / UNION ALL set operation (S3-WS1-04).
+    pub has_union: bool,
     /// LIMIT value, if present.
     pub limit: Option<u64>,
 }
@@ -125,7 +127,15 @@ pub fn parse_one(sql: &str) -> Result<Statement, String> {
 fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
     match tokens.first() {
         Some(Token::Keyword(k)) => match k.to_ascii_uppercase().as_str() {
-            "SELECT" => Ok(Statement::Select(parse_select(tokens))),
+            "SELECT" => {
+                let mut stmt = parse_select(tokens);
+                // Detect UNION / UNION ALL set operations (S3-WS1-04).
+                let up = raw.to_ascii_uppercase();
+                if up.contains(" UNION ") {
+                    stmt.has_union = true;
+                }
+                Ok(Statement::Select(stmt))
+            }
             "INSERT" => parse_insert(tokens).map(Statement::Insert),
             "UPDATE" => Ok(Statement::Update(parse_update(tokens))),
             "DELETE" => Ok(Statement::Delete(parse_delete(tokens))),
@@ -898,6 +908,44 @@ mod join_tests {
         let stmt = parse_one(sql).unwrap();
         if let Statement::Select(s) = stmt {
             assert!(s.join.is_none(), "no JOIN in query — field must be None");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+}
+/// S3-WS1-04: UNION / set-operation detection tests.
+#[cfg(test)]
+mod subquery_tests {
+    use super::*;
+
+    #[test]
+    fn select_union_sets_has_union_true() {
+        let sql = "SELECT id FROM users UNION SELECT id FROM admins";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.has_union, "UNION keyword must set has_union = true");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn select_union_all_sets_has_union_true() {
+        let sql = "SELECT name FROM products UNION ALL SELECT name FROM archived_products";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.has_union, "UNION ALL must set has_union = true");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn plain_select_has_union_is_false() {
+        let sql = "SELECT * FROM users WHERE id = 1";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(!s.has_union, "plain SELECT must have has_union = false");
         } else {
             panic!("expected Select statement");
         }

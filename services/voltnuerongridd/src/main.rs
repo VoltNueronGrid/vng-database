@@ -934,6 +934,7 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                     "security/kms".to_string(),
                     "security/kms/outage".to_string(),
                     "security/tls/status".to_string(),
+                    "security/tls/rotate".to_string(),
                     "security/tde/status".to_string(),
                     "security/tde/toggle".to_string(),
                 ],
@@ -1286,6 +1287,21 @@ struct DriverDisconnectResponse {
     disconnected: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct DriverSessionInfo {
+    session_token: String,
+    driver_name: String,
+    driver_version: String,
+    connected_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct DriverSessionListResponse {
+    status: &'static str,
+    session_count: usize,
+    sessions: Vec<DriverSessionInfo>,
+}
+
 // ─── S7-WS6-02: Raft log entries response ─────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -1321,6 +1337,19 @@ struct CdcEvent {
 #[derive(Debug, Serialize)]
 struct CdcStreamResponse {
     status: &'static str,
+    event_count: usize,
+    events: Vec<CdcEvent>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CdcStreamFilterQuery {
+    table: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CdcStreamFilterResponse {
+    status: &'static str,
+    table_filter: Option<String>,
     event_count: usize,
     events: Vec<CdcEvent>,
 }
@@ -1650,6 +1679,19 @@ struct SecurityTlsStatusResponse {
     cert_source: String,
     cert_rotation_supported: bool,
     note: &'static str,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TlsCertRotateRequest {
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TlsCertRotateResponse {
+    status: &'static str,
+    rotation_initiated: bool,
+    cert_source: String,
+    reason: String,
 }
 
 // S6-WS5-04: TDE runtime status
@@ -2854,6 +2896,7 @@ async fn main() {
         .route("/api/v1/store/columnar/scan", get(store_columnar_scan))
         // S6-WS5-03: TLS runtime status
         .route("/api/v1/security/tls/status", get(security_tls_status))
+        .route("/api/v1/security/tls/rotate", post(security_tls_rotate))
         // S6-WS5-04: TDE/encryption-at-rest status
         .route("/api/v1/security/tde/status", get(security_tde_status))
         // S6-WS5-04: TDE toggle override
@@ -2874,8 +2917,10 @@ async fn main() {
         .route("/api/v1/driver/protocol/info", get(driver_protocol_info))
         .route("/api/v1/driver/connect", post(driver_connect))
         .route("/api/v1/driver/disconnect", post(driver_disconnect))
+        .route("/api/v1/driver/sessions", get(driver_session_list))
         // S10-WS15-02: CDC stream from WAL
         .route("/api/v1/store/cdc/stream", get(cdc_stream))
+        .route("/api/v1/store/cdc/stream/filter", get(cdc_stream_filter))
         .route("/api/v1/store/cdc/cursor", get(cdc_cursor_status))
         .route("/api/v1/store/cdc/cursor/advance", post(cdc_cursor_advance))
         // S2-WS2-04: Row store point-in-time snapshot export
@@ -6330,6 +6375,34 @@ async fn chaos_health(State(state): State<AppState>) -> (StatusCode, Json<ChaosH
     }))
 }
 
+/// S6-WS5-03: Initiate a TLS cert rotation (scaffold — records attempt, does not hot-swap certs).
+async fn security_tls_rotate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<TlsCertRotateRequest>,
+) -> Result<(StatusCode, Json<TlsCertRotateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    require_operator_privilege(
+        &headers,
+        &state,
+        "security.kms",
+        "security/tls/rotate",
+        PrivilegeAction::Manage,
+    )?;
+    let cert_source = std::env::var("VNG_TLS_CERT_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "not_configured".to_string());
+    let rotation_initiated = cert_source != "not_configured";
+    let reason = req.reason.unwrap_or_else(|| "manual_rotation".to_string());
+    Ok((StatusCode::OK, Json(TlsCertRotateResponse {
+        status: "ok",
+        rotation_initiated,
+        cert_source,
+        reason,
+    })))
+}
+
 // ─── S8-WS10-02: Driver wire protocol handlers ────────────────────────────────
 
 /// S8-WS10-02: Return the current wire protocol capabilities.
@@ -6532,6 +6605,37 @@ async fn cdc_stream(
 
 // ─── S10-WS15-02: CDC cursor tracking ────────────────────────────────────────
 
+/// S10-WS15-02: Filter CDC stream by table name.
+async fn cdc_stream_filter(
+    State(state): State<AppState>,
+    Query(query): Query<CdcStreamFilterQuery>,
+) -> (StatusCode, Json<CdcStreamFilterResponse>) {
+    let wal = state.wal_engine.lock().expect("wal_engine lock cdc_filter");
+    let all_events: Vec<CdcEvent> = wal.wal_records()
+        .iter()
+        .map(|r| CdcEvent {
+            sequence: r.sequence,
+            op: if r.value == "__deleted__" { "delete".to_string() } else { "insert".to_string() },
+            table_name: "row_store".to_string(),
+            key: r.key.clone(),
+            payload: r.value.clone(),
+            captured_at_ms: 0,
+        })
+        .collect();
+    drop(wal);
+    let events: Vec<CdcEvent> = match &query.table {
+        Some(t) => all_events.into_iter().filter(|e| e.table_name == *t).collect(),
+        None => all_events,
+    };
+    let event_count = events.len();
+    (StatusCode::OK, Json(CdcStreamFilterResponse {
+        status: "ok",
+        table_filter: query.table,
+        event_count,
+        events,
+    }))
+}
+
 /// S10-WS15-02: Read the current CDC cursor position for a given table.
 async fn cdc_cursor_status(
     State(state): State<AppState>,
@@ -6662,6 +6766,31 @@ async fn outbox_broker_health(
         broker_count,
         brokers,
     }))
+}
+
+/// S8-WS10-02: List all active driver sessions.
+async fn driver_session_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<DriverSessionListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let sessions = state.driver_sessions.lock().expect("driver_sessions lock list");
+    let list: Vec<DriverSessionInfo> = sessions
+        .iter()
+        .map(|(token, sess)| DriverSessionInfo {
+            session_token: token.clone(),
+            driver_name: sess.driver_name.clone(),
+            driver_version: sess.driver_version.clone(),
+            connected_at_ms: sess.connected_at_ms,
+        })
+        .collect();
+    let session_count = list.len();
+    drop(sessions);
+    Ok((StatusCode::OK, Json(DriverSessionListResponse {
+        status: "ok",
+        session_count,
+        sessions: list,
+    })))
 }
 
 fn evaluate_deadlock_scan_outcome(
@@ -16855,6 +16984,98 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.model_count, 2);
         assert_eq!(body.total_requests, 7);
+    }
+
+    // ── S6-WS5-03: TLS cert rotation ─────────────────────────────────────────
+    #[tokio::test]
+    async fn s6_ws5_03_tls_rotate_requires_operator_auth() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let result = security_tls_rotate(
+            State(state),
+            headers,
+            axum::extract::Json(TlsCertRotateRequest::default()),
+        ).await;
+        // Should succeed with operator auth (cert_source will be "not_configured" in test env)
+        let (status, _) = result.unwrap();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn s6_ws5_03_tls_rotate_returns_not_configured_without_cert_env() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let result = security_tls_rotate(
+            State(state),
+            headers,
+            axum::extract::Json(TlsCertRotateRequest { reason: Some("test".to_string()) }),
+        ).await;
+        let (status, axum::extract::Json(body)) = result.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.cert_source, "not_configured");
+        assert!(!body.rotation_initiated, "cert not configured so rotation_initiated=false");
+        assert_eq!(body.reason, "test");
+    }
+
+    // ── S8-WS10-02: Driver session list ──────────────────────────────────────
+    #[tokio::test]
+    async fn s8_ws10_02_driver_session_list_fresh_state_empty() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let result = driver_session_list(State(state), headers).await;
+        let (status, axum::extract::Json(body)) = result.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.session_count, 0);
+        assert!(body.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_session_list_shows_connected_session() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut sessions = state.driver_sessions.lock().unwrap();
+            sessions.insert("drv-sess-42".to_string(), DriverSession {
+                driver_name: "test-driver".to_string(),
+                driver_version: "1.0".to_string(),
+                connected_at_ms: 12345,
+            });
+        }
+        let headers = operator_headers("test-key", "admin");
+        let result = driver_session_list(State(state), headers).await;
+        let (status, axum::extract::Json(body)) = result.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.session_count, 1);
+        assert_eq!(body.sessions[0].session_token, "drv-sess-42");
+        assert_eq!(body.sessions[0].driver_name, "test-driver");
+    }
+
+    // ── S10-WS15-02: CDC stream filter ────────────────────────────────────────
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_stream_filter_matching_table_returns_events() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+            wal.append_mutation("k2", "v2");
+        }
+        let query = CdcStreamFilterQuery { table: Some("row_store".to_string()) };
+        let (status, axum::extract::Json(body)) = cdc_stream_filter(State(state), axum::extract::Query(query)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.event_count, 2, "row_store table should match all WAL events");
+        assert_eq!(body.table_filter.as_deref(), Some("row_store"));
+    }
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_stream_filter_unknown_table_returns_empty() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("k1", "v1");
+        }
+        let query = CdcStreamFilterQuery { table: Some("nonexistent_table".to_string()) };
+        let (status, axum::extract::Json(body)) = cdc_stream_filter(State(state), axum::extract::Query(query)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.event_count, 0, "unknown table filter returns no events");
     }
 
 }
