@@ -2131,6 +2131,20 @@ struct RowCountResponse {
     count: usize,
 }
 
+// ─── S2-WS2-04: Row store delete-by-key structs ──────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct RowDeleteRequest {
+    key: String,
+}
+
+#[derive(Serialize)]
+struct RowDeleteResponse {
+    status: &'static str,
+    key: String,
+    deleted: bool,
+}
+
 // ─── S9-WS8A-02: Audit export struct ─────────────────────────────────────────
 
 #[derive(Deserialize, Default)]
@@ -2437,6 +2451,21 @@ struct IngestSchemaEntry {
 #[derive(Serialize)]
 struct IngestSchemaRegistryResponse {
     status: &'static str,
+    connector_count: usize,
+    entries: Vec<IngestSchemaEntry>,
+}
+
+// ─── S5-WS4-03: Ingest schema list (format-filtered) structs ─────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct IngestSchemaListQuery {
+    format: Option<String>,
+}
+
+#[derive(Serialize)]
+struct IngestSchemaListResponse {
+    status: &'static str,
+    format_filter: Option<String>,
     connector_count: usize,
     entries: Vec<IngestSchemaEntry>,
 }
@@ -3507,6 +3536,8 @@ async fn main() {
         .route("/api/v1/store/rows/stats", get(row_store_stats))
         // S2-WS2-04: Row store key-prefix count
         .route("/api/v1/store/rows/count", get(row_store_count))
+        // S2-WS2-04: Row store delete by key
+        .route("/api/v1/store/rows/delete", post(row_store_delete))
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
@@ -3533,6 +3564,8 @@ async fn main() {
         .route("/api/v1/ingest/status", get(ingest_status))
         // S5-WS4-03: ingest schema registry
         .route("/api/v1/ingest/schema", get(ingest_schema_registry))
+        // S5-WS4-03: ingest schema list (format-filtered)
+        .route("/api/v1/ingest/schema/list", get(ingest_schema_list))
         .route("/api/v1/ingest/outbox/status", get(ingest_outbox_status))
         .route("/api/v1/ingest/outbox/replay", post(ingest_outbox_replay))
         // REQ-02 DDL catalog endpoint
@@ -7998,6 +8031,35 @@ async fn row_store_count(
     })))
 }
 
+// ─── S2-WS2-04: Row store delete-by-key handler ──────────────────────────────
+
+/// S2-WS2-04: Delete a specific row by key from the row store and WAL.
+async fn row_store_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RowDeleteRequest>,
+) -> Result<(StatusCode, Json<RowDeleteResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let mut rs = state.row_store.lock().expect("row_store lock delete");
+    let snapshot_xid = rs.current_xid();
+    let rows = rs.scan_at_snapshot(snapshot_xid);
+    let exists = rows.iter().any(|(k, _)| *k == req.key.as_str());
+    if exists {
+        let xid = rs.begin_xid();
+        rs.delete(xid, &req.key);
+        drop(rs);
+        let mut wal = state.wal_engine.lock().expect("wal_engine lock delete");
+        wal.append_mutation(&req.key, "__deleted__");
+    } else {
+        drop(rs);
+    }
+    Ok((StatusCode::OK, Json(RowDeleteResponse {
+        status: "ok",
+        key: req.key,
+        deleted: exists,
+    })))
+}
+
 // ─── S5-WS4A-02: Broker adapter status + flush ────────────────────────────────
 
 /// S5-WS4A-02: Report the status of all registered broker adapters.
@@ -8144,6 +8206,50 @@ fn ingest_infer_columns(
         IngestSchemaColumn { name: "key".to_string(), inferred_type: "utf8" },
         IngestSchemaColumn { name: "payload".to_string(), inferred_type: "utf8" },
     ]
+}
+
+// ─── S5-WS4-03: Ingest schema list (format-filtered) handler ─────────────────
+
+/// S5-WS4-03: List ingest schema entries, optionally filtered by format (csv/json/parquet/excel).
+async fn ingest_schema_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<IngestSchemaListQuery>,
+) -> Result<(StatusCode, Json<IngestSchemaListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_ingest_runtime_privilege(&headers, &state, PrivilegeAction::Read, "ingest/schema")?;
+    let csv_map = state.ingest_csv_records.lock().expect("csv schema list lock");
+    let json_map = state.ingest_json_records.lock().expect("json schema list lock");
+    let mut entries: Vec<IngestSchemaEntry> = Vec::new();
+    let fmt = params.format.as_deref();
+    if fmt.is_none() || fmt == Some("csv") {
+        for (connector_id, records) in csv_map.iter() {
+            entries.push(IngestSchemaEntry {
+                connector_id: connector_id.clone(),
+                format: "csv".to_string(),
+                row_count: records.len(),
+                columns: ingest_infer_columns(records),
+            });
+        }
+    }
+    if fmt.is_none() || fmt == Some("json") {
+        for (connector_id, records) in json_map.iter() {
+            entries.push(IngestSchemaEntry {
+                connector_id: connector_id.clone(),
+                format: "json".to_string(),
+                row_count: records.len(),
+                columns: ingest_infer_columns(records),
+            });
+        }
+    }
+    let connector_count = entries.len();
+    drop(csv_map);
+    drop(json_map);
+    Ok((StatusCode::OK, Json(IngestSchemaListResponse {
+        status: "ok",
+        format_filter: params.format,
+        connector_count,
+        entries,
+    })))
 }
 
 // ─── S8-WS10-02: driver query pass-through ──────────────────────────────────
@@ -18287,6 +18393,55 @@ mod tests {
         assert!(!body.entries[0].columns.is_empty());
     }
 
+    // ─── S5-WS4-03: Ingest schema list endpoint tests ────────────────────────
+
+    #[tokio::test]
+    async fn s5_ws4_03_ingest_schema_list_no_filter_returns_all_formats() {
+        use voltnuerongrid_ingest::IngestRecord;
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut csv = state.ingest_csv_records.lock().unwrap();
+            csv.insert("csv-orders".to_string(), vec![
+                IngestRecord { key: "r1".to_string(), payload: "id=1".to_string() },
+            ]);
+            let mut json = state.ingest_json_records.lock().unwrap();
+            json.insert("json-events".to_string(), vec![
+                IngestRecord { key: "e1".to_string(), payload: r#"{"id":1}"#.to_string() },
+            ]);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = ingest_schema_list(
+            State(state), headers, Query(IngestSchemaListQuery { format: None }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.connector_count, 2, "no filter returns both csv and json entries");
+        assert!(body.format_filter.is_none());
+    }
+
+    #[tokio::test]
+    async fn s5_ws4_03_ingest_schema_list_csv_filter_excludes_json() {
+        use voltnuerongrid_ingest::IngestRecord;
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut csv = state.ingest_csv_records.lock().unwrap();
+            csv.insert("csv-orders".to_string(), vec![
+                IngestRecord { key: "r1".to_string(), payload: "id=1".to_string() },
+            ]);
+            let mut json = state.ingest_json_records.lock().unwrap();
+            json.insert("json-events".to_string(), vec![
+                IngestRecord { key: "e1".to_string(), payload: r#"{"id":1}"#.to_string() },
+            ]);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = ingest_schema_list(
+            State(state), headers, Query(IngestSchemaListQuery { format: Some("csv".to_string()) }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.connector_count, 1, "csv filter must return only csv entries");
+        assert_eq!(body.entries[0].format, "csv");
+        assert_eq!(body.format_filter.as_deref(), Some("csv"));
+    }
+
     // ─── S5-WS4A-02: Broker adapter integration tests ────────────────────────
 
     #[tokio::test]
@@ -18797,6 +18952,34 @@ mod tests {
         ).await.unwrap();
         assert_eq!(filtered.count, 2, "2 orders rows match the prefix");
         assert_eq!(filtered.key_prefix.as_deref(), Some("orders:"));
+    }
+
+    // ── S2-WS2-04: Row store delete-by-key endpoint tests ─────────────────────
+
+    #[tokio::test]
+    async fn s2_ws2_04_row_delete_existing_key_returns_deleted_true() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut rs = state.row_store.lock().unwrap();
+            let xid = rs.begin_xid();
+            rs.insert(xid, "orders:99", std::collections::HashMap::from([("v".to_string(), "x".to_string())]));
+        }
+        let headers = operator_headers("test-key", "admin");
+        let req = RowDeleteRequest { key: "orders:99".to_string() };
+        let (status, Json(body)) = row_store_delete(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.deleted, "existing key must report deleted = true");
+        assert_eq!(body.key, "orders:99");
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_04_row_delete_missing_key_returns_deleted_false() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = RowDeleteRequest { key: "no-such-key".to_string() };
+        let (status, Json(body)) = row_store_delete(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.deleted, "missing key must report deleted = false");
     }
 
     #[tokio::test]

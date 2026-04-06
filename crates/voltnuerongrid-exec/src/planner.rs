@@ -116,6 +116,10 @@ pub enum LogicalPlan {
         count: u64,
         order_by: String,
     },
+    /// Correlated or scalar subquery wrapper (S3-WS1-04 has_subquery support).
+    Subquery {
+        input: Box<LogicalPlan>,
+    },
     /// Unrecognised or unparseable statement.
     Unknown(String),
 }
@@ -141,6 +145,7 @@ impl LogicalPlan {
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
+            LogicalPlan::Subquery { input } => input.primary_table(),
             _ => None,
         }
     }
@@ -176,6 +181,7 @@ impl LogicalPlan {
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
+            LogicalPlan::Subquery { input } => input.has_aggregation(),
             _ => false,
         }
     }
@@ -356,6 +362,14 @@ impl QueryPlanner {
                     recommended_path: QueryPath::Olap,
                 }
             }
+            LogicalPlan::Subquery { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 2.0,
+                    recommended_path: QueryPath::Hybrid,
+                }
+            }
             LogicalPlan::Unknown(_) => CostEstimate {
                 estimated_rows: 0,
                 relative_cost: 0.0,
@@ -500,12 +514,21 @@ impl QueryPlanner {
         };
 
         // SELECT DISTINCT deduplication (S3-WS1-04 is_distinct detection): wrap outermost.
-        if sel.is_distinct {
+        let after_distinct = if sel.is_distinct {
             LogicalPlan::Distinct {
                 input: Box::new(after_window),
             }
         } else {
             after_window
+        };
+
+        // Subquery wrapper (S3-WS1-04 has_subquery detection): outermost node.
+        if sel.has_subquery {
+            LogicalPlan::Subquery {
+                input: Box::new(after_distinct),
+            }
+        } else {
+            after_distinct
         }
     }
 
@@ -792,5 +815,22 @@ mod tests {
         let c = cost("SELECT * FROM orders ORDER BY created_at LIMIT 20");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "TopN query should route to OLTP");
         assert_eq!(c.estimated_rows, 20, "estimated rows capped at TopN count");
+    }
+
+    #[test]
+    fn planner_subquery_produces_subquery_node() {
+        let p = plan("SELECT id FROM orders WHERE id IN (SELECT id FROM recent_orders)");
+        assert!(
+            matches!(&p, LogicalPlan::Subquery { .. }),
+            "query with subquery should produce outermost Subquery node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("orders"));
+    }
+
+    #[test]
+    fn cost_subquery_routes_to_hybrid() {
+        let c = cost("SELECT id FROM orders WHERE id IN (SELECT id FROM recent_orders)");
+        assert_eq!(c.recommended_path, QueryPath::Hybrid, "subquery should route to Hybrid");
+        assert!(c.relative_cost >= 2.0, "subquery carries cost >= 2.0 overhead");
     }
 }

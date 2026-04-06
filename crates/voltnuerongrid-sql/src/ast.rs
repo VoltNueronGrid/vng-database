@@ -61,6 +61,8 @@ pub struct SelectStatement {
     pub has_group_by: bool,
     /// True when the query contains an ORDER BY clause (S3-WS1-06).
     pub has_order_by: bool,
+    /// True when the query contains a HAVING clause (S3-WS1-06).
+    pub has_having: bool,
 }
 
 /// A parsed INSERT statement.
@@ -181,6 +183,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect ORDER BY clause (S3-WS1-06).
                 if up.contains("ORDER BY") {
                     stmt.has_order_by = true;
+                }
+                // Detect HAVING clause (S3-WS1-06).
+                if up.contains("HAVING") {
+                    stmt.has_having = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1341,5 +1347,32 @@ mod order_by_detection_tests {
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(s.has_order_by, "ORDER BY ... LIMIT must set has_order_by = true");
         assert_eq!(s.limit, Some(10), "LIMIT 10 must be parsed");
+    }
+}
+
+#[cfg(test)]
+mod having_flag_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_having_sets_has_having_true() {
+        let stmt = parse_one("SELECT dept, COUNT(*) FROM employees GROUP BY dept HAVING COUNT(*) > 5").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_having, "HAVING clause must set has_having = true");
+    }
+
+    #[test]
+    fn select_without_having_has_having_false() {
+        let stmt = parse_one("SELECT name FROM users WHERE active = 1").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_having, "query without HAVING must have has_having = false");
+    }
+
+    #[test]
+    fn select_having_also_sets_has_group_by_true() {
+        let stmt = parse_one("SELECT region, SUM(sales) FROM orders GROUP BY region HAVING SUM(sales) > 1000").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_having, "HAVING must set has_having = true");
+        assert!(s.has_group_by, "GROUP BY ... HAVING must also set has_group_by = true");
     }
 }
