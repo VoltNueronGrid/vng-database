@@ -94,6 +94,10 @@ pub enum LogicalPlan {
     InList {
         input: Box<LogicalPlan>,
     },
+    /// BETWEEN ... AND range predicate filter (from S3-WS1-08 has_between support).
+    Between {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -146,6 +150,7 @@ impl LogicalPlan {
             LogicalPlan::Join { left, .. } => left.primary_table(),
             LogicalPlan::Union { left, .. } => left.primary_table(),
             LogicalPlan::InList { input } => input.primary_table(),
+            LogicalPlan::Between { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -183,6 +188,7 @@ impl LogicalPlan {
                 left.has_aggregation() || right.has_aggregation()
             }
             LogicalPlan::InList { input } => input.has_aggregation(),
+            LogicalPlan::Between { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -341,6 +347,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.8) as u64,
                     relative_cost: inner.relative_cost + 0.5,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Between { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.75) as u64,
+                    relative_cost: inner.relative_cost + 0.4,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -546,12 +560,21 @@ impl QueryPlanner {
         };
 
         // InList wrapper (S3-WS1-07 has_in_list detection): outermost node.
-        if sel.has_in_list {
+        let after_in_list = if sel.has_in_list {
             LogicalPlan::InList {
                 input: Box::new(after_subquery),
             }
         } else {
             after_subquery
+        };
+
+        // Between wrapper (S3-WS1-08 has_between detection): outermost node.
+        if sel.has_between {
+            LogicalPlan::Between {
+                input: Box::new(after_in_list),
+            }
+        } else {
+            after_in_list
         }
     }
 
@@ -873,5 +896,23 @@ mod tests {
         let c = cost("SELECT id FROM users WHERE id IN (1, 2, 3)");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "IN list should route to OLTP");
         assert!(c.relative_cost >= 0.5, "InList must carry at least 0.5 cost overhead");
+    }
+
+    #[test]
+    fn planner_between_select_produces_between_node() {
+        let p = plan("SELECT id FROM users WHERE age BETWEEN 18 AND 65");
+        assert!(
+            matches!(&p, LogicalPlan::Between { .. }),
+            "BETWEEN query should produce outermost Between node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_between_query_routes_to_oltp() {
+        let c = cost("SELECT id FROM users WHERE age BETWEEN 18 AND 65");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "BETWEEN should route to OLTP");
+        assert!(c.relative_cost >= 0.4, "Between must carry at least 0.4 cost overhead");
     }
 }

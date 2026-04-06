@@ -65,6 +65,8 @@ pub struct SelectStatement {
     pub has_having: bool,
     /// True when the WHERE clause contains an IN (list) predicate (S3-WS1-07).
     pub has_in_list: bool,
+    /// True when the WHERE clause contains a BETWEEN ... AND predicate (S3-WS1-08).
+    pub has_between: bool,
 }
 
 /// A parsed INSERT statement.
@@ -194,6 +196,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Exclude subquery form "IN (SELECT ..." so has_subquery stays exclusive.
                 if up.contains(" IN (") && !up.contains("(SELECT") {
                     stmt.has_in_list = true;
+                }
+                // Detect BETWEEN ... AND predicate in WHERE (S3-WS1-08).
+                if up.contains(" BETWEEN ") && up.contains(" AND ") {
+                    stmt.has_between = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1407,5 +1413,31 @@ mod in_list_tests {
         let stmt = parse_one("SELECT * FROM orders WHERE total > 100").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_in_list, "plain SELECT without IN must have has_in_list = false");
+    }
+}
+
+#[cfg(test)]
+mod between_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_between_sets_has_between_true() {
+        let stmt = parse_one("SELECT id FROM users WHERE age BETWEEN 18 AND 65").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_between, "BETWEEN ... AND predicate must set has_between = true");
+    }
+
+    #[test]
+    fn select_with_between_string_range() {
+        let stmt = parse_one("SELECT id FROM orders WHERE order_date BETWEEN '2024-01-01' AND '2024-12-31'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_between, "BETWEEN with date strings must set has_between = true");
+    }
+
+    #[test]
+    fn plain_select_has_between_is_false() {
+        let stmt = parse_one("SELECT * FROM transactions WHERE amount > 100").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_between, "plain SELECT without BETWEEN must have has_between = false");
     }
 }

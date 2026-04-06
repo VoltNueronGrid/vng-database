@@ -1442,6 +1442,28 @@ struct WalTailResponse {
     entries: Vec<WalReplayEntry>,
 }
 
+// ─── S2-WS2-03: WAL mutations query structs ───────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct WalMutationsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalMutationRecord {
+    sequence: u64,
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WalMutationsResponse {
+    status: &'static str,
+    mutation_count: usize,
+    limit_applied: usize,
+    mutations: Vec<WalMutationRecord>,
+}
+
 // ─── S2-WS2-02: WAL segment list structs ─────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -2495,6 +2517,22 @@ struct IngestFormatDetectResponse {
     field_count: usize,
 }
 
+// ─── S5-WS4-04: Connector validation structs ──────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct IngestConnectorValidateRequest {
+    connector_id: String,
+    format: String,
+    config_json: String,
+}
+
+#[derive(Serialize)]
+struct IngestConnectorValidateResponse {
+    status: &'static str,
+    valid: bool,
+    issues: Vec<String>,
+}
+
 // ─── S2-WS2-05: Transaction isolation stats structs ──────────────────────────
 
 #[derive(Serialize)]
@@ -3517,6 +3555,8 @@ async fn main() {
         .route("/api/v1/store/wal/replay", get(wal_replay))
         // S2-WS2-02: WAL tail (last N records)
         .route("/api/v1/store/wal/tail", get(wal_tail))
+        // S2-WS2-03: WAL mutations (recent key-value changes)
+        .route("/api/v1/store/wal/mutations", get(wal_mutations))
         // S2-WS2-02: WAL segment list (checkpoint groups)
         .route("/api/v1/store/wal/segment/list", get(wal_segment_list))
         // S2-WS2-02: WAL replay count (filtered record count, no body)
@@ -3595,6 +3635,8 @@ async fn main() {
         .route("/api/v1/ingest/schema/list", get(ingest_schema_list))
         // S5-WS4-03: ingest format auto-detection
         .route("/api/v1/ingest/format/detect", post(ingest_format_detect))
+        // S5-WS4-04: ingest connector configuration validation
+        .route("/api/v1/ingest/connector/validate", post(ingest_connector_validate))
         .route("/api/v1/ingest/outbox/status", get(ingest_outbox_status))
         .route("/api/v1/ingest/outbox/replay", post(ingest_outbox_replay))
         // REQ-02 DDL catalog endpoint
@@ -7163,6 +7205,35 @@ async fn wal_tail(
     }))
 }
 
+// ─── S2-WS2-03: WAL mutations handler ──────────────────────────────────────
+
+/// S2-WS2-03: Return recent mutation records from WAL with key+value pairs.
+async fn wal_mutations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WalMutationsQuery>,
+) -> (StatusCode, Json<WalMutationsResponse>) {
+    let _ = require_operator_auth(&headers, &state);
+    let limit_applied = params.limit.unwrap_or(50).max(1).min(10_000);
+    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let all_records = wal.wal_records().to_vec();
+    drop(wal);
+    let total = all_records.len();
+    let skip = if total > limit_applied { total - limit_applied } else { 0 };
+    let mutations: Vec<WalMutationRecord> = all_records
+        .into_iter()
+        .skip(skip)
+        .map(|r| WalMutationRecord { sequence: r.sequence, key: r.key, value: r.value })
+        .collect();
+    let mutation_count = mutations.len();
+    (StatusCode::OK, Json(WalMutationsResponse {
+        status: "ok",
+        mutation_count,
+        limit_applied,
+        mutations,
+    }))
+}
+
 // ─── S2-WS2-02: WAL segment list handler ────────────────────────────────────
 
 /// S2-WS2-02: List WAL checkpoint segments plus the active (unbounded) segment.
@@ -8331,6 +8402,34 @@ async fn ingest_format_detect(
         detected_format,
         confidence,
         field_count,
+    })))
+}
+
+// ─── S5-WS4-04: Connector configuration validation handler ──────────────────
+
+/// S5-WS4-04: Validate that a connector config is well-formed before registration.
+async fn ingest_connector_validate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestConnectorValidateRequest>,
+) -> Result<(StatusCode, Json<IngestConnectorValidateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let mut issues: Vec<String> = Vec::new();
+    if req.connector_id.trim().is_empty() {
+        issues.push("connector_id cannot be empty".to_string());
+    }
+    match req.format.as_str() {
+        "json" | "csv" | "parquet" | "excel" => {}
+        _ => issues.push(format!("unsupported format '{}'; expected: json, csv, parquet, excel", req.format)),
+    }
+    if let Err(e) = serde_json::from_str::<serde_json::Value>(&req.config_json) {
+        issues.push(format!("config_json is not valid JSON: {e}"));
+    }
+    let valid = issues.is_empty();
+    Ok((StatusCode::OK, Json(IngestConnectorValidateResponse {
+        status: "ok",
+        valid,
+        issues,
     })))
 }
 
@@ -18560,6 +18659,42 @@ mod tests {
         assert!(body.confidence >= 0.9, "json confidence must be >= 0.9");
     }
 
+    // ─── S5-WS4-04: Connector validation tests ──────────────────────────────
+
+    #[tokio::test]
+    async fn s5_ws4_04_ingest_connector_validate_json_format() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = IngestConnectorValidateRequest {
+            connector_id: "conn-1".to_string(),
+            format: "json".to_string(),
+            config_json: r#"{"batch_size": 100}"#.to_string(),
+        };
+        let (status, Json(body)) = ingest_connector_validate(
+            State(state), headers, Json(req),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.valid, "valid JSON config with known format must pass");
+        assert!(body.issues.is_empty(), "no issues for a valid request");
+    }
+
+    #[tokio::test]
+    async fn s5_ws4_04_ingest_connector_validate_unknown_format_is_invalid() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = IngestConnectorValidateRequest {
+            connector_id: "conn-2".to_string(),
+            format: "xml".to_string(),
+            config_json: r#"{"tag": "row"}"#.to_string(),
+        };
+        let (status, Json(body)) = ingest_connector_validate(
+            State(state), headers, Json(req),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.valid, "unknown format must fail validation");
+        assert!(!body.issues.is_empty(), "issues must describe the format error");
+    }
+
     // ─── S5-WS4A-02: Broker adapter integration tests ────────────────────────
 
     #[tokio::test]
@@ -19342,6 +19477,50 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.record_count, 3, "limit=3 means only 3 newest entries");
         assert_eq!(body.limit_applied, 3);
+    }
+
+    // ── S2-WS2-03: WAL mutations tests ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn s2_ws2_03_wal_mutations_returns_keys_and_values() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            wal.append_mutation("user:101", "alice@example.com");
+            wal.append_mutation("user:102", "bob@example.com");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_mutations(
+            State(state),
+            headers,
+            axum::extract::Query(WalMutationsQuery { limit: Some(10) }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.mutation_count, 2);
+        assert_eq!(body.mutations[0].key, "user:101");
+        assert_eq!(body.mutations[0].value, "alice@example.com");
+        assert_eq!(body.mutations[1].key, "user:102");
+        assert_eq!(body.mutations[1].value, "bob@example.com");
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_03_wal_mutations_respects_limit() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut wal = state.wal_engine.lock().unwrap();
+            for i in 0..100u64 {
+                wal.append_mutation(&format!("k{}", i), &format!("v{}", i));
+            }
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_mutations(
+            State(state),
+            headers,
+            axum::extract::Query(WalMutationsQuery { limit: Some(25) }),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.mutation_count, 25, "limit=25 means only 25 newest mutations");
+        assert_eq!(body.limit_applied, 25);
     }
 
     // ── S2-WS2-02: WAL segment list ───────────────────────────────────────────
