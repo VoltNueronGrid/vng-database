@@ -69,6 +69,8 @@ pub struct SelectStatement {
     pub has_between: bool,
     /// True when the WHERE clause contains a LIKE or ILIKE predicate (S3-WS1-09).
     pub has_like: bool,
+    /// True when the WHERE clause contains a NOT keyword predicate (S3-WS1-10).
+    pub has_not: bool,
 }
 
 /// A parsed INSERT statement.
@@ -206,6 +208,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect LIKE / ILIKE predicate in WHERE (S3-WS1-09).
                 if up.contains(" LIKE ") || up.contains(" ILIKE ") {
                     stmt.has_like = true;
+                }
+                // Detect NOT keyword predicate in WHERE (S3-WS1-10); exclude IS NOT NULL patterns.
+                if up.contains(" NOT ") && !up.contains("IS NOT") {
+                    stmt.has_not = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1471,5 +1477,31 @@ mod like_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_like, "plain SELECT without LIKE must have has_like = false");
+    }
+}
+
+#[cfg(test)]
+mod not_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_not_in_sets_has_not_true() {
+        let stmt = parse_one("SELECT id FROM users WHERE id NOT IN (1, 2, 3)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_not, "NOT IN predicate must set has_not = true");
+    }
+
+    #[test]
+    fn select_with_not_like_sets_has_not_true() {
+        let stmt = parse_one("SELECT name FROM users WHERE name NOT LIKE '%admin%'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_not, "NOT LIKE predicate must set has_not = true");
+    }
+
+    #[test]
+    fn plain_select_has_not_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_not, "plain SELECT without NOT must have has_not = false");
     }
 }

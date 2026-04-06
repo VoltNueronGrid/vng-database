@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 34 Implementation Log
+
+**Date:** 2025 (Sprint 9 continuation)
+**Test Baseline → New:** sql 129→132, exec 42→44, service 365→369 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_not: bool` field + detection | `voltnuerongrid-sql` | Detects `NOT IN`, `NOT LIKE`, `NOT BETWEEN` in WHERE clause (`S3-WS1-10`) | 3 (`not_tests` module) |
+| `Not { input }` plan node | `voltnuerongrid-exec` | OLTP-routed NOT predicate node in `LogicalPlan`; 0.85× row estimate, +0.6 cost | 2 |
+| `GET /api/v1/store/rows/keys` | `voltnuerongridd` | Returns row store primary keys with optional prefix filter (operator-auth) | 2 |
+| `POST /api/v1/store/wal/truncate` | `voltnuerongridd` | Truncates WAL up to sequence via forced checkpoint (operator-auth) | 2 |
+
+---
+
 ## Definition of Done (Tracker)
 
 A tracker row moves to **Done** only when:

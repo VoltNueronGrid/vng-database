@@ -102,6 +102,10 @@ pub enum LogicalPlan {
     Like {
         input: Box<LogicalPlan>,
     },
+    /// NOT keyword predicate filter (from S3-WS1-10 has_not support).
+    Not {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -156,6 +160,7 @@ impl LogicalPlan {
             LogicalPlan::InList { input } => input.primary_table(),
             LogicalPlan::Between { input } => input.primary_table(),
             LogicalPlan::Like { input } => input.primary_table(),
+            LogicalPlan::Not { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -195,6 +200,7 @@ impl LogicalPlan {
             LogicalPlan::InList { input } => input.has_aggregation(),
             LogicalPlan::Between { input } => input.has_aggregation(),
             LogicalPlan::Like { input } => input.has_aggregation(),
+            LogicalPlan::Not { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -370,6 +376,14 @@ impl QueryPlanner {
                     estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
                     relative_cost: inner.relative_cost + 1.2,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Not { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.85) as u64,
+                    relative_cost: inner.relative_cost + 0.6,
+                    recommended_path: QueryPath::Oltp,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -592,12 +606,21 @@ impl QueryPlanner {
         };
 
         // Like wrapper (S3-WS1-09 has_like detection): outermost node.
-        if sel.has_like {
+        let after_like = if sel.has_like {
             LogicalPlan::Like {
                 input: Box::new(after_between),
             }
         } else {
             after_between
+        };
+
+        // Not wrapper (S3-WS1-10 has_not detection): outermost node.
+        if sel.has_not {
+            LogicalPlan::Not {
+                input: Box::new(after_like),
+            }
+        } else {
+            after_like
         }
     }
 
@@ -955,5 +978,23 @@ mod tests {
         let c = cost("SELECT name FROM users WHERE name LIKE '%Alice%'");
         assert_eq!(c.recommended_path, QueryPath::Olap, "LIKE should route to OLAP (full scan)");
         assert!(c.relative_cost >= 1.2, "Like must carry at least 1.2 cost overhead");
+    }
+
+    #[test]
+    fn planner_not_select_produces_not_node() {
+        let p = plan("SELECT id FROM users WHERE id NOT IN (1, 2, 3)");
+        assert!(
+            matches!(&p, LogicalPlan::Not { .. }),
+            "NOT predicate query should produce outermost Not node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_not_query_routes_to_oltp() {
+        let c = cost("SELECT id FROM users WHERE id NOT IN (1, 2, 3)");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "NOT predicate should route to OLTP");
+        assert!(c.relative_cost >= 0.6, "Not must carry at least 0.6 cost overhead");
     }
 }

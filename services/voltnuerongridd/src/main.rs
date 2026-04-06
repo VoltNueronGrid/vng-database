@@ -2314,6 +2314,35 @@ struct ConnectorUpdateResponse {
     updated: bool,
 }
 
+// ─── S11-WS1-10: Row store keys structs ─────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct StoreRowsKeysQuery {
+    prefix: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StoreRowsKeysResponse {
+    status: &'static str,
+    total_keys: usize,
+    keys: Vec<String>,
+}
+
+// ─── S11-WS1-10: WAL truncate structs ───────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct WalTruncateRequest {
+    up_to_sequence: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct WalTruncateResponse {
+    status: &'static str,
+    records_removed: usize,
+    new_record_count: usize,
+    truncated: bool,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3590,6 +3619,8 @@ async fn main() {
         .route("/api/v1/store/wal/mutations", get(wal_mutations))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
+        // S11-WS1-10: WAL truncate up to sequence
+        .route("/api/v1/store/wal/truncate", post(wal_truncate))
         // S2-WS2-02: WAL segment list (checkpoint groups)
         .route("/api/v1/store/wal/segment/list", get(wal_segment_list))
         // S2-WS2-02: WAL replay count (filtered record count, no body)
@@ -3638,6 +3669,8 @@ async fn main() {
         .route("/api/v1/store/rows/count", get(row_store_count))
         // S2-WS2-04: Row store delete by key
         .route("/api/v1/store/rows/delete", post(row_store_delete))
+        // S11-WS1-10: Row store key list
+        .route("/api/v1/store/rows/keys", get(store_rows_keys))
         // S5-WS4A-02: Broker adapter status + flush
         .route("/api/v1/ingest/outbox/broker/status", get(outbox_broker_status))
         .route("/api/v1/ingest/outbox/broker/flush", post(outbox_broker_flush))
@@ -7900,6 +7933,70 @@ async fn connector_update(
         status: "ok",
         connector_id: req.connector_id,
         updated,
+    })))
+}
+
+// ─── S11-WS1-10: Row store key list endpoint ─────────────────────────────────
+
+/// S11-WS1-10: Return primary keys from the row store, optionally filtered by prefix.
+async fn store_rows_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<StoreRowsKeysQuery>,
+) -> Result<(StatusCode, Json<StoreRowsKeysResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock store_rows_keys");
+    let all_rows = rs.export_rows_snapshot();
+    drop(rs);
+    let keys: Vec<String> = all_rows
+        .into_iter()
+        .map(|(k, _)| k)
+        .filter(|k| {
+            params.prefix.as_ref().map(|p| k.starts_with(p.as_str())).unwrap_or(true)
+        })
+        .collect();
+    let total_keys = keys.len();
+    Ok((StatusCode::OK, Json(StoreRowsKeysResponse {
+        status: "ok",
+        total_keys,
+        keys,
+    })))
+}
+
+// ─── S11-WS1-10: WAL truncate endpoint ───────────────────────────────────────
+
+/// S11-WS1-10: Truncate WAL records up to a given sequence by forcing a checkpoint.
+async fn wal_truncate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<WalTruncateRequest>,
+) -> Result<(StatusCode, Json<WalTruncateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let records_before = {
+        let wal = state.wal_engine.lock().expect("wal_engine lock wal_truncate_before");
+        wal.wal_records().len()
+    };
+    let latest_seq = {
+        let wal = state.wal_engine.lock().expect("wal_engine lock wal_truncate_seq");
+        wal.latest_sequence()
+    };
+    let truncated = if latest_seq >= req.up_to_sequence && records_before > 0 {
+        let mut wal = state.wal_engine.lock().expect("wal_engine lock wal_truncate_cp");
+        wal.force_checkpoint();
+        true
+    } else {
+        false
+    };
+    let new_record_count = {
+        let wal = state.wal_engine.lock().expect("wal_engine lock wal_truncate_after");
+        wal.wal_records().len()
+    };
+    let records_removed = records_before.saturating_sub(new_record_count);
+    Ok((StatusCode::OK, Json(WalTruncateResponse {
+        status: "ok",
+        records_removed,
+        new_record_count,
+        truncated,
     })))
 }
 
@@ -20715,6 +20812,58 @@ mod tests {
         let (status, Json(body)) = connector_update(State(state), headers, Json(req)).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert!(!body.updated, "missing connector must return updated = false");
+    }
+
+    // ─── S11-WS1-10: Row store keys endpoint tests ────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_10_store_rows_keys_empty_on_fresh_state() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = store_rows_keys(
+            State(state),
+            headers,
+            Query(StoreRowsKeysQuery { prefix: None }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_keys, 0, "fresh row store must have no keys");
+        assert!(body.keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_10_store_rows_keys_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = store_rows_keys(
+            State(state),
+            headers,
+            Query(StoreRowsKeysQuery { prefix: None }),
+        ).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-10: WAL truncate endpoint tests ──────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_10_wal_truncate_empty_wal_returns_not_truncated() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = WalTruncateRequest { up_to_sequence: 1 };
+        let (status, Json(body)) = wal_truncate(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.truncated, "empty WAL must return truncated = false");
+        assert_eq!(body.records_removed, 0);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_10_wal_truncate_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let req = WalTruncateRequest { up_to_sequence: 100 };
+        let result = wal_truncate(State(state), headers, Json(req)).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
 
 }
