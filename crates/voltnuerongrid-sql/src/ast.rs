@@ -47,6 +47,8 @@ pub struct SelectStatement {
     pub has_subquery: bool,
     /// True when the raw SQL contains a window function call `OVER (` (S3-WS1-04).
     pub has_window_fn: bool,
+    /// True when the raw SQL contains an aggregate function call (COUNT, SUM, AVG, MIN, MAX) (S3-WS1-04).
+    pub has_agg_fn: bool,
     /// LIMIT value, if present.
     pub limit: Option<u64>,
 }
@@ -145,6 +147,14 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect window function calls: any `OVER (` or `OVER(` (S3-WS1-04).
                 if up.contains("OVER (") || up.contains("OVER(") {
                     stmt.has_window_fn = true;
+                }
+                // Detect aggregate function calls: COUNT(, SUM(, AVG(, MIN(, MAX( (S3-WS1-04).
+                let up_trim = up.replace(' ', "");
+                if up_trim.contains("COUNT(") || up_trim.contains("SUM(")
+                    || up_trim.contains("AVG(") || up_trim.contains("MIN(")
+                    || up_trim.contains("MAX(")
+                {
+                    stmt.has_agg_fn = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1078,6 +1088,45 @@ mod window_fn_tests {
         let stmt = parse_one(sql).unwrap();
         if let Statement::Select(s) = stmt {
             assert!(!s.has_window_fn, "plain GROUP BY aggregate must NOT set has_window_fn");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+}
+
+/// S3-WS1-04: Aggregate function detection tests (S3-WS1-06 conformance).
+#[cfg(test)]
+mod agg_fn_tests {
+    use super::*;
+
+    #[test]
+    fn select_count_sets_has_agg_fn_true() {
+        let sql = "SELECT COUNT(id) FROM orders WHERE status = 'open'";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.has_agg_fn, "COUNT( must set has_agg_fn = true");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn select_sum_and_avg_set_has_agg_fn_true() {
+        let sql = "SELECT SUM(amount), AVG(quantity) FROM line_items";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.has_agg_fn, "SUM( and AVG( must set has_agg_fn = true");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn plain_select_has_agg_fn_false() {
+        let sql = "SELECT id, name FROM customers WHERE id = 1";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(!s.has_agg_fn, "plain SELECT without aggregates must NOT set has_agg_fn");
         } else {
             panic!("expected Select statement");
         }

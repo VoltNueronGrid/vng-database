@@ -1427,6 +1427,13 @@ struct CdcCursorResponse {
     cursor_position: u64,
 }
 
+// ─── S10-WS15-02: CDC cursor rewind struct ────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct CdcCursorRewindRequest {
+    table_name: String,
+}
+
 // ─── S5-WS4A-02: Broker adapter structs ───────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -1985,6 +1992,20 @@ struct AuditSnapshotResponse {
     genesis_hash: &'static str,
 }
 
+// ─── S9-WS8A-02: Audit purge structs ────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AuditPurgeRequest {
+    confirm: bool,
+}
+
+#[derive(Serialize)]
+struct AuditPurgeResponse {
+    status: &'static str,
+    events_purged: usize,
+    chain_reset: bool,
+}
+
 // ─── S5-E4A-01: Connector SDK runtime structs ───────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2016,6 +2037,20 @@ struct ConnectorListResponse {
     status: &'static str,
     connector_count: usize,
     connectors: Vec<ConnectorPlugin>,
+}
+
+// ─── S5-E4A-01: Connector get-by-id structs ─────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ConnectorGetQuery {
+    id: String,
+}
+
+#[derive(Serialize)]
+struct ConnectorGetResponse {
+    status: &'static str,
+    found: bool,
+    connector: Option<ConnectorPlugin>,
 }
 
 // ─── S5-E4A-01: Connector deregister structs ─────────────────────────────────
@@ -3141,6 +3176,8 @@ async fn main() {
         .route("/api/v1/store/htap/sync", post(htap_force_sync))
         // S9-WS8A-02: Audit export (all buffered events + file-backed status)
         .route("/api/v1/audit/export", get(audit_export))
+        // S9-WS8A-02: Audit purge — flush in-memory audit sink
+        .route("/api/v1/audit/purge", post(audit_purge))
         // S7-WS6-02: Raft consensus RPC + status endpoints
         .route("/api/v1/cluster/raft/status", get(raft_status))
         .route("/api/v1/cluster/raft/vote", post(raft_vote))
@@ -3201,6 +3238,8 @@ async fn main() {
         .route("/api/v1/store/cdc/stream/latest", get(cdc_stream_latest))
         .route("/api/v1/store/cdc/cursor", get(cdc_cursor_status))
         .route("/api/v1/store/cdc/cursor/advance", post(cdc_cursor_advance))
+        // S10-WS15-02: CDC cursor rewind
+        .route("/api/v1/store/cdc/cursor/rewind", post(cdc_cursor_rewind))
         // S2-WS2-04: Row store point-in-time snapshot export
         .route("/api/v1/store/rows/snapshot", get(row_store_snapshot))
         // S2-WS2-04: Row store operational stats
@@ -3215,6 +3254,8 @@ async fn main() {
         .route("/api/v1/connectors", get(connector_list))
         .route("/api/v1/connectors/register", post(connector_register))
         .route("/api/v1/connectors/deregister", post(connector_deregister))
+        // S5-E4A-01: Connector get by ID
+        .route("/api/v1/connectors/get", get(connector_get))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
         .route("/api/v1/ai/policy/stats", get(ai_policy_stats))
         // S9-WS8-02: AI policy counter reset
@@ -6051,6 +6092,28 @@ async fn audit_snapshot(
     })))
 }
 
+// ─── S9-WS8A-02: Audit purge — flush the in-memory audit sink ────────────────
+
+/// S9-WS8A-02: Purge all buffered audit events (requires operator auth).
+async fn audit_purge(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(_req): Json<AuditPurgeRequest>,
+) -> Result<(StatusCode, Json<AuditPurgeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let events_purged = {
+        let mut sink = state.audit_sink.lock().expect("audit_sink lock");
+        let count = sink.all().len();
+        *sink = AppendOnlyAuditSink::new();
+        count
+    };
+    Ok((StatusCode::OK, Json(AuditPurgeResponse {
+        status: "ok",
+        events_purged,
+        chain_reset: true,
+    })))
+}
+
 // ─── S9-WS8A-01: Audit CLI summary ──────────────────────────────────────────
 
 /// S9-WS8A-01: Return a CLI-friendly summary of the current audit chain state.
@@ -7004,6 +7067,25 @@ async fn connector_deregister(
     ))
 }
 
+// ─── S5-E4A-01: Connector get by ID ──────────────────────────────────────────
+
+/// S5-E4A-01: Return a single connector from the registry by connector_id.
+async fn connector_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<ConnectorGetQuery>,
+) -> Result<(StatusCode, Json<ConnectorGetResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let registry = state.connector_registry.lock().expect("connector_registry lock");
+    let connector = registry.iter().find(|c| c.connector_id == params.id).cloned();
+    let found = connector.is_some();
+    Ok((StatusCode::OK, Json(ConnectorGetResponse {
+        status: "ok",
+        found,
+        connector,
+    })))
+}
+
 // ─── S7-WS6-03: Raft fencing token endpoint ──────────────────────────────────────────
 
 /// Return the current fencing token for the Raft node.
@@ -7173,6 +7255,24 @@ async fn cdc_cursor_advance(
         status: "ok",
         table_name: req.table_name,
         cursor_position: req.position,
+    })))
+}
+
+// ─── S10-WS15-02: CDC cursor rewind — reset a table cursor to 0 ───────────────
+
+/// S10-WS15-02: Rewind (reset to 0) the CDC cursor for the specified table.
+async fn cdc_cursor_rewind(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CdcCursorRewindRequest>,
+) -> Result<(StatusCode, Json<CdcCursorResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let mut cursors = state.cdc_cursors.lock().expect("cdc_cursors lock");
+    cursors.insert(req.table_name.clone(), 0);
+    Ok((StatusCode::OK, Json(CdcCursorResponse {
+        status: "ok",
+        table_name: req.table_name,
+        cursor_position: 0,
     })))
 }
 
@@ -17757,6 +17857,29 @@ mod tests {
         assert_eq!(body2.cursor_position, 42, "cursor must persist after advance");
     }
 
+    // ─── S10-WS15-02: CDC cursor rewind tests ────────────────────────────────
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_cursor_rewind_sets_cursor_to_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let adv = CdcCursorAdvanceRequest { table_name: "events".to_string(), position: 77 };
+        cdc_cursor_advance(State(state.clone()), headers.clone(), Json(adv)).await.unwrap();
+        let req = CdcCursorRewindRequest { table_name: "events".to_string() };
+        let (status, Json(body)) = cdc_cursor_rewind(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.cursor_position, 0, "rewind must reset cursor to 0");
+    }
+
+    #[tokio::test]
+    async fn s10_ws15_02_cdc_cursor_rewind_unknown_table_creates_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = CdcCursorRewindRequest { table_name: "new_table".to_string() };
+        let (status, Json(body)) = cdc_cursor_rewind(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.cursor_position, 0, "rewind on new table must create cursor at 0");
+    }
+
     // ─── S2-WS2-04: Row store snapshot export tests ───────────────────────────
 
     #[tokio::test]
@@ -18409,6 +18532,36 @@ mod tests {
         assert!(body.chain_valid, "2-event chain should be valid");
     }
 
+    // ─── S9-WS8A-02: Audit purge tests ──────────────────────────────────────
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_purge_empty_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = AuditPurgeRequest { confirm: true };
+        let (status, Json(body)) = audit_purge(State(state), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.events_purged, 0, "empty sink purge must report 0 events");
+        assert!(body.chain_reset, "chain must be reset after purge");
+    }
+
+    #[tokio::test]
+    async fn s9_ws8a_02_audit_purge_clears_events() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut sink = state.audit_sink.lock().unwrap();
+            sink.append(voltnuerongrid_audit::AuditEventKind::Sql, "actor", "q1", "ok", "{}");
+            sink.append(voltnuerongrid_audit::AuditEventKind::Sql, "actor", "q2", "ok", "{}");
+        }
+        let headers = operator_headers("test-key", "admin");
+        let req = AuditPurgeRequest { confirm: true };
+        let (status, Json(body)) = audit_purge(State(state.clone()), headers, Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.events_purged, 2, "must report 2 events purged");
+        assert!(body.chain_reset);
+        let sink = state.audit_sink.lock().unwrap();
+        assert!(sink.is_empty(), "audit sink must be empty after purge");
+    }
+
     // ── S9-WS8A-01: Audit CLI summary endpoint ───────────────────────────────
     #[tokio::test]
     async fn s9_ws8a_01_audit_cli_summary_empty_state() {
@@ -18564,6 +18717,42 @@ mod tests {
         let (status, Json(body)) = connector_deregister(State(state), headers, Json(dreq)).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert!(!body.removed, "unknown connector must report removed = false");
+    }
+
+    // ─── S5-E4A-01: Connector get-by-id tests ───────────────────────────────
+    #[tokio::test]
+    async fn s5_e4a_01_connector_get_existing_returns_found() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let reg_req = ConnectorRegisterRequest {
+            connector_id: "my-connector".to_string(),
+            connector_type: "csv".to_string(),
+            version: "1.0.0".to_string(),
+            signed: Some(true),
+        };
+        connector_register(State(state.clone()), headers.clone(), Json(reg_req)).await.unwrap();
+        let (status, Json(body)) = connector_get(
+            State(state),
+            headers,
+            Query(ConnectorGetQuery { id: "my-connector".to_string() }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.found, "registered connector must be found");
+        assert!(body.connector.is_some(), "connector data must be present");
+    }
+
+    #[tokio::test]
+    async fn s5_e4a_01_connector_get_unknown_returns_not_found() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = connector_get(
+            State(state),
+            headers,
+            Query(ConnectorGetQuery { id: "no-such-connector".to_string() }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.found, "unknown connector must report found = false");
+        assert!(body.connector.is_none());
     }
 
 }
