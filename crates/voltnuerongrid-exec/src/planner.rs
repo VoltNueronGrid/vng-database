@@ -90,6 +90,10 @@ pub enum LogicalPlan {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
     },
+    /// IN-list predicate filter (from S3-WS1-07 has_in_list support).
+    InList {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -141,6 +145,7 @@ impl LogicalPlan {
             | LogicalPlan::TopN { input, .. } => input.primary_table(),
             LogicalPlan::Join { left, .. } => left.primary_table(),
             LogicalPlan::Union { left, .. } => left.primary_table(),
+            LogicalPlan::InList { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -177,6 +182,7 @@ impl LogicalPlan {
             LogicalPlan::Union { left, right } => {
                 left.has_aggregation() || right.has_aggregation()
             }
+            LogicalPlan::InList { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -328,6 +334,14 @@ impl QueryPlanner {
                     estimated_rows: lc.estimated_rows.saturating_add(rc.estimated_rows),
                     relative_cost: lc.relative_cost + rc.relative_cost + 2.0,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::InList { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.8) as u64,
+                    relative_cost: inner.relative_cost + 0.5,
+                    recommended_path: QueryPath::Oltp,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -523,12 +537,21 @@ impl QueryPlanner {
         };
 
         // Subquery wrapper (S3-WS1-04 has_subquery detection): outermost node.
-        if sel.has_subquery {
+        let after_subquery = if sel.has_subquery {
             LogicalPlan::Subquery {
                 input: Box::new(after_distinct),
             }
         } else {
             after_distinct
+        };
+
+        // InList wrapper (S3-WS1-07 has_in_list detection): outermost node.
+        if sel.has_in_list {
+            LogicalPlan::InList {
+                input: Box::new(after_subquery),
+            }
+        } else {
+            after_subquery
         }
     }
 
@@ -832,5 +855,23 @@ mod tests {
         let c = cost("SELECT id FROM orders WHERE id IN (SELECT id FROM recent_orders)");
         assert_eq!(c.recommended_path, QueryPath::Hybrid, "subquery should route to Hybrid");
         assert!(c.relative_cost >= 2.0, "subquery carries cost >= 2.0 overhead");
+    }
+
+    #[test]
+    fn planner_in_list_select_produces_in_list_node() {
+        let p = plan("SELECT id FROM users WHERE id IN (1, 2, 3)");
+        assert!(
+            matches!(&p, LogicalPlan::InList { .. }),
+            "IN list query should produce outermost InList node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_in_list_query_routes_to_oltp() {
+        let c = cost("SELECT id FROM users WHERE id IN (1, 2, 3)");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "IN list should route to OLTP");
+        assert!(c.relative_cost >= 0.5, "InList must carry at least 0.5 cost overhead");
     }
 }

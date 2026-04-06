@@ -63,6 +63,8 @@ pub struct SelectStatement {
     pub has_order_by: bool,
     /// True when the query contains a HAVING clause (S3-WS1-06).
     pub has_having: bool,
+    /// True when the WHERE clause contains an IN (list) predicate (S3-WS1-07).
+    pub has_in_list: bool,
 }
 
 /// A parsed INSERT statement.
@@ -187,6 +189,11 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect HAVING clause (S3-WS1-06).
                 if up.contains("HAVING") {
                     stmt.has_having = true;
+                }
+                // Detect IN list predicate in WHERE (S3-WS1-07).
+                // Exclude subquery form "IN (SELECT ..." so has_subquery stays exclusive.
+                if up.contains(" IN (") && !up.contains("(SELECT") {
+                    stmt.has_in_list = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1374,5 +1381,31 @@ mod having_flag_tests {
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(s.has_having, "HAVING must set has_having = true");
         assert!(s.has_group_by, "GROUP BY ... HAVING must also set has_group_by = true");
+    }
+}
+
+#[cfg(test)]
+mod in_list_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_in_predicate_sets_has_in_list_true() {
+        let stmt = parse_one("SELECT id FROM users WHERE id IN (1, 2, 3)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_in_list, "IN (list) predicate must set has_in_list = true");
+    }
+
+    #[test]
+    fn select_with_in_list_string_values() {
+        let stmt = parse_one("SELECT name FROM products WHERE category IN ('A', 'B', 'C')").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_in_list, "IN with string literals must set has_in_list = true");
+    }
+
+    #[test]
+    fn plain_select_has_in_list_is_false() {
+        let stmt = parse_one("SELECT * FROM orders WHERE total > 100").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_in_list, "plain SELECT without IN must have has_in_list = false");
     }
 }

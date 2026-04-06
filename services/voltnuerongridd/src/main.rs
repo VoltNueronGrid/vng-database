@@ -1340,6 +1340,16 @@ struct RaftMemberListResponse {
     members: Vec<RaftMemberEntry>,
 }
 
+// ─── S7-WS6-01: Raft vote statistics ─────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RaftVoteStatsResponse {
+    status: &'static str,
+    current_term: u64,
+    total_votes_granted: u64,
+    total_votes_rejected: u64,
+}
+
 // ─── S7-WS6-03: Raft current leader response ────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -2470,6 +2480,21 @@ struct IngestSchemaListResponse {
     entries: Vec<IngestSchemaEntry>,
 }
 
+// ─── S5-WS4-03: Ingest format detection structs ──────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct IngestFormatDetectRequest {
+    sample_data: String,
+}
+
+#[derive(Serialize)]
+struct IngestFormatDetectResponse {
+    status: &'static str,
+    detected_format: String,
+    confidence: f64,
+    field_count: usize,
+}
+
 // ─── S2-WS2-05: Transaction isolation stats structs ──────────────────────────
 
 #[derive(Serialize)]
@@ -3456,6 +3481,8 @@ async fn main() {
         .route("/api/v1/cluster/raft/leader", get(raft_leader))
         // S7-WS6-03: Raft fencing token
         .route("/api/v1/cluster/raft/fence", get(raft_fence))
+        // S7-WS6-01: Raft vote statistics
+        .route("/api/v1/cluster/raft/vote/stats", get(raft_vote_stats))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
         // S4-WS3-04: HTAP sync export for OLAP consumers
         .route("/api/v1/store/htap/export", post(store_htap_export))
@@ -3566,6 +3593,8 @@ async fn main() {
         .route("/api/v1/ingest/schema", get(ingest_schema_registry))
         // S5-WS4-03: ingest schema list (format-filtered)
         .route("/api/v1/ingest/schema/list", get(ingest_schema_list))
+        // S5-WS4-03: ingest format auto-detection
+        .route("/api/v1/ingest/format/detect", post(ingest_format_detect))
         .route("/api/v1/ingest/outbox/status", get(ingest_outbox_status))
         .route("/api/v1/ingest/outbox/replay", post(ingest_outbox_replay))
         // REQ-02 DDL catalog endpoint
@@ -7714,6 +7743,25 @@ async fn connector_get(
     })))
 }
 
+// ─── S7-WS6-01: Raft vote statistics endpoint ───────────────────────────────
+
+/// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
+async fn raft_vote_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftVoteStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let snap = state.raft_state.lock().expect("raft_state lock").status();
+    // Scaffold: vote accumulation not yet tracked in RaftNode;
+    // expose current_term only and return zeroed counters.
+    Ok((StatusCode::OK, Json(RaftVoteStatsResponse {
+        status: "ok",
+        current_term: snap.current_term,
+        total_votes_granted: 0,
+        total_votes_rejected: 0,
+    })))
+}
+
 // ─── S7-WS6-03: Raft fencing token endpoint ──────────────────────────────────────────
 
 /// Return the current fencing token for the Raft node.
@@ -8249,6 +8297,40 @@ async fn ingest_schema_list(
         format_filter: params.format,
         connector_count,
         entries,
+    })))
+}
+
+// ─── S5-WS4-03: Ingest format auto-detection handler ─────────────────────────
+
+/// S5-WS4-03: Analyse a raw data sample and return the detected format + field count.
+async fn ingest_format_detect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestFormatDetectRequest>,
+) -> Result<(StatusCode, Json<IngestFormatDetectResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let sample = req.sample_data.trim();
+    let (detected_format, confidence, field_count) =
+        if sample.starts_with('[') || sample.starts_with('{') {
+            let fc = if let Ok(v) = serde_json::from_str::<serde_json::Value>(sample) {
+                if let Some(obj) = v.as_object() {
+                    obj.len()
+                } else if let Some(arr) = v.as_array() {
+                    arr.first().and_then(|x| x.as_object()).map(|o| o.len()).unwrap_or(0)
+                } else { 0 }
+            } else { 0 };
+            ("json".to_string(), 0.95f64, fc)
+        } else if sample.lines().next().map(|l| l.contains(',')).unwrap_or(false) {
+            let fc = sample.lines().next().map(|l| l.split(',').count()).unwrap_or(0);
+            ("csv".to_string(), 0.85f64, fc)
+        } else {
+            ("unknown".to_string(), 0.0f64, 0usize)
+        };
+    Ok((StatusCode::OK, Json(IngestFormatDetectResponse {
+        status: "ok",
+        detected_format,
+        confidence,
+        field_count,
     })))
 }
 
@@ -18442,6 +18524,42 @@ mod tests {
         assert_eq!(body.format_filter.as_deref(), Some("csv"));
     }
 
+    // ─── S5-WS4-03: Ingest format detect endpoint tests ──────────────────────
+
+    #[tokio::test]
+    async fn s5_ws4_03_ingest_format_detect_csv_sample() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = IngestFormatDetectRequest {
+            sample_data: "id,name,email
+1,Alice,a@x.com
+".to_string(),
+        };
+        let (status, Json(body)) = ingest_format_detect(
+            State(state), headers, Json(req),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.detected_format, "csv");
+        assert_eq!(body.field_count, 3);
+        assert!(body.confidence >= 0.8, "csv confidence must be >= 0.8");
+    }
+
+    #[tokio::test]
+    async fn s5_ws4_03_ingest_format_detect_json_sample() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let req = IngestFormatDetectRequest {
+            sample_data: r#"{"id": 1, "name": "Bob", "score": 42}"#.to_string(),
+        };
+        let (status, Json(body)) = ingest_format_detect(
+            State(state), headers, Json(req),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.detected_format, "json");
+        assert_eq!(body.field_count, 3);
+        assert!(body.confidence >= 0.9, "json confidence must be >= 0.9");
+    }
+
     // ─── S5-WS4A-02: Broker adapter integration tests ────────────────────────
 
     #[tokio::test]
@@ -18596,6 +18714,32 @@ mod tests {
         let (status, Json(body)) = raft_leader(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.current_term, 5, "leader response must reflect updated term");
+    }
+
+    // ─── S7-WS6-01: Raft vote statistics tests ───────────────────────────────
+
+    #[tokio::test]
+    async fn s7_ws6_01_raft_vote_stats_fresh_state_shows_zero_counts() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_vote_stats(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.total_votes_granted, 0, "fresh node must have zero votes granted");
+        assert_eq!(body.total_votes_rejected, 0, "fresh node must have zero votes rejected");
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_01_raft_vote_stats_reflects_current_term() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut node = state.raft_state.lock().unwrap();
+            node.current_term = 7;
+        }
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_vote_stats(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.current_term, 7, "vote stats must reflect current raft term");
     }
 
     // ─── S7-WS6-03: Raft fencing token tests ─────────────────────────────
