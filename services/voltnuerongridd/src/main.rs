@@ -1323,6 +1323,23 @@ struct RaftHeartbeatResponse {
     heartbeat_accepted: bool,
 }
 
+// ─── S7-WS6-03: Raft cluster member list structs ──────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RaftMemberEntry {
+    node_id: String,
+    role: String,
+    term: u64,
+    fencing_token: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RaftMemberListResponse {
+    status: &'static str,
+    member_count: usize,
+    members: Vec<RaftMemberEntry>,
+}
+
 // ─── S2-WS2-02: WAL forced checkpoint response ────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -1691,6 +1708,23 @@ struct ColumnarScanResponse {
     columns: Vec<ColumnarScanColumn>,
 }
 
+// ─── S4-WS3-02: Columnar projection query/response ───────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct ColumnarProjectQuery {
+    /// Comma-separated list of column names to project; empty = all columns.
+    columns: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ColumnarProjectResponse {
+    status: &'static str,
+    rows_scanned: usize,
+    columns_projected: usize,
+    elapsed_us: u128,
+    columns: Vec<ColumnarScanColumn>,
+}
+
 // S6-WS5-03: TLS runtime status
 #[derive(Serialize)]
 struct SecurityTlsStatusResponse {
@@ -1870,6 +1904,20 @@ struct ConnectorListResponse {
     status: &'static str,
     connector_count: usize,
     connectors: Vec<ConnectorPlugin>,
+}
+
+// ─── S5-E4A-01: Connector deregister structs ─────────────────────────────────
+
+#[derive(Deserialize)]
+struct ConnectorDeregisterRequest {
+    connector_id: String,
+}
+
+#[derive(Serialize)]
+struct ConnectorDeregisterResponse {
+    status: &'static str,
+    connector_id: String,
+    removed: bool,
 }
 
 // ─── S7-WS6-03: Raft fencing token struct ──────────────────────────────────────────
@@ -2921,6 +2969,7 @@ async fn main() {
         .route("/api/v1/cluster/raft/tick", post(raft_tick))
         .route("/api/v1/cluster/raft/log", get(raft_log))
         .route("/api/v1/cluster/raft/heartbeat", post(raft_heartbeat))
+        .route("/api/v1/cluster/raft/members", get(raft_member_list))
         // S7-WS6-03: Raft fencing token
         .route("/api/v1/cluster/raft/fence", get(raft_fence))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
@@ -2928,6 +2977,7 @@ async fn main() {
         .route("/api/v1/store/htap/export", post(store_htap_export))
         // S4-WS3-03: vectorized columnar scan
         .route("/api/v1/store/columnar/scan", get(store_columnar_scan))
+        .route("/api/v1/store/columnar/project", get(store_columnar_project))
         // S6-WS5-03: TLS runtime status
         .route("/api/v1/security/tls/status", get(security_tls_status))
         .route("/api/v1/security/tls/rotate", post(security_tls_rotate))
@@ -2967,6 +3017,7 @@ async fn main() {
         // S5-E4A-01: Connector SDK runtime load
         .route("/api/v1/connectors", get(connector_list))
         .route("/api/v1/connectors/register", post(connector_register))
+        .route("/api/v1/connectors/deregister", post(connector_deregister))
         .route("/api/v1/ai/policy/update", post(ai_policy_update))
         .route("/api/v1/ai/policy/stats", get(ai_policy_stats))
         .route("/api/v1/ai/request", post(ai_rate_check))
@@ -6571,6 +6622,27 @@ async fn raft_heartbeat(
     }))
 }
 
+// ─── S7-WS6-03: Raft cluster member list endpoint ────────────────────────────
+
+/// S7-WS6-03: Return the list of known Raft cluster members (scaffold: local node only).
+async fn raft_member_list(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<RaftMemberListResponse>) {
+    let node = state.raft_state.lock().expect("raft_state lock");
+    let member = RaftMemberEntry {
+        node_id: node.node_id.clone(),
+        role: format!("{:?}", node.role),
+        term: node.current_term,
+        fencing_token: node.fencing_token,
+    };
+    drop(node);
+    (StatusCode::OK, Json(RaftMemberListResponse {
+        status: "ok",
+        member_count: 1,
+        members: vec![member],
+    }))
+}
+
 // ─── S8-WS10-02: Driver session disconnect ────────────────────────────────────
 
 async fn driver_disconnect(
@@ -6625,6 +6697,28 @@ async fn connector_list(
     let connectors = state.connector_registry.lock().expect("connector_registry lock").clone();
     let connector_count = connectors.len();
     (StatusCode::OK, Json(ConnectorListResponse { status: "ok", connector_count, connectors }))
+}
+
+/// S5-E4A-01: Deregister a connector plugin by ID.
+async fn connector_deregister(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ConnectorDeregisterRequest>,
+) -> Result<(StatusCode, Json<ConnectorDeregisterResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let mut registry = state.connector_registry.lock().expect("connector_registry lock");
+    let before_len = registry.len();
+    registry.retain(|c| c.connector_id != req.connector_id);
+    let removed = registry.len() < before_len;
+    drop(registry);
+    Ok((
+        StatusCode::OK,
+        Json(ConnectorDeregisterResponse {
+            status: "ok",
+            connector_id: req.connector_id,
+            removed,
+        }),
+    ))
 }
 
 // ─── S7-WS6-03: Raft fencing token endpoint ──────────────────────────────────────────
@@ -9122,6 +9216,75 @@ async fn store_columnar_scan(
             status: "ok",
             rows_scanned: stats.rows_scanned,
             columns_materialized: stats.columns_materialized,
+            elapsed_us: stats.elapsed_us,
+            columns,
+        }),
+    ))
+}
+
+// ─── S4-WS3-02: Columnar column projection ───────────────────────────────────
+
+/// S4-WS3-02: Project specific columns from the columnar store.
+/// Accepts `?columns=a,b,c`; returns all when parameter is absent.
+async fn store_columnar_project(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<ColumnarProjectQuery>,
+) -> Result<(StatusCode, Json<ColumnarProjectResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_store_runtime_principal(&headers, &state, PrivilegeAction::Read, "store/columnar/project")?;
+    let (batch, stats) = {
+        use voltnuerongrid_store::columnar::vectorized_scan;
+        let rs = state.row_store.lock().expect("row_store lock columnar_project");
+        let snapshot_xid = rs.current_xid();
+        let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
+            .scan_at_snapshot(snapshot_xid)
+            .into_iter()
+            .map(|(k, d)| (k.to_string(), d.clone()))
+            .collect();
+        vectorized_scan(&raw_rows, 10_000)
+    };
+    // Build projection set — empty means "all columns"
+    let requested: Vec<String> = params
+        .columns
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+    let columns: Vec<ColumnarScanColumn> = batch
+        .column_names
+        .iter()
+        .filter(|name| requested.is_empty() || requested.contains(name))
+        .filter_map(|name| {
+            batch.columns.get(name).map(|cv| {
+                use voltnuerongrid_store::columnar::ColumnVector;
+                let type_hint = match cv {
+                    ColumnVector::Int64(_) => "int64",
+                    ColumnVector::Float64(_) => "float64",
+                    ColumnVector::Bool(_) => "bool",
+                    ColumnVector::Utf8(_) => "utf8",
+                    ColumnVector::Null(_) => "null",
+                };
+                let sample_values: Vec<String> = (0..cv.len().min(3))
+                    .filter_map(|i| cv.value_as_str(i))
+                    .collect();
+                ColumnarScanColumn {
+                    name: name.clone(),
+                    type_hint: type_hint.to_string(),
+                    row_count: cv.len(),
+                    sample_values,
+                }
+            })
+        })
+        .collect();
+    let columns_projected = columns.len();
+    Ok((
+        StatusCode::OK,
+        Json(ColumnarProjectResponse {
+            status: "ok",
+            rows_scanned: stats.rows_scanned,
+            columns_projected,
             elapsed_us: stats.elapsed_us,
             columns,
         }),
@@ -17258,6 +17421,95 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.event_count, 2);
         assert!(body.chain_valid, "2-event chain should be valid");
+    }
+
+    // ── S7-WS6-03: Raft member list endpoint ─────────────────────────────────
+    #[tokio::test]
+    async fn s7_ws6_03_raft_member_list_single_node() {
+        let state = state_with_key(Some("test-key"));
+        let (status, Json(body)) = raft_member_list(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.member_count, 1);
+        assert_eq!(body.members.len(), 1);
+        assert!(!body.members[0].node_id.is_empty(), "member must have a node_id");
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_03_raft_member_list_reflects_term() {
+        let state = state_with_key(Some("test-key"));
+        {
+            let mut node = state.raft_state.lock().unwrap();
+            node.current_term = 7;
+        }
+        let (status, Json(body)) = raft_member_list(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.members[0].term, 7);
+    }
+
+    // ── S4-WS3-02: Columnar project endpoint ─────────────────────────────────
+    #[tokio::test]
+    async fn s4_ws3_02_columnar_project_empty_store_returns_no_columns() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let params = ColumnarProjectQuery { columns: None };
+        let (status, Json(body)) = store_columnar_project(State(state), headers, Query(params)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.rows_scanned, 0);
+        assert_eq!(body.columns_projected, 0);
+    }
+
+    #[tokio::test]
+    async fn s4_ws3_02_columnar_project_returns_all_when_no_filter() {
+        let state = state_with_key(Some("test-key"));
+        // Insert a row so there are columns to materialise.
+        {
+            let mut rs = state.row_store.lock().unwrap();
+            let xid = rs.begin_xid();
+            let mut data = std::collections::HashMap::new();
+            data.insert("source".to_string(), "test".to_string());
+            data.insert("payload".to_string(), "hello".to_string());
+            rs.insert(xid, "row-1", data);
+        }
+        let headers = operator_headers("test-key", "admin");
+        let params = ColumnarProjectQuery { columns: None };
+        let (status, Json(body)) = store_columnar_project(State(state), headers, Query(params)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.rows_scanned > 0, "should have scanned rows");
+        assert!(body.columns_projected > 0, "should project all columns when no filter");
+    }
+
+    // ── S5-E4A-01: Connector deregister endpoint ──────────────────────────────
+    #[tokio::test]
+    async fn s5_e4a_01_deregister_known_connector_returns_removed_true() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        // Register first.
+        let req = ConnectorRegisterRequest {
+            connector_id: "conn-x".to_string(),
+            connector_type: "csv-source".to_string(),
+            version: "1.0".to_string(),
+            signed: Some(true),
+        };
+        connector_register(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
+        // Now deregister.
+        let dreq = ConnectorDeregisterRequest { connector_id: "conn-x".to_string() };
+        let (status, Json(body)) = connector_deregister(State(state.clone()), headers, Json(dreq)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.removed, "known connector must report removed = true");
+        assert_eq!(body.connector_id, "conn-x");
+        // Registry should now be empty.
+        let reg = state.connector_registry.lock().unwrap();
+        assert_eq!(reg.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn s5_e4a_01_deregister_unknown_connector_returns_removed_false() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let dreq = ConnectorDeregisterRequest { connector_id: "no-such-connector".to_string() };
+        let (status, Json(body)) = connector_deregister(State(state), headers, Json(dreq)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.removed, "unknown connector must report removed = false");
     }
 
 }

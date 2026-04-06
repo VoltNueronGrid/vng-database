@@ -43,6 +43,8 @@ pub struct SelectStatement {
     pub join: Option<JoinClause>,
     /// True when the raw SQL contains a UNION / UNION ALL set operation (S3-WS1-04).
     pub has_union: bool,
+    /// True when the raw SQL contains a correlated or scalar subquery `(SELECT …)` (S3-WS1-04).
+    pub has_subquery: bool,
     /// LIMIT value, if present.
     pub limit: Option<u64>,
 }
@@ -133,6 +135,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 let up = raw.to_ascii_uppercase();
                 if up.contains(" UNION ") {
                     stmt.has_union = true;
+                }
+                // Detect correlated / scalar subqueries: any `(SELECT …)` (S3-WS1-04).
+                if up.contains("(SELECT") || up.contains("( SELECT") {
+                    stmt.has_subquery = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -913,6 +919,45 @@ mod join_tests {
         }
     }
 }
+/// S3-WS1-04: Subquery / EXISTS detection tests.
+#[cfg(test)]
+mod subquery_detection_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_scalar_subquery_sets_has_subquery_true() {
+        let sql = "SELECT id, (SELECT MAX(price) FROM products) AS max_price FROM orders";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.has_subquery, "scalar (SELECT …) must set has_subquery = true");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn select_with_in_subquery_sets_has_subquery_true() {
+        let sql = "SELECT * FROM users WHERE id IN (SELECT user_id FROM admins)";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(s.has_subquery, "IN (SELECT …) must set has_subquery = true");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+
+    #[test]
+    fn plain_select_has_subquery_is_false() {
+        let sql = "SELECT * FROM users WHERE active = 1";
+        let stmt = parse_one(sql).unwrap();
+        if let Statement::Select(s) = stmt {
+            assert!(!s.has_subquery, "plain SELECT must have has_subquery = false");
+        } else {
+            panic!("expected Select statement");
+        }
+    }
+}
+
 /// S3-WS1-04: UNION / set-operation detection tests.
 #[cfg(test)]
 mod subquery_tests {
