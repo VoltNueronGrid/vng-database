@@ -214,6 +214,10 @@ pub enum LogicalPlan {
     Lateral {
         input: Box<LogicalPlan>,
     },
+    /// PIVOT or UNPIVOT clause for cross-tabulation (S3-WS1-30 has_pivot support).
+    Pivot {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -257,6 +261,7 @@ impl LogicalPlan {
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::WindowAgg { input } => input.primary_table(),
             LogicalPlan::Lateral { input } => input.primary_table(),
+            LogicalPlan::Pivot { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -316,6 +321,7 @@ impl LogicalPlan {
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::WindowAgg { .. } => true,
             LogicalPlan::Lateral { input } => input.has_aggregation(),
+            LogicalPlan::Pivot { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -649,6 +655,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
                     relative_cost: inner.relative_cost + 0.7,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Pivot { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.9) as u64,
+                    relative_cost: inner.relative_cost + 0.8,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1051,13 +1065,22 @@ impl QueryPlanner {
             after_json_op
         };
 
-        // Lateral wrapper (S3-WS1-29 has_lateral detection): outermost node.
-        if sel.has_lateral {
+        // Lateral wrapper (S3-WS1-29 has_lateral detection).
+        let after_lateral = if sel.has_lateral {
             LogicalPlan::Lateral {
                 input: Box::new(after_window_agg),
             }
         } else {
             after_window_agg
+        };
+
+        // Pivot wrapper (S3-WS1-30 has_pivot detection): outermost node.
+        if sel.has_pivot {
+            LogicalPlan::Pivot {
+                input: Box::new(after_lateral),
+            }
+        } else {
+            after_lateral
         }
     }
 
@@ -1791,5 +1814,25 @@ mod tests {
         let c = cost("SELECT a.id, b.val FROM accounts a, LATERAL (SELECT val FROM history WHERE history.acct = a.id LIMIT 1) b");
         assert_eq!(c.recommended_path, QueryPath::Olap, "LATERAL subquery should route to OLAP");
         assert!(c.relative_cost >= 0.7, "Lateral must carry at least 0.7 cost overhead");
+    }
+
+    // ── S3-WS1-30: Pivot node tests ──────────────────────────────────────────
+
+    #[test]
+    fn planner_pivot_select_produces_pivot_node() {
+        let p = plan("SELECT * FROM sales PIVOT (SUM(amount) FOR region IN ('East', 'West'))");
+        assert!(
+            matches!(&p, LogicalPlan::Pivot { .. }),
+            "PIVOT clause must produce outermost Pivot node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("sales"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_pivot_query_routes_to_olap() {
+        let c = cost("SELECT product, region, sales FROM quarterly_sales UNPIVOT (sales FOR region IN (q1, q2, q3, q4))");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "PIVOT/UNPIVOT query should route to OLAP");
+        assert!(c.relative_cost >= 0.8, "Pivot must carry at least 0.8 cost overhead");
     }
 }

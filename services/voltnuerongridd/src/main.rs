@@ -2765,6 +2765,16 @@ struct RowsKeyLongestResponse {
     row_count: usize,
 }
 
+// S3-WS1-30: rows/key/shortest struct
+
+#[derive(Debug, Serialize)]
+struct RowsKeyShortestResponse {
+    status: &'static str,
+    shortest_key: String,
+    key_length: usize,
+    row_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4159,6 +4169,8 @@ async fn main() {
         // S3-WS1-29: wal/write/count + rows/key/longest
         .route("/api/v1/store/wal/write/count", get(wal_write_count))
         .route("/api/v1/store/rows/key/longest", get(rows_key_longest))
+        // S3-WS1-30: rows/key/shortest (wal/age exists from S22)
+        .route("/api/v1/store/rows/key/shortest", get(rows_key_shortest))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9323,6 +9335,25 @@ async fn rows_key_longest(
         .to_string();
     let key_length = longest_key.len();
     Ok((StatusCode::OK, Json(RowsKeyLongestResponse { status: "ok", longest_key, key_length, row_count })))
+}
+
+// S3-WS1-30: rows/key/shortest endpoint
+async fn rows_key_shortest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsKeyShortestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_key_shortest");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let row_count = snapshot.len();
+    let shortest_key = snapshot.iter()
+        .map(|(k, _)| k.as_str())
+        .min_by_key(|k| k.len())
+        .unwrap_or("")
+        .to_string();
+    let key_length = shortest_key.len();
+    Ok((StatusCode::OK, Json(RowsKeyShortestResponse { status: "ok", shortest_key, key_length, row_count })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23005,6 +23036,49 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_key_longest(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-30: wal_age tests (reuse existing wal_age endpoint from S22)
+
+    #[tokio::test]
+    async fn s11_ws1_30_wal_age_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_age(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.sequence_span, 0, "fresh WAL must have zero sequence span");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_30_wal_age_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_age(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-30: rows_key_shortest tests
+
+    #[tokio::test]
+    async fn s11_ws1_30_rows_key_shortest_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_key_shortest(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.row_count, 0, "fresh store must return zero rows");
+        assert_eq!(body.key_length, 0, "empty store must have zero shortest key length");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_30_rows_key_shortest_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_key_shortest(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

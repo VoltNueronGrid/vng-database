@@ -109,6 +109,8 @@ pub struct SelectStatement {
     pub has_window_agg: bool,
     /// True when the query uses a LATERAL join or LATERAL subquery (S3-WS1-29).
     pub has_lateral: bool,
+    /// True when the query uses a PIVOT or UNPIVOT clause (S3-WS1-30).
+    pub has_pivot: bool,
 }
 
 /// A parsed INSERT statement.
@@ -329,6 +331,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect LATERAL join or LATERAL subquery (S3-WS1-29).
                 if up.contains("LATERAL") {
                     stmt.has_lateral = true;
+                }
+                // Detect PIVOT / UNPIVOT clause (S3-WS1-30).
+                if up.contains("PIVOT") {
+                    stmt.has_pivot = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2137,5 +2143,33 @@ mod lateral_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_lateral, "plain SELECT without LATERAL must have has_lateral = false");
+    }
+}
+
+// ─── S3-WS1-30: has_pivot tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod pivot_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_pivot_sets_has_pivot() {
+        let stmt = parse_one("SELECT * FROM sales PIVOT (SUM(amount) FOR region IN ('East', 'West'))").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_pivot, "PIVOT clause must set has_pivot = true");
+    }
+
+    #[test]
+    fn select_with_unpivot_sets_has_pivot() {
+        let stmt = parse_one("SELECT product, region, sales FROM quarterly_sales UNPIVOT (sales FOR region IN (q1, q2, q3, q4))").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_pivot, "UNPIVOT clause must set has_pivot = true");
+    }
+
+    #[test]
+    fn plain_select_has_pivot_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_pivot, "plain SELECT without PIVOT must have has_pivot = false");
     }
 }
