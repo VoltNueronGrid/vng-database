@@ -2790,6 +2790,21 @@ struct RowsCountAllResponse {
     total_count: usize,
 }
 
+// S3-WS1-32: wal/max/seq + rows/snapshot/size structs
+
+#[derive(Debug, Serialize)]
+struct WalMaxSeqResponse {
+    status: &'static str,
+    max_sequence: u64,
+    has_records: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsSnapshotSizeResponse {
+    status: &'static str,
+    snapshot_row_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4189,6 +4204,9 @@ async fn main() {
         // S3-WS1-31: wal/min/seq + rows/count/all
         .route("/api/v1/store/wal/min/seq", get(wal_min_seq))
         .route("/api/v1/store/rows/count/all", get(rows_count_all))
+        // S3-WS1-32: wal/max/seq + rows/snapshot/size
+        .route("/api/v1/store/wal/max/seq", get(wal_max_seq))
+        .route("/api/v1/store/rows/snapshot/size", get(rows_snapshot_size))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9398,6 +9416,32 @@ async fn rows_count_all(
     let total_count = rs.total_row_count();
     drop(rs);
     Ok((StatusCode::OK, Json(RowsCountAllResponse { status: "ok", total_count })))
+}
+
+// S3-WS1-32: wal/max/seq endpoint
+async fn wal_max_seq(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalMaxSeqResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_max_seq");
+    let records = wal.wal_records();
+    let max_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
+    let has_records = !records.is_empty();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalMaxSeqResponse { status: "ok", max_sequence, has_records })))
+}
+
+// S3-WS1-32: rows/snapshot/size endpoint
+async fn rows_snapshot_size(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsSnapshotSizeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_snapshot_size");
+    let snapshot_row_count = rs.total_row_count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsSnapshotSizeResponse { status: "ok", snapshot_row_count })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23166,6 +23210,49 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_count_all(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-32: wal_max_seq tests
+
+    #[tokio::test]
+    async fn s11_ws1_32_wal_max_seq_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_max_seq(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.has_records, "fresh WAL must have no records");
+        assert_eq!(body.max_sequence, 0, "fresh WAL must have max_sequence = 0");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_32_wal_max_seq_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_max_seq(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-32: rows_snapshot_size tests
+
+    #[tokio::test]
+    async fn s11_ws1_32_rows_snapshot_size_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_snapshot_size(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.snapshot_row_count, 0, "fresh store must have zero snapshot rows");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_32_rows_snapshot_size_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_snapshot_size(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

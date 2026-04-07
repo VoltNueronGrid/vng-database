@@ -222,6 +222,10 @@ pub enum LogicalPlan {
     Fetch {
         input: Box<LogicalPlan>,
     },
+    /// VALUES clause used as a row source / VALUES CTE (S3-WS1-32 has_values support).
+    Values {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -267,6 +271,7 @@ impl LogicalPlan {
             LogicalPlan::Lateral { input } => input.primary_table(),
             LogicalPlan::Pivot { input } => input.primary_table(),
             LogicalPlan::Fetch { input } => input.primary_table(),
+            LogicalPlan::Values { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -328,6 +333,7 @@ impl LogicalPlan {
             LogicalPlan::Lateral { input } => input.has_aggregation(),
             LogicalPlan::Pivot { input } => input.has_aggregation(),
             LogicalPlan::Fetch { input } => input.has_aggregation(),
+            LogicalPlan::Values { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -677,6 +683,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.05,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Values { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.02,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -1098,12 +1112,21 @@ impl QueryPlanner {
         };
 
         // Fetch wrapper (S3-WS1-31 has_fetch detection): outermost node.
-        if sel.has_fetch {
+        let after_fetch = if sel.has_fetch {
             LogicalPlan::Fetch {
                 input: Box::new(after_pivot),
             }
         } else {
             after_pivot
+        };
+
+        // Values wrapper (S3-WS1-32 has_values detection): outermost node.
+        if sel.has_values {
+            LogicalPlan::Values {
+                input: Box::new(after_fetch),
+            }
+        } else {
+            after_fetch
         }
     }
 
@@ -1877,5 +1900,24 @@ mod tests {
         let c = cost("SELECT name FROM employees ORDER BY salary DESC FETCH FIRST 10 ROWS ONLY");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "FETCH pagination should route to OLTP");
         assert!(c.relative_cost >= 0.05, "Fetch must carry at least 0.05 cost overhead");
+    }
+
+    // ── S3-WS1-32: Values node tests ──────────────────────────────────────────
+
+    #[test]
+    fn planner_values_select_produces_values_node() {
+        let p = plan("SELECT col FROM (VALUES (10),(20),(30)) AS t(col)");
+        assert!(
+            matches!(&p, LogicalPlan::Values { .. }),
+            "VALUES row source must produce outermost Values node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_values_query_routes_to_oltp() {
+        let c = cost("SELECT a, b FROM (VALUES (1,2),(3,4)) AS v(a,b)");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "VALUES row source should route to OLTP");
+        assert!(c.relative_cost >= 0.02, "Values must carry at least 0.02 cost overhead");
     }
 }

@@ -113,6 +113,8 @@ pub struct SelectStatement {
     pub has_pivot: bool,
     /// True when the query uses a FETCH NEXT/FIRST pagination clause (S3-WS1-31).
     pub has_fetch: bool,
+    /// True when the query uses a VALUES clause as a row source / VALUES CTE (S3-WS1-32).
+    pub has_values: bool,
 }
 
 /// A parsed INSERT statement.
@@ -341,6 +343,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect FETCH NEXT / FETCH FIRST pagination clause (S3-WS1-31).
                 if up.contains("FETCH NEXT") || up.contains("FETCH FIRST") {
                     stmt.has_fetch = true;
+                }
+                // Detect VALUES clause used as a row source / VALUES CTE (S3-WS1-32).
+                if up.contains("VALUES (") {
+                    stmt.has_values = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2205,5 +2211,33 @@ mod fetch_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_fetch, "plain SELECT without FETCH must have has_fetch = false");
+    }
+}
+
+// ─── S3-WS1-32: has_values tests ───────────────────────────────────────────
+
+#[cfg(test)]
+mod values_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_values_cte_sets_has_values() {
+        let stmt = parse_one("SELECT a, b FROM (VALUES (1,2),(3,4)) AS v(a,b)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_values, "VALUES row source must set has_values = true");
+    }
+
+    #[test]
+    fn select_with_inline_values_sets_has_values() {
+        let stmt = parse_one("SELECT col FROM (VALUES (10),(20),(30)) AS t(col)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_values, "Inline VALUES must set has_values = true");
+    }
+
+    #[test]
+    fn plain_select_has_values_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_values, "plain SELECT without VALUES must have has_values = false");
     }
 }
