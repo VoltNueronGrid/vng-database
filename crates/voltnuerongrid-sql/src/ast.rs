@@ -79,6 +79,8 @@ pub struct SelectStatement {
     pub has_cast: bool,
     /// True when the query contains a NULLIF() expression (S3-WS1-14).
     pub has_nullif: bool,
+    /// True when the query contains a string function (LENGTH, UPPER, LOWER, SUBSTR) (S3-WS1-15).
+    pub has_string_fn: bool,
 }
 
 /// A parsed INSERT statement.
@@ -236,6 +238,11 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect NULLIF() expression anywhere in the query (S3-WS1-14).
                 if up_trim.contains("NULLIF(") {
                     stmt.has_nullif = true;
+                }
+                // Detect string functions anywhere in the query (S3-WS1-15).
+                if up_trim.contains("LENGTH(") || up_trim.contains("UPPER(")
+                    || up_trim.contains("LOWER(") || up_trim.contains("SUBSTR(") {
+                    stmt.has_string_fn = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1633,5 +1640,33 @@ mod nullif_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_nullif, "plain SELECT without NULLIF must have has_nullif = false");
+    }
+}
+
+// ─── S3-WS1-15: has_string_fn tests ─────────────────────────────────────────
+
+#[cfg(test)]
+mod string_fn_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_upper_sets_has_string_fn() {
+        let stmt = parse_one("SELECT UPPER(name) FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_string_fn, "UPPER() expression must set has_string_fn = true");
+    }
+
+    #[test]
+    fn string_fn_detection_lower_case_insensitive() {
+        let stmt = parse_one("SELECT lower(email) FROM accounts").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_string_fn, "lowercase lower() must set has_string_fn = true");
+    }
+
+    #[test]
+    fn plain_select_has_string_fn_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_string_fn, "plain SELECT without string functions must have has_string_fn = false");
     }
 }

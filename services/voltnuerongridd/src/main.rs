@@ -2460,6 +2460,39 @@ struct RowsModifiedResponse {
     keys: Vec<String>,
 }
 
+// ─── S11-WS1-15: WAL range structs ───────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct WalRangeQuery {
+    from_seq: u64,
+    to_seq: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalRangeEntry {
+    sequence: u64,
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WalRangeResponse {
+    status: &'static str,
+    record_count: usize,
+    from_seq: u64,
+    to_seq: u64,
+    entries: Vec<WalRangeEntry>,
+}
+
+// ─── S11-WS1-15: Rows XID structs ────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowsXidResponse {
+    status: &'static str,
+    current_xid: u64,
+    next_xid: u64,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3740,6 +3773,8 @@ async fn main() {
         .route("/api/v1/store/wal/seq", get(wal_seq))
         // S11-WS1-14: WAL head records (first N entries)
         .route("/api/v1/store/wal/head", get(wal_head))
+        // S11-WS1-15: WAL range (records within a sequence range)
+        .route("/api/v1/store/wal/range", get(wal_range))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3798,6 +3833,8 @@ async fn main() {
         .route("/api/v1/store/rows/version", get(row_store_version))
         // S11-WS1-14: Rows modified after a given transaction ID
         .route("/api/v1/store/rows/modified", get(rows_modified))
+        // S11-WS1-15: Row store current XID info
+        .route("/api/v1/store/rows/xid", get(rows_xid))
         // S11-WS1-12: Row store page-level stats
         .route("/api/v1/store/rows/page/stats", get(rows_page_stats))
         // S5-WS4A-02: Broker adapter status + flush
@@ -8332,6 +8369,56 @@ async fn rows_modified(
         modified_count,
         since_xid: params.since_xid,
         keys,
+    })))
+}
+
+// ─── S11-WS1-15: WAL range endpoint ──────────────────────────────────────────
+
+/// S11-WS1-15: Return WAL records within a given sequence range [from_seq, to_seq].
+async fn wal_range(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WalRangeQuery>,
+) -> Result<(StatusCode, Json<WalRangeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_range");
+    let all_records = wal.wal_records();
+    let to_seq = params.to_seq.unwrap_or(u64::MAX);
+    let entries: Vec<WalRangeEntry> = all_records
+        .iter()
+        .filter(|r| r.sequence >= params.from_seq && r.sequence <= to_seq)
+        .map(|r| WalRangeEntry {
+            sequence: r.sequence,
+            key: r.key.clone(),
+            value: r.value.clone(),
+        })
+        .collect();
+    let record_count = entries.len();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalRangeResponse {
+        status: "ok",
+        record_count,
+        from_seq: params.from_seq,
+        to_seq,
+        entries,
+    })))
+}
+
+// ─── S11-WS1-15: Rows XID endpoint ───────────────────────────────────────────
+
+/// S11-WS1-15: Return the current transaction ID and next expected XID.
+async fn rows_xid(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsXidResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_xid");
+    let current_xid = rs.current_xid();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsXidResponse {
+        status: "ok",
+        current_xid,
+        next_xid: current_xid + 1,
     })))
 }
 
@@ -21389,6 +21476,56 @@ mod tests {
             headers,
             Query(RowsModifiedQuery { since_xid: 1 }),
         ).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-15: WAL range endpoint tests ─────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_15_wal_range_empty_wal_returns_zero_entries() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_range(
+            State(state),
+            headers,
+            Query(WalRangeQuery { from_seq: 0, to_seq: None }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 0, "empty WAL must return zero range entries");
+        assert!(body.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_15_wal_range_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_range(
+            State(state),
+            headers,
+            Query(WalRangeQuery { from_seq: 0, to_seq: Some(100) }),
+        ).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-15: Rows XID endpoint tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_15_rows_xid_fresh_state_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_xid(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.current_xid, 0, "fresh row store must have current_xid 0");
+        assert_eq!(body.next_xid, 1, "next_xid must be current_xid + 1");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_15_rows_xid_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_xid(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

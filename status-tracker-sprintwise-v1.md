@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 39 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 144→147, exec 52→54, service 385→389 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_string_fn: bool` field + detection | `voltnuerongrid-sql` | Detects `LENGTH(`, `UPPER(`, `LOWER(`, `SUBSTR(` in query (`S3-WS1-15`) | 3 (`string_fn_tests` module) |
+| `StringFn { input }` plan node | `voltnuerongrid-exec` | OLTP pass-through node; +0.1 cost | 2 |
+| `GET /api/v1/store/wal/range` | `voltnuerongridd` | WAL records within `[from_seq, to_seq]` range (operator-auth) | 2 |
+| `GET /api/v1/store/rows/xid` | `voltnuerongridd` | Returns `current_xid` and `next_xid` from MVCC row store (operator-auth) | 2 |
+
+---
+
 ## Session 38 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

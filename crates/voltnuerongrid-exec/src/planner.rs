@@ -122,6 +122,10 @@ pub enum LogicalPlan {
     Nullif {
         input: Box<LogicalPlan>,
     },
+    /// String function expression (LENGTH/UPPER/LOWER/SUBSTR) (from S3-WS1-15 has_string_fn support).
+    StringFn {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -181,6 +185,7 @@ impl LogicalPlan {
             LogicalPlan::Coalesce { input } => input.primary_table(),
             LogicalPlan::Cast { input } => input.primary_table(),
             LogicalPlan::Nullif { input } => input.primary_table(),
+            LogicalPlan::StringFn { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -225,6 +230,7 @@ impl LogicalPlan {
             LogicalPlan::Coalesce { input } => input.has_aggregation(),
             LogicalPlan::Cast { input } => input.has_aggregation(),
             LogicalPlan::Nullif { input } => input.has_aggregation(),
+            LogicalPlan::StringFn { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -439,6 +445,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.15,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::StringFn { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.1,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -707,12 +721,21 @@ impl QueryPlanner {
         };
 
         // Nullif wrapper (S3-WS1-14 has_nullif detection): outermost node.
-        if sel.has_nullif {
+        let after_nullif = if sel.has_nullif {
             LogicalPlan::Nullif {
                 input: Box::new(after_cast),
             }
         } else {
             after_cast
+        };
+
+        // StringFn wrapper (S3-WS1-15 has_string_fn detection): outermost node.
+        if sel.has_string_fn {
+            LogicalPlan::StringFn {
+                input: Box::new(after_nullif),
+            }
+        } else {
+            after_nullif
         }
     }
 
@@ -1160,5 +1183,23 @@ mod tests {
         let c = cost("SELECT NULLIF(score, 0) FROM results");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "NULLIF should route to OLTP");
         assert!(c.relative_cost >= 0.15, "Nullif must carry at least 0.15 cost overhead");
+    }
+
+    #[test]
+    fn planner_string_fn_select_produces_string_fn_node() {
+        let p = plan("SELECT UPPER(name) FROM users");
+        assert!(
+            matches!(&p, LogicalPlan::StringFn { .. }),
+            "UPPER() query should produce outermost StringFn node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_string_fn_query_routes_to_oltp() {
+        let c = cost("SELECT LENGTH(name) FROM users");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "string fn should route to OLTP");
+        assert!(c.relative_cost >= 0.1, "StringFn must carry at least 0.1 cost overhead");
     }
 }
