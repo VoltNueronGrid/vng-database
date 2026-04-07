@@ -2748,6 +2748,23 @@ struct WalEntryLatestResponse {
     entry_sequence: u64,
 }
 
+// S3-WS1-29: wal/write/count + rows/key/longest structs
+
+#[derive(Debug, Serialize)]
+struct WalWriteCountResponse {
+    status: &'static str,
+    write_count: usize,
+    total_records: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsKeyLongestResponse {
+    status: &'static str,
+    longest_key: String,
+    key_length: usize,
+    row_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4139,6 +4156,9 @@ async fn main() {
         // S3-WS1-28: rows/field/count + wal/entry/latest
         .route("/api/v1/store/rows/field/count", get(rows_field_count))
         .route("/api/v1/store/wal/entry/latest", get(wal_entry_latest))
+        // S3-WS1-29: wal/write/count + rows/key/longest
+        .route("/api/v1/store/wal/write/count", get(wal_write_count))
+        .route("/api/v1/store/rows/key/longest", get(rows_key_longest))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9270,6 +9290,39 @@ async fn wal_entry_latest(
     let has_entry = !records.is_empty();
     drop(wal);
     Ok((StatusCode::OK, Json(WalEntryLatestResponse { status: "ok", has_entry, entry_sequence })))
+}
+
+// S3-WS1-29: wal/write/count endpoint
+async fn wal_write_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalWriteCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_write_count");
+    let records = wal.wal_records().to_vec();
+    drop(wal);
+    let total_records = records.len();
+    let write_count = records.iter().filter(|r| r.value != "__deleted__").count();
+    Ok((StatusCode::OK, Json(WalWriteCountResponse { status: "ok", write_count, total_records })))
+}
+
+// S3-WS1-29: rows/key/longest endpoint
+async fn rows_key_longest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsKeyLongestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_key_longest");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let row_count = snapshot.len();
+    let longest_key = snapshot.iter()
+        .map(|(k, _)| k.as_str())
+        .max_by_key(|k| k.len())
+        .unwrap_or("")
+        .to_string();
+    let key_length = longest_key.len();
+    Ok((StatusCode::OK, Json(RowsKeyLongestResponse { status: "ok", longest_key, key_length, row_count })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -22909,6 +22962,49 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = wal_entry_latest(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-29: wal_write_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_29_wal_write_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_write_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.write_count, 0, "fresh WAL must have zero writes");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_29_wal_write_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_write_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-29: rows_key_longest tests
+
+    #[tokio::test]
+    async fn s11_ws1_29_rows_key_longest_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_key_longest(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.row_count, 0, "fresh store must return zero rows");
+        assert_eq!(body.key_length, 0, "empty store must have zero longest key length");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_29_rows_key_longest_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_key_longest(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

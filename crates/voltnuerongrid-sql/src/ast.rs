@@ -107,6 +107,8 @@ pub struct SelectStatement {
     pub has_json_op: bool,
     /// True when the query uses a window aggregate function (COUNT/SUM/AVG/ROW_NUMBER OVER ...) (S3-WS1-28).
     pub has_window_agg: bool,
+    /// True when the query uses a LATERAL join or LATERAL subquery (S3-WS1-29).
+    pub has_lateral: bool,
 }
 
 /// A parsed INSERT statement.
@@ -323,6 +325,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect window aggregate function COUNT/SUM/AVG/ROW_NUMBER OVER (...) (S3-WS1-28).
                 if (up.contains("COUNT(") || up.contains("SUM(") || up.contains("AVG(") || up.contains("ROW_NUMBER")) && up.contains("OVER") {
                     stmt.has_window_agg = true;
+                }
+                // Detect LATERAL join or LATERAL subquery (S3-WS1-29).
+                if up.contains("LATERAL") {
+                    stmt.has_lateral = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2103,5 +2109,33 @@ mod window_agg_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_window_agg, "plain SELECT without window agg must have has_window_agg = false");
+    }
+}
+
+// ─── S3-WS1-29: has_lateral tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod lateral_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_lateral_join_sets_has_lateral() {
+        let stmt = parse_one("SELECT u.name, o.total FROM users u JOIN LATERAL (SELECT SUM(amount) AS total FROM orders WHERE orders.user_id = u.id) o ON true").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_lateral, "LATERAL JOIN must set has_lateral = true");
+    }
+
+    #[test]
+    fn select_with_lateral_subquery_sets_has_lateral() {
+        let stmt = parse_one("SELECT a.id, b.val FROM accounts a, LATERAL (SELECT val FROM history WHERE history.acct = a.id LIMIT 1) b").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_lateral, "LATERAL subquery must set has_lateral = true");
+    }
+
+    #[test]
+    fn plain_select_has_lateral_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_lateral, "plain SELECT without LATERAL must have has_lateral = false");
     }
 }

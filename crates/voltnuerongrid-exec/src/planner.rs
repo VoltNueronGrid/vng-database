@@ -210,6 +210,10 @@ pub enum LogicalPlan {
     WindowAgg {
         input: Box<LogicalPlan>,
     },
+    /// LATERAL join or LATERAL subquery (S3-WS1-29 has_lateral support).
+    Lateral {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -252,6 +256,7 @@ impl LogicalPlan {
             LogicalPlan::JsonOp { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::WindowAgg { input } => input.primary_table(),
+            LogicalPlan::Lateral { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -310,6 +315,7 @@ impl LogicalPlan {
             LogicalPlan::JsonOp { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::WindowAgg { .. } => true,
+            LogicalPlan::Lateral { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -635,6 +641,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 1.5,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Lateral { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
+                    relative_cost: inner.relative_cost + 0.7,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1028,13 +1042,22 @@ impl QueryPlanner {
             after_regexp
         };
 
-        // WindowAgg wrapper (S3-WS1-28 has_window_agg detection): outermost node.
-        if sel.has_window_agg {
+        // WindowAgg wrapper (S3-WS1-28 has_window_agg detection).
+        let after_window_agg = if sel.has_window_agg {
             LogicalPlan::WindowAgg {
                 input: Box::new(after_json_op),
             }
         } else {
             after_json_op
+        };
+
+        // Lateral wrapper (S3-WS1-29 has_lateral detection): outermost node.
+        if sel.has_lateral {
+            LogicalPlan::Lateral {
+                input: Box::new(after_window_agg),
+            }
+        } else {
+            after_window_agg
         }
     }
 
@@ -1748,5 +1771,25 @@ mod tests {
         let c = cost("SELECT ROW_NUMBER() OVER (ORDER BY salary DESC) FROM staff");
         assert_eq!(c.recommended_path, QueryPath::Olap, "Window aggregate should route to OLAP");
         assert!(c.relative_cost >= 1.5, "WindowAgg must carry at least 1.5 cost overhead");
+    }
+
+    // ── S3-WS1-29: Lateral node tests ─────────────────────────────────────────
+
+    #[test]
+    fn planner_lateral_select_produces_lateral_node() {
+        let p = plan("SELECT u.name, o.total FROM users u JOIN LATERAL (SELECT SUM(amount) AS total FROM orders WHERE orders.user_id = u.id) o ON true");
+        assert!(
+            matches!(&p, LogicalPlan::Lateral { .. }),
+            "LATERAL join must produce outermost Lateral node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_lateral_query_routes_to_olap() {
+        let c = cost("SELECT a.id, b.val FROM accounts a, LATERAL (SELECT val FROM history WHERE history.acct = a.id LIMIT 1) b");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "LATERAL subquery should route to OLAP");
+        assert!(c.relative_cost >= 0.7, "Lateral must carry at least 0.7 cost overhead");
     }
 }
