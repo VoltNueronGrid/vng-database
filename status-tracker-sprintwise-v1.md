@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 58 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 201→204, exec 90→92, service 461→465 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_full_text_search: bool` field + detection | `voltnuerongrid-sql` | Detects `MATCH(` / `@@` full-text patterns (`S3-WS1-34`) | 3 (`full_text_search_tests` module) |
+| `FullTextSearch { input }` plan node | `voltnuerongrid-exec` | OLAP node; 0.3× row selectivity, +0.60 cost | 2 |
+| `GET /api/v1/store/wal/size/bytes` | `voltnuerongridd` | WAL size estimate in bytes (operator-auth) | 2 |
+| `GET /api/v1/store/rows/distinct/count` | `voltnuerongridd` | Distinct row count from MVCC store (operator-auth) | 2 |
+
+---
+
 ## Session 57 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

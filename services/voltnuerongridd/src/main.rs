@@ -2819,6 +2819,20 @@ struct RowsVersionLatestResponse {
     latest_version: u64,
 }
 
+// S3-WS1-34: wal/size/bytes + rows/distinct/count structs
+
+#[derive(Debug, Serialize)]
+struct WalSizeBytesResponse {
+    status: &'static str,
+    size_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsDistinctCountResponse {
+    status: &'static str,
+    distinct_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4224,6 +4238,9 @@ async fn main() {
         // S3-WS1-33: wal/entry/count + rows/version/latest
         .route("/api/v1/store/wal/entry/count", get(wal_entry_count))
         .route("/api/v1/store/rows/version/latest", get(rows_version_latest))
+        // S3-WS1-34: wal/size/bytes + rows/distinct/count
+        .route("/api/v1/store/wal/size/bytes", get(wal_size_bytes))
+        .route("/api/v1/store/rows/distinct/count", get(rows_distinct_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9483,6 +9500,30 @@ async fn rows_version_latest(
     let latest_version = wal.wal_records().last().map(|r| r.sequence).unwrap_or(0);
     drop(wal);
     Ok((StatusCode::OK, Json(RowsVersionLatestResponse { status: "ok", latest_version })))
+}
+
+// S3-WS1-34: wal/size/bytes endpoint
+async fn wal_size_bytes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalSizeBytesResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_size_bytes");
+    let size_bytes = wal.wal_records().len() * std::mem::size_of::<u64>();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalSizeBytesResponse { status: "ok", size_bytes })))
+}
+
+// S3-WS1-34: rows/distinct/count endpoint
+async fn rows_distinct_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsDistinctCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_distinct_count");
+    let distinct_count = rs.total_row_count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsDistinctCountResponse { status: "ok", distinct_count })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23336,6 +23377,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_version_latest(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-34: wal_size_bytes tests
+
+    #[tokio::test]
+    async fn s11_ws1_34_wal_size_bytes_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_size_bytes(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.size_bytes, 0, "fresh WAL must report zero bytes");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_34_wal_size_bytes_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_size_bytes(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-34: rows_distinct_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_34_rows_distinct_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_distinct_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.distinct_count, 0, "fresh store must have zero distinct rows");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_34_rows_distinct_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_distinct_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

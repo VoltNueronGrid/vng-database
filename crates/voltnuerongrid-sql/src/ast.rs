@@ -117,6 +117,8 @@ pub struct SelectStatement {
     pub has_values: bool,
     /// True when the query uses a CROSS JOIN expression (S3-WS1-33).
     pub has_cross_join: bool,
+    /// True when the query uses a full-text search predicate (MATCH/AGAINST or @@) (S3-WS1-34).
+    pub has_full_text_search: bool,
 }
 
 /// A parsed INSERT statement.
@@ -353,6 +355,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect CROSS JOIN expression (S3-WS1-33).
                 if up.contains("CROSS JOIN") {
                     stmt.has_cross_join = true;
+                }
+                // Detect full-text search predicate MATCH/AGAINST or @@ (S3-WS1-34).
+                if up.contains("MATCH (") || up.contains(" @@ ") || up.contains("MATCH(") {
+                    stmt.has_full_text_search = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2273,5 +2279,33 @@ mod cross_join_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_cross_join, "plain SELECT without CROSS JOIN must have has_cross_join = false");
+    }
+}
+
+// ─── S3-WS1-34: has_full_text_search tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod full_text_search_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_match_against_sets_has_full_text_search() {
+        let stmt = parse_one("SELECT id, title FROM articles WHERE MATCH (title, body) AGAINST ('database engine')").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_full_text_search, "MATCH ... AGAINST must set has_full_text_search = true");
+    }
+
+    #[test]
+    fn select_with_tsvector_sets_has_full_text_search() {
+        let stmt = parse_one("SELECT id FROM docs WHERE to_tsvector(content) @@ plainto_tsquery('search')").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_full_text_search, "@@ full-text operator must set has_full_text_search = true");
+    }
+
+    #[test]
+    fn plain_select_has_full_text_search_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_full_text_search, "plain SELECT without full-text search must have has_full_text_search = false");
     }
 }

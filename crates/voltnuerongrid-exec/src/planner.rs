@@ -230,6 +230,10 @@ pub enum LogicalPlan {
     CrossJoin {
         input: Box<LogicalPlan>,
     },
+    /// Full-text search predicate (MATCH/AGAINST or @@) (S3-WS1-34 has_full_text_search support).
+    FullTextSearch {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -277,6 +281,7 @@ impl LogicalPlan {
             LogicalPlan::Fetch { input } => input.primary_table(),
             LogicalPlan::Values { input } => input.primary_table(),
             LogicalPlan::CrossJoin { input } => input.primary_table(),
+            LogicalPlan::FullTextSearch { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -340,6 +345,7 @@ impl LogicalPlan {
             LogicalPlan::Fetch { input } => input.has_aggregation(),
             LogicalPlan::Values { input } => input.has_aggregation(),
             LogicalPlan::CrossJoin { input } => input.has_aggregation(),
+            LogicalPlan::FullTextSearch { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -705,6 +711,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows * inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.30,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::FullTextSearch { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.3) as u64,
+                    relative_cost: inner.relative_cost + 0.60,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1143,13 +1157,22 @@ impl QueryPlanner {
             after_fetch
         };
 
-        // CrossJoin wrapper (S3-WS1-33 has_cross_join detection): outermost node.
-        if sel.has_cross_join {
+        // CrossJoin wrapper (S3-WS1-33 has_cross_join detection).
+        let after_cross_join = if sel.has_cross_join {
             LogicalPlan::CrossJoin {
                 input: Box::new(after_values),
             }
         } else {
             after_values
+        };
+
+        // FullTextSearch wrapper (S3-WS1-34 has_full_text_search detection): outermost node.
+        if sel.has_full_text_search {
+            LogicalPlan::FullTextSearch {
+                input: Box::new(after_cross_join),
+            }
+        } else {
+            after_cross_join
         }
     }
 
@@ -1961,5 +1984,24 @@ mod tests {
         let c = cost("SELECT x, y FROM t1 CROSS JOIN t2 WHERE t1.id < 10");
         assert_eq!(c.recommended_path, QueryPath::Olap, "CROSS JOIN should route to OLAP");
         assert!(c.relative_cost >= 0.30, "CrossJoin must carry at least 0.30 cost overhead");
+    }
+
+    // ── S3-WS1-34: FullTextSearch node tests ───────────────────────────────────
+
+    #[test]
+    fn planner_full_text_search_produces_full_text_search_node() {
+        let p = plan("SELECT id, title FROM articles WHERE MATCH (title, body) AGAINST ('database engine')");
+        assert!(
+            matches!(&p, LogicalPlan::FullTextSearch { .. }),
+            "MATCH/AGAINST must produce outermost FullTextSearch node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_full_text_search_routes_to_olap() {
+        let c = cost("SELECT id FROM docs WHERE to_tsvector(content) @@ plainto_tsquery('search')");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "full-text search should route to OLAP");
+        assert!(c.relative_cost >= 0.60, "FullTextSearch must carry at least 0.60 cost overhead");
     }
 }
