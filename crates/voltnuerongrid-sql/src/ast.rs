@@ -83,6 +83,8 @@ pub struct SelectStatement {
     pub has_string_fn: bool,
     /// True when the query contains a date/time function (NOW, DATE_TRUNC, EXTRACT) (S3-WS1-16).
     pub has_date_fn: bool,
+    /// True when the query contains a string concatenation (CONCAT() or || operator) (S3-WS1-17).
+    pub has_concat: bool,
 }
 
 /// A parsed INSERT statement.
@@ -250,6 +252,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up_trim.contains("NOW(") || up_trim.contains("DATE_TRUNC(")
                     || up_trim.contains("EXTRACT(") {
                     stmt.has_date_fn = true;
+                }
+                // Detect string concatenation anywhere in the query (S3-WS1-17).
+                if up_trim.contains("CONCAT(") || up.contains(" || ") {
+                    stmt.has_concat = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1703,5 +1709,33 @@ mod date_fn_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_date_fn, "plain SELECT without date functions must have has_date_fn = false");
+    }
+}
+
+// ─── S3-WS1-17: has_concat tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod concat_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_concat_fn_sets_has_concat() {
+        let stmt = parse_one("SELECT CONCAT(first_name, ' ', last_name) FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_concat, "CONCAT() expression must set has_concat = true");
+    }
+
+    #[test]
+    fn concat_detection_pipe_operator() {
+        let stmt = parse_one("SELECT first_name || ' ' || last_name FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_concat, "|| concat operator must set has_concat = true");
+    }
+
+    #[test]
+    fn plain_select_has_concat_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_concat, "plain SELECT without CONCAT must have has_concat = false");
     }
 }

@@ -2511,6 +2511,25 @@ struct RowsVisibleResponse {
     visible_row_count: usize,
 }
 
+// ─── S11-WS1-17: WAL latest structs ──────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalLatestResponse {
+    status: &'static str,
+    sequence: u64,
+    key: String,
+    value: String,
+    has_record: bool,
+}
+
+// ─── S11-WS1-17: Rows total structs ──────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowsTotalResponse {
+    status: &'static str,
+    total_row_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3795,6 +3814,8 @@ async fn main() {
         .route("/api/v1/store/wal/range", get(wal_range))
         // S11-WS1-16: WAL size estimate
         .route("/api/v1/store/wal/size", get(wal_size))
+        // S11-WS1-17: WAL latest single record
+        .route("/api/v1/store/wal/latest", get(wal_latest))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3857,6 +3878,8 @@ async fn main() {
         .route("/api/v1/store/rows/xid", get(rows_xid))
         // S11-WS1-16: Visible row count at current snapshot
         .route("/api/v1/store/rows/visible", get(rows_visible))
+        // S11-WS1-17: Total row count (all versions)
+        .route("/api/v1/store/rows/total", get(rows_total))
         // S11-WS1-12: Row store page-level stats
         .route("/api/v1/store/rows/page/stats", get(rows_page_stats))
         // S5-WS4A-02: Broker adapter status + flush
@@ -8483,6 +8506,54 @@ async fn rows_visible(
         status: "ok",
         snapshot_xid,
         visible_row_count,
+    })))
+}
+
+// ─── S11-WS1-17: WAL latest endpoint ─────────────────────────────────────────
+
+/// S11-WS1-17: Return the single latest (highest-sequence) WAL record.
+async fn wal_latest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_latest");
+    let records = wal.wal_records();
+    let resp = if let Some(r) = records.last() {
+        WalLatestResponse {
+            status: "ok",
+            sequence: r.sequence,
+            key: r.key.clone(),
+            value: r.value.clone(),
+            has_record: true,
+        }
+    } else {
+        WalLatestResponse {
+            status: "ok",
+            sequence: 0,
+            key: String::new(),
+            value: String::new(),
+            has_record: false,
+        }
+    };
+    drop(wal);
+    Ok((StatusCode::OK, Json(resp)))
+}
+
+// ─── S11-WS1-17: Rows total endpoint ─────────────────────────────────────────
+
+/// S11-WS1-17: Return total row count across all MVCC versions (including tombstones).
+async fn rows_total(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsTotalResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_total");
+    let total_row_count = rs.total_row_count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsTotalResponse {
+        status: "ok",
+        total_row_count,
     })))
 }
 
@@ -21632,6 +21703,47 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_visible(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-17: WAL latest endpoint tests ────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_17_wal_latest_empty_wal_has_no_record() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_latest(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.has_record, "empty WAL must return has_record = false");
+        assert_eq!(body.sequence, 0, "empty WAL sequence must be 0");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_17_wal_latest_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_latest(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-17: Rows total endpoint tests ────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_17_rows_total_fresh_store_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_total(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_row_count, 0, "fresh store must have zero total rows");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_17_rows_total_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_total(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

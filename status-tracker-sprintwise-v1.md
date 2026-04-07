@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 41 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 150→153, exec 56→58, service 393→397 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_concat: bool` field + detection | `voltnuerongrid-sql` | Detects `CONCAT(` and `||` pipe operator in query (`S3-WS1-17`) | 3 (`concat_tests` module) |
+| `Concat { input }` plan node | `voltnuerongrid-exec` | OLTP pass-through node; +0.08 cost | 2 |
+| `GET /api/v1/store/wal/latest` | `voltnuerongridd` | Last WAL record or `has_record=false` when empty (operator-auth) | 2 |
+| `GET /api/v1/store/rows/total` | `voltnuerongridd` | Total row count across all MVCC versions incl. tombstones (operator-auth) | 2 |
+
+---
+
 ## Session 40 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

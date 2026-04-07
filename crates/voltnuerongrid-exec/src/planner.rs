@@ -130,6 +130,10 @@ pub enum LogicalPlan {
     DateFn {
         input: Box<LogicalPlan>,
     },
+    /// String concatenation expression (CONCAT/||) (from S3-WS1-17 has_concat support).
+    Concat {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -191,6 +195,7 @@ impl LogicalPlan {
             LogicalPlan::Nullif { input } => input.primary_table(),
             LogicalPlan::StringFn { input } => input.primary_table(),
             LogicalPlan::DateFn { input } => input.primary_table(),
+            LogicalPlan::Concat { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -237,6 +242,7 @@ impl LogicalPlan {
             LogicalPlan::Nullif { input } => input.has_aggregation(),
             LogicalPlan::StringFn { input } => input.has_aggregation(),
             LogicalPlan::DateFn { input } => input.has_aggregation(),
+            LogicalPlan::Concat { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -467,6 +473,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.12,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Concat { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.08,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -753,12 +767,21 @@ impl QueryPlanner {
         };
 
         // DateFn wrapper (S3-WS1-16 has_date_fn detection): outermost node.
-        if sel.has_date_fn {
+        let after_date_fn = if sel.has_date_fn {
             LogicalPlan::DateFn {
                 input: Box::new(after_string_fn),
             }
         } else {
             after_string_fn
+        };
+
+        // Concat wrapper (S3-WS1-17 has_concat detection): outermost node.
+        if sel.has_concat {
+            LogicalPlan::Concat {
+                input: Box::new(after_date_fn),
+            }
+        } else {
+            after_date_fn
         }
     }
 
@@ -1242,5 +1265,23 @@ mod tests {
         let c = cost("SELECT EXTRACT(year FROM created_at) FROM events");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "date fn should route to OLTP");
         assert!(c.relative_cost >= 0.12, "DateFn must carry at least 0.12 cost overhead");
+    }
+
+    #[test]
+    fn planner_concat_select_produces_concat_node() {
+        let p = plan("SELECT CONCAT(first_name, last_name) FROM users");
+        assert!(
+            matches!(&p, LogicalPlan::Concat { .. }),
+            "CONCAT() query should produce outermost Concat node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_concat_query_routes_to_oltp() {
+        let c = cost("SELECT CONCAT(first_name, last_name) FROM users");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "CONCAT should route to OLTP");
+        assert!(c.relative_cost >= 0.08, "Concat must carry at least 0.08 cost overhead");
     }
 }
