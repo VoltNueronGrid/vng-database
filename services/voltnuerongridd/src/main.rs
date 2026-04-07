@@ -2530,6 +2530,36 @@ struct RowsTotalResponse {
     total_row_count: usize,
 }
 
+// ─── S11-WS1-18: WAL by-key structs ──────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct WalByKeyQuery {
+    key_prefix: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WalByKeyEntry {
+    sequence: u64,
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WalByKeyResponse {
+    status: &'static str,
+    key_prefix: String,
+    record_count: usize,
+    entries: Vec<WalByKeyEntry>,
+}
+
+// ─── S11-WS1-18: Rows keys count structs ─────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowsKeysCountResponse {
+    status: &'static str,
+    key_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3816,6 +3846,8 @@ async fn main() {
         .route("/api/v1/store/wal/size", get(wal_size))
         // S11-WS1-17: WAL latest single record
         .route("/api/v1/store/wal/latest", get(wal_latest))
+        // S11-WS1-18: WAL records filtered by key prefix
+        .route("/api/v1/store/wal/by-key", get(wal_by_key))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3880,6 +3912,8 @@ async fn main() {
         .route("/api/v1/store/rows/visible", get(rows_visible))
         // S11-WS1-17: Total row count (all versions)
         .route("/api/v1/store/rows/total", get(rows_total))
+        // S11-WS1-18: Count of distinct row keys
+        .route("/api/v1/store/rows/keys/count", get(rows_keys_count))
         // S11-WS1-12: Row store page-level stats
         .route("/api/v1/store/rows/page/stats", get(rows_page_stats))
         // S5-WS4A-02: Broker adapter status + flush
@@ -8554,6 +8588,54 @@ async fn rows_total(
     Ok((StatusCode::OK, Json(RowsTotalResponse {
         status: "ok",
         total_row_count,
+    })))
+}
+
+// ─── S11-WS1-18: WAL by-key endpoint ─────────────────────────────────────────
+
+/// S11-WS1-18: Return WAL records whose key starts with the given key_prefix.
+async fn wal_by_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WalByKeyQuery>,
+) -> Result<(StatusCode, Json<WalByKeyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_by_key");
+    let entries: Vec<WalByKeyEntry> = wal.wal_records()
+        .iter()
+        .filter(|r| r.key.starts_with(params.key_prefix.as_str()))
+        .map(|r| WalByKeyEntry {
+            sequence: r.sequence,
+            key: r.key.clone(),
+            value: r.value.clone(),
+        })
+        .collect();
+    let record_count = entries.len();
+    let key_prefix = params.key_prefix.clone();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalByKeyResponse {
+        status: "ok",
+        key_prefix,
+        record_count,
+        entries,
+    })))
+}
+
+// ─── S11-WS1-18: Rows keys count endpoint ────────────────────────────────────
+
+/// S11-WS1-18: Return the count of distinct row keys in the MVCC store.
+async fn rows_keys_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsKeysCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_keys_count");
+    let snapshot = rs.export_rows_snapshot();
+    let key_count = snapshot.len();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsKeysCountResponse {
+        status: "ok",
+        key_count,
     })))
 }
 
@@ -21744,6 +21826,55 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_total(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-18: WAL by-key endpoint tests ────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_18_wal_by_key_empty_wal_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_by_key(
+            State(state),
+            headers,
+            Query(WalByKeyQuery { key_prefix: "user:".to_string() }),
+        ).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 0, "empty WAL must return zero records for any prefix");
+        assert_eq!(body.key_prefix, "user:");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_18_wal_by_key_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_by_key(
+            State(state),
+            headers,
+            Query(WalByKeyQuery { key_prefix: "k".to_string() }),
+        ).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-18: Rows keys count endpoint tests ───────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_18_rows_keys_count_fresh_store_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_keys_count(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.key_count, 0, "fresh store must have zero distinct keys");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_18_rows_keys_count_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_keys_count(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

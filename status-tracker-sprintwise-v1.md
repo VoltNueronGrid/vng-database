@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 42 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 153→156, exec 58→60, service 397→401 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_math_fn: bool` field + detection | `voltnuerongrid-sql` | Detects `ABS(`, `ROUND(`, `CEIL(`, `FLOOR(` in query (`S3-WS1-18`) | 3 (`math_fn_tests` module) |
+| `MathFn { input }` plan node | `voltnuerongrid-exec` | OLTP pass-through node; +0.09 cost | 2 |
+| `GET /api/v1/store/wal/by-key` | `voltnuerongridd` | WAL records filtered by `key_prefix` (operator-auth) | 2 |
+| `GET /api/v1/store/rows/keys/count` | `voltnuerongridd` | Count of distinct row keys in MVCC store (operator-auth) | 2 |
+
+---
+
 ## Session 41 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

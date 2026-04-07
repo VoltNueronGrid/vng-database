@@ -85,6 +85,8 @@ pub struct SelectStatement {
     pub has_date_fn: bool,
     /// True when the query contains a string concatenation (CONCAT() or || operator) (S3-WS1-17).
     pub has_concat: bool,
+    /// True when the query contains a math function (ABS, ROUND, CEIL, FLOOR) (S3-WS1-18).
+    pub has_math_fn: bool,
 }
 
 /// A parsed INSERT statement.
@@ -256,6 +258,11 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect string concatenation anywhere in the query (S3-WS1-17).
                 if up_trim.contains("CONCAT(") || up.contains(" || ") {
                     stmt.has_concat = true;
+                }
+                // Detect math functions anywhere in the query (S3-WS1-18).
+                if up_trim.contains("ABS(") || up_trim.contains("ROUND(")
+                    || up_trim.contains("CEIL(") || up_trim.contains("FLOOR(") {
+                    stmt.has_math_fn = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1737,5 +1744,33 @@ mod concat_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_concat, "plain SELECT without CONCAT must have has_concat = false");
+    }
+}
+
+// ─── S3-WS1-18: has_math_fn tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod math_fn_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_abs_sets_has_math_fn() {
+        let stmt = parse_one("SELECT ABS(balance) FROM accounts").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_math_fn, "ABS() expression must set has_math_fn = true");
+    }
+
+    #[test]
+    fn math_fn_detection_round_case_insensitive() {
+        let stmt = parse_one("SELECT round(price, 2) FROM products").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_math_fn, "lowercase round() must set has_math_fn = true");
+    }
+
+    #[test]
+    fn plain_select_has_math_fn_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_math_fn, "plain SELECT without math functions must have has_math_fn = false");
     }
 }

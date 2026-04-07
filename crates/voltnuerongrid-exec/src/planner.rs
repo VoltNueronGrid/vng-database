@@ -134,6 +134,10 @@ pub enum LogicalPlan {
     Concat {
         input: Box<LogicalPlan>,
     },
+    /// Math function expression (ABS/ROUND/CEIL/FLOOR) (from S3-WS1-18 has_math_fn support).
+    MathFn {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -196,6 +200,7 @@ impl LogicalPlan {
             LogicalPlan::StringFn { input } => input.primary_table(),
             LogicalPlan::DateFn { input } => input.primary_table(),
             LogicalPlan::Concat { input } => input.primary_table(),
+            LogicalPlan::MathFn { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -243,6 +248,7 @@ impl LogicalPlan {
             LogicalPlan::StringFn { input } => input.has_aggregation(),
             LogicalPlan::DateFn { input } => input.has_aggregation(),
             LogicalPlan::Concat { input } => input.has_aggregation(),
+            LogicalPlan::MathFn { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -481,6 +487,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.08,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::MathFn { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.09,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -776,12 +790,21 @@ impl QueryPlanner {
         };
 
         // Concat wrapper (S3-WS1-17 has_concat detection): outermost node.
-        if sel.has_concat {
+        let after_concat = if sel.has_concat {
             LogicalPlan::Concat {
                 input: Box::new(after_date_fn),
             }
         } else {
             after_date_fn
+        };
+
+        // MathFn wrapper (S3-WS1-18 has_math_fn detection): outermost node.
+        if sel.has_math_fn {
+            LogicalPlan::MathFn {
+                input: Box::new(after_concat),
+            }
+        } else {
+            after_concat
         }
     }
 
@@ -1283,5 +1306,23 @@ mod tests {
         let c = cost("SELECT CONCAT(first_name, last_name) FROM users");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "CONCAT should route to OLTP");
         assert!(c.relative_cost >= 0.08, "Concat must carry at least 0.08 cost overhead");
+    }
+
+    #[test]
+    fn planner_math_fn_select_produces_math_fn_node() {
+        let p = plan("SELECT ABS(balance) FROM accounts");
+        assert!(
+            matches!(&p, LogicalPlan::MathFn { .. }),
+            "ABS() query should produce outermost MathFn node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("accounts"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_math_fn_query_routes_to_oltp() {
+        let c = cost("SELECT ROUND(price, 2) FROM products");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "math fn should route to OLTP");
+        assert!(c.relative_cost >= 0.09, "MathFn must carry at least 0.09 cost overhead");
     }
 }
