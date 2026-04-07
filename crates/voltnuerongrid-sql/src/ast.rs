@@ -87,6 +87,8 @@ pub struct SelectStatement {
     pub has_concat: bool,
     /// True when the query contains a math function (ABS, ROUND, CEIL, FLOOR) (S3-WS1-18).
     pub has_math_fn: bool,
+    /// True when the query contains an EXISTS subquery predicate (S3-WS1-19).
+    pub has_exists: bool,
 }
 
 /// A parsed INSERT statement.
@@ -263,6 +265,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up_trim.contains("ABS(") || up_trim.contains("ROUND(")
                     || up_trim.contains("CEIL(") || up_trim.contains("FLOOR(") {
                     stmt.has_math_fn = true;
+                }
+                // Detect EXISTS subquery predicate (S3-WS1-19).
+                if up_trim.contains("EXISTS(") || up.contains("EXISTS (") {
+                    stmt.has_exists = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1772,5 +1778,33 @@ mod math_fn_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_math_fn, "plain SELECT without math functions must have has_math_fn = false");
+    }
+}
+
+// ─── S3-WS1-19: has_exists tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod exists_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_exists_sets_has_exists() {
+        let stmt = parse_one("SELECT id FROM orders WHERE EXISTS (SELECT 1 FROM items WHERE items.order_id = orders.id)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_exists, "EXISTS subquery must set has_exists = true");
+    }
+
+    #[test]
+    fn exists_detection_case_insensitive() {
+        let stmt = parse_one("SELECT name FROM customers WHERE exists (SELECT 1 FROM orders WHERE orders.cid = customers.id)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_exists, "lowercase exists () must set has_exists = true");
+    }
+
+    #[test]
+    fn plain_select_has_exists_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_exists, "plain SELECT without EXISTS must have has_exists = false");
     }
 }

@@ -2560,6 +2560,35 @@ struct RowsKeysCountResponse {
     key_count: usize,
 }
 
+// ─── S11-WS1-19: WAL checkpoint latest structs ───────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalCheckpointLatestResponse {
+    status: &'static str,
+    checkpoint_id: u64,
+    record_count: usize,
+}
+
+// ─── S11-WS1-19: Rows scan visible structs ───────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct RowsScanVisibleQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct RowScanEntry {
+    key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsScanVisibleResponse {
+    status: &'static str,
+    snapshot_xid: u64,
+    row_count: usize,
+    rows: Vec<RowScanEntry>,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3848,6 +3877,8 @@ async fn main() {
         .route("/api/v1/store/wal/latest", get(wal_latest))
         // S11-WS1-18: WAL records filtered by key prefix
         .route("/api/v1/store/wal/by-key", get(wal_by_key))
+        // S11-WS1-19: Latest WAL checkpoint info
+        .route("/api/v1/store/wal/checkpoint/latest", get(wal_checkpoint_latest))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3914,6 +3945,8 @@ async fn main() {
         .route("/api/v1/store/rows/total", get(rows_total))
         // S11-WS1-18: Count of distinct row keys
         .route("/api/v1/store/rows/keys/count", get(rows_keys_count))
+        // S11-WS1-19: Scan all rows visible at current snapshot
+        .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
         .route("/api/v1/store/rows/page/stats", get(rows_page_stats))
         // S5-WS4A-02: Broker adapter status + flush
@@ -8636,6 +8669,53 @@ async fn rows_keys_count(
     Ok((StatusCode::OK, Json(RowsKeysCountResponse {
         status: "ok",
         key_count,
+    })))
+}
+
+// ─── S11-WS1-19: WAL checkpoint latest endpoint ──────────────────────────────
+
+/// S11-WS1-19: Return the latest completed WAL checkpoint info.
+async fn wal_checkpoint_latest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalCheckpointLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_checkpoint_latest");
+    let total = wal.checkpoint_count();
+    let record_count = wal.wal_records().len();
+    drop(wal);
+    let checkpoint_id = total as u64;
+    Ok((StatusCode::OK, Json(WalCheckpointLatestResponse {
+        status: "ok",
+        checkpoint_id,
+        record_count,
+    })))
+}
+
+// ─── S11-WS1-19: Rows scan visible endpoint ──────────────────────────────────
+
+/// S11-WS1-19: Return all rows visible at the current MVCC snapshot, with optional limit.
+async fn rows_scan_visible(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<RowsScanVisibleQuery>,
+) -> Result<(StatusCode, Json<RowsScanVisibleResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_scan_visible");
+    let snapshot_xid = rs.current_xid();
+    let all_rows = rs.scan_at_snapshot(snapshot_xid);
+    let rows: Vec<RowScanEntry> = all_rows
+        .iter()
+        .take(params.limit.unwrap_or(usize::MAX))
+        .map(|(k, _)| RowScanEntry { key: k.to_string() })
+        .collect();
+    let row_count = rows.len();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsScanVisibleResponse {
+        status: "ok",
+        snapshot_xid,
+        row_count,
+        rows,
     })))
 }
 
@@ -21875,6 +21955,46 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_keys_count(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-19: WAL checkpoint latest endpoint tests ─────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_19_wal_checkpoint_latest_fresh_state_returns_zero_id() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_checkpoint_latest(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.checkpoint_id, 0, "fresh WAL has no checkpoints");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_19_wal_checkpoint_latest_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_checkpoint_latest(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-19: Rows scan visible endpoint tests ─────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_19_rows_scan_visible_fresh_store_returns_empty() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_scan_visible(State(state), headers, Query(RowsScanVisibleQuery { limit: None })).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.row_count, 0, "fresh row store must return empty scan");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_19_rows_scan_visible_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_scan_visible(State(state), headers, Query(RowsScanVisibleQuery { limit: None })).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

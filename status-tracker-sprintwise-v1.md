@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 43 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 156→159, exec 60→62, service 401→405 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_exists: bool` field + detection | `voltnuerongrid-sql` | Detects `EXISTS(` / `EXISTS (` subquery predicate (`S3-WS1-19`) | 3 (`exists_tests` module) |
+| `Exists { input }` plan node | `voltnuerongrid-exec` | OLAP node; 0.5× row reduction, +1.2 cost | 2 |
+| `GET /api/v1/store/wal/checkpoint/latest` | `voltnuerongridd` | Latest WAL checkpoint id + record count (operator-auth) | 2 |
+| `GET /api/v1/store/rows/scan/visible` | `voltnuerongridd` | Scan visible rows at current MVCC snapshot, optional `limit` (operator-auth) | 2 |
+
+---
+
 ## Session 42 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

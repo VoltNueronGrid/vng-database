@@ -138,6 +138,10 @@ pub enum LogicalPlan {
     MathFn {
         input: Box<LogicalPlan>,
     },
+    /// EXISTS subquery predicate (from S3-WS1-19 has_exists support).
+    Exists {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -201,6 +205,7 @@ impl LogicalPlan {
             LogicalPlan::DateFn { input } => input.primary_table(),
             LogicalPlan::Concat { input } => input.primary_table(),
             LogicalPlan::MathFn { input } => input.primary_table(),
+            LogicalPlan::Exists { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -249,6 +254,7 @@ impl LogicalPlan {
             LogicalPlan::DateFn { input } => input.has_aggregation(),
             LogicalPlan::Concat { input } => input.has_aggregation(),
             LogicalPlan::MathFn { input } => input.has_aggregation(),
+            LogicalPlan::Exists { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -496,6 +502,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.09,
                     recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Exists { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.5) as u64,
+                    relative_cost: inner.relative_cost + 1.2,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -798,13 +812,22 @@ impl QueryPlanner {
             after_date_fn
         };
 
-        // MathFn wrapper (S3-WS1-18 has_math_fn detection): outermost node.
-        if sel.has_math_fn {
+        // MathFn wrapper (S3-WS1-18 has_math_fn detection).
+        let after_math_fn = if sel.has_math_fn {
             LogicalPlan::MathFn {
                 input: Box::new(after_concat),
             }
         } else {
             after_concat
+        };
+
+        // Exists wrapper (S3-WS1-19 has_exists detection): outermost node.
+        if sel.has_exists {
+            LogicalPlan::Exists {
+                input: Box::new(after_math_fn),
+            }
+        } else {
+            after_math_fn
         }
     }
 
@@ -1324,5 +1347,23 @@ mod tests {
         let c = cost("SELECT ROUND(price, 2) FROM products");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "math fn should route to OLTP");
         assert!(c.relative_cost >= 0.09, "MathFn must carry at least 0.09 cost overhead");
+    }
+
+    #[test]
+    fn planner_exists_select_produces_exists_node() {
+        let p = plan("SELECT id FROM orders WHERE EXISTS (SELECT 1 FROM items WHERE items.order_id = orders.id)");
+        assert!(
+            matches!(&p, LogicalPlan::Exists { .. }),
+            "EXISTS subquery must produce outermost Exists node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("orders"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_exists_query_routes_to_olap() {
+        let c = cost("SELECT id FROM orders WHERE EXISTS (SELECT 1 FROM items WHERE items.order_id = orders.id)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "EXISTS subquery should route to OLAP");
+        assert!(c.relative_cost >= 1.2, "Exists must carry at least 1.2 cost overhead");
     }
 }
