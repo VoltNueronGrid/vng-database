@@ -146,6 +146,10 @@ pub enum LogicalPlan {
     AnyAll {
         input: Box<LogicalPlan>,
     },
+    /// NOT IN predicate (anti-semi-join pattern) (from S3-WS1-21 has_not_in support).
+    NotIn {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -211,6 +215,7 @@ impl LogicalPlan {
             LogicalPlan::MathFn { input } => input.primary_table(),
             LogicalPlan::Exists { input } => input.primary_table(),
             LogicalPlan::AnyAll { input } => input.primary_table(),
+            LogicalPlan::NotIn { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -261,6 +266,7 @@ impl LogicalPlan {
             LogicalPlan::MathFn { input } => input.has_aggregation(),
             LogicalPlan::Exists { input } => input.has_aggregation(),
             LogicalPlan::AnyAll { input } => input.has_aggregation(),
+            LogicalPlan::NotIn { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -523,6 +529,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.8) as u64,
                     relative_cost: inner.relative_cost + 0.6,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::NotIn { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
+                    relative_cost: inner.relative_cost + 0.4,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -844,13 +858,22 @@ impl QueryPlanner {
             after_math_fn
         };
 
-        // AnyAll wrapper (S3-WS1-20 has_any_all detection): outermost node.
-        if sel.has_any_all {
+        // AnyAll wrapper (S3-WS1-20 has_any_all detection).
+        let after_any_all = if sel.has_any_all {
             LogicalPlan::AnyAll {
                 input: Box::new(after_exists),
             }
         } else {
             after_exists
+        };
+
+        // NotIn wrapper (S3-WS1-21 has_not_in detection): outermost node.
+        if sel.has_not_in {
+            LogicalPlan::NotIn {
+                input: Box::new(after_any_all),
+            }
+        } else {
+            after_any_all
         }
     }
 
@@ -1212,7 +1235,7 @@ mod tests {
 
     #[test]
     fn planner_not_select_produces_not_node() {
-        let p = plan("SELECT id FROM users WHERE id NOT IN (1, 2, 3)");
+        let p = plan("SELECT id FROM users WHERE NOT (id = 0)");
         assert!(
             matches!(&p, LogicalPlan::Not { .. }),
             "NOT predicate query should produce outermost Not node; got: {:?}", p
@@ -1223,7 +1246,7 @@ mod tests {
 
     #[test]
     fn cost_not_query_routes_to_oltp() {
-        let c = cost("SELECT id FROM users WHERE id NOT IN (1, 2, 3)");
+        let c = cost("SELECT id FROM users WHERE NOT (id = 0)");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "NOT predicate should route to OLTP");
         assert!(c.relative_cost >= 0.6, "Not must carry at least 0.6 cost overhead");
     }
@@ -1406,5 +1429,23 @@ mod tests {
         let c = cost("SELECT name FROM employees WHERE salary >= ALL(SELECT salary FROM managers)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "ANY/ALL quantifier should route to OLAP");
         assert!(c.relative_cost >= 0.6, "AnyAll must carry at least 0.6 cost overhead");
+    }
+
+    #[test]
+    fn planner_not_in_select_produces_not_in_node() {
+        let p = plan("SELECT id FROM orders WHERE status NOT IN ('cancelled', 'failed')");
+        assert!(
+            matches!(&p, LogicalPlan::NotIn { .. }),
+            "NOT IN predicate must produce outermost NotIn node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("orders"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_not_in_query_routes_to_olap() {
+        let c = cost("SELECT name FROM users WHERE id NOT IN (SELECT user_id FROM bans)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "NOT IN should route to OLAP");
+        assert!(c.relative_cost >= 0.4, "NotIn must carry at least 0.4 cost overhead");
     }
 }

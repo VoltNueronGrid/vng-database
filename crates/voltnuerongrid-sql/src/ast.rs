@@ -91,6 +91,8 @@ pub struct SelectStatement {
     pub has_exists: bool,
     /// True when the query uses ANY or ALL quantifiers with a subquery/list (S3-WS1-20).
     pub has_any_all: bool,
+    /// True when the query contains a NOT IN (...) predicate (S3-WS1-21).
+    pub has_not_in: bool,
 }
 
 /// A parsed INSERT statement.
@@ -229,8 +231,8 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains(" LIKE ") || up.contains(" ILIKE ") {
                     stmt.has_like = true;
                 }
-                // Detect NOT keyword predicate in WHERE (S3-WS1-10); exclude IS NOT NULL patterns.
-                if up.contains(" NOT ") && !up.contains("IS NOT") {
+                // Detect NOT keyword predicate in WHERE (S3-WS1-10); exclude IS NOT NULL and NOT IN patterns.
+                if up.contains(" NOT ") && !up.contains("IS NOT") && !up.contains("NOT IN") {
                     stmt.has_not = true;
                 }
                 // Detect CASE WHEN expression anywhere in the query (S3-WS1-11).
@@ -275,6 +277,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect ANY / ALL quantifiers (S3-WS1-20).
                 if up_trim.contains("ANY(") || up_trim.contains("ALL(") {
                     stmt.has_any_all = true;
+                }
+                // Detect NOT IN predicate (S3-WS1-21).
+                if up.contains("NOT IN (") || up.contains("NOT IN(") {
+                    stmt.has_not_in = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1548,10 +1554,10 @@ mod not_tests {
     use super::*;
 
     #[test]
-    fn select_with_not_in_sets_has_not_true() {
-        let stmt = parse_one("SELECT id FROM users WHERE id NOT IN (1, 2, 3)").unwrap();
+    fn select_with_not_exists_sets_has_not_true() {
+        let stmt = parse_one("SELECT id FROM users WHERE NOT (id = 0)").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
-        assert!(s.has_not, "NOT IN predicate must set has_not = true");
+        assert!(s.has_not, "NOT (...) predicate must set has_not = true");
     }
 
     #[test]
@@ -1840,5 +1846,33 @@ mod any_all_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_any_all, "plain SELECT without ANY/ALL must have has_any_all = false");
+    }
+}
+
+// ─── S3-WS1-21: has_not_in tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod not_in_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_not_in_sets_has_not_in() {
+        let stmt = parse_one("SELECT id FROM orders WHERE status NOT IN ('cancelled', 'failed')").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_not_in, "NOT IN predicate must set has_not_in = true");
+    }
+
+    #[test]
+    fn not_in_detection_subquery_form() {
+        let stmt = parse_one("SELECT name FROM users WHERE id NOT IN (SELECT user_id FROM bans)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_not_in, "NOT IN (subquery) must set has_not_in = true");
+    }
+
+    #[test]
+    fn plain_select_has_not_in_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_not_in, "plain SELECT without NOT IN must have has_not_in = false");
     }
 }

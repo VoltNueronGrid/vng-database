@@ -2607,6 +2607,24 @@ struct RowsTombstoneCountResponse {
     tombstone_count: usize,
 }
 
+// ─── S11-WS1-21: WAL unique keys structs ─────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalUniqueKeysResponse {
+    status: &'static str,
+    unique_key_count: usize,
+}
+
+// ─── S11-WS1-21: Rows XID history structs ────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowsXidHistoryResponse {
+    status: &'static str,
+    current_xid: u64,
+    next_xid: u64,
+    total_transactions: u64,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3899,6 +3917,8 @@ async fn main() {
         .route("/api/v1/store/wal/checkpoint/latest", get(wal_checkpoint_latest))
         // S11-WS1-20: WAL insert/delete delta counts
         .route("/api/v1/store/wal/delta", get(wal_delta))
+        // S11-WS1-21: Unique key count across all WAL records
+        .route("/api/v1/store/wal/unique/keys", get(wal_unique_keys))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3967,6 +3987,8 @@ async fn main() {
         .route("/api/v1/store/rows/keys/count", get(rows_keys_count))
         // S11-WS1-20: Count of tombstone (deleted) rows
         .route("/api/v1/store/rows/tombstone/count", get(rows_tombstone_count))
+        // S11-WS1-21: Row store XID history (current + next + total)
+        .route("/api/v1/store/rows/xid/history", get(rows_xid_history))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -8779,6 +8801,54 @@ async fn rows_tombstone_count(
         tombstone_count,
     })))
 }
+
+// ─── S
+
+// --- S11-WS1-21: WAL unique keys endpoint ────────────────────────────────────
+
+/// S11-WS1-21: Return the count of unique keys that appear across all WAL records.
+async fn wal_unique_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalUniqueKeysResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_unique_keys");
+    let records = wal.wal_records().to_vec();
+    drop(wal);
+    let unique_key_count = {
+        let mut keys: Vec<&str> = records.iter().map(|r| r.key.as_str()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys.len()
+    };
+    Ok((StatusCode::OK, Json(WalUniqueKeysResponse {
+        status: "ok",
+        unique_key_count,
+    })))
+}
+
+// ─── S11-WS1-21: Rows XID history endpoint ───────────────────────────────────
+
+/// S11-WS1-21: Return current XID, next XID, and total transaction count from the row store.
+async fn rows_xid_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsXidHistoryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_xid_history");
+    let current_xid = rs.current_xid();
+    let next_xid = current_xid + 1;
+    let total_transactions = current_xid;
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsXidHistoryResponse {
+        status: "ok",
+        current_xid,
+        next_xid,
+        total_transactions,
+    })))
+}
+
+// ─── S
 
 // ─── S7-WS6-01: Raft vote statistics endpoint ───────────────────────────────
 
@@ -22097,6 +22167,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_scan_visible(State(state), headers, Query(RowsScanVisibleQuery { limit: None })).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+
+    // ─── S11-WS1-21: WAL unique keys endpoint tests ───────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_21_wal_unique_keys_fresh_wal_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_unique_keys(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.unique_key_count, 0, "fresh WAL must have zero unique keys");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_21_wal_unique_keys_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_unique_keys(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-21: Rows XID history endpoint tests ──────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_21_rows_xid_history_fresh_store_returns_zero_xid() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_xid_history(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.current_xid, 0, "fresh store must have current_xid = 0");
+        assert_eq!(body.next_xid, 1, "next_xid must be current_xid + 1");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_21_rows_xid_history_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_xid_history(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

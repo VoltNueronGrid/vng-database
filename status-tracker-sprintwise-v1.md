@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 45 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 162→165, exec 64→66, service 409→413 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|-|
+| `has_not_in: bool` field + detection | `voltnuerongrid-sql` | Detects `NOT IN (` / `NOT IN(` (`S3-WS1-21`); refined `has_not` exclusion | 3 (`not_in_tests` module) |
+| `NotIn { input }` plan node | `voltnuerongrid-exec` | OLAP node; 0.7× row selectivity, +0.4 cost | 2 |
+| `GET /api/v1/store/wal/unique/keys` | `voltnuerongridd` | Unique WAL key count (operator-auth) | 2 |
+| `GET /api/v1/store/rows/xid/history` | `voltnuerongridd` | current_xid + next_xid + total_transactions (operator-auth) | 2 |
+
+---
+
 ## Session 44 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)
