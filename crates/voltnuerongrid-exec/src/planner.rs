@@ -154,6 +154,10 @@ pub enum LogicalPlan {
     Trim {
         input: Box<LogicalPlan>,
     },
+    /// INTERVAL date arithmetic expression (S3-WS1-23 has_interval support).
+    Interval {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -221,6 +225,7 @@ impl LogicalPlan {
             LogicalPlan::AnyAll { input } => input.primary_table(),
             LogicalPlan::NotIn { input } => input.primary_table(),
             LogicalPlan::Trim { input } => input.primary_table(),
+            LogicalPlan::Interval { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -273,6 +278,7 @@ impl LogicalPlan {
             LogicalPlan::AnyAll { input } => input.has_aggregation(),
             LogicalPlan::NotIn { input } => input.has_aggregation(),
             LogicalPlan::Trim { input } => input.has_aggregation(),
+            LogicalPlan::Interval { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -552,6 +558,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.05,
                     recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Interval { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.9) as u64,
+                    relative_cost: inner.relative_cost + 0.3,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -890,13 +904,22 @@ impl QueryPlanner {
             after_any_all
         };
 
-        // Trim wrapper (S3-WS1-22 has_trim detection): outermost node.
-        if sel.has_trim {
+        // Trim wrapper (S3-WS1-22 has_trim detection).
+        let after_trim = if sel.has_trim {
             LogicalPlan::Trim {
                 input: Box::new(after_not_in),
             }
         } else {
             after_not_in
+        };
+
+        // Interval wrapper (S3-WS1-23 has_interval detection): outermost node.
+        if sel.has_interval {
+            LogicalPlan::Interval {
+                input: Box::new(after_trim),
+            }
+        } else {
+            after_trim
         }
     }
 
@@ -1490,5 +1513,25 @@ mod tests {
         let c = cost("SELECT LTRIM(email) FROM contacts");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "TRIM functions should route to OLTP");
         assert!(c.relative_cost >= 0.05, "Trim must carry at least 0.05 cost overhead");
+    }
+
+    // ── S3-WS1-23: Interval node tests ───────────────────────────────────────
+
+    #[test]
+    fn planner_interval_select_produces_interval_node() {
+        let p = plan("SELECT created_at + INTERVAL '7 days' FROM events");
+        assert!(
+            matches!(&p, LogicalPlan::Interval { .. }),
+            "INTERVAL expression must produce outermost Interval node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("events"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_interval_query_routes_to_olap() {
+        let c = cost("SELECT * FROM logs WHERE ts > NOW() - INTERVAL '1 hour'");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "INTERVAL expressions should route to OLAP");
+        assert!(c.relative_cost >= 0.3, "Interval must carry at least 0.3 cost overhead");
     }
 }

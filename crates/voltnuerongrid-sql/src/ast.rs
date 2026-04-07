@@ -95,6 +95,8 @@ pub struct SelectStatement {
     pub has_not_in: bool,
     /// True when the query contains a TRIM / LTRIM / RTRIM function call (S3-WS1-22).
     pub has_trim: bool,
+    /// True when the query uses an INTERVAL expression (date arithmetic) (S3-WS1-23).
+    pub has_interval: bool,
 }
 
 /// A parsed INSERT statement.
@@ -1908,5 +1910,32 @@ mod trim_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_trim, "plain SELECT without TRIM must have has_trim = false");
+    }
+}
+// ─── S3-WS1-23: has_interval tests ───────────────────────────────────────────
+
+#[cfg(test)]
+mod interval_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_interval_sets_has_interval() {
+        let stmt = parse_one("SELECT created_at + INTERVAL '7 days' FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_interval, "INTERVAL expression must set has_interval = true");
+    }
+
+    #[test]
+    fn interval_detection_alternate_form() {
+        let stmt = parse_one("SELECT * FROM logs WHERE ts > NOW() - INTERVAL '1 hour'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_interval, "INTERVAL in WHERE clause must set has_interval = true");
+    }
+
+    #[test]
+    fn plain_select_has_interval_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_interval, "plain SELECT without INTERVAL must have has_interval = false");
     }
 }

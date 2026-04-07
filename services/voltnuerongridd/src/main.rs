@@ -2642,6 +2642,22 @@ struct RowsFirstKeyResponse {
     first_key: String,
 }
 
+// ─── S11-WS1-23: WAL keys list + rows last key structs ──────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalKeysListResponse {
+    status: &'static str,
+    key_count: usize,
+    keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsLastKeyResponse {
+    status: &'static str,
+    has_key: bool,
+    last_key: String,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3938,6 +3954,8 @@ async fn main() {
         .route("/api/v1/store/wal/unique/keys", get(wal_unique_keys))
         // S11-WS1-22: WAL age (oldest/newest sequence span)
         .route("/api/v1/store/wal/age", get(wal_age))
+        // S11-WS1-23: List all unique keys in the WAL
+        .route("/api/v1/store/wal/keys/list", get(wal_keys_list))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -4010,6 +4028,8 @@ async fn main() {
         .route("/api/v1/store/rows/xid/history", get(rows_xid_history))
         // S11-WS1-22: First key in the row store (alphabetically)
         .route("/api/v1/store/rows/first/key", get(rows_first_key))
+        // S11-WS1-23: Last alphabetically-sorted key in the row store
+        .route("/api/v1/store/rows/last/key", get(rows_last_key))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -8911,6 +8931,50 @@ async fn rows_first_key(
         status: "ok",
         has_key,
         first_key,
+    })))
+}
+
+// ─── S11-WS1-23: WAL keys list endpoint ─────────────────────────────────────────────
+
+/// S11-WS1-23: Return a deduplicated, sorted list of all keys present in the WAL.
+async fn wal_keys_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalKeysListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_keys_list");
+    let records = wal.wal_records().to_vec();
+    drop(wal);
+    let mut keys: Vec<String> = records.into_iter().map(|r| r.key).collect();
+    keys.sort();
+    keys.dedup();
+    let key_count = keys.len();
+    Ok((StatusCode::OK, Json(WalKeysListResponse {
+        status: "ok",
+        key_count,
+        keys,
+    })))
+}
+
+// ─── S11-WS1-23: Rows last key endpoint ─────────────────────────────────────────────────────
+
+/// S11-WS1-23: Return the last (alphabetically largest) key currently in the row store.
+async fn rows_last_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsLastKeyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_last_key");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let mut keys: Vec<String> = snapshot.into_iter().map(|(k, _)| k).collect();
+    keys.sort();
+    let last_key = keys.into_iter().last().unwrap_or_default();
+    let has_key = !last_key.is_empty();
+    Ok((StatusCode::OK, Json(RowsLastKeyResponse {
+        status: "ok",
+        has_key,
+        last_key,
     })))
 }
 
@@ -22315,6 +22379,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_first_key(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ── S11-WS1-23: WAL keys list + rows last key tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_23_wal_keys_list_returns_ok_empty_wal() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_keys_list(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.key_count, 0, "fresh WAL must have zero keys");
+        assert!(body.keys.is_empty(), "keys list must be empty for fresh WAL");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_23_wal_keys_list_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_keys_list(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_23_rows_last_key_returns_ok_empty_store() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_last_key(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.has_key, "fresh empty store must have has_key = false");
+        assert_eq!(body.last_key, "", "empty store must have empty last_key");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_23_rows_last_key_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_last_key(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
