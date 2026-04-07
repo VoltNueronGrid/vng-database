@@ -226,6 +226,10 @@ pub enum LogicalPlan {
     Values {
         input: Box<LogicalPlan>,
     },
+    /// CROSS JOIN expression between two relations (S3-WS1-33 has_cross_join support).
+    CrossJoin {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -272,6 +276,7 @@ impl LogicalPlan {
             LogicalPlan::Pivot { input } => input.primary_table(),
             LogicalPlan::Fetch { input } => input.primary_table(),
             LogicalPlan::Values { input } => input.primary_table(),
+            LogicalPlan::CrossJoin { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -334,6 +339,7 @@ impl LogicalPlan {
             LogicalPlan::Pivot { input } => input.has_aggregation(),
             LogicalPlan::Fetch { input } => input.has_aggregation(),
             LogicalPlan::Values { input } => input.has_aggregation(),
+            LogicalPlan::CrossJoin { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -692,6 +698,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.02,
                     recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::CrossJoin { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows * inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.30,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -1120,13 +1134,22 @@ impl QueryPlanner {
             after_pivot
         };
 
-        // Values wrapper (S3-WS1-32 has_values detection): outermost node.
-        if sel.has_values {
+        // Values wrapper (S3-WS1-32 has_values detection).
+        let after_values = if sel.has_values {
             LogicalPlan::Values {
                 input: Box::new(after_fetch),
             }
         } else {
             after_fetch
+        };
+
+        // CrossJoin wrapper (S3-WS1-33 has_cross_join detection): outermost node.
+        if sel.has_cross_join {
+            LogicalPlan::CrossJoin {
+                input: Box::new(after_values),
+            }
+        } else {
+            after_values
         }
     }
 
@@ -1919,5 +1942,24 @@ mod tests {
         let c = cost("SELECT a, b FROM (VALUES (1,2),(3,4)) AS v(a,b)");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "VALUES row source should route to OLTP");
         assert!(c.relative_cost >= 0.02, "Values must carry at least 0.02 cost overhead");
+    }
+
+    // ── S3-WS1-33: CrossJoin node tests ──────────────────────────────────────
+
+    #[test]
+    fn planner_cross_join_select_produces_cross_join_node() {
+        let p = plan("SELECT a.id, b.name FROM products a CROSS JOIN categories b");
+        assert!(
+            matches!(&p, LogicalPlan::CrossJoin { .. }),
+            "CROSS JOIN must produce outermost CrossJoin node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_cross_join_query_routes_to_olap() {
+        let c = cost("SELECT x, y FROM t1 CROSS JOIN t2 WHERE t1.id < 10");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "CROSS JOIN should route to OLAP");
+        assert!(c.relative_cost >= 0.30, "CrossJoin must carry at least 0.30 cost overhead");
     }
 }

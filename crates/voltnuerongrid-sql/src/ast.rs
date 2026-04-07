@@ -115,6 +115,8 @@ pub struct SelectStatement {
     pub has_fetch: bool,
     /// True when the query uses a VALUES clause as a row source / VALUES CTE (S3-WS1-32).
     pub has_values: bool,
+    /// True when the query uses a CROSS JOIN expression (S3-WS1-33).
+    pub has_cross_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -347,6 +349,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect VALUES clause used as a row source / VALUES CTE (S3-WS1-32).
                 if up.contains("VALUES (") {
                     stmt.has_values = true;
+                }
+                // Detect CROSS JOIN expression (S3-WS1-33).
+                if up.contains("CROSS JOIN") {
+                    stmt.has_cross_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2239,5 +2245,33 @@ mod values_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_values, "plain SELECT without VALUES must have has_values = false");
+    }
+}
+
+// ─── S3-WS1-33: has_cross_join tests ─────────────────────────────────────────
+
+#[cfg(test)]
+mod cross_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_cross_join_sets_has_cross_join() {
+        let stmt = parse_one("SELECT a.id, b.name FROM products a CROSS JOIN categories b").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_cross_join, "CROSS JOIN must set has_cross_join = true");
+    }
+
+    #[test]
+    fn select_with_cross_join_and_filter_sets_has_cross_join() {
+        let stmt = parse_one("SELECT x, y FROM t1 CROSS JOIN t2 WHERE t1.id < 10").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_cross_join, "CROSS JOIN with WHERE must set has_cross_join = true");
+    }
+
+    #[test]
+    fn plain_select_has_cross_join_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_cross_join, "plain SELECT without CROSS JOIN must have has_cross_join = false");
     }
 }

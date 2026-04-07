@@ -2805,6 +2805,20 @@ struct RowsSnapshotSizeResponse {
     snapshot_row_count: usize,
 }
 
+// S3-WS1-33: wal/entry/count + rows/version/latest structs
+
+#[derive(Debug, Serialize)]
+struct WalEntryCountResponse {
+    status: &'static str,
+    entry_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsVersionLatestResponse {
+    status: &'static str,
+    latest_version: u64,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4207,6 +4221,9 @@ async fn main() {
         // S3-WS1-32: wal/max/seq + rows/snapshot/size
         .route("/api/v1/store/wal/max/seq", get(wal_max_seq))
         .route("/api/v1/store/rows/snapshot/size", get(rows_snapshot_size))
+        // S3-WS1-33: wal/entry/count + rows/version/latest
+        .route("/api/v1/store/wal/entry/count", get(wal_entry_count))
+        .route("/api/v1/store/rows/version/latest", get(rows_version_latest))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9442,6 +9459,30 @@ async fn rows_snapshot_size(
     let snapshot_row_count = rs.total_row_count();
     drop(rs);
     Ok((StatusCode::OK, Json(RowsSnapshotSizeResponse { status: "ok", snapshot_row_count })))
+}
+
+// S3-WS1-33: wal/entry/count endpoint
+async fn wal_entry_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalEntryCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_entry_count");
+    let entry_count = wal.wal_records().len();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalEntryCountResponse { status: "ok", entry_count })))
+}
+
+// S3-WS1-33: rows/version/latest endpoint
+async fn rows_version_latest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsVersionLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock rows_version_latest");
+    let latest_version = wal.wal_records().last().map(|r| r.sequence).unwrap_or(0);
+    drop(wal);
+    Ok((StatusCode::OK, Json(RowsVersionLatestResponse { status: "ok", latest_version })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23253,6 +23294,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_snapshot_size(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-33: wal_entry_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_33_wal_entry_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_entry_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.entry_count, 0, "fresh WAL must have zero entries");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_33_wal_entry_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_entry_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-33: rows_version_latest tests
+
+    #[tokio::test]
+    async fn s11_ws1_33_rows_version_latest_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_version_latest(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.latest_version, 0, "fresh WAL must have latest_version = 0");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_33_rows_version_latest_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_version_latest(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
