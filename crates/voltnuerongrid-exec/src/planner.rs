@@ -162,6 +162,10 @@ pub enum LogicalPlan {
     InSubquery {
         input: Box<LogicalPlan>,
     },
+    /// IS NULL / IS NOT NULL predicate node (S3-WS1-25 has_is_null support).
+    IsNull {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -231,6 +235,7 @@ impl LogicalPlan {
             LogicalPlan::Trim { input } => input.primary_table(),
             LogicalPlan::Interval { input } => input.primary_table(),
             LogicalPlan::InSubquery { input } => input.primary_table(),
+            LogicalPlan::IsNull { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -285,6 +290,7 @@ impl LogicalPlan {
             LogicalPlan::Trim { input } => input.has_aggregation(),
             LogicalPlan::Interval { input } => input.has_aggregation(),
             LogicalPlan::InSubquery { input } => input.has_aggregation(),
+            LogicalPlan::IsNull { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -580,6 +586,14 @@ impl QueryPlanner {
                     estimated_rows: (inner.estimated_rows as f64 * 0.6) as u64,
                     relative_cost: inner.relative_cost + 0.8,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::IsNull { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.1,
+                    recommended_path: QueryPath::Oltp,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -936,13 +950,22 @@ impl QueryPlanner {
             after_trim
         };
 
-        // InSubquery wrapper (S3-WS1-24 has_in_subquery detection): outermost node.
-        if sel.has_in_subquery {
+        // InSubquery wrapper (S3-WS1-24 has_in_subquery detection).
+        let after_in_subquery = if sel.has_in_subquery {
             LogicalPlan::InSubquery {
                 input: Box::new(after_interval),
             }
         } else {
             after_interval
+        };
+
+        // IsNull wrapper (S3-WS1-25 has_is_null detection): outermost node.
+        if sel.has_is_null {
+            LogicalPlan::IsNull {
+                input: Box::new(after_in_subquery),
+            }
+        } else {
+            after_in_subquery
         }
     }
 
@@ -1575,5 +1598,25 @@ mod tests {
         let c = cost("SELECT name FROM products WHERE cat_id IN (SELECT id FROM cats)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "IN subquery should route to OLAP");
         assert!(c.relative_cost >= 0.8, "InSubquery must carry at least 0.8 cost overhead");
+    }
+
+    // ── S3-WS1-25: IsNull node tests ─────────────────────────────────────────
+
+    #[test]
+    fn planner_is_null_select_produces_is_null_node() {
+        let p = plan("SELECT id FROM users WHERE email IS NULL");
+        assert!(
+            matches!(&p, LogicalPlan::IsNull { .. }),
+            "IS NULL predicate must produce outermost IsNull node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_is_null_query_routes_to_oltp() {
+        let c = cost("SELECT name FROM customers WHERE deleted_at IS NOT NULL");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "IS NULL check should route to OLTP");
+        assert!(c.relative_cost >= 0.1, "IsNull must carry at least 0.1 cost overhead");
     }
 }

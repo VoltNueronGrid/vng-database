@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 49 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline to New:** sql 174>177, exec 72>74, service 425>429 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|-|
+| `has_is_null: bool` field + detection | `voltnuerongrid-sql` | Detects `IS NULL` / `IS NOT NULL` (S3-WS1-25) | 3 (`is_null_tests` module) |
+| `IsNull { input }` plan node | `voltnuerongrid-exec` | OLTP node; pass-through rows, +0.1 cost | 2 |
+| `GET /api/v1/store/rows/value/search` | `voltnuerongridd` | Returns keys of rows whose payload contains `?value=` substring (operator-auth) | 2 |
+| `GET /api/v1/store/wal/record/count` | `voltnuerongridd` | Total WAL record count (operator-auth) | 2 |
+
+---
+
 ## Session 48 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

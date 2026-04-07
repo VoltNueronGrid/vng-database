@@ -99,6 +99,8 @@ pub struct SelectStatement {
     pub has_interval: bool,
     /// True when the query uses an IN (SELECT ...) subquery predicate (S3-WS1-24).
     pub has_in_subquery: bool,
+    /// True when the query tests a column for NULL (`IS NULL` / `IS NOT NULL`) (S3-WS1-25).
+    pub has_is_null: bool,
 }
 
 /// A parsed INSERT statement.
@@ -299,6 +301,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect IN (SELECT ...) subquery predicate (S3-WS1-24).
                 if up.contains("IN (SELECT") || up.contains("IN(SELECT") {
                     stmt.has_in_subquery = true;
+                }
+                // Detect IS NULL / IS NOT NULL predicate (S3-WS1-25).
+                if up.contains("IS NULL") || up.contains("IS NOT NULL") {
+                    stmt.has_is_null = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1974,6 +1980,32 @@ mod in_subquery_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_in_subquery, "plain SELECT without IN subquery must have has_in_subquery = false");
+    }
+}
+
+#[cfg(test)]
+mod is_null_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_is_null_sets_has_is_null() {
+        let stmt = parse_one("SELECT id FROM users WHERE email IS NULL").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_is_null, "IS NULL predicate must set has_is_null = true");
+    }
+
+    #[test]
+    fn is_null_detection_is_not_null_form() {
+        let stmt = parse_one("SELECT name FROM customers WHERE deleted_at IS NOT NULL").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_is_null, "IS NOT NULL predicate must set has_is_null = true");
+    }
+
+    #[test]
+    fn plain_select_has_is_null_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_is_null, "plain SELECT without IS NULL must have has_is_null = false");
     }
 }
 }
