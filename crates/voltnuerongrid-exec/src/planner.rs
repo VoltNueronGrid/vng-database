@@ -170,6 +170,10 @@ pub enum LogicalPlan {
     Regexp {
         input: Box<LogicalPlan>,
     },
+    /// JSON operator node (`->` / `->>` / `JSON_EXTRACT`) (S3-WS1-27 has_json_op support).
+    JsonOp {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -241,6 +245,7 @@ impl LogicalPlan {
             LogicalPlan::InSubquery { input } => input.primary_table(),
             LogicalPlan::IsNull { input } => input.primary_table(),
             LogicalPlan::Regexp { input } => input.primary_table(),
+            LogicalPlan::JsonOp { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -297,6 +302,7 @@ impl LogicalPlan {
             LogicalPlan::InSubquery { input } => input.has_aggregation(),
             LogicalPlan::IsNull { input } => input.has_aggregation(),
             LogicalPlan::Regexp { input } => input.has_aggregation(),
+            LogicalPlan::JsonOp { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -607,6 +613,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
                     relative_cost: inner.relative_cost + 0.5,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::JsonOp { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.4,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -982,13 +996,22 @@ impl QueryPlanner {
             after_in_subquery
         };
 
-        // Regexp wrapper (S3-WS1-26 has_regexp detection): outermost node.
-        if sel.has_regexp {
+        // Regexp wrapper (S3-WS1-26 has_regexp detection).
+        let after_regexp = if sel.has_regexp {
             LogicalPlan::Regexp {
                 input: Box::new(after_is_null),
             }
         } else {
             after_is_null
+        };
+
+        // JsonOp wrapper (S3-WS1-27 has_json_op detection): outermost node.
+        if sel.has_json_op {
+            LogicalPlan::JsonOp {
+                input: Box::new(after_regexp),
+            }
+        } else {
+            after_regexp
         }
     }
 
@@ -1661,5 +1684,25 @@ mod tests {
         let c = cost("SELECT name FROM logs WHERE message RLIKE 'error'");
         assert_eq!(c.recommended_path, QueryPath::Olap, "REGEXP pattern match should route to OLAP");
         assert!(c.relative_cost >= 0.5, "Regexp must carry at least 0.5 cost overhead");
+    }
+
+    // ── S3-WS1-27: JsonOp node tests ─────────────────────────────────────────
+
+    #[test]
+    fn planner_json_op_select_produces_json_op_node() {
+        let p = plan("SELECT data -> '$.name' FROM users");
+        assert!(
+            matches!(&p, LogicalPlan::JsonOp { .. }),
+            "JSON -> operator must produce outermost JsonOp node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_json_op_query_routes_to_olap() {
+        let c = cost("SELECT JSON_EXTRACT(data, '$.age') FROM profiles");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "JSON operator query should route to OLAP");
+        assert!(c.relative_cost >= 0.4, "JsonOp must carry at least 0.4 cost overhead");
     }
 }

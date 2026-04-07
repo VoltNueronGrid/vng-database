@@ -176,4 +176,4 @@ lines.splice(s24Close + 1, 0, ...testBlock);
 console.log('Tests inserted.');
 
 fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
-console.log('Done. Total lines:', lines.length);
+console.log('Done. Total lines:', lines.length);

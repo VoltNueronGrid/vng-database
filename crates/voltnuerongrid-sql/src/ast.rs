@@ -103,6 +103,8 @@ pub struct SelectStatement {
     pub has_is_null: bool,
     /// True when the query uses a REGEXP / RLIKE / SIMILAR TO pattern match (S3-WS1-26).
     pub has_regexp: bool,
+    /// True when the query uses a JSON operator (`->`, `->>`, `JSON_EXTRACT`, `JSON_VALUE`) (S3-WS1-27).
+    pub has_json_op: bool,
 }
 
 /// A parsed INSERT statement.
@@ -311,6 +313,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect REGEXP / RLIKE / SIMILAR TO pattern match (S3-WS1-26).
                 if up.contains("REGEXP") || up.contains("RLIKE") || up.contains("SIMILAR TO") {
                     stmt.has_regexp = true;
+                }
+                // Detect JSON operator access -> / ->> / JSON_EXTRACT / JSON_VALUE (S3-WS1-27).
+                if up.contains("->") || up.contains("JSON_EXTRACT") || up.contains("JSON_VALUE") {
+                    stmt.has_json_op = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2039,5 +2045,31 @@ mod regexp_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_regexp, "plain SELECT without pattern match must have has_regexp = false");
+    }
+}
+
+#[cfg(test)]
+mod json_op_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_arrow_sets_has_json_op() {
+        let stmt = parse_one("SELECT data -> '$.name' FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_json_op, "JSON -> operator must set has_json_op = true");
+    }
+
+    #[test]
+    fn json_op_detection_extract_form() {
+        let stmt = parse_one("SELECT JSON_EXTRACT(data, '$.age') FROM profiles").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_json_op, "JSON_EXTRACT must set has_json_op = true");
+    }
+
+    #[test]
+    fn plain_select_has_json_op_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_json_op, "plain SELECT without JSON ops must have has_json_op = false");
     }
 }

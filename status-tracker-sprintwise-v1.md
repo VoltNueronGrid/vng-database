@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 51 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline to New:** sql 180>183, exec 76>78, service 433>437 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|-|
+| `has_json_op: bool` field + detection | `voltnuerongrid-sql` | Detects `->`, `JSON_EXTRACT`, `JSON_VALUE` (S3-WS1-27) | 3 (`json_op_tests` module) |
+| `JsonOp { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.4 cost | 2 |
+| `GET /api/v1/store/rows/payload/size` | `voltnuerongridd` | Total field count + row count across all MVCC rows (operator-auth) | 2 |
+| `GET /api/v1/store/wal/flush/count` | `voltnuerongridd` | Total WAL write count (operator-auth) | 2 |
+
+---
+
 ## Session 50 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)
