@@ -206,6 +206,10 @@ pub enum LogicalPlan {
     },
     /// Unrecognised or unparseable statement.
     Unknown(String),
+    /// Window aggregate function node (COUNT/SUM/AVG/ROW_NUMBER OVER ...) (S3-WS1-28 has_window_agg support).
+    WindowAgg {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -247,6 +251,7 @@ impl LogicalPlan {
             LogicalPlan::Regexp { input } => input.primary_table(),
             LogicalPlan::JsonOp { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
+            LogicalPlan::WindowAgg { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -304,6 +309,7 @@ impl LogicalPlan {
             LogicalPlan::Regexp { input } => input.has_aggregation(),
             LogicalPlan::JsonOp { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
+            LogicalPlan::WindowAgg { .. } => true,
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -621,6 +627,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.4,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::WindowAgg { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 1.5,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1005,13 +1019,22 @@ impl QueryPlanner {
             after_is_null
         };
 
-        // JsonOp wrapper (S3-WS1-27 has_json_op detection): outermost node.
-        if sel.has_json_op {
+        // JsonOp wrapper (S3-WS1-27 has_json_op detection).
+        let after_json_op = if sel.has_json_op {
             LogicalPlan::JsonOp {
                 input: Box::new(after_regexp),
             }
         } else {
             after_regexp
+        };
+
+        // WindowAgg wrapper (S3-WS1-28 has_window_agg detection): outermost node.
+        if sel.has_window_agg {
+            LogicalPlan::WindowAgg {
+                input: Box::new(after_json_op),
+            }
+        } else {
+            after_json_op
         }
     }
 
@@ -1704,5 +1727,26 @@ mod tests {
         let c = cost("SELECT JSON_EXTRACT(data, '$.age') FROM profiles");
         assert_eq!(c.recommended_path, QueryPath::Olap, "JSON operator query should route to OLAP");
         assert!(c.relative_cost >= 0.4, "JsonOp must carry at least 0.4 cost overhead");
+    }
+
+    // ── S3-WS1-28: WindowAgg node tests ───────────────────────────────────────
+
+    #[test]
+    fn planner_window_agg_select_produces_window_agg_node() {
+        let p = plan("SELECT COUNT(id) OVER (PARTITION BY dept) FROM employees");
+        assert!(
+            matches!(&p, LogicalPlan::WindowAgg { .. }),
+            "COUNT() OVER must produce outermost WindowAgg node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("employees"));
+        assert!(p.is_read_only());
+        assert!(p.has_aggregation(), "WindowAgg must report has_aggregation = true");
+    }
+
+    #[test]
+    fn cost_window_agg_query_routes_to_olap() {
+        let c = cost("SELECT ROW_NUMBER() OVER (ORDER BY salary DESC) FROM staff");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "Window aggregate should route to OLAP");
+        assert!(c.relative_cost >= 1.5, "WindowAgg must carry at least 1.5 cost overhead");
     }
 }

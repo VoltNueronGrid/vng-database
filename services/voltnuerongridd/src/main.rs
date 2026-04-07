@@ -2732,6 +2732,22 @@ struct WalFlushCountResponse {
     flush_count: usize,
 }
 
+// S3-WS1-28: rows/field/count + wal/entry/latest structs
+
+#[derive(Debug, Serialize)]
+struct RowsFieldCountResponse {
+    status: &'static str,
+    total_fields: usize,
+    row_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct WalEntryLatestResponse {
+    status: &'static str,
+    has_entry: bool,
+    entry_sequence: u64,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4120,6 +4136,9 @@ async fn main() {
         .route("/api/v1/store/rows/payload/size", get(rows_payload_size))
         // S11-WS1-27: WAL flush count (total writes)
         .route("/api/v1/store/wal/flush/count", get(wal_flush_count))
+        // S3-WS1-28: rows/field/count + wal/entry/latest
+        .route("/api/v1/store/rows/field/count", get(rows_field_count))
+        .route("/api/v1/store/wal/entry/latest", get(wal_entry_latest))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9224,6 +9243,34 @@ async fn wal_flush_count(
 }
 
 // ─── S7-WS6-01: Raft vote statistics endpoint ───────────────────────────────
+
+// S3-WS1-28: rows/field/count endpoint
+async fn rows_field_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsFieldCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_field_count");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let row_count = snapshot.len();
+    let total_fields: usize = snapshot.iter().map(|(_, p)| p.len()).sum();
+    Ok((StatusCode::OK, Json(RowsFieldCountResponse { status: "ok", total_fields, row_count })))
+}
+
+// S3-WS1-28: wal/entry/latest endpoint
+async fn wal_entry_latest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalEntryLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_entry_latest");
+    let records = wal.wal_records();
+    let entry_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
+    let has_entry = !records.is_empty();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalEntryLatestResponse { status: "ok", has_entry, entry_sequence })))
+}
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
 async fn raft_vote_stats(
@@ -22824,6 +22871,46 @@ mod tests {
         let result = wal_flush_count(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-28: rows_field_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_28_rows_field_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_field_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_28_rows_field_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_field_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-28: wal_entry_latest tests
+
+    #[tokio::test]
+    async fn s11_ws1_28_wal_entry_latest_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_entry_latest(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_28_wal_entry_latest_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_entry_latest(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
 
 }

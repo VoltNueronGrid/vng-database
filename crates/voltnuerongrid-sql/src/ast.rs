@@ -105,6 +105,8 @@ pub struct SelectStatement {
     pub has_regexp: bool,
     /// True when the query uses a JSON operator (`->`, `->>`, `JSON_EXTRACT`, `JSON_VALUE`) (S3-WS1-27).
     pub has_json_op: bool,
+    /// True when the query uses a window aggregate function (COUNT/SUM/AVG/ROW_NUMBER OVER ...) (S3-WS1-28).
+    pub has_window_agg: bool,
 }
 
 /// A parsed INSERT statement.
@@ -317,6 +319,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect JSON operator access -> / ->> / JSON_EXTRACT / JSON_VALUE (S3-WS1-27).
                 if up.contains("->") || up.contains("JSON_EXTRACT") || up.contains("JSON_VALUE") {
                     stmt.has_json_op = true;
+                }
+                // Detect window aggregate function COUNT/SUM/AVG/ROW_NUMBER OVER (...) (S3-WS1-28).
+                if (up.contains("COUNT(") || up.contains("SUM(") || up.contains("AVG(") || up.contains("ROW_NUMBER")) && up.contains("OVER") {
+                    stmt.has_window_agg = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2071,5 +2077,31 @@ mod json_op_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_json_op, "plain SELECT without JSON ops must have has_json_op = false");
+    }
+}
+
+#[cfg(test)]
+mod window_agg_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_count_over_sets_has_window_agg() {
+        let stmt = parse_one("SELECT COUNT(id) OVER (PARTITION BY dept) FROM employees").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_window_agg, "COUNT() OVER must set has_window_agg = true");
+    }
+
+    #[test]
+    fn window_agg_detection_row_number_form() {
+        let stmt = parse_one("SELECT ROW_NUMBER() OVER (ORDER BY salary DESC) FROM staff").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_window_agg, "ROW_NUMBER OVER must set has_window_agg = true");
+    }
+
+    #[test]
+    fn plain_select_has_window_agg_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_window_agg, "plain SELECT without window agg must have has_window_agg = false");
     }
 }

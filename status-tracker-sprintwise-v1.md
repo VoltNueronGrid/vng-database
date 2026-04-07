@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 52 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline to New:** sql 183>186, exec 78>80, service 437>441 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|-|
+| `has_window_agg: bool` field + detection | `voltnuerongrid-sql` | Detects `COUNT()/SUM()/AVG()/ROW_NUMBER OVER` (S3-WS1-28) | 3 (`window_agg_tests` module) |
+| `WindowAgg { input }` plan node | `voltnuerongrid-exec` | OLAP node; `has_aggregation()=true`, +1.5 cost | 2 |
+| `GET /api/v1/store/rows/field/count` | `voltnuerongridd` | Total field count + row count across all MVCC rows (operator-auth) | 2 |
+| `GET /api/v1/store/wal/entry/latest` | `voltnuerongridd` | Latest WAL entry sequence + has_entry flag (operator-auth) | 2 |
+
+---
+
 ## Session 51 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)
