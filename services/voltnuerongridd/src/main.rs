@@ -2697,6 +2697,27 @@ struct WalRecordCountResponse {
     record_count: usize,
 }
 
+// ─── S11-WS1-26: Rows count range + WAL checkpoint age structs ───────────────────────────────
+#[derive(Debug, Deserialize)]
+struct RowsCountRangeQuery {
+    prefix: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsCountRangeResponse {
+    status: &'static str,
+    row_count: usize,
+    prefix: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalCheckpointAgeResponse {
+    status: &'static str,
+    checkpoint_count: usize,
+    oldest_sequence: u64,
+    newest_sequence: u64,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4077,6 +4098,10 @@ async fn main() {
         .route("/api/v1/store/rows/value/search", get(rows_value_search))
         // S11-WS1-25: Count total WAL records
         .route("/api/v1/store/wal/record/count", get(wal_record_count))
+        // S11-WS1-26: Count rows optionally filtered by key prefix
+        .route("/api/v1/store/rows/count/range", get(rows_count_range))
+        // S11-WS1-26: WAL checkpoint age (oldest/newest seqno)
+        .route("/api/v1/store/wal/checkpoint/age", get(wal_checkpoint_age))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9103,6 +9128,47 @@ async fn wal_record_count(
     Ok((StatusCode::OK, Json(WalRecordCountResponse {
         status: "ok",
         record_count,
+    })))
+}
+
+/// S11-WS1-26: Count rows optionally filtered by a key prefix.
+async fn rows_count_range(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<RowsCountRangeQuery>,
+) -> Result<(StatusCode, Json<RowsCountRangeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_count_range");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let row_count = match &params.prefix {
+        Some(p) => snapshot.iter().filter(|(k, _)| k.starts_with(p.as_str())).count(),
+        None => snapshot.len(),
+    };
+    Ok((StatusCode::OK, Json(RowsCountRangeResponse {
+        status: "ok",
+        row_count,
+        prefix: params.prefix,
+    })))
+}
+
+/// S11-WS1-26: Return WAL checkpoint age (oldest/newest sequence numbers).
+async fn wal_checkpoint_age(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalCheckpointAgeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_checkpoint_age");
+    let records = wal.wal_records();
+    let oldest_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
+    let newest_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
+    let checkpoint_count = wal.checkpoint_count();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalCheckpointAgeResponse {
+        status: "ok",
+        checkpoint_count,
+        oldest_sequence,
+        newest_sequence,
     })))
 }
 
@@ -22629,6 +22695,45 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = wal_record_count(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ── S11-WS1-26: rows count range + wal checkpoint age tests ───────────────────────
+    #[tokio::test]
+    async fn s11_ws1_26_rows_count_range_returns_ok() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let params = Query(RowsCountRangeQuery { prefix: None });
+        let (status, Json(body)) = rows_count_range(State(state), headers, params).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_26_rows_count_range_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let params = Query(RowsCountRangeQuery { prefix: None });
+        let result = rows_count_range(State(state), headers, params).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_26_wal_checkpoint_age_returns_ok() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_checkpoint_age(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_26_wal_checkpoint_age_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_checkpoint_age(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

@@ -166,6 +166,10 @@ pub enum LogicalPlan {
     IsNull {
         input: Box<LogicalPlan>,
     },
+    /// REGEXP / RLIKE / SIMILAR TO pattern-match node (S3-WS1-26 has_regexp support).
+    Regexp {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -236,6 +240,7 @@ impl LogicalPlan {
             LogicalPlan::Interval { input } => input.primary_table(),
             LogicalPlan::InSubquery { input } => input.primary_table(),
             LogicalPlan::IsNull { input } => input.primary_table(),
+            LogicalPlan::Regexp { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -291,6 +296,7 @@ impl LogicalPlan {
             LogicalPlan::Interval { input } => input.has_aggregation(),
             LogicalPlan::InSubquery { input } => input.has_aggregation(),
             LogicalPlan::IsNull { input } => input.has_aggregation(),
+            LogicalPlan::Regexp { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -594,6 +600,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.1,
                     recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::Regexp { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
+                    relative_cost: inner.relative_cost + 0.5,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -959,13 +973,22 @@ impl QueryPlanner {
             after_interval
         };
 
-        // IsNull wrapper (S3-WS1-25 has_is_null detection): outermost node.
-        if sel.has_is_null {
+        // IsNull wrapper (S3-WS1-25 has_is_null detection).
+        let after_is_null = if sel.has_is_null {
             LogicalPlan::IsNull {
                 input: Box::new(after_in_subquery),
             }
         } else {
             after_in_subquery
+        };
+
+        // Regexp wrapper (S3-WS1-26 has_regexp detection): outermost node.
+        if sel.has_regexp {
+            LogicalPlan::Regexp {
+                input: Box::new(after_is_null),
+            }
+        } else {
+            after_is_null
         }
     }
 
@@ -1618,5 +1641,25 @@ mod tests {
         let c = cost("SELECT name FROM customers WHERE deleted_at IS NOT NULL");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "IS NULL check should route to OLTP");
         assert!(c.relative_cost >= 0.1, "IsNull must carry at least 0.1 cost overhead");
+    }
+
+    // ── S3-WS1-26: Regexp node tests ─────────────────────────────────────────
+
+    #[test]
+    fn planner_regexp_select_produces_regexp_node() {
+        let p = plan("SELECT id FROM users WHERE email REGEXP '^[a-z]+'");
+        assert!(
+            matches!(&p, LogicalPlan::Regexp { .. }),
+            "REGEXP predicate must produce outermost Regexp node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_regexp_query_routes_to_olap() {
+        let c = cost("SELECT name FROM logs WHERE message RLIKE 'error'");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "REGEXP pattern match should route to OLAP");
+        assert!(c.relative_cost >= 0.5, "Regexp must carry at least 0.5 cost overhead");
     }
 }

@@ -101,6 +101,8 @@ pub struct SelectStatement {
     pub has_in_subquery: bool,
     /// True when the query tests a column for NULL (`IS NULL` / `IS NOT NULL`) (S3-WS1-25).
     pub has_is_null: bool,
+    /// True when the query uses a REGEXP / RLIKE / SIMILAR TO pattern match (S3-WS1-26).
+    pub has_regexp: bool,
 }
 
 /// A parsed INSERT statement.
@@ -305,6 +307,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect IS NULL / IS NOT NULL predicate (S3-WS1-25).
                 if up.contains("IS NULL") || up.contains("IS NOT NULL") {
                     stmt.has_is_null = true;
+                }
+                // Detect REGEXP / RLIKE / SIMILAR TO pattern match (S3-WS1-26).
+                if up.contains("REGEXP") || up.contains("RLIKE") || up.contains("SIMILAR TO") {
+                    stmt.has_regexp = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2008,4 +2014,30 @@ mod is_null_tests {
         assert!(!s.has_is_null, "plain SELECT without IS NULL must have has_is_null = false");
     }
 }
+}
+
+#[cfg(test)]
+mod regexp_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_regexp_sets_has_regexp() {
+        let stmt = parse_one("SELECT id FROM users WHERE email REGEXP '^[a-z]+'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_regexp, "REGEXP predicate must set has_regexp = true");
+    }
+
+    #[test]
+    fn regexp_detection_rlike_form() {
+        let stmt = parse_one("SELECT name FROM logs WHERE message RLIKE 'error'").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_regexp, "RLIKE form must set has_regexp = true");
+    }
+
+    #[test]
+    fn plain_select_has_regexp_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_regexp, "plain SELECT without pattern match must have has_regexp = false");
+    }
 }
