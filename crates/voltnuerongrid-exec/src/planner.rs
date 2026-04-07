@@ -158,6 +158,10 @@ pub enum LogicalPlan {
     Interval {
         input: Box<LogicalPlan>,
     },
+    /// IN (SELECT ...) subquery predicate (anti-join / semi-join pattern) (S3-WS1-24 has_in_subquery support).
+    InSubquery {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -226,6 +230,7 @@ impl LogicalPlan {
             LogicalPlan::NotIn { input } => input.primary_table(),
             LogicalPlan::Trim { input } => input.primary_table(),
             LogicalPlan::Interval { input } => input.primary_table(),
+            LogicalPlan::InSubquery { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -279,6 +284,7 @@ impl LogicalPlan {
             LogicalPlan::NotIn { input } => input.has_aggregation(),
             LogicalPlan::Trim { input } => input.has_aggregation(),
             LogicalPlan::Interval { input } => input.has_aggregation(),
+            LogicalPlan::InSubquery { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -565,6 +571,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.9) as u64,
                     relative_cost: inner.relative_cost + 0.3,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::InSubquery { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.6) as u64,
+                    relative_cost: inner.relative_cost + 0.8,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -913,13 +927,22 @@ impl QueryPlanner {
             after_not_in
         };
 
-        // Interval wrapper (S3-WS1-23 has_interval detection): outermost node.
-        if sel.has_interval {
+        // Interval wrapper (S3-WS1-23 has_interval detection).
+        let after_interval = if sel.has_interval {
             LogicalPlan::Interval {
                 input: Box::new(after_trim),
             }
         } else {
             after_trim
+        };
+
+        // InSubquery wrapper (S3-WS1-24 has_in_subquery detection): outermost node.
+        if sel.has_in_subquery {
+            LogicalPlan::InSubquery {
+                input: Box::new(after_interval),
+            }
+        } else {
+            after_interval
         }
     }
 
@@ -1210,17 +1233,17 @@ mod tests {
 
     #[test]
     fn planner_subquery_produces_subquery_node() {
-        let p = plan("SELECT id FROM orders WHERE id IN (SELECT id FROM recent_orders)");
+        let p = plan("SELECT id FROM orders WHERE id = (SELECT MAX(id) FROM recent_orders)");
         assert!(
             matches!(&p, LogicalPlan::Subquery { .. }),
-            "query with subquery should produce outermost Subquery node; got: {:?}", p
+            "query with scalar subquery should produce outermost Subquery node; got: {:?}", p
         );
         assert_eq!(p.primary_table(), Some("orders"));
     }
 
     #[test]
     fn cost_subquery_routes_to_hybrid() {
-        let c = cost("SELECT id FROM orders WHERE id IN (SELECT id FROM recent_orders)");
+        let c = cost("SELECT id FROM orders WHERE id = (SELECT MAX(id) FROM recent_orders)");
         assert_eq!(c.recommended_path, QueryPath::Hybrid, "subquery should route to Hybrid");
         assert!(c.relative_cost >= 2.0, "subquery carries cost >= 2.0 overhead");
     }
@@ -1533,5 +1556,24 @@ mod tests {
         let c = cost("SELECT * FROM logs WHERE ts > NOW() - INTERVAL '1 hour'");
         assert_eq!(c.recommended_path, QueryPath::Olap, "INTERVAL expressions should route to OLAP");
         assert!(c.relative_cost >= 0.3, "Interval must carry at least 0.3 cost overhead");
+    }
+    // ── S3-WS1-24: InSubquery node tests ─────────────────────────────────────
+
+    #[test]
+    fn planner_in_subquery_select_produces_in_subquery_node() {
+        let p = plan("SELECT id FROM orders WHERE user_id IN (SELECT id FROM users)");
+        assert!(
+            matches!(&p, LogicalPlan::InSubquery { .. }),
+            "IN (SELECT ...) predicate must produce outermost InSubquery node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("orders"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_in_subquery_query_routes_to_olap() {
+        let c = cost("SELECT name FROM products WHERE cat_id IN (SELECT id FROM cats)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "IN subquery should route to OLAP");
+        assert!(c.relative_cost >= 0.8, "InSubquery must carry at least 0.8 cost overhead");
     }
 }

@@ -658,6 +658,27 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 48 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline to New:** sql 171>174, exec 70>72, service 421>425 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|-|
+| `has_in_subquery: bool` field + detection | `voltnuerongrid-sql` | Detects `IN (SELECT` / `IN(SELECT` (S3-WS1-24); updated 2 existing planner tests to scalar subquery | 3 (`in_subquery_tests` module) |
+| `InSubquery { input }` plan node | `voltnuerongrid-exec` | OLAP node; 0.6x row selectivity, +0.8 cost | 2 |
+| `GET /api/v1/store/rows/count/distinct` | `voltnuerongridd` | Distinct value count across all MVCC rows (operator-auth) | 2 |
+| `GET /api/v1/store/rows/key/exists` | `voltnuerongridd` | Key existence check (`?key=` param) (operator-auth) | 2 |
+
+---
+
+## Session 47 Fix Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Fix:** Added missing INTERVAL detection block in ast.rs (S3-WS1-23). Fixed 2 failing SQL tests (169>171) and 2 failing exec tests (68>70).
+
+---
+
 ## Session 46 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

@@ -97,6 +97,8 @@ pub struct SelectStatement {
     pub has_trim: bool,
     /// True when the query uses an INTERVAL expression (date arithmetic) (S3-WS1-23).
     pub has_interval: bool,
+    /// True when the query uses an IN (SELECT ...) subquery predicate (S3-WS1-24).
+    pub has_in_subquery: bool,
 }
 
 /// A parsed INSERT statement.
@@ -289,6 +291,14 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect TRIM / LTRIM / RTRIM function calls (S3-WS1-22).
                 if up_trim.contains("TRIM(") || up_trim.contains("LTRIM(") || up_trim.contains("RTRIM(") {
                     stmt.has_trim = true;
+                }
+                // Detect INTERVAL date arithmetic expressions (S3-WS1-23).
+                if up.contains("INTERVAL") {
+                    stmt.has_interval = true;
+                }
+                // Detect IN (SELECT ...) subquery predicate (S3-WS1-24).
+                if up.contains("IN (SELECT") || up.contains("IN(SELECT") {
+                    stmt.has_in_subquery = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1938,4 +1948,32 @@ mod interval_tests {
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_interval, "plain SELECT without INTERVAL must have has_interval = false");
     }
+
+// ─── S3-WS1-24: has_in_subquery tests ────────────────────────────────────────
+
+#[cfg(test)]
+mod in_subquery_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_in_subquery_sets_has_in_subquery() {
+        let stmt = parse_one("SELECT id FROM orders WHERE user_id IN (SELECT id FROM users)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_in_subquery, "IN (SELECT ...) must set has_in_subquery = true");
+    }
+
+    #[test]
+    fn in_subquery_detection_compact_form() {
+        let stmt = parse_one("SELECT name FROM products WHERE cat_id IN(SELECT id FROM cats)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_in_subquery, "IN(SELECT...) compact form must set has_in_subquery = true");
+    }
+
+    #[test]
+    fn plain_select_has_in_subquery_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_in_subquery, "plain SELECT without IN subquery must have has_in_subquery = false");
+    }
+}
 }

@@ -431,6 +431,17 @@ A tracker row moves to **Done** only when:
 | H-09 | In Progress | 65% | improving | P2 | R4 | Cross-IDE parity/safety baseline drafted in `reference/h09-cross-ide-parity-test-matrix.md`, executed via `tests/kpi/scripts/run-h09-ide-parity-matrix.ps1` + `tests/kpi/scripts/run-h09-gate.ps1`, and now linked to release evidence via `tests/kpi/scripts/run-h09-release-summary.ps1` (`tests/kpi/results/gates/h09-release-readiness.json`) | Full cross-IDE runtime action parity checks (live extension operations and permission-boundary negative paths) are still pending | Extend H-09 matrix from baseline evidence checks to live runtime parity/permission scenarios and add trend/badge artifacts |
 | H-10 | In Progress | 70% | improving | P2 | R4 | Governance artifact set created (`reference/h10-arb-charter.md`, `reference/h10-deprecation-policy.md`, `reference/h10-deprecation-registry.md`, `reference/h10-governance-checklist.md`) and now wired into executable gate/release evidence via `tests/kpi/scripts/run-h10-governance-checklist.ps1`, `tests/kpi/scripts/run-h10-gate.ps1`, `tests/kpi/scripts/run-h10-release-summary.ps1` | ARB formal approval cycle pending; tooling reliability debt still open for PowerShell artifact regeneration and Codacy automation path on this Windows host | Schedule ARB sign-off session, ratify policy/registry v1, then add ARB decision-log evidence into H-10 release gate |
 
+### 9.2p Session 48 Implementation Update (S3-WS1-24 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_in_subquery: bool` field to `SelectStatement` (ast.rs). Detects `IN (SELECT` and `IN(SELECT` via `up` buffer (S3-WS1-24). Updated two existing subquery planner tests to scalar subquery syntax to avoid conflict. Tests: `in_subquery_tests` module (3 tests). Total: **174 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `InSubquery { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, 0.6x row selectivity, +0.8 cost), and `plan_select()` converted Interval to `let after_interval` and added InSubquery outermost wrap. Tests: `planner_in_subquery_select_produces_in_subquery_node`, `cost_in_subquery_query_routes_to_olap`. Total: **72 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/rows/count/distinct` (operator-auth, returns count of distinct values in MVCC store) and `GET /api/v1/store/rows/key/exists` (operator-auth, `?key=` param, returns bool exists). Tests: 4 new tests (`s11_ws1_24_*`). Total: **425 passed**.
+
+### 9.2o Session 47 Fix Log (S3-WS1-23 detection fix)
+
+- **SQL (`voltnuerongrid-sql`)**: Fixed missing `has_interval` detection block (S3-WS1-23) — added `if up.contains("INTERVAL")` detection after TRIM block. Fixed 2 failing tests. Total: **171 passed**.
+- **Exec (`voltnuerongrid-exec`)**: `Interval` node and `has_interval` plan wrap already existed from S47 partial apply — fixed by SQL detection fix. Fixed 2 failing tests. Total: **70 passed**.
+
 ### 9.2n Session 46 Implementation Update (S3-WS1-22 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_trim: bool` field to `SelectStatement` (ast.rs). Detects `TRIM(`, `LTRIM(`, `RTRIM(` via `up_trim` buffer (S3-WS1-22). Tests: `trim_tests` module (3 tests). Total: **168 passed**.

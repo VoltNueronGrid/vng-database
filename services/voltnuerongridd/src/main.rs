@@ -2658,6 +2658,26 @@ struct RowsLastKeyResponse {
     last_key: String,
 }
 
+// ─── S11-WS1-24: Rows count distinct + rows key exists structs ───────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowsCountDistinctResponse {
+    status: &'static str,
+    distinct_value_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct RowsKeyExistsQuery {
+    key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsKeyExistsResponse {
+    status: &'static str,
+    key: String,
+    exists: bool,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4030,6 +4050,10 @@ async fn main() {
         .route("/api/v1/store/rows/first/key", get(rows_first_key))
         // S11-WS1-23: Last alphabetically-sorted key in the row store
         .route("/api/v1/store/rows/last/key", get(rows_last_key))
+        // S11-WS1-24: Count of distinct row values in the store
+        .route("/api/v1/store/rows/count/distinct", get(rows_count_distinct))
+        // S11-WS1-24: Check if a given key exists in the row store
+        .route("/api/v1/store/rows/key/exists", get(rows_key_exists))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -8975,6 +8999,47 @@ async fn rows_last_key(
         status: "ok",
         has_key,
         last_key,
+    })))
+}
+
+// ─── S11-WS1-24: Rows count distinct endpoint ──────────────────────────────────────────────
+
+/// S11-WS1-24: Return the count of distinct row values in the MVCC row store.
+async fn rows_count_distinct(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsCountDistinctResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_count_distinct");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let mut distinct_values: Vec<String> = snapshot.into_iter().flat_map(|(_, payload)| payload.into_values()).collect();
+    distinct_values.sort();
+    distinct_values.dedup();
+    let distinct_value_count = distinct_values.len();
+    Ok((StatusCode::OK, Json(RowsCountDistinctResponse {
+        status: "ok",
+        distinct_value_count,
+    })))
+}
+
+// ─── S11-WS1-24: Rows key exists endpoint ──────────────────────────────────────────────────────
+
+/// S11-WS1-24: Return whether a given key exists in the MVCC row store.
+async fn rows_key_exists(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<RowsKeyExistsQuery>,
+) -> Result<(StatusCode, Json<RowsKeyExistsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_key_exists");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let exists = snapshot.iter().any(|(k, _)| k == &params.key);
+    Ok((StatusCode::OK, Json(RowsKeyExistsResponse {
+        status: "ok",
+        key: params.key,
+        exists,
     })))
 }
 
@@ -22421,6 +22486,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_last_key(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ── S11-WS1-24: Rows count distinct + rows key exists tests ───────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_24_rows_count_distinct_returns_ok() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_count_distinct(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.distinct_value_count, 0, "fresh store has no distinct values");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_24_rows_count_distinct_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_count_distinct(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_24_rows_key_exists_returns_false_for_missing_key() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let params = Query(RowsKeyExistsQuery { key: "nonexistent".to_string() });
+        let (status, Json(body)) = rows_key_exists(State(state), headers, params).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.exists, "non-existent key must return exists = false");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_24_rows_key_exists_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let params = Query(RowsKeyExistsQuery { key: "k".to_string() });
+        let result = rows_key_exists(State(state), headers, params).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
