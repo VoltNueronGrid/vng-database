@@ -2493,6 +2493,24 @@ struct RowsXidResponse {
     next_xid: u64,
 }
 
+// ─── S11-WS1-16: WAL size structs ────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalSizeResponse {
+    status: &'static str,
+    record_count: usize,
+    estimated_bytes: usize,
+}
+
+// ─── S11-WS1-16: Rows visible structs ────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowsVisibleResponse {
+    status: &'static str,
+    snapshot_xid: u64,
+    visible_row_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3775,6 +3793,8 @@ async fn main() {
         .route("/api/v1/store/wal/head", get(wal_head))
         // S11-WS1-15: WAL range (records within a sequence range)
         .route("/api/v1/store/wal/range", get(wal_range))
+        // S11-WS1-16: WAL size estimate
+        .route("/api/v1/store/wal/size", get(wal_size))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3835,6 +3855,8 @@ async fn main() {
         .route("/api/v1/store/rows/modified", get(rows_modified))
         // S11-WS1-15: Row store current XID info
         .route("/api/v1/store/rows/xid", get(rows_xid))
+        // S11-WS1-16: Visible row count at current snapshot
+        .route("/api/v1/store/rows/visible", get(rows_visible))
         // S11-WS1-12: Row store page-level stats
         .route("/api/v1/store/rows/page/stats", get(rows_page_stats))
         // S5-WS4A-02: Broker adapter status + flush
@@ -8419,6 +8441,48 @@ async fn rows_xid(
         status: "ok",
         current_xid,
         next_xid: current_xid + 1,
+    })))
+}
+
+// ─── S11-WS1-16: WAL size endpoint ───────────────────────────────────────────
+
+/// S11-WS1-16: Return a WAL record count and estimated byte size.
+async fn wal_size(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalSizeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_size");
+    let records = wal.wal_records();
+    let record_count = records.len();
+    // Estimate: 8 bytes (sequence) + avg key + avg value; 64 bytes per record scaffold.
+    let estimated_bytes = records.iter().fold(0usize, |acc, r| {
+        acc + 8 + r.key.len() + r.value.len()
+    });
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalSizeResponse {
+        status: "ok",
+        record_count,
+        estimated_bytes,
+    })))
+}
+
+// ─── S11-WS1-16: Rows visible endpoint ───────────────────────────────────────
+
+/// S11-WS1-16: Return the count of visible rows at the current MVCC snapshot.
+async fn rows_visible(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsVisibleResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_visible");
+    let snapshot_xid = rs.current_xid();
+    let visible_row_count = rs.visible_row_count(snapshot_xid);
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsVisibleResponse {
+        status: "ok",
+        snapshot_xid,
+        visible_row_count,
     })))
 }
 
@@ -21526,6 +21590,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_xid(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-16: WAL size endpoint tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_16_wal_size_empty_wal_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_size(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.record_count, 0, "empty WAL must report zero records");
+        assert_eq!(body.estimated_bytes, 0, "empty WAL must report zero bytes");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_16_wal_size_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_size(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-16: Rows visible endpoint tests ──────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_16_rows_visible_fresh_store_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_visible(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.visible_row_count, 0, "fresh store must have zero visible rows");
+        assert_eq!(body.snapshot_xid, 0, "fresh snapshot must be xid 0");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_16_rows_visible_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_visible(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

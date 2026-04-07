@@ -81,6 +81,8 @@ pub struct SelectStatement {
     pub has_nullif: bool,
     /// True when the query contains a string function (LENGTH, UPPER, LOWER, SUBSTR) (S3-WS1-15).
     pub has_string_fn: bool,
+    /// True when the query contains a date/time function (NOW, DATE_TRUNC, EXTRACT) (S3-WS1-16).
+    pub has_date_fn: bool,
 }
 
 /// A parsed INSERT statement.
@@ -243,6 +245,11 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up_trim.contains("LENGTH(") || up_trim.contains("UPPER(")
                     || up_trim.contains("LOWER(") || up_trim.contains("SUBSTR(") {
                     stmt.has_string_fn = true;
+                }
+                // Detect date/time functions anywhere in the query (S3-WS1-16).
+                if up_trim.contains("NOW(") || up_trim.contains("DATE_TRUNC(")
+                    || up_trim.contains("EXTRACT(") {
+                    stmt.has_date_fn = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1668,5 +1675,33 @@ mod string_fn_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_string_fn, "plain SELECT without string functions must have has_string_fn = false");
+    }
+}
+
+// ─── S3-WS1-16: has_date_fn tests ──────────────────────────────────────────
+
+#[cfg(test)]
+mod date_fn_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_now_sets_has_date_fn() {
+        let stmt = parse_one("SELECT NOW() FROM dual").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_date_fn, "NOW() expression must set has_date_fn = true");
+    }
+
+    #[test]
+    fn date_fn_detection_date_trunc_case_insensitive() {
+        let stmt = parse_one("SELECT date_trunc('day', created_at) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_date_fn, "lowercase date_trunc() must set has_date_fn = true");
+    }
+
+    #[test]
+    fn plain_select_has_date_fn_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_date_fn, "plain SELECT without date functions must have has_date_fn = false");
     }
 }

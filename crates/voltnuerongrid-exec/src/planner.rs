@@ -126,6 +126,10 @@ pub enum LogicalPlan {
     StringFn {
         input: Box<LogicalPlan>,
     },
+    /// Date/time function expression (NOW/DATE_TRUNC/EXTRACT) (from S3-WS1-16 has_date_fn support).
+    DateFn {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -186,6 +190,7 @@ impl LogicalPlan {
             LogicalPlan::Cast { input } => input.primary_table(),
             LogicalPlan::Nullif { input } => input.primary_table(),
             LogicalPlan::StringFn { input } => input.primary_table(),
+            LogicalPlan::DateFn { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -231,6 +236,7 @@ impl LogicalPlan {
             LogicalPlan::Cast { input } => input.has_aggregation(),
             LogicalPlan::Nullif { input } => input.has_aggregation(),
             LogicalPlan::StringFn { input } => input.has_aggregation(),
+            LogicalPlan::DateFn { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -453,6 +459,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.1,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::DateFn { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.12,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -730,12 +744,21 @@ impl QueryPlanner {
         };
 
         // StringFn wrapper (S3-WS1-15 has_string_fn detection): outermost node.
-        if sel.has_string_fn {
+        let after_string_fn = if sel.has_string_fn {
             LogicalPlan::StringFn {
                 input: Box::new(after_nullif),
             }
         } else {
             after_nullif
+        };
+
+        // DateFn wrapper (S3-WS1-16 has_date_fn detection): outermost node.
+        if sel.has_date_fn {
+            LogicalPlan::DateFn {
+                input: Box::new(after_string_fn),
+            }
+        } else {
+            after_string_fn
         }
     }
 
@@ -1201,5 +1224,23 @@ mod tests {
         let c = cost("SELECT LENGTH(name) FROM users");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "string fn should route to OLTP");
         assert!(c.relative_cost >= 0.1, "StringFn must carry at least 0.1 cost overhead");
+    }
+
+    #[test]
+    fn planner_date_fn_select_produces_date_fn_node() {
+        let p = plan("SELECT NOW() FROM dual");
+        assert!(
+            matches!(&p, LogicalPlan::DateFn { .. }),
+            "NOW() query should produce outermost DateFn node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("dual"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_date_fn_query_routes_to_oltp() {
+        let c = cost("SELECT EXTRACT(year FROM created_at) FROM events");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "date fn should route to OLTP");
+        assert!(c.relative_cost >= 0.12, "DateFn must carry at least 0.12 cost overhead");
     }
 }

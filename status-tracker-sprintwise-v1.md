@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 40 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 147→150, exec 54→56, service 389→393 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_date_fn: bool` field + detection | `voltnuerongrid-sql` | Detects `NOW(`, `DATE_TRUNC(`, `EXTRACT(` in query (`S3-WS1-16`) | 3 (`date_fn_tests` module) |
+| `DateFn { input }` plan node | `voltnuerongrid-exec` | OLTP pass-through node; +0.12 cost | 2 |
+| `GET /api/v1/store/wal/size` | `voltnuerongridd` | WAL record count + estimated byte size (operator-auth) | 2 |
+| `GET /api/v1/store/rows/visible` | `voltnuerongridd` | Visible row count at current MVCC snapshot xid (operator-auth) | 2 |
+
+---
+
 ## Session 39 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)
