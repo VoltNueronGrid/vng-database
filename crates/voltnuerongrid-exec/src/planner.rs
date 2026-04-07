@@ -218,6 +218,10 @@ pub enum LogicalPlan {
     Pivot {
         input: Box<LogicalPlan>,
     },
+    /// FETCH NEXT/FIRST pagination clause (S3-WS1-31 has_fetch support).
+    Fetch {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -262,6 +266,7 @@ impl LogicalPlan {
             LogicalPlan::WindowAgg { input } => input.primary_table(),
             LogicalPlan::Lateral { input } => input.primary_table(),
             LogicalPlan::Pivot { input } => input.primary_table(),
+            LogicalPlan::Fetch { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -322,6 +327,7 @@ impl LogicalPlan {
             LogicalPlan::WindowAgg { .. } => true,
             LogicalPlan::Lateral { input } => input.has_aggregation(),
             LogicalPlan::Pivot { input } => input.has_aggregation(),
+            LogicalPlan::Fetch { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -664,6 +670,14 @@ impl QueryPlanner {
                     estimated_rows: (inner.estimated_rows as f64 * 0.9) as u64,
                     relative_cost: inner.relative_cost + 0.8,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Fetch { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.05,
+                    recommended_path: QueryPath::Oltp,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -1074,13 +1088,22 @@ impl QueryPlanner {
             after_window_agg
         };
 
-        // Pivot wrapper (S3-WS1-30 has_pivot detection): outermost node.
-        if sel.has_pivot {
+        // Pivot wrapper (S3-WS1-30 has_pivot detection).
+        let after_pivot = if sel.has_pivot {
             LogicalPlan::Pivot {
                 input: Box::new(after_lateral),
             }
         } else {
             after_lateral
+        };
+
+        // Fetch wrapper (S3-WS1-31 has_fetch detection): outermost node.
+        if sel.has_fetch {
+            LogicalPlan::Fetch {
+                input: Box::new(after_pivot),
+            }
+        } else {
+            after_pivot
         }
     }
 
@@ -1834,5 +1857,25 @@ mod tests {
         let c = cost("SELECT product, region, sales FROM quarterly_sales UNPIVOT (sales FOR region IN (q1, q2, q3, q4))");
         assert_eq!(c.recommended_path, QueryPath::Olap, "PIVOT/UNPIVOT query should route to OLAP");
         assert!(c.relative_cost >= 0.8, "Pivot must carry at least 0.8 cost overhead");
+    }
+
+    // ── S3-WS1-31: Fetch node tests ──────────────────────────────────────────
+
+    #[test]
+    fn planner_fetch_select_produces_fetch_node() {
+        let p = plan("SELECT id FROM orders ORDER BY id OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY");
+        assert!(
+            matches!(&p, LogicalPlan::Fetch { .. }),
+            "FETCH NEXT must produce outermost Fetch node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("orders"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_fetch_query_routes_to_oltp() {
+        let c = cost("SELECT name FROM employees ORDER BY salary DESC FETCH FIRST 10 ROWS ONLY");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "FETCH pagination should route to OLTP");
+        assert!(c.relative_cost >= 0.05, "Fetch must carry at least 0.05 cost overhead");
     }
 }

@@ -2775,6 +2775,21 @@ struct RowsKeyShortestResponse {
     row_count: usize,
 }
 
+// S3-WS1-31: wal/min/seq + rows/count/all structs
+
+#[derive(Debug, Serialize)]
+struct WalMinSeqResponse {
+    status: &'static str,
+    min_sequence: u64,
+    has_records: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsCountAllResponse {
+    status: &'static str,
+    total_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4171,6 +4186,9 @@ async fn main() {
         .route("/api/v1/store/rows/key/longest", get(rows_key_longest))
         // S3-WS1-30: rows/key/shortest (wal/age exists from S22)
         .route("/api/v1/store/rows/key/shortest", get(rows_key_shortest))
+        // S3-WS1-31: wal/min/seq + rows/count/all
+        .route("/api/v1/store/wal/min/seq", get(wal_min_seq))
+        .route("/api/v1/store/rows/count/all", get(rows_count_all))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9354,6 +9372,32 @@ async fn rows_key_shortest(
         .to_string();
     let key_length = shortest_key.len();
     Ok((StatusCode::OK, Json(RowsKeyShortestResponse { status: "ok", shortest_key, key_length, row_count })))
+}
+
+// S3-WS1-31: wal/min/seq endpoint
+async fn wal_min_seq(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalMinSeqResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_min_seq");
+    let records = wal.wal_records();
+    let min_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
+    let has_records = !records.is_empty();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalMinSeqResponse { status: "ok", min_sequence, has_records })))
+}
+
+// S3-WS1-31: rows/count/all endpoint
+async fn rows_count_all(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsCountAllResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_count_all");
+    let total_count = rs.total_row_count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsCountAllResponse { status: "ok", total_count })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23079,6 +23123,49 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_key_shortest(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-31: wal_min_seq tests
+
+    #[tokio::test]
+    async fn s11_ws1_31_wal_min_seq_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_min_seq(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.has_records, "fresh WAL must have no records");
+        assert_eq!(body.min_sequence, 0, "fresh WAL must have min_sequence = 0");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_31_wal_min_seq_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_min_seq(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-31: rows_count_all tests
+
+    #[tokio::test]
+    async fn s11_ws1_31_rows_count_all_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_count_all(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.total_count, 0, "fresh store must have zero total rows");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_31_rows_count_all_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_count_all(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

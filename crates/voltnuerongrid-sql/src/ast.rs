@@ -111,6 +111,8 @@ pub struct SelectStatement {
     pub has_lateral: bool,
     /// True when the query uses a PIVOT or UNPIVOT clause (S3-WS1-30).
     pub has_pivot: bool,
+    /// True when the query uses a FETCH NEXT/FIRST pagination clause (S3-WS1-31).
+    pub has_fetch: bool,
 }
 
 /// A parsed INSERT statement.
@@ -335,6 +337,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect PIVOT / UNPIVOT clause (S3-WS1-30).
                 if up.contains("PIVOT") {
                     stmt.has_pivot = true;
+                }
+                // Detect FETCH NEXT / FETCH FIRST pagination clause (S3-WS1-31).
+                if up.contains("FETCH NEXT") || up.contains("FETCH FIRST") {
+                    stmt.has_fetch = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2171,5 +2177,33 @@ mod pivot_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_pivot, "plain SELECT without PIVOT must have has_pivot = false");
+    }
+}
+
+// ─── S3-WS1-31: has_fetch tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_fetch_next_sets_has_fetch() {
+        let stmt = parse_one("SELECT id FROM orders ORDER BY id OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_fetch, "FETCH NEXT must set has_fetch = true");
+    }
+
+    #[test]
+    fn select_with_fetch_first_sets_has_fetch() {
+        let stmt = parse_one("SELECT name FROM employees ORDER BY salary DESC FETCH FIRST 10 ROWS ONLY").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_fetch, "FETCH FIRST must set has_fetch = true");
+    }
+
+    #[test]
+    fn plain_select_has_fetch_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_fetch, "plain SELECT without FETCH must have has_fetch = false");
     }
 }
