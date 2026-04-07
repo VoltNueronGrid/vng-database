@@ -150,6 +150,10 @@ pub enum LogicalPlan {
     NotIn {
         input: Box<LogicalPlan>,
     },
+    /// TRIM / LTRIM / RTRIM string function applied to result set (S3-WS1-22 has_trim support).
+    Trim {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -216,6 +220,7 @@ impl LogicalPlan {
             LogicalPlan::Exists { input } => input.primary_table(),
             LogicalPlan::AnyAll { input } => input.primary_table(),
             LogicalPlan::NotIn { input } => input.primary_table(),
+            LogicalPlan::Trim { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -267,6 +272,7 @@ impl LogicalPlan {
             LogicalPlan::Exists { input } => input.has_aggregation(),
             LogicalPlan::AnyAll { input } => input.has_aggregation(),
             LogicalPlan::NotIn { input } => input.has_aggregation(),
+            LogicalPlan::Trim { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -538,6 +544,14 @@ impl QueryPlanner {
                     estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
                     relative_cost: inner.relative_cost + 0.4,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Trim { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.05,
+                    recommended_path: QueryPath::Oltp,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -867,13 +881,22 @@ impl QueryPlanner {
             after_exists
         };
 
-        // NotIn wrapper (S3-WS1-21 has_not_in detection): outermost node.
-        if sel.has_not_in {
+        // NotIn wrapper (S3-WS1-21 has_not_in detection).
+        let after_not_in = if sel.has_not_in {
             LogicalPlan::NotIn {
                 input: Box::new(after_any_all),
             }
         } else {
             after_any_all
+        };
+
+        // Trim wrapper (S3-WS1-22 has_trim detection): outermost node.
+        if sel.has_trim {
+            LogicalPlan::Trim {
+                input: Box::new(after_not_in),
+            }
+        } else {
+            after_not_in
         }
     }
 
@@ -1447,5 +1470,25 @@ mod tests {
         let c = cost("SELECT name FROM users WHERE id NOT IN (SELECT user_id FROM bans)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "NOT IN should route to OLAP");
         assert!(c.relative_cost >= 0.4, "NotIn must carry at least 0.4 cost overhead");
+    }
+
+    // ── S3-WS1-22: Trim node tests ────────────────────────────────────────────
+
+    #[test]
+    fn planner_trim_select_produces_trim_node() {
+        let p = plan("SELECT TRIM(name) FROM users");
+        assert!(
+            matches!(&p, LogicalPlan::Trim { .. }),
+            "TRIM() call must produce outermost Trim node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("users"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_trim_query_routes_to_oltp() {
+        let c = cost("SELECT LTRIM(email) FROM contacts");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "TRIM functions should route to OLTP");
+        assert!(c.relative_cost >= 0.05, "Trim must carry at least 0.05 cost overhead");
     }
 }

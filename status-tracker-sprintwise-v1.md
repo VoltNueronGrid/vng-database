@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 46 Implementation Log
+
+**Date:** 2026-04-07 (Sprint 9 continuation)
+**Test Baseline → New:** sql 165→168, exec 66→68, service 413→417 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|-|
+| `has_trim: bool` field + detection | `voltnuerongrid-sql` | Detects `TRIM(`, `LTRIM(`, `RTRIM(` via `up_trim` buffer (`S3-WS1-22`) | 3 (`trim_tests` module) |
+| `Trim { input }` plan node | `voltnuerongrid-exec` | OLTP node; pass-through rows, +0.05 cost | 2 |
+| `GET /api/v1/store/wal/age` | `voltnuerongridd` | oldest_sequence, newest_sequence, sequence_span from live WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/first/key` | `voltnuerongridd` | First alphabetically-sorted key in MVCC row store (operator-auth) | 2 |
+
+---
+
 ## Session 45 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

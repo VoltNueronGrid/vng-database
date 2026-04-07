@@ -93,6 +93,8 @@ pub struct SelectStatement {
     pub has_any_all: bool,
     /// True when the query contains a NOT IN (...) predicate (S3-WS1-21).
     pub has_not_in: bool,
+    /// True when the query contains a TRIM / LTRIM / RTRIM function call (S3-WS1-22).
+    pub has_trim: bool,
 }
 
 /// A parsed INSERT statement.
@@ -281,6 +283,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect NOT IN predicate (S3-WS1-21).
                 if up.contains("NOT IN (") || up.contains("NOT IN(") {
                     stmt.has_not_in = true;
+                }
+                // Detect TRIM / LTRIM / RTRIM function calls (S3-WS1-22).
+                if up_trim.contains("TRIM(") || up_trim.contains("LTRIM(") || up_trim.contains("RTRIM(") {
+                    stmt.has_trim = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1874,5 +1880,33 @@ mod not_in_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_not_in, "plain SELECT without NOT IN must have has_not_in = false");
+    }
+}
+
+// ─── S3-WS1-22: has_trim tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod trim_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_trim_sets_has_trim() {
+        let stmt = parse_one("SELECT TRIM(name) FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_trim, "TRIM() call must set has_trim = true");
+    }
+
+    #[test]
+    fn trim_detection_ltrim_and_rtrim() {
+        let stmt = parse_one("SELECT LTRIM(RTRIM(email)) FROM contacts").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_trim, "LTRIM/RTRIM calls must set has_trim = true");
+    }
+
+    #[test]
+    fn plain_select_has_trim_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_trim, "plain SELECT without TRIM must have has_trim = false");
     }
 }

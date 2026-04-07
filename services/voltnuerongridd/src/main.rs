@@ -2625,6 +2625,23 @@ struct RowsXidHistoryResponse {
     total_transactions: u64,
 }
 
+// ─── S11-WS1-22: WAL age + rows first key structs ────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalAgeResponse {
+    status: &'static str,
+    oldest_sequence: u64,
+    newest_sequence: u64,
+    sequence_span: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsFirstKeyResponse {
+    status: &'static str,
+    has_key: bool,
+    first_key: String,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3919,6 +3936,8 @@ async fn main() {
         .route("/api/v1/store/wal/delta", get(wal_delta))
         // S11-WS1-21: Unique key count across all WAL records
         .route("/api/v1/store/wal/unique/keys", get(wal_unique_keys))
+        // S11-WS1-22: WAL age (oldest/newest sequence span)
+        .route("/api/v1/store/wal/age", get(wal_age))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3989,6 +4008,8 @@ async fn main() {
         .route("/api/v1/store/rows/tombstone/count", get(rows_tombstone_count))
         // S11-WS1-21: Row store XID history (current + next + total)
         .route("/api/v1/store/rows/xid/history", get(rows_xid_history))
+        // S11-WS1-22: First key in the row store (alphabetically)
+        .route("/api/v1/store/rows/first/key", get(rows_first_key))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -8849,6 +8870,50 @@ async fn rows_xid_history(
 }
 
 // ─── S
+// ─── S11-WS1-22: WAL age endpoint ─────────────────────────────────────────────
+
+/// S11-WS1-22: Return the oldest and newest WAL sequence numbers and their span.
+async fn wal_age(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalAgeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_age");
+    let records = wal.wal_records();
+    let oldest_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
+    let newest_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
+    let sequence_span = newest_sequence.saturating_sub(oldest_sequence);
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalAgeResponse {
+        status: "ok",
+        oldest_sequence,
+        newest_sequence,
+        sequence_span,
+    })))
+}
+
+// ─── S11-WS1-22: Rows first key endpoint ─────────────────────────────────────────────────────
+
+/// S11-WS1-22: Return the first (alphabetically smallest) key currently in the row store.
+async fn rows_first_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsFirstKeyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_first_key");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let mut keys: Vec<String> = snapshot.into_iter().map(|(k, _)| k).collect();
+    keys.sort();
+    let first_key = keys.into_iter().next().unwrap_or_default();
+    let has_key = !first_key.is_empty();
+    Ok((StatusCode::OK, Json(RowsFirstKeyResponse {
+        status: "ok",
+        has_key,
+        first_key,
+    })))
+}
+
 
 // ─── S7-WS6-01: Raft vote statistics endpoint ───────────────────────────────
 
@@ -22209,6 +22274,47 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_xid_history(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ── S11-WS1-22: WAL age + rows first key tests ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_22_wal_age_returns_ok_with_span() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_age(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.sequence_span, body.newest_sequence.saturating_sub(body.oldest_sequence));
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_22_wal_age_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_age(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_22_rows_first_key_returns_ok_empty_store() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_first_key(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.has_key, "fresh empty store must have has_key = false");
+        assert_eq!(body.first_key, "", "empty store must have empty first_key");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_22_rows_first_key_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_first_key(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
