@@ -89,6 +89,8 @@ pub struct SelectStatement {
     pub has_math_fn: bool,
     /// True when the query contains an EXISTS subquery predicate (S3-WS1-19).
     pub has_exists: bool,
+    /// True when the query uses ANY or ALL quantifiers with a subquery/list (S3-WS1-20).
+    pub has_any_all: bool,
 }
 
 /// A parsed INSERT statement.
@@ -269,6 +271,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect EXISTS subquery predicate (S3-WS1-19).
                 if up_trim.contains("EXISTS(") || up.contains("EXISTS (") {
                     stmt.has_exists = true;
+                }
+                // Detect ANY / ALL quantifiers (S3-WS1-20).
+                if up_trim.contains("ANY(") || up_trim.contains("ALL(") {
+                    stmt.has_any_all = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -1806,5 +1812,33 @@ mod exists_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_exists, "plain SELECT without EXISTS must have has_exists = false");
+    }
+}
+
+// ─── S3-WS1-20: has_any_all tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod any_all_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_any_sets_has_any_all() {
+        let stmt = parse_one("SELECT id FROM products WHERE price > ANY(SELECT price FROM discounts)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_any_all, "ANY quantifier must set has_any_all = true");
+    }
+
+    #[test]
+    fn select_with_all_sets_has_any_all() {
+        let stmt = parse_one("SELECT name FROM employees WHERE salary >= ALL(SELECT salary FROM managers)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_any_all, "ALL quantifier must set has_any_all = true");
+    }
+
+    #[test]
+    fn plain_select_has_any_all_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_any_all, "plain SELECT without ANY/ALL must have has_any_all = false");
     }
 }

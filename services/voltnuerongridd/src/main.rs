@@ -2589,6 +2589,24 @@ struct RowsScanVisibleResponse {
     rows: Vec<RowScanEntry>,
 }
 
+// ─── S11-WS1-20: WAL delta structs ───────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct WalDeltaResponse {
+    status: &'static str,
+    insert_count: usize,
+    delete_count: usize,
+    total_records: usize,
+}
+
+// ─── S11-WS1-20: Rows tombstone count structs ────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct RowsTombstoneCountResponse {
+    status: &'static str,
+    tombstone_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3879,6 +3897,8 @@ async fn main() {
         .route("/api/v1/store/wal/by-key", get(wal_by_key))
         // S11-WS1-19: Latest WAL checkpoint info
         .route("/api/v1/store/wal/checkpoint/latest", get(wal_checkpoint_latest))
+        // S11-WS1-20: WAL insert/delete delta counts
+        .route("/api/v1/store/wal/delta", get(wal_delta))
         // S2-WS2-02: WAL checkpoint history
         .route("/api/v1/store/wal/checkpoint/history", get(wal_checkpoint_history))
         // S11-WS1-10: WAL truncate up to sequence
@@ -3945,6 +3965,8 @@ async fn main() {
         .route("/api/v1/store/rows/total", get(rows_total))
         // S11-WS1-18: Count of distinct row keys
         .route("/api/v1/store/rows/keys/count", get(rows_keys_count))
+        // S11-WS1-20: Count of tombstone (deleted) rows
+        .route("/api/v1/store/rows/tombstone/count", get(rows_tombstone_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -8716,6 +8738,45 @@ async fn rows_scan_visible(
         snapshot_xid,
         row_count,
         rows,
+    })))
+}
+
+// ─── S11-WS1-20: WAL delta endpoint ──────────────────────────────────────────
+
+/// S11-WS1-20: Return insert and delete counts derived from WAL record values.
+async fn wal_delta(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalDeltaResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_delta");
+    let records = wal.wal_records().to_vec();
+    drop(wal);
+    let total_records = records.len();
+    let delete_count = records.iter().filter(|r| r.value == "__deleted__").count();
+    let insert_count = total_records - delete_count;
+    Ok((StatusCode::OK, Json(WalDeltaResponse {
+        status: "ok",
+        insert_count,
+        delete_count,
+        total_records,
+    })))
+}
+
+// ─── S11-WS1-20: Rows tombstone count endpoint ───────────────────────────────
+
+/// S11-WS1-20: Return the count of tombstone (deleted-marker) rows in the MVCC store.
+async fn rows_tombstone_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsTombstoneCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock rows_tombstone_count");
+    let tombstone_count = wal.wal_records().iter().filter(|r| r.value == "__deleted__").count();
+    drop(wal);
+    Ok((StatusCode::OK, Json(RowsTombstoneCountResponse {
+        status: "ok",
+        tombstone_count,
     })))
 }
 
@@ -21955,6 +22016,47 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let headers = HeaderMap::new();
         let result = rows_keys_count(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-20: WAL delta endpoint tests ─────────────────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_20_wal_delta_fresh_wal_returns_zero_counts() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_delta(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.insert_count, 0, "fresh WAL must have zero inserts");
+        assert_eq!(body.delete_count, 0, "fresh WAL must have zero deletes");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_20_wal_delta_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = wal_delta(State(state), headers).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── S11-WS1-20: Rows tombstone count endpoint tests ──────────────────────
+
+    #[tokio::test]
+    async fn s11_ws1_20_rows_tombstone_count_fresh_store_returns_zero() {
+        let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_tombstone_count(State(state), headers).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.tombstone_count, 0, "fresh row store must have zero tombstones");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_20_rows_tombstone_count_missing_auth_returns_401() {
+        let state = state_with_key(Some("test-key"));
+        let headers = HeaderMap::new();
+        let result = rows_tombstone_count(State(state), headers).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

@@ -142,6 +142,10 @@ pub enum LogicalPlan {
     Exists {
         input: Box<LogicalPlan>,
     },
+    /// ANY/ALL quantifier expression (from S3-WS1-20 has_any_all support).
+    AnyAll {
+        input: Box<LogicalPlan>,
+    },
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
@@ -206,6 +210,7 @@ impl LogicalPlan {
             LogicalPlan::Concat { input } => input.primary_table(),
             LogicalPlan::MathFn { input } => input.primary_table(),
             LogicalPlan::Exists { input } => input.primary_table(),
+            LogicalPlan::AnyAll { input } => input.primary_table(),
             LogicalPlan::WindowFn { input, .. } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
@@ -255,6 +260,7 @@ impl LogicalPlan {
             LogicalPlan::Concat { input } => input.has_aggregation(),
             LogicalPlan::MathFn { input } => input.has_aggregation(),
             LogicalPlan::Exists { input } => input.has_aggregation(),
+            LogicalPlan::AnyAll { input } => input.has_aggregation(),
             LogicalPlan::WindowFn { input, .. } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
@@ -509,6 +515,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.5) as u64,
                     relative_cost: inner.relative_cost + 1.2,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::AnyAll { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.8) as u64,
+                    relative_cost: inner.relative_cost + 0.6,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -821,13 +835,22 @@ impl QueryPlanner {
             after_concat
         };
 
-        // Exists wrapper (S3-WS1-19 has_exists detection): outermost node.
-        if sel.has_exists {
+        // Exists wrapper (S3-WS1-19 has_exists detection).
+        let after_exists = if sel.has_exists {
             LogicalPlan::Exists {
                 input: Box::new(after_math_fn),
             }
         } else {
             after_math_fn
+        };
+
+        // AnyAll wrapper (S3-WS1-20 has_any_all detection): outermost node.
+        if sel.has_any_all {
+            LogicalPlan::AnyAll {
+                input: Box::new(after_exists),
+            }
+        } else {
+            after_exists
         }
     }
 
@@ -1365,5 +1388,23 @@ mod tests {
         let c = cost("SELECT id FROM orders WHERE EXISTS (SELECT 1 FROM items WHERE items.order_id = orders.id)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "EXISTS subquery should route to OLAP");
         assert!(c.relative_cost >= 1.2, "Exists must carry at least 1.2 cost overhead");
+    }
+
+    #[test]
+    fn planner_any_all_select_produces_any_all_node() {
+        let p = plan("SELECT id FROM products WHERE price > ANY(SELECT price FROM discounts)");
+        assert!(
+            matches!(&p, LogicalPlan::AnyAll { .. }),
+            "ANY quantifier must produce outermost AnyAll node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("products"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_any_all_query_routes_to_olap() {
+        let c = cost("SELECT name FROM employees WHERE salary >= ALL(SELECT salary FROM managers)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "ANY/ALL quantifier should route to OLAP");
+        assert!(c.relative_cost >= 0.6, "AnyAll must carry at least 0.6 cost overhead");
     }
 }
