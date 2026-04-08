@@ -266,6 +266,10 @@ pub enum LogicalPlan {
     RecursiveCte {
         input: Box<LogicalPlan>,
     },
+    /// NOT EXISTS subquery semantics wrapper (S3-WS1-43 has_not_exists support).
+    NotExists {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -322,6 +326,7 @@ impl LogicalPlan {
             LogicalPlan::Qualify { input } => input.primary_table(),
             LogicalPlan::WithCte { input } => input.primary_table(),
             LogicalPlan::RecursiveCte { input } => input.primary_table(),
+            LogicalPlan::NotExists { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -394,6 +399,7 @@ impl LogicalPlan {
             LogicalPlan::Qualify { input } => input.has_aggregation(),
             LogicalPlan::WithCte { input } => input.has_aggregation(),
             LogicalPlan::RecursiveCte { input } => input.has_aggregation(),
+            LogicalPlan::NotExists { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -832,6 +838,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 3.00,
                     recommended_path: QueryPath::Hybrid,
+                }
+            }
+            LogicalPlan::NotExists { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.8) as u64,
+                    relative_cost: inner.relative_cost + 2.00,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -1350,13 +1364,22 @@ impl QueryPlanner {
             after_qualify
         };
 
-        // RecursiveCte wrapper (S3-WS1-42 has_recursive_cte detection): outermost node.
-        if sel.has_recursive_cte {
+        // RecursiveCte wrapper (S3-WS1-42 has_recursive_cte detection).
+        let after_recursive_cte = if sel.has_recursive_cte {
             LogicalPlan::RecursiveCte {
                 input: Box::new(after_with_cte),
             }
         } else {
             after_with_cte
+        };
+
+        // NotExists wrapper (S3-WS1-43 has_not_exists detection): outermost node.
+        if sel.has_not_exists {
+            LogicalPlan::NotExists {
+                input: Box::new(after_recursive_cte),
+            }
+        } else {
+            after_recursive_cte
         }
     }
 
@@ -2340,5 +2363,24 @@ mod tests {
         let c = cost("WITH RECURSIVE t AS (SELECT 1 AS n) SELECT n FROM t");
         assert_eq!(c.recommended_path, QueryPath::Hybrid, "WITH RECURSIVE should route to Hybrid");
         assert!(c.relative_cost >= 3.00, "RecursiveCte must carry at least 3.00 cost overhead");
+    }
+
+    // ── S3-WS1-43: NotExists node tests ─────────────────────────────────────
+
+    #[test]
+    fn planner_not_exists_select_produces_not_exists_node() {
+        let p = plan("SELECT id FROM users u WHERE NOT EXISTS (SELECT 1 FROM bans b WHERE b.user_id = u.id)");
+        assert!(
+            matches!(&p, LogicalPlan::NotExists { .. }),
+            "NOT EXISTS must produce outermost NotExists node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_not_exists_routes_to_olap() {
+        let c = cost("SELECT id FROM users WHERE NOT EXISTS (SELECT 1 FROM sessions)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "NOT EXISTS should route to OLAP");
+        assert!(c.relative_cost >= 2.00, "NotExists must carry at least 2.00 cost overhead");
     }
 }

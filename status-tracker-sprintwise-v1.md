@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 67 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 228→231, exec 108→110, service 497→501 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_not_exists: bool` field + detection | `voltnuerongrid-sql` | Detects `NOT EXISTS (...)` subquery predicate (`S3-WS1-43`) | 3 (`not_exists_tests` module) |
+| `NotExists { input }` plan node | `voltnuerongrid-exec` | OLAP node; 0.8x row reduction, +2.00 cost overhead | 2 |
+| `GET /api/v1/store/wal/mutation/count/non_deleted` | `voltnuerongridd` | Count non-deleted WAL mutations (operator-auth) | 2 |
+| `GET /api/v1/store/rows/value/empty/count` | `voltnuerongridd` | Count empty string values across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 66 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

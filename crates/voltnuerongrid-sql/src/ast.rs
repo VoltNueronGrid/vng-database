@@ -135,6 +135,8 @@ pub struct SelectStatement {
     pub has_with_cte: bool,
     /// True when the query uses a WITH RECURSIVE ... AS (...) CTE clause (S3-WS1-42).
     pub has_recursive_cte: bool,
+    /// True when the query uses a NOT EXISTS subquery predicate (S3-WS1-43).
+    pub has_not_exists: bool,
 }
 
 /// A parsed INSERT statement.
@@ -408,6 +410,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.trim_start().starts_with("WITH RECURSIVE ") && up.contains(" AS (") {
                     stmt.has_recursive_cte = true;
                 }
+                // Detect NOT EXISTS predicate (S3-WS1-43).
+                if up.contains("NOT EXISTS(") || up.contains("NOT EXISTS (") {
+                    stmt.has_not_exists = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -426,6 +432,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if up.trim_start().starts_with("WITH RECURSIVE ") && up.contains(" AS (") {
                     stmt.has_recursive_cte = true;
+                }
+                if up.contains("NOT EXISTS(") || up.contains("NOT EXISTS (") {
+                    stmt.has_not_exists = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2598,5 +2607,33 @@ mod recursive_cte_tests {
         let stmt = parse_one("WITH a AS (SELECT id FROM t1) SELECT id FROM a").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_recursive_cte, "non-recursive WITH CTE must have has_recursive_cte = false");
+    }
+}
+
+// ─── S3-WS1-43: has_not_exists tests ────────────────────────────────────────
+
+#[cfg(test)]
+mod not_exists_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_not_exists_sets_has_not_exists_true() {
+        let stmt = parse_one("SELECT id FROM users u WHERE NOT EXISTS (SELECT 1 FROM bans b WHERE b.user_id = u.id)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_not_exists, "NOT EXISTS must set has_not_exists = true");
+    }
+
+    #[test]
+    fn select_with_not_exists_in_and_predicate_sets_has_not_exists_true() {
+        let stmt = parse_one("SELECT id FROM t WHERE active = 1 AND NOT EXISTS(SELECT 1 FROM x)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_not_exists, "NOT EXISTS predicate must set has_not_exists = true");
+    }
+
+    #[test]
+    fn select_with_exists_only_has_not_exists_false() {
+        let stmt = parse_one("SELECT id FROM users WHERE EXISTS (SELECT 1 FROM sessions)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_not_exists, "EXISTS without NOT must have has_not_exists = false");
     }
 }
