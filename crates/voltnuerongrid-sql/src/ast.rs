@@ -185,6 +185,8 @@ pub struct SelectStatement {
     pub has_group_by_cube: bool,
     /// True when the query uses SELECT DISTINCT ON (...) (S3-WS1-67).
     pub has_select_distinct_on: bool,
+    /// True when the query uses FOR UPDATE / FOR SHARE locking clause (S3-WS1-68).
+    pub has_for_update: bool,
 }
 
 /// A parsed INSERT statement.
@@ -547,6 +549,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_select_distinct_on(&up) {
                     stmt.has_select_distinct_on = true;
                 }
+                if has_for_update(&up) {
+                    stmt.has_for_update = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -651,6 +656,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_select_distinct_on(&up) {
                     stmt.has_select_distinct_on = true;
+                }
+                if has_for_update(&up) {
+                    stmt.has_for_update = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3323,6 +3331,14 @@ fn has_select_distinct_on(up: &str) -> bool {
     up.contains("SELECT DISTINCT ON (")
 }
 
+fn has_lateral_join(up: &str) -> bool {
+    up.contains(" LATERAL ") || up.contains(" LATERAL(")
+}
+
+fn has_for_update(up: &str) -> bool {
+    up.contains(" FOR UPDATE") || up.contains(" FOR SHARE")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3837,6 +3853,43 @@ mod select_distinct_on_tests {
         assert!(
             !s.has_select_distinct_on,
             "SELECT DISTINCT (without ON) must keep has_select_distinct_on = false"
+        );
+    }
+}
+
+// ─── S3-WS1-68: has_for_update tests ─────────────────────────────────────────
+
+#[cfg(test)]
+mod for_update_tests {
+    use super::*;
+
+    #[test]
+    fn select_for_update_sets_has_for_update() {
+        let stmt = parse_one("SELECT id FROM accounts WHERE balance > 0 FOR UPDATE").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_for_update,
+            "SELECT ... FOR UPDATE must set has_for_update = true"
+        );
+    }
+
+    #[test]
+    fn select_for_share_sets_has_for_update() {
+        let stmt = parse_one("SELECT id FROM orders WHERE status = 'pending' FOR SHARE").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_for_update,
+            "SELECT ... FOR SHARE must set has_for_update = true"
+        );
+    }
+
+    #[test]
+    fn select_without_for_update_keeps_has_for_update_false() {
+        let stmt = parse_one("SELECT id FROM accounts WHERE balance > 0").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_for_update,
+            "Plain SELECT must keep has_for_update = false"
         );
     }
 }

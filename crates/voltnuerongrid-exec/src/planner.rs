@@ -366,6 +366,10 @@ pub enum LogicalPlan {
     SelectDistinctOn {
         input: Box<LogicalPlan>,
     },
+    /// FOR UPDATE / FOR SHARE row-locking wrapper (S3-WS1-68 has_for_update support).
+    ForUpdate {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -447,6 +451,7 @@ impl LogicalPlan {
             LogicalPlan::GroupByRollup { input } => input.primary_table(),
             LogicalPlan::GroupByCube { input } => input.primary_table(),
             LogicalPlan::SelectDistinctOn { input } => input.primary_table(),
+            LogicalPlan::ForUpdate { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -544,6 +549,7 @@ impl LogicalPlan {
             LogicalPlan::GroupByRollup { input } => input.has_aggregation(),
             LogicalPlan::GroupByCube { input } => input.has_aggregation(),
             LogicalPlan::SelectDistinctOn { input } => input.has_aggregation(),
+            LogicalPlan::ForUpdate { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1182,6 +1188,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.07,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::ForUpdate { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.03,
+                    recommended_path: QueryPath::Oltp,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -1922,12 +1936,21 @@ impl QueryPlanner {
         };
 
         // SelectDistinctOn wrapper (S3-WS1-67 has_select_distinct_on detection): outermost node.
-        if sel.has_select_distinct_on {
+        let after_select_distinct_on = if sel.has_select_distinct_on {
             LogicalPlan::SelectDistinctOn {
                 input: Box::new(after_group_by_cube),
             }
         } else {
             after_group_by_cube
+        };
+
+        // ForUpdate wrapper (S3-WS1-68 has_for_update detection): outermost node.
+        if sel.has_for_update {
+            LogicalPlan::ForUpdate {
+                input: Box::new(after_select_distinct_on),
+            }
+        } else {
+            after_select_distinct_on
         }
     }
 
@@ -3403,5 +3426,24 @@ mod tests {
         let c = cost("SELECT DISTINCT ON (region) region, name FROM employees");
         assert_eq!(c.recommended_path, QueryPath::Olap, "SELECT DISTINCT ON should route to OLAP");
         assert!(c.relative_cost >= 0.07, "SelectDistinctOn must carry at least 0.07 cost overhead");
+    }
+
+    // ── S3-WS1-68: ForUpdate node tests ─────────────────────────
+
+    #[test]
+    fn planner_for_update_produces_for_update_node() {
+        let p = plan("SELECT id FROM accounts WHERE balance > 0 FOR UPDATE");
+        assert!(
+            matches!(&p, LogicalPlan::ForUpdate { .. }),
+            "SELECT ... FOR UPDATE must produce outermost ForUpdate node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_for_update_routes_to_oltp_with_overhead() {
+        let c = cost("SELECT id FROM accounts WHERE balance > 0 FOR UPDATE");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "FOR UPDATE should route to OLTP");
+        assert!(c.relative_cost >= 0.03, "ForUpdate must carry at least 0.03 cost overhead");
     }
 }

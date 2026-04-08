@@ -897,6 +897,20 @@ Release Gate Impact: <none|medium|high>
 ---
 
 ## Session 91 Implementation Log
+## Session 92 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 303→306, exec 158→160, service 597→601 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_for_update: bool` field + detection | `voltnuerongrid-sql` | Detects FOR UPDATE / FOR SHARE row-locking clauses (`S3-WS1-68`) | 3 (`for_update_tests` module) |
+| `ForUpdate { input }` plan node | `voltnuerongrid-exec` | OLTP node; +0.03 cost overhead | 2 |
+| `GET /api/v1/store/wal/for/update/count` | `voltnuerongridd` | Count FOR-UPDATE usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/for/update/count` | `voltnuerongridd` | Count FOR-UPDATE usage in rows (operator-auth) | 2 |
+
+---
+
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
 **Test Baseline → New:** sql 300→303, exec 156→158, service 593→597 (+9 total)
