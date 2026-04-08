@@ -274,6 +274,10 @@ pub enum LogicalPlan {
     AggregateFilter {
         input: Box<LogicalPlan>,
     },
+    /// Window frame clause semantics wrapper (S3-WS1-45 has_window_frame support).
+    WindowFrame {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -332,6 +336,7 @@ impl LogicalPlan {
             LogicalPlan::RecursiveCte { input } => input.primary_table(),
             LogicalPlan::NotExists { input } => input.primary_table(),
             LogicalPlan::AggregateFilter { input } => input.primary_table(),
+            LogicalPlan::WindowFrame { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -406,6 +411,7 @@ impl LogicalPlan {
             LogicalPlan::RecursiveCte { input } => input.has_aggregation(),
             LogicalPlan::NotExists { input } => input.has_aggregation(),
             LogicalPlan::AggregateFilter { input } => input.has_aggregation(),
+            LogicalPlan::WindowFrame { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -859,6 +865,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.60,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::WindowFrame { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.55,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1396,13 +1410,22 @@ impl QueryPlanner {
             after_recursive_cte
         };
 
-        // AggregateFilter wrapper (S3-WS1-44 has_filter detection): outermost node.
-        if sel.has_filter {
+        // AggregateFilter wrapper (S3-WS1-44 has_filter detection).
+        let after_aggregate_filter = if sel.has_filter {
             LogicalPlan::AggregateFilter {
                 input: Box::new(after_not_exists),
             }
         } else {
             after_not_exists
+        };
+
+        // WindowFrame wrapper (S3-WS1-45 has_window_frame detection): outermost node.
+        if sel.has_window_frame {
+            LogicalPlan::WindowFrame {
+                input: Box::new(after_aggregate_filter),
+            }
+        } else {
+            after_aggregate_filter
         }
     }
 
@@ -2424,5 +2447,24 @@ mod tests {
         let c = cost("SELECT SUM(amount) FILTER (WHERE kind = 'paid') FROM tx");
         assert_eq!(c.recommended_path, QueryPath::Olap, "aggregate FILTER should route to OLAP");
         assert!(c.relative_cost >= 0.60, "AggregateFilter must carry at least 0.60 cost overhead");
+    }
+
+    // ── S3-WS1-45: WindowFrame node tests ───────────────────────────────────
+
+    #[test]
+    fn planner_window_frame_select_produces_window_frame_node() {
+        let p = plan("SELECT SUM(v) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM events");
+        assert!(
+            matches!(&p, LogicalPlan::WindowFrame { .. }),
+            "window frame must produce outermost WindowFrame node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_window_frame_routes_to_olap_path_with_penalty() {
+        let c = cost("SELECT SUM(v) OVER (ORDER BY ts RANGE UNBOUNDED PRECEDING) FROM events");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "window frame should route to OLAP");
+        assert!(c.relative_cost >= 0.55, "WindowFrame must carry at least 0.55 cost overhead");
     }
 }

@@ -139,6 +139,8 @@ pub struct SelectStatement {
     pub has_not_exists: bool,
     /// True when the query uses an aggregate FILTER (WHERE ...) clause (S3-WS1-44).
     pub has_filter: bool,
+    /// True when the query uses an explicit window frame clause (S3-WS1-45).
+    pub has_window_frame: bool,
 }
 
 /// A parsed INSERT statement.
@@ -420,6 +422,14 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains("FILTER (") || up.contains("FILTER(") {
                     stmt.has_filter = true;
                 }
+                // Detect explicit window frame clause (S3-WS1-45).
+                if up.contains("ROWS BETWEEN")
+                    || up.contains("RANGE BETWEEN")
+                    || up.contains("ROWS UNBOUNDED")
+                    || up.contains("RANGE UNBOUNDED")
+                {
+                    stmt.has_window_frame = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -444,6 +454,13 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if up.contains("FILTER (") || up.contains("FILTER(") {
                     stmt.has_filter = true;
+                }
+                if up.contains("ROWS BETWEEN")
+                    || up.contains("RANGE BETWEEN")
+                    || up.contains("ROWS UNBOUNDED")
+                    || up.contains("RANGE UNBOUNDED")
+                {
+                    stmt.has_window_frame = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2672,5 +2689,36 @@ mod filter_agg_tests {
         let stmt = parse_one("SELECT COUNT(*) FROM users").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_filter, "plain SELECT without FILTER must have has_filter = false");
+    }
+}
+
+// ─── S3-WS1-45: has_window_frame tests ──────────────────────────────────────
+
+#[cfg(test)]
+mod window_frame_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_rows_between_sets_has_window_frame() {
+        let stmt = parse_one("SELECT SUM(v) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_window_frame, "ROWS BETWEEN window frame must set has_window_frame = true");
+    }
+
+    #[test]
+    fn select_with_range_unbounded_sets_has_window_frame() {
+        let stmt = parse_one("SELECT AVG(v) OVER (ORDER BY ts RANGE UNBOUNDED PRECEDING) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_window_frame, "RANGE UNBOUNDED window frame must set has_window_frame = true");
+    }
+
+    #[test]
+    fn plain_window_without_frame_has_window_frame_false() {
+        let stmt = parse_one("SELECT ROW_NUMBER() OVER (PARTITION BY grp ORDER BY ts) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_window_frame,
+            "window function without explicit ROWS/RANGE frame must keep has_window_frame = false"
+        );
     }
 }
