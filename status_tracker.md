@@ -467,6 +467,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `FunctionOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.18 cost), and `plan_select()` (`has_order_by_function_expression` outermost wrap with `after_expression_ordering` let binding). Tests: `planner_function_ordering_select_produces_function_ordering_node`, `cost_function_ordering_routes_to_olap_with_higher_overhead`. Total: **130 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/value/trimmed/count` and `GET /api/v1/store/rows/value/trimmed/count` (operator-auth, counts values requiring whitespace trimming for WAL and row snapshots). Tests: 4 new tests (`s11_ws1_53_*`). Total: **541 passed**.
 
+### 9.2at Session 78 Implementation Update (S3-WS1-54 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_case_expression: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY CASE expressions (for example `CASE ... END`) in SELECT/WITH queries (S3-WS1-54). Tests: `order_by_case_expression_tests` module (3 tests). Total: **264 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `CaseOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.14 cost), and `plan_select()` (`has_order_by_case_expression` outermost wrap with `after_function_ordering` let binding). Tests: `planner_case_ordering_select_produces_case_ordering_node`, `cost_case_ordering_routes_to_olap_with_small_overhead`. Total: **132 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/value/case_variant/count` and `GET /api/v1/store/rows/value/case_variant/count` (operator-auth, case-variant value counts for WAL and row snapshots). Tests: 4 new tests (`s11_ws1_54_*`). Total: **545 passed**.
+
 ### 9.2am Session 71 Implementation Update (S3-WS1-47 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_window_partition: bool` field to `SelectStatement` (ast.rs). Detects `PARTITION BY` window clauses in SELECT/WITH queries (S3-WS1-47). Tests: `window_partition_tests` module (3 tests). Total: **243 passed**.

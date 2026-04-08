@@ -157,6 +157,8 @@ pub struct SelectStatement {
     pub has_order_by_expression: bool,
     /// True when ORDER BY uses function expressions like ORDER BY UPPER(name) (S3-WS1-53).
     pub has_order_by_function_expression: bool,
+    /// True when ORDER BY uses CASE expressions (S3-WS1-54).
+    pub has_order_by_case_expression: bool,
 }
 
 /// A parsed INSERT statement.
@@ -480,6 +482,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_function_expression(&up) {
                     stmt.has_order_by_function_expression = true;
                 }
+                if has_order_by_case_expression(&up) {
+                    stmt.has_order_by_case_expression = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -539,6 +544,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_function_expression(&up) {
                     stmt.has_order_by_function_expression = true;
+                }
+                if has_order_by_case_expression(&up) {
+                    stmt.has_order_by_case_expression = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3092,6 +3100,51 @@ mod order_by_function_expression_tests {
         assert!(
             !s.has_order_by_function_expression,
             "ORDER BY arithmetic expression must keep has_order_by_function_expression = false"
+        );
+    }
+}
+
+fn has_order_by_case_expression(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = &up[idx + "ORDER BY".len()..];
+        return tail.contains("CASE") && tail.contains("END");
+    }
+    false
+}
+
+// ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
+
+#[cfg(test)]
+mod order_by_case_expression_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_case_sets_has_order_by_case_expression() {
+        let stmt = parse_one("SELECT status FROM tasks ORDER BY CASE WHEN status = 'OPEN' THEN 0 ELSE 1 END").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_case_expression,
+            "ORDER BY CASE ... END must set has_order_by_case_expression = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_order_by_case_sets_has_order_by_case_expression() {
+        let stmt = parse_one("WITH t AS (SELECT status FROM tasks) SELECT status FROM t ORDER BY CASE WHEN status = 'OPEN' THEN 0 ELSE 1 END").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_case_expression,
+            "WITH query ORDER BY CASE ... END must set has_order_by_case_expression = true"
+        );
+    }
+
+    #[test]
+    fn select_order_by_named_column_keeps_has_order_by_case_expression_false() {
+        let stmt = parse_one("SELECT status FROM tasks ORDER BY status").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_case_expression,
+            "ORDER BY named column must keep has_order_by_case_expression = false"
         );
     }
 }

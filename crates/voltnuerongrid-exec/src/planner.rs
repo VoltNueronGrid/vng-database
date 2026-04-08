@@ -310,6 +310,10 @@ pub enum LogicalPlan {
     FunctionOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY CASE-expression semantics wrapper (S3-WS1-54 has_order_by_case_expression support).
+    CaseOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -377,6 +381,7 @@ impl LogicalPlan {
             LogicalPlan::PositionalOrdering { input } => input.primary_table(),
             LogicalPlan::ExpressionOrdering { input } => input.primary_table(),
             LogicalPlan::FunctionOrdering { input } => input.primary_table(),
+            LogicalPlan::CaseOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -460,6 +465,7 @@ impl LogicalPlan {
             LogicalPlan::PositionalOrdering { input } => input.has_aggregation(),
             LogicalPlan::ExpressionOrdering { input } => input.has_aggregation(),
             LogicalPlan::FunctionOrdering { input } => input.has_aggregation(),
+            LogicalPlan::CaseOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -985,6 +991,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.18,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::CaseOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.14,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1600,13 +1614,21 @@ impl QueryPlanner {
             after_positional_ordering
         };
 
-        // FunctionOrdering wrapper (S3-WS1-53 has_order_by_function_expression detection): outermost node.
-        if sel.has_order_by_function_expression {
+        let after_function_ordering = if sel.has_order_by_function_expression {
             LogicalPlan::FunctionOrdering {
                 input: Box::new(after_expression_ordering),
             }
         } else {
             after_expression_ordering
+        };
+
+        // CaseOrdering wrapper (S3-WS1-54 has_order_by_case_expression detection): outermost node.
+        if sel.has_order_by_case_expression {
+            LogicalPlan::CaseOrdering {
+                input: Box::new(after_function_ordering),
+            }
+        } else {
+            after_function_ordering
         }
     }
 
@@ -2807,5 +2829,24 @@ mod tests {
         let c = cost("SELECT created_at FROM events ORDER BY DATE_TRUNC('DAY', created_at)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "function ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.18, "FunctionOrdering must carry at least 0.18 cost overhead");
+    }
+
+    // ── S3-WS1-54: CaseOrdering node tests ─────────────────────────────────
+
+    #[test]
+    fn planner_case_ordering_select_produces_case_ordering_node() {
+        let p = plan("SELECT status FROM tasks ORDER BY CASE WHEN status = 'OPEN' THEN 0 ELSE 1 END");
+        assert!(
+            matches!(&p, LogicalPlan::CaseOrdering { .. }),
+            "ORDER BY CASE expression must produce outermost CaseOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_case_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT status FROM tasks ORDER BY CASE WHEN status = 'OPEN' THEN 0 ELSE 1 END");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "CASE ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.14, "CaseOrdering must carry at least 0.14 cost overhead");
     }
 }
