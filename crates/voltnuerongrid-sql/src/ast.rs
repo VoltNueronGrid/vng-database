@@ -125,6 +125,8 @@ pub struct SelectStatement {
     pub has_natural_join: bool,
     /// True when the query uses a JOIN ... USING (...) clause (S3-WS1-37).
     pub has_using_join: bool,
+    /// True when the query uses an EXCEPT set operation (S3-WS1-38).
+    pub has_except: bool,
 }
 
 /// A parsed INSERT statement.
@@ -377,6 +379,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect JOIN ... USING (...) clause (S3-WS1-37).
                 if up.contains(" USING (") || up.contains("USING(") {
                     stmt.has_using_join = true;
+                }
+                // Detect EXCEPT set operation (S3-WS1-38).
+                if up.contains(" EXCEPT ") {
+                    stmt.has_except = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2409,5 +2415,33 @@ mod using_join_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_using_join, "plain SELECT without USING join must have has_using_join = false");
+    }
+}
+
+// ─── S3-WS1-38: has_except tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod except_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_except_sets_has_except() {
+        let stmt = parse_one("SELECT id FROM active_users EXCEPT SELECT id FROM banned_users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_except, "EXCEPT set operation must set has_except = true");
+    }
+
+    #[test]
+    fn select_with_except_all_sets_has_except() {
+        let stmt = parse_one("SELECT id FROM s1 EXCEPT ALL SELECT id FROM s2").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_except, "EXCEPT ALL must set has_except = true");
+    }
+
+    #[test]
+    fn plain_select_has_except_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_except, "plain SELECT without EXCEPT must have has_except = false");
     }
 }

@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 62 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 213→216, exec 98→100, service 477→481 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_except: bool` field + detection | `voltnuerongrid-sql` | Detects `EXCEPT` set operation (`S3-WS1-38`) | 3 (`except_tests` module) |
+| `Except { input }` plan node | `voltnuerongrid-exec` | OLAP node; 0.8x row reduction, +0.45 cost | 2 |
+| `GET /api/v1/store/wal/seq/span` | `voltnuerongridd` | Oldest/newest WAL sequence and span (operator-auth) | 2 |
+| `GET /api/v1/store/rows/key/empty/count` | `voltnuerongridd` | Count empty-string keys in row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 61 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

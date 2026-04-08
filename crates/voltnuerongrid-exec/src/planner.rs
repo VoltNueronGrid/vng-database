@@ -246,6 +246,10 @@ pub enum LogicalPlan {
     UsingJoin {
         input: Box<LogicalPlan>,
     },
+    /// EXCEPT set operation semantics wrapper (S3-WS1-38 has_except support).
+    Except {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -297,6 +301,7 @@ impl LogicalPlan {
             LogicalPlan::GroupingSets { input } => input.primary_table(),
             LogicalPlan::NaturalJoin { input } => input.primary_table(),
             LogicalPlan::UsingJoin { input } => input.primary_table(),
+            LogicalPlan::Except { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -364,6 +369,7 @@ impl LogicalPlan {
             LogicalPlan::GroupingSets { input } => input.has_aggregation(),
             LogicalPlan::NaturalJoin { input } => input.has_aggregation(),
             LogicalPlan::UsingJoin { input } => input.has_aggregation(),
+            LogicalPlan::Except { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -761,6 +767,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.25,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Except { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.8) as u64,
+                    relative_cost: inner.relative_cost + 0.45,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1235,13 +1249,22 @@ impl QueryPlanner {
             after_grouping_sets
         };
 
-        // UsingJoin wrapper (S3-WS1-37 has_using_join detection): outermost node.
-        if sel.has_using_join {
+        // UsingJoin wrapper (S3-WS1-37 has_using_join detection).
+        let after_using_join = if sel.has_using_join {
             LogicalPlan::UsingJoin {
                 input: Box::new(after_natural_join),
             }
         } else {
             after_natural_join
+        };
+
+        // Except wrapper (S3-WS1-38 has_except detection): outermost node.
+        if sel.has_except {
+            LogicalPlan::Except {
+                input: Box::new(after_using_join),
+            }
+        } else {
+            after_using_join
         }
     }
 
@@ -2130,5 +2153,24 @@ mod tests {
         let c = cost("SELECT u.id, p.title FROM users u LEFT JOIN posts p USING (user_id)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "JOIN ... USING should route to OLAP");
         assert!(c.relative_cost >= 0.25, "UsingJoin must carry at least 0.25 cost overhead");
+    }
+
+    // ── S3-WS1-38: Except node tests ─────────────────────────────────────────
+
+    #[test]
+    fn planner_except_select_produces_except_node() {
+        let p = plan("SELECT id FROM active_users EXCEPT SELECT id FROM banned_users");
+        assert!(
+            matches!(&p, LogicalPlan::Except { .. }),
+            "EXCEPT must produce outermost Except node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_except_routes_to_olap() {
+        let c = cost("SELECT id FROM s1 EXCEPT ALL SELECT id FROM s2");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "EXCEPT should route to OLAP");
+        assert!(c.relative_cost >= 0.45, "Except must carry at least 0.45 cost overhead");
     }
 }
