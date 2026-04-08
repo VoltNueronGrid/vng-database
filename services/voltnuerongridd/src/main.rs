@@ -3098,6 +3098,20 @@ struct RowsValueUniqueCountResponse {
     unique_value_count: usize,
 }
 
+// S3-WS1-53: wal/value/trimmed/count + rows/value/trimmed/count structs
+
+#[derive(Debug, Serialize)]
+struct WalValueTrimmedCountResponse {
+    status: &'static str,
+    trimmed_value_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsValueTrimmedCountResponse {
+    status: &'static str,
+    trimmed_value_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4560,6 +4574,9 @@ async fn main() {
         // S3-WS1-52: wal/value/unique/count + rows/value/unique/count
         .route("/api/v1/store/wal/value/unique/count", get(wal_value_unique_count))
         .route("/api/v1/store/rows/value/unique/count", get(rows_value_unique_count))
+        // S3-WS1-53: wal/value/trimmed/count + rows/value/trimmed/count
+        .route("/api/v1/store/wal/value/trimmed/count", get(wal_value_trimmed_count))
+        .route("/api/v1/store/rows/value/trimmed/count", get(rows_value_trimmed_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -10495,6 +10512,45 @@ async fn rows_value_unique_count(
     Ok((StatusCode::OK, Json(RowsValueUniqueCountResponse {
         status: "ok",
         unique_value_count,
+    })))
+}
+
+// S3-WS1-53: wal/value/trimmed/count endpoint
+async fn wal_value_trimmed_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalValueTrimmedCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_value_trimmed_count");
+    let trimmed_value_count = wal
+        .wal_records()
+        .iter()
+        .filter(|rec| rec.value.trim() != rec.value)
+        .count();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalValueTrimmedCountResponse {
+        status: "ok",
+        trimmed_value_count,
+    })))
+}
+
+// S3-WS1-53: rows/value/trimmed/count endpoint
+async fn rows_value_trimmed_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsValueTrimmedCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_value_trimmed_count");
+    let trimmed_value_count = rs
+        .export_rows_snapshot()
+        .into_iter()
+        .flat_map(|(_, row)| row.into_values())
+        .filter(|value| value.trim() != value)
+        .count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsValueTrimmedCountResponse {
+        status: "ok",
+        trimmed_value_count,
     })))
 }
 
@@ -25160,6 +25216,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_value_unique_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-53: wal_value_trimmed_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_53_wal_value_trimmed_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_value_trimmed_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.trimmed_value_count, 0, "fresh WAL must have zero trimmed values");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_53_wal_value_trimmed_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_value_trimmed_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-53: rows_value_trimmed_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_53_rows_value_trimmed_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_value_trimmed_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.trimmed_value_count, 0, "fresh store must have zero trimmed values");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_53_rows_value_trimmed_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_value_trimmed_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

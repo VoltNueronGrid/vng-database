@@ -714,6 +714,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 77 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 258→261, exec 128→130, service 537→541 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_order_by_function_expression: bool` field + detection | `voltnuerongrid-sql` | Detects function-based ORDER BY expressions (`S3-WS1-53`) | 3 (`order_by_function_expression_tests` module) |
+| `FunctionOrdering { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.18 cost overhead | 2 |
+| `GET /api/v1/store/wal/value/trimmed/count` | `voltnuerongridd` | Count WAL values requiring trim (operator-auth) | 2 |
+| `GET /api/v1/store/rows/value/trimmed/count` | `voltnuerongridd` | Count row values requiring trim (operator-auth) | 2 |
+
+---
+
 ## Session 72 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

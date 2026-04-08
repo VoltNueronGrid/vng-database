@@ -155,6 +155,8 @@ pub struct SelectStatement {
     pub has_order_by_positional: bool,
     /// True when ORDER BY uses computed expressions like ORDER BY a + b (S3-WS1-52).
     pub has_order_by_expression: bool,
+    /// True when ORDER BY uses function expressions like ORDER BY UPPER(name) (S3-WS1-53).
+    pub has_order_by_function_expression: bool,
 }
 
 /// A parsed INSERT statement.
@@ -475,6 +477,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_expression(&up) {
                     stmt.has_order_by_expression = true;
                 }
+                if has_order_by_function_expression(&up) {
+                    stmt.has_order_by_function_expression = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -531,6 +536,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_expression(&up) {
                     stmt.has_order_by_expression = true;
+                }
+                if has_order_by_function_expression(&up) {
+                    stmt.has_order_by_function_expression = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3031,6 +3039,59 @@ mod order_by_expression_tests {
         assert!(
             !s.has_order_by_expression,
             "ORDER BY named column must keep has_order_by_expression = false"
+        );
+    }
+}
+
+fn has_order_by_function_expression(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = up[idx + "ORDER BY".len()..].trim_start();
+        if let Some(open_idx) = tail.find('(') {
+            let prefix = tail[..open_idx].trim_end();
+            if let Some(name) = prefix.split_whitespace().last() {
+                return !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_alphabetic() || c == '_');
+            }
+        }
+    }
+    false
+}
+
+// ─── S3-WS1-53: has_order_by_function_expression tests ────────────────────
+
+#[cfg(test)]
+mod order_by_function_expression_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_upper_sets_has_order_by_function_expression() {
+        let stmt = parse_one("SELECT name FROM users ORDER BY UPPER(name)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_function_expression,
+            "ORDER BY UPPER(name) must set has_order_by_function_expression = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_order_by_date_trunc_sets_has_order_by_function_expression() {
+        let stmt = parse_one("WITH t AS (SELECT created_at FROM events) SELECT created_at FROM t ORDER BY DATE_TRUNC('DAY', created_at)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_function_expression,
+            "ORDER BY DATE_TRUNC(...) must set has_order_by_function_expression = true"
+        );
+    }
+
+    #[test]
+    fn select_order_by_arithmetic_keeps_has_order_by_function_expression_false() {
+        let stmt = parse_one("SELECT price, qty FROM sales ORDER BY price * qty").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_function_expression,
+            "ORDER BY arithmetic expression must keep has_order_by_function_expression = false"
         );
     }
 }

@@ -306,6 +306,10 @@ pub enum LogicalPlan {
     ExpressionOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY function-expression semantics wrapper (S3-WS1-53 has_order_by_function_expression support).
+    FunctionOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -372,6 +376,7 @@ impl LogicalPlan {
             LogicalPlan::CollationOrdering { input } => input.primary_table(),
             LogicalPlan::PositionalOrdering { input } => input.primary_table(),
             LogicalPlan::ExpressionOrdering { input } => input.primary_table(),
+            LogicalPlan::FunctionOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -454,6 +459,7 @@ impl LogicalPlan {
             LogicalPlan::CollationOrdering { input } => input.has_aggregation(),
             LogicalPlan::PositionalOrdering { input } => input.has_aggregation(),
             LogicalPlan::ExpressionOrdering { input } => input.has_aggregation(),
+            LogicalPlan::FunctionOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -971,6 +977,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.12,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::FunctionOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.18,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1578,13 +1592,21 @@ impl QueryPlanner {
             after_collation_ordering
         };
 
-        // ExpressionOrdering wrapper (S3-WS1-52 has_order_by_expression detection): outermost node.
-        if sel.has_order_by_expression {
+        let after_expression_ordering = if sel.has_order_by_expression {
             LogicalPlan::ExpressionOrdering {
                 input: Box::new(after_positional_ordering),
             }
         } else {
             after_positional_ordering
+        };
+
+        // FunctionOrdering wrapper (S3-WS1-53 has_order_by_function_expression detection): outermost node.
+        if sel.has_order_by_function_expression {
+            LogicalPlan::FunctionOrdering {
+                input: Box::new(after_expression_ordering),
+            }
+        } else {
+            after_expression_ordering
         }
     }
 
@@ -2766,5 +2788,24 @@ mod tests {
         let c = cost("SELECT name FROM users ORDER BY UPPER(name)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "expression ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.12, "ExpressionOrdering must carry at least 0.12 cost overhead");
+    }
+
+    // ── S3-WS1-53: FunctionOrdering node tests ─────────────────────────────
+
+    #[test]
+    fn planner_function_ordering_select_produces_function_ordering_node() {
+        let p = plan("SELECT name FROM users ORDER BY UPPER(name)");
+        assert!(
+            matches!(&p, LogicalPlan::FunctionOrdering { .. }),
+            "ORDER BY function expression must produce outermost FunctionOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_function_ordering_routes_to_olap_with_higher_overhead() {
+        let c = cost("SELECT created_at FROM events ORDER BY DATE_TRUNC('DAY', created_at)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "function ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.18, "FunctionOrdering must carry at least 0.18 cost overhead");
     }
 }
