@@ -798,6 +798,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 84 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 279→282, exec 142→144, service 565→569 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_order_by_multi_column: bool` field + detection | `voltnuerongrid-sql` | Detects ORDER BY multi-key usage (`S3-WS1-60`) | 3 (`order_by_multi_column_tests` module) |
+| `MultiColumnOrdering { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.02 cost overhead | 2 |
+| `GET /api/v1/store/wal/order_by/multi_column/count` | `voltnuerongridd` | Count multi-column ORDER BY usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/order_by/multi_column/count` | `voltnuerongridd` | Count multi-column ORDER BY usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

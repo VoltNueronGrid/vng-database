@@ -334,6 +334,10 @@ pub enum LogicalPlan {
     RandAliasOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY multi-column semantics wrapper (S3-WS1-60 has_order_by_multi_column support).
+    MultiColumnOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -407,6 +411,7 @@ impl LogicalPlan {
             LogicalPlan::RandomOrdering { input } => input.primary_table(),
             LogicalPlan::SeededRandomOrdering { input } => input.primary_table(),
             LogicalPlan::RandAliasOrdering { input } => input.primary_table(),
+            LogicalPlan::MultiColumnOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -496,6 +501,7 @@ impl LogicalPlan {
             LogicalPlan::RandomOrdering { input } => input.has_aggregation(),
             LogicalPlan::SeededRandomOrdering { input } => input.has_aggregation(),
             LogicalPlan::RandAliasOrdering { input } => input.has_aggregation(),
+            LogicalPlan::MultiColumnOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1069,6 +1075,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.19,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::MultiColumnOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.02,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1738,12 +1752,21 @@ impl QueryPlanner {
         };
 
         // RandAliasOrdering wrapper (S3-WS1-59 has_order_by_rand_alias detection): outermost node.
-        if sel.has_order_by_rand_alias {
+        let after_rand_alias_ordering = if sel.has_order_by_rand_alias {
             LogicalPlan::RandAliasOrdering {
                 input: Box::new(after_seeded_random_ordering),
             }
         } else {
             after_seeded_random_ordering
+        };
+
+        // MultiColumnOrdering wrapper (S3-WS1-60 has_order_by_multi_column detection): outermost node.
+        if sel.has_order_by_multi_column {
+            LogicalPlan::MultiColumnOrdering {
+                input: Box::new(after_rand_alias_ordering),
+            }
+        } else {
+            after_rand_alias_ordering
         }
     }
 
@@ -3064,5 +3087,24 @@ mod tests {
         let c = cost("SELECT id FROM users ORDER BY RAND()");
         assert_eq!(c.recommended_path, QueryPath::Olap, "RAND ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.19, "RandAliasOrdering must carry at least 0.19 cost overhead");
+    }
+
+    // ── S3-WS1-60: MultiColumnOrdering node tests ──────────────────────────
+
+    #[test]
+    fn planner_multi_column_ordering_select_produces_multi_column_ordering_node() {
+        let p = plan("SELECT id, name FROM users ORDER BY id, name");
+        assert!(
+            matches!(&p, LogicalPlan::MultiColumnOrdering { .. }),
+            "ORDER BY multiple columns must produce outermost MultiColumnOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_multi_column_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id, name FROM users ORDER BY id, name");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "multi-column ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.02, "MultiColumnOrdering must carry at least 0.02 cost overhead");
     }
 }

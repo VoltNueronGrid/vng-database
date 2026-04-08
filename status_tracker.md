@@ -497,6 +497,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `RandAliasOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.19 cost), and `plan_select()` (`has_order_by_rand_alias` outermost wrap after seeded-random ordering). Tests: `planner_rand_alias_ordering_select_produces_rand_alias_ordering_node`, `cost_rand_alias_ordering_routes_to_olap_with_small_overhead`. Total: **142 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/order_by/rand_alias/count` and `GET /api/v1/store/rows/order_by/rand_alias/count` (operator-auth, `RAND()` alias usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_59_*`). Total: **565 passed**.
 
+### 9.2az Session 84 Implementation Update (S3-WS1-60 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_multi_column: bool` field to `SelectStatement` (ast.rs). Detects multi-key ORDER BY clauses (for example `ORDER BY a, b`) in SELECT/WITH queries (S3-WS1-60). Tests: `order_by_multi_column_tests` module (3 tests). Total: **282 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `MultiColumnOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.02 cost), and `plan_select()` (`has_order_by_multi_column` outermost wrap after rand-alias ordering). Tests: `planner_multi_column_ordering_select_produces_multi_column_ordering_node`, `cost_multi_column_ordering_routes_to_olap_with_small_overhead`. Total: **144 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/order_by/multi_column/count` and `GET /api/v1/store/rows/order_by/multi_column/count` (operator-auth, multi-column ORDER BY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_60_*`). Total: **569 passed**.
+
 ### 9.2at Session 78 Implementation Update (S3-WS1-54 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_case_expression: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY CASE expressions (for example `CASE ... END`) in SELECT/WITH queries (S3-WS1-54). Tests: `order_by_case_expression_tests` module (3 tests). Total: **264 passed**.

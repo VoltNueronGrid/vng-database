@@ -169,6 +169,8 @@ pub struct SelectStatement {
     pub has_order_by_random_seeded: bool,
     /// True when ORDER BY uses RAND() function alias ordering (S3-WS1-59).
     pub has_order_by_rand_alias: bool,
+    /// True when ORDER BY includes multiple sort keys (S3-WS1-60).
+    pub has_order_by_multi_column: bool,
 }
 
 /// A parsed INSERT statement.
@@ -510,6 +512,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_rand_alias(&up) {
                     stmt.has_order_by_rand_alias = true;
                 }
+                if has_order_by_multi_column(&up) {
+                    stmt.has_order_by_multi_column = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -587,6 +592,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_rand_alias(&up) {
                     stmt.has_order_by_rand_alias = true;
+                }
+                if has_order_by_multi_column(&up) {
+                    stmt.has_order_by_multi_column = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3204,6 +3212,24 @@ fn has_order_by_rand_alias(up: &str) -> bool {
     false
 }
 
+fn has_order_by_multi_column(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = &up[idx + "ORDER BY".len()..];
+        let first_clause = tail
+            .split(" LIMIT")
+            .next()
+            .unwrap_or(tail)
+            .split(" OFFSET")
+            .next()
+            .unwrap_or(tail)
+            .split(" FETCH")
+            .next()
+            .unwrap_or(tail);
+        return first_clause.contains(',');
+    }
+    false
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3422,6 +3448,43 @@ mod order_by_rand_alias_tests {
         assert!(
             !s.has_order_by_rand_alias,
             "ORDER BY RANDOM() must keep has_order_by_rand_alias = false"
+        );
+    }
+}
+
+// ─── S3-WS1-60: has_order_by_multi_column tests ───────────────────────────
+
+#[cfg(test)]
+mod order_by_multi_column_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_two_columns_sets_has_order_by_multi_column() {
+        let stmt = parse_one("SELECT id, name FROM users ORDER BY id, name").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_multi_column,
+            "ORDER BY with two columns must set has_order_by_multi_column = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_order_by_three_columns_sets_has_order_by_multi_column() {
+        let stmt = parse_one("WITH t AS (SELECT id, name, created_at FROM users) SELECT id, name, created_at FROM t ORDER BY id, name, created_at").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_multi_column,
+            "WITH query ORDER BY with three columns must set has_order_by_multi_column = true"
+        );
+    }
+
+    #[test]
+    fn select_order_by_single_column_keeps_has_order_by_multi_column_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_multi_column,
+            "ORDER BY single column must keep has_order_by_multi_column = false"
         );
     }
 }
