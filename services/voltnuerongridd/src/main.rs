@@ -2940,6 +2940,22 @@ struct RowsKeyMaxResponse {
     max_key: String,
 }
 
+// S3-WS1-42: wal/mutation/span + rows/value/non_null/count structs
+
+#[derive(Debug, Serialize)]
+struct WalMutationSpanResponse {
+    status: &'static str,
+    oldest_sequence: u64,
+    newest_sequence: u64,
+    mutation_span: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsValueNonNullCountResponse {
+    status: &'static str,
+    non_null_value_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4369,6 +4385,9 @@ async fn main() {
         // S3-WS1-41: wal/record/deleted + rows/key/max
         .route("/api/v1/store/wal/record/deleted", get(wal_record_deleted))
         .route("/api/v1/store/rows/key/max", get(rows_key_max))
+        // S3-WS1-42: wal/mutation/span + rows/value/non_null/count
+        .route("/api/v1/store/wal/mutation/span", get(wal_mutation_span))
+        .route("/api/v1/store/rows/value/non_null/count", get(rows_value_non_null_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9864,6 +9883,56 @@ async fn rows_key_max(
     drop(rs);
     let has_key = !max_key.is_empty();
     Ok((StatusCode::OK, Json(RowsKeyMaxResponse { status: "ok", has_key, max_key })))
+}
+
+// S3-WS1-42: wal/mutation/span endpoint
+async fn wal_mutation_span(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalMutationSpanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_mutation_span");
+    let mut seqs: Vec<u64> = wal
+        .wal_records()
+        .iter()
+        .filter(|r| r.value != "__deleted__")
+        .map(|r| r.sequence)
+        .collect();
+    drop(wal);
+    seqs.sort_unstable();
+    let oldest_sequence = seqs.first().copied().unwrap_or(0);
+    let newest_sequence = seqs.last().copied().unwrap_or(0);
+    let mutation_span = if oldest_sequence == 0 || newest_sequence == 0 {
+        0
+    } else {
+        newest_sequence.saturating_sub(oldest_sequence)
+    };
+    Ok((StatusCode::OK, Json(WalMutationSpanResponse {
+        status: "ok",
+        oldest_sequence,
+        newest_sequence,
+        mutation_span,
+    })))
+}
+
+// S3-WS1-42: rows/value/non_null/count endpoint
+async fn rows_value_non_null_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsValueNonNullCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_value_non_null_count");
+    let non_null_value_count = rs
+        .export_rows_snapshot()
+        .into_iter()
+        .flat_map(|(_, row)| row.into_values())
+        .filter(|v| !v.is_empty())
+        .count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsValueNonNullCountResponse {
+        status: "ok",
+        non_null_value_count,
+    })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -24062,6 +24131,50 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_key_max(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-42: wal_mutation_span tests
+
+    #[tokio::test]
+    async fn s11_ws1_42_wal_mutation_span_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_mutation_span(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.oldest_sequence, 0, "fresh WAL mutation oldest sequence must be 0");
+        assert_eq!(body.newest_sequence, 0, "fresh WAL mutation newest sequence must be 0");
+        assert_eq!(body.mutation_span, 0, "fresh WAL mutation span must be 0");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_42_wal_mutation_span_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_mutation_span(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-42: rows_value_non_null_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_42_rows_value_non_null_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_value_non_null_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.non_null_value_count, 0, "fresh store must have zero non-null values");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_42_rows_value_non_null_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_value_non_null_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

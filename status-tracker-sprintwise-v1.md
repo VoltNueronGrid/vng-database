@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 66 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 225→228, exec 106→108, service 493→497 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_recursive_cte: bool` field + detection | `voltnuerongrid-sql` | Detects `WITH RECURSIVE ... AS (...)` CTE clause (`S3-WS1-42`) | 3 (`recursive_cte_tests` module) |
+| `RecursiveCte { input }` plan node | `voltnuerongrid-exec` | Hybrid node; +3.00 cost overhead | 2 |
+| `GET /api/v1/store/wal/mutation/span` | `voltnuerongridd` | Oldest/newest non-delete WAL sequence and mutation span (operator-auth) | 2 |
+| `GET /api/v1/store/rows/value/non_null/count` | `voltnuerongridd` | Count non-null values across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 65 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

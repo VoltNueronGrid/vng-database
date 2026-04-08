@@ -262,6 +262,10 @@ pub enum LogicalPlan {
     WithCte {
         input: Box<LogicalPlan>,
     },
+    /// WITH RECURSIVE ... AS (...) CTE semantics wrapper (S3-WS1-42 has_recursive_cte support).
+    RecursiveCte {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -317,6 +321,7 @@ impl LogicalPlan {
             LogicalPlan::Intersect { input } => input.primary_table(),
             LogicalPlan::Qualify { input } => input.primary_table(),
             LogicalPlan::WithCte { input } => input.primary_table(),
+            LogicalPlan::RecursiveCte { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -388,6 +393,7 @@ impl LogicalPlan {
             LogicalPlan::Intersect { input } => input.has_aggregation(),
             LogicalPlan::Qualify { input } => input.has_aggregation(),
             LogicalPlan::WithCte { input } => input.has_aggregation(),
+            LogicalPlan::RecursiveCte { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -818,6 +824,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.15,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::RecursiveCte { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 3.00,
+                    recommended_path: QueryPath::Hybrid,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -1327,13 +1341,22 @@ impl QueryPlanner {
             after_intersect
         };
 
-        // WithCte wrapper (S3-WS1-41 has_with_cte detection): outermost node.
-        if sel.has_with_cte {
+        // WithCte wrapper (S3-WS1-41 has_with_cte detection).
+        let after_with_cte = if sel.has_with_cte {
             LogicalPlan::WithCte {
                 input: Box::new(after_qualify),
             }
         } else {
             after_qualify
+        };
+
+        // RecursiveCte wrapper (S3-WS1-42 has_recursive_cte detection): outermost node.
+        if sel.has_recursive_cte {
+            LogicalPlan::RecursiveCte {
+                input: Box::new(after_with_cte),
+            }
+        } else {
+            after_with_cte
         }
     }
 
@@ -2298,5 +2321,24 @@ mod tests {
         let c = cost("WITH x AS (SELECT id FROM events) SELECT id FROM x");
         assert_eq!(c.recommended_path, QueryPath::Olap, "WITH CTE should route to OLAP");
         assert!(c.relative_cost >= 0.15, "WithCte must carry at least 0.15 cost overhead");
+    }
+
+    // ── S3-WS1-42: RecursiveCte node tests ──────────────────────────────────
+
+    #[test]
+    fn planner_recursive_cte_select_produces_recursive_cte_node() {
+        let p = plan("WITH RECURSIVE t AS (SELECT 1 AS n) SELECT n FROM t");
+        assert!(
+            matches!(&p, LogicalPlan::RecursiveCte { .. }),
+            "WITH RECURSIVE must produce outermost RecursiveCte node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_recursive_cte_routes_to_hybrid() {
+        let c = cost("WITH RECURSIVE t AS (SELECT 1 AS n) SELECT n FROM t");
+        assert_eq!(c.recommended_path, QueryPath::Hybrid, "WITH RECURSIVE should route to Hybrid");
+        assert!(c.relative_cost >= 3.00, "RecursiveCte must carry at least 3.00 cost overhead");
     }
 }

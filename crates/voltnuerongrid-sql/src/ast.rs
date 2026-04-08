@@ -133,6 +133,8 @@ pub struct SelectStatement {
     pub has_qualify: bool,
     /// True when the query uses a WITH ... AS (...) CTE clause (S3-WS1-41).
     pub has_with_cte: bool,
+    /// True when the query uses a WITH RECURSIVE ... AS (...) CTE clause (S3-WS1-42).
+    pub has_recursive_cte: bool,
 }
 
 /// A parsed INSERT statement.
@@ -402,6 +404,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.trim_start().starts_with("WITH ") && up.contains(" AS (") {
                     stmt.has_with_cte = true;
                 }
+                // Detect WITH RECURSIVE ... AS (...) CTE clause (S3-WS1-42).
+                if up.trim_start().starts_with("WITH RECURSIVE ") && up.contains(" AS (") {
+                    stmt.has_recursive_cte = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -417,6 +423,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 let up = raw.to_ascii_uppercase();
                 if up.trim_start().starts_with("WITH ") && up.contains(" AS (") {
                     stmt.has_with_cte = true;
+                }
+                if up.trim_start().starts_with("WITH RECURSIVE ") && up.contains(" AS (") {
+                    stmt.has_recursive_cte = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2561,5 +2570,33 @@ mod with_cte_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_with_cte, "plain SELECT without WITH CTE must have has_with_cte = false");
+    }
+}
+
+// ─── S3-WS1-42: has_recursive_cte tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod recursive_cte_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_recursive_cte_sets_has_recursive_cte() {
+        let stmt = parse_one("WITH RECURSIVE t AS (SELECT 1 AS n) SELECT n FROM t").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_recursive_cte, "WITH RECURSIVE must set has_recursive_cte = true");
+    }
+
+    #[test]
+    fn select_with_recursive_union_all_sets_has_recursive_cte() {
+        let stmt = parse_one("WITH RECURSIVE t AS (SELECT 1 AS n UNION ALL SELECT n+1 FROM t WHERE n < 3) SELECT n FROM t").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_recursive_cte, "recursive UNION ALL CTE must set has_recursive_cte = true");
+    }
+
+    #[test]
+    fn plain_with_cte_has_recursive_cte_is_false() {
+        let stmt = parse_one("WITH a AS (SELECT id FROM t1) SELECT id FROM a").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_recursive_cte, "non-recursive WITH CTE must have has_recursive_cte = false");
     }
 }
