@@ -161,6 +161,8 @@ pub struct SelectStatement {
     pub has_order_by_case_expression: bool,
     /// True when ORDER BY uses DESC (descending direction) versus default ASC (S3-WS1-55).
     pub has_order_by_desc_direction: bool,
+    /// True when ORDER BY uses RANDOM()/RAND() function-based random ordering (S3-WS1-56).
+    pub has_order_by_random: bool,
 }
 
 /// A parsed INSERT statement.
@@ -490,6 +492,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_desc_direction(&up) {
                     stmt.has_order_by_desc_direction = true;
                 }
+                if has_order_by_random(&up) {
+                    stmt.has_order_by_random = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -555,6 +560,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_desc_direction(&up) {
                     stmt.has_order_by_desc_direction = true;
+                }
+                if has_order_by_random(&up) {
+                    stmt.has_order_by_random = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3128,6 +3136,17 @@ fn has_order_by_desc_direction(up: &str) -> bool {
     false
 }
 
+fn has_order_by_random(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = &up[idx + "ORDER BY".len()..];
+        let tail_upper = tail.to_uppercase();
+        return tail_upper.contains("RANDOM()")
+            || tail_upper.contains("RAND()")
+            || (tail_upper.contains("RANDOM(") && tail_upper.contains(")"));
+    }
+    false
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3198,6 +3217,43 @@ mod order_by_desc_direction_tests {
         assert!(
             !s.has_order_by_desc_direction,
             "ORDER BY ASC must keep has_order_by_desc_direction = false"
+        );
+    }
+}
+
+// ─── S3-WS1-56: has_order_by_random tests ───────────────────────────────────
+
+#[cfg(test)]
+mod order_by_random_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_random_sets_has_order_by_random() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY RANDOM()").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_random,
+            "ORDER BY RANDOM() must set has_order_by_random = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_order_by_random_sets_has_order_by_random() {
+        let stmt = parse_one("WITH t AS (SELECT id FROM users) SELECT id FROM t ORDER BY RANDOM()").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_random,
+            "WITH query ORDER BY RANDOM() must set has_order_by_random = true"
+        );
+    }
+
+    #[test]
+    fn select_order_by_named_column_keeps_has_order_by_random_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_random,
+            "ORDER BY named column must keep has_order_by_random = false"
         );
     }
 }

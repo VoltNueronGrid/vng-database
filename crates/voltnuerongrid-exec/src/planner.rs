@@ -318,6 +318,10 @@ pub enum LogicalPlan {
     DirectionOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY RANDOM()/RAND() semantics wrapper (S3-WS1-56 has_order_by_random support).
+    RandomOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -387,6 +391,7 @@ impl LogicalPlan {
             LogicalPlan::FunctionOrdering { input } => input.primary_table(),
             LogicalPlan::CaseOrdering { input } => input.primary_table(),
             LogicalPlan::DirectionOrdering { input } => input.primary_table(),
+            LogicalPlan::RandomOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -472,6 +477,7 @@ impl LogicalPlan {
             LogicalPlan::FunctionOrdering { input } => input.has_aggregation(),
             LogicalPlan::CaseOrdering { input } => input.has_aggregation(),
             LogicalPlan::DirectionOrdering { input } => input.has_aggregation(),
+            LogicalPlan::RandomOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1013,6 +1019,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.05,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::RandomOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.20,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1646,12 +1660,21 @@ impl QueryPlanner {
         };
 
         // DirectionOrdering wrapper (S3-WS1-55 has_order_by_desc_direction detection): outermost node.
-        if sel.has_order_by_desc_direction {
+        let after_direction_ordering = if sel.has_order_by_desc_direction {
             LogicalPlan::DirectionOrdering {
                 input: Box::new(after_case_ordering),
             }
         } else {
             after_case_ordering
+        };
+
+        // RandomOrdering wrapper (S3-WS1-56 has_order_by_random detection): outermost node.
+        if sel.has_order_by_random {
+            LogicalPlan::RandomOrdering {
+                input: Box::new(after_direction_ordering),
+            }
+        } else {
+            after_direction_ordering
         }
     }
 
@@ -2896,5 +2919,24 @@ mod tests {
         let c = cost("SELECT id FROM users ORDER BY id DESC");
         assert_eq!(c.recommended_path, QueryPath::Olap, "DESC direction ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.05, "DirectionOrdering must carry at least 0.05 cost overhead");
+    }
+
+    // ── S3-WS1-56: RandomOrdering node tests ──────────────────────────────
+
+    #[test]
+    fn planner_random_ordering_select_produces_random_ordering_node() {
+        let p = plan("SELECT id FROM users ORDER BY RANDOM()");
+        assert!(
+            matches!(&p, LogicalPlan::RandomOrdering { .. }),
+            "ORDER BY RANDOM() must produce outermost RandomOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_random_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id FROM users ORDER BY RANDOM()");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "RANDOM ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.20, "RandomOrdering must carry at least 0.20 cost overhead");
     }
 }
