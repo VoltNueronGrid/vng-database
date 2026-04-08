@@ -153,6 +153,8 @@ pub struct SelectStatement {
     pub has_order_by_collation: bool,
     /// True when ORDER BY uses positional indexes like ORDER BY 1 (S3-WS1-51).
     pub has_order_by_positional: bool,
+    /// True when ORDER BY uses computed expressions like ORDER BY a + b (S3-WS1-52).
+    pub has_order_by_expression: bool,
 }
 
 /// A parsed INSERT statement.
@@ -470,6 +472,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_positional(&up) {
                     stmt.has_order_by_positional = true;
                 }
+                if has_order_by_expression(&up) {
+                    stmt.has_order_by_expression = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -523,6 +528,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_positional(&up) {
                     stmt.has_order_by_positional = true;
+                }
+                if has_order_by_expression(&up) {
+                    stmt.has_order_by_expression = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2979,6 +2987,50 @@ mod order_by_positional_tests {
         assert!(
             !s.has_order_by_positional,
             "ORDER BY named column must keep has_order_by_positional = false"
+        );
+    }
+}
+
+fn has_order_by_expression(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = up[idx + "ORDER BY".len()..].trim_start();
+        return tail.contains('(')
+            || tail.contains(" + ")
+            || tail.contains(" - ")
+            || tail.contains(" * ")
+            || tail.contains(" / ")
+            || tail.contains(" || ");
+    }
+    false
+}
+
+// ─── S3-WS1-52: has_order_by_expression tests ──────────────────────────────
+
+#[cfg(test)]
+mod order_by_expression_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_arithmetic_expression_sets_has_order_by_expression() {
+        let stmt = parse_one("SELECT price, qty FROM sales ORDER BY price * qty").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_order_by_expression, "ORDER BY arithmetic expression must set has_order_by_expression = true");
+    }
+
+    #[test]
+    fn select_order_by_function_expression_sets_has_order_by_expression() {
+        let stmt = parse_one("SELECT name FROM users ORDER BY UPPER(name)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_order_by_expression, "ORDER BY function expression must set has_order_by_expression = true");
+    }
+
+    #[test]
+    fn select_order_by_named_column_keeps_has_order_by_expression_false() {
+        let stmt = parse_one("SELECT name FROM users ORDER BY name").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_expression,
+            "ORDER BY named column must keep has_order_by_expression = false"
         );
     }
 }

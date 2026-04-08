@@ -302,6 +302,10 @@ pub enum LogicalPlan {
     PositionalOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY expression semantics wrapper (S3-WS1-52 has_order_by_expression support).
+    ExpressionOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -367,6 +371,7 @@ impl LogicalPlan {
             LogicalPlan::NullsOrdering { input } => input.primary_table(),
             LogicalPlan::CollationOrdering { input } => input.primary_table(),
             LogicalPlan::PositionalOrdering { input } => input.primary_table(),
+            LogicalPlan::ExpressionOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -448,6 +453,7 @@ impl LogicalPlan {
             LogicalPlan::NullsOrdering { input } => input.has_aggregation(),
             LogicalPlan::CollationOrdering { input } => input.has_aggregation(),
             LogicalPlan::PositionalOrdering { input } => input.has_aggregation(),
+            LogicalPlan::ExpressionOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -957,6 +963,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.08,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::ExpressionOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.12,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1556,13 +1570,21 @@ impl QueryPlanner {
             after_nulls_ordering
         };
 
-        // PositionalOrdering wrapper (S3-WS1-51 has_order_by_positional detection): outermost node.
-        if sel.has_order_by_positional {
+        let after_positional_ordering = if sel.has_order_by_positional {
             LogicalPlan::PositionalOrdering {
                 input: Box::new(after_collation_ordering),
             }
         } else {
             after_collation_ordering
+        };
+
+        // ExpressionOrdering wrapper (S3-WS1-52 has_order_by_expression detection): outermost node.
+        if sel.has_order_by_expression {
+            LogicalPlan::ExpressionOrdering {
+                input: Box::new(after_positional_ordering),
+            }
+        } else {
+            after_positional_ordering
         }
     }
 
@@ -2725,5 +2747,24 @@ mod tests {
         let c = cost("SELECT id, name FROM users ORDER BY 2 DESC");
         assert_eq!(c.recommended_path, QueryPath::Olap, "positional ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.08, "PositionalOrdering must carry at least 0.08 cost overhead");
+    }
+
+    // ── S3-WS1-52: ExpressionOrdering node tests ───────────────────────────
+
+    #[test]
+    fn planner_expression_ordering_select_produces_expression_ordering_node() {
+        let p = plan("SELECT price, qty FROM sales ORDER BY price * qty");
+        assert!(
+            matches!(&p, LogicalPlan::ExpressionOrdering { .. }),
+            "ORDER BY expression must produce outermost ExpressionOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_expression_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT name FROM users ORDER BY UPPER(name)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "expression ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.12, "ExpressionOrdering must carry at least 0.12 cost overhead");
     }
 }
