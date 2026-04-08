@@ -187,6 +187,8 @@ pub struct SelectStatement {
     pub has_select_distinct_on: bool,
     /// True when the query uses FOR UPDATE / FOR SHARE locking clause (S3-WS1-68).
     pub has_for_update: bool,
+    /// True when the query uses LEFT JOIN / LEFT OUTER JOIN (S3-WS1-69).
+    pub has_left_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -552,6 +554,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_for_update(&up) {
                     stmt.has_for_update = true;
                 }
+                if has_left_join(&up) {
+                    stmt.has_left_join = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -659,6 +664,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_for_update(&up) {
                     stmt.has_for_update = true;
+                }
+                if has_left_join(&up) {
+                    stmt.has_left_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3331,12 +3339,12 @@ fn has_select_distinct_on(up: &str) -> bool {
     up.contains("SELECT DISTINCT ON (")
 }
 
-fn has_lateral_join(up: &str) -> bool {
-    up.contains(" LATERAL ") || up.contains(" LATERAL(")
-}
-
 fn has_for_update(up: &str) -> bool {
     up.contains(" FOR UPDATE") || up.contains(" FOR SHARE")
+}
+
+fn has_left_join(up: &str) -> bool {
+    up.contains(" LEFT JOIN ") || up.contains(" LEFT OUTER JOIN ")
 }
 
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
@@ -3890,6 +3898,43 @@ mod for_update_tests {
         assert!(
             !s.has_for_update,
             "Plain SELECT must keep has_for_update = false"
+        );
+    }
+}
+
+// ─── S3-WS1-69: has_left_join tests ─────────────────────────────────────────
+
+#[cfg(test)]
+mod left_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_left_join_sets_has_left_join() {
+        let stmt = parse_one("SELECT u.id, o.total FROM users u LEFT JOIN orders o ON o.user_id = u.id").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_left_join,
+            "SELECT ... LEFT JOIN must set has_left_join = true"
+        );
+    }
+
+    #[test]
+    fn select_left_outer_join_sets_has_left_join() {
+        let stmt = parse_one("SELECT u.id, o.total FROM users u LEFT OUTER JOIN orders o ON o.user_id = u.id").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_left_join,
+            "SELECT ... LEFT OUTER JOIN must set has_left_join = true"
+        );
+    }
+
+    #[test]
+    fn select_without_left_join_keeps_has_left_join_false() {
+        let stmt = parse_one("SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_left_join,
+            "INNER JOIN must keep has_left_join = false"
         );
     }
 }

@@ -896,7 +896,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
-## Session 91 Implementation Log
+## Session 93 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 306→309, exec 160→162, service 601→605 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_left_join: bool` field + detection | `voltnuerongrid-sql` | Detects LEFT JOIN / LEFT OUTER JOIN usage (`S3-WS1-69`) | 3 (`left_join_tests` module) |
+| `LeftJoin { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.12 cost overhead | 2 |
+| `GET /api/v1/store/wal/left/join/count` | `voltnuerongridd` | Count LEFT-JOIN usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/left/join/count` | `voltnuerongridd` | Count LEFT-JOIN usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 92 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
@@ -911,6 +924,7 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 91 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
 **Test Baseline → New:** sql 300→303, exec 156→158, service 593→597 (+9 total)

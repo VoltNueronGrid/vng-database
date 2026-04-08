@@ -370,6 +370,10 @@ pub enum LogicalPlan {
     ForUpdate {
         input: Box<LogicalPlan>,
     },
+    /// LEFT JOIN / LEFT OUTER JOIN wrapper (S3-WS1-69 has_left_join support).
+    LeftJoin {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -452,6 +456,7 @@ impl LogicalPlan {
             LogicalPlan::GroupByCube { input } => input.primary_table(),
             LogicalPlan::SelectDistinctOn { input } => input.primary_table(),
             LogicalPlan::ForUpdate { input } => input.primary_table(),
+            LogicalPlan::LeftJoin { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -550,6 +555,7 @@ impl LogicalPlan {
             LogicalPlan::GroupByCube { input } => input.has_aggregation(),
             LogicalPlan::SelectDistinctOn { input } => input.has_aggregation(),
             LogicalPlan::ForUpdate { input } => input.has_aggregation(),
+            LogicalPlan::LeftJoin { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1196,6 +1202,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.03,
                     recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::LeftJoin { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.12,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -1945,12 +1959,21 @@ impl QueryPlanner {
         };
 
         // ForUpdate wrapper (S3-WS1-68 has_for_update detection): outermost node.
-        if sel.has_for_update {
+        let after_for_update = if sel.has_for_update {
             LogicalPlan::ForUpdate {
                 input: Box::new(after_select_distinct_on),
             }
         } else {
             after_select_distinct_on
+        };
+
+        // LeftJoin wrapper (S3-WS1-69 has_left_join detection): outermost node.
+        if sel.has_left_join {
+            LogicalPlan::LeftJoin {
+                input: Box::new(after_for_update),
+            }
+        } else {
+            after_for_update
         }
     }
 
@@ -3445,5 +3468,24 @@ mod tests {
         let c = cost("SELECT id FROM accounts WHERE balance > 0 FOR UPDATE");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "FOR UPDATE should route to OLTP");
         assert!(c.relative_cost >= 0.03, "ForUpdate must carry at least 0.03 cost overhead");
+    }
+
+    // ── S3-WS1-69: LeftJoin node tests ──────────────────────────
+
+    #[test]
+    fn planner_left_join_produces_left_join_node() {
+        let p = plan("SELECT u.id, o.total FROM users u LEFT JOIN orders o ON o.user_id = u.id");
+        assert!(
+            matches!(&p, LogicalPlan::LeftJoin { .. }),
+            "SELECT ... LEFT JOIN must produce outermost LeftJoin node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_left_join_routes_to_olap_with_overhead() {
+        let c = cost("SELECT u.id, o.total FROM users u LEFT JOIN orders o ON o.user_id = u.id");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "LEFT JOIN should route to OLAP");
+        assert!(c.relative_cost >= 0.12, "LeftJoin must carry at least 0.12 cost overhead");
     }
 }

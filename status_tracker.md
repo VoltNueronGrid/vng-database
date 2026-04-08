@@ -539,13 +539,19 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `GroupByCube { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.15 cost), and `plan_select()` (`has_group_by_cube` outermost wrap after group-by-rollup). Tests: `planner_group_by_cube_select_produces_group_by_cube_node`, `cost_group_by_cube_routes_to_olap_with_small_overhead`. Total: **156 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/group_by/cube/count` and `GET /api/v1/store/rows/group_by/cube/count` (operator-auth, GROUP-BY-CUBE usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_66_*`). Total: **593 passed**.
 
-### 9.2bg Session 91 Implementation Update (S3-WS1-67 + service endpoints)
+### 9.2bi Session 93 Implementation Update (S3-WS1-69 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_left_join: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `LEFT JOIN` or `LEFT OUTER JOIN` clauses (S3-WS1-69). Tests: `left_join_tests` module (3 tests). Total: **309 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `LeftJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.12 cost), and `plan_select()` (`has_left_join` outermost wrap after for-update handling). Tests: `planner_left_join_produces_left_join_node`, `cost_left_join_routes_to_olap_with_overhead`. Total: **162 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/left/join/count` and `GET /api/v1/store/rows/left/join/count` (operator-auth, LEFT-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_69_*`). Total: **605 passed**.
+
 ### 9.2bh Session 92 Implementation Update (S3-WS1-68 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_for_update: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `FOR UPDATE` or `FOR SHARE` row-locking clauses (S3-WS1-68). Tests: `for_update_tests` module (3 tests). Total: **306 passed**.
 - **Exec (`voltnuerongrid-exec`)**: Added `ForUpdate { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLTP path, +0.03 cost), and `plan_select()` (`has_for_update` outermost wrap after select-distinct-on). Tests: `planner_for_update_produces_for_update_node`, `cost_for_update_routes_to_oltp_with_overhead`. Total: **160 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/for/update/count` and `GET /api/v1/store/rows/for/update/count` (operator-auth, FOR UPDATE / FOR SHARE usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_68_*`). Total: **601 passed**.
 
+### 9.2bg Session 91 Implementation Update (S3-WS1-67 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_select_distinct_on: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `SELECT DISTINCT ON (...)` (PostgreSQL-style per-partition deduplication) (S3-WS1-67). Tests: `select_distinct_on_tests` module (3 tests). Total: **303 passed**.
 - **Exec (`voltnuerongrid-exec`)**: Added `SelectDistinctOn { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.07 cost), and `plan_select()` (`has_select_distinct_on` outermost wrap after group-by-cube). Tests: `planner_select_distinct_on_produces_select_distinct_on_node`, `cost_select_distinct_on_routes_to_olap_with_small_overhead`. Total: **158 passed**.
