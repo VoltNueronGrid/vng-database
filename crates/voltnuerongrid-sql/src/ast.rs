@@ -143,6 +143,8 @@ pub struct SelectStatement {
     pub has_window_frame: bool,
     /// True when the query defines a named window via WINDOW ... AS (...) (S3-WS1-46).
     pub has_named_window: bool,
+    /// True when a window clause uses PARTITION BY (S3-WS1-47).
+    pub has_window_partition: bool,
 }
 
 /// A parsed INSERT statement.
@@ -436,6 +438,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains(" WINDOW ") && up.contains(" AS (") {
                     stmt.has_named_window = true;
                 }
+                // Detect window PARTITION BY usage (S3-WS1-47).
+                if up.contains("PARTITION BY") {
+                    stmt.has_window_partition = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -470,6 +476,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if up.contains(" WINDOW ") && up.contains(" AS (") {
                     stmt.has_named_window = true;
+                }
+                if up.contains("PARTITION BY") {
+                    stmt.has_window_partition = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2759,6 +2768,37 @@ mod named_window_tests {
         assert!(
             !s.has_named_window,
             "OVER (...) without WINDOW clause must keep has_named_window = false"
+        );
+    }
+}
+
+// ─── S3-WS1-47: has_window_partition tests ─────────────────────────────────
+
+#[cfg(test)]
+mod window_partition_tests {
+    use super::*;
+
+    #[test]
+    fn select_over_partition_by_sets_has_window_partition() {
+        let stmt = parse_one("SELECT SUM(v) OVER (PARTITION BY grp ORDER BY ts) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_window_partition, "PARTITION BY in OVER clause must set has_window_partition = true");
+    }
+
+    #[test]
+    fn named_window_partition_by_sets_has_window_partition() {
+        let stmt = parse_one("SELECT SUM(v) OVER w FROM events WINDOW w AS (PARTITION BY grp ORDER BY ts)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_window_partition, "PARTITION BY in named window must set has_window_partition = true");
+    }
+
+    #[test]
+    fn window_without_partition_by_keeps_has_window_partition_false() {
+        let stmt = parse_one("SELECT ROW_NUMBER() OVER (ORDER BY ts) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_window_partition,
+            "window clause without PARTITION BY must keep has_window_partition = false"
         );
     }
 }

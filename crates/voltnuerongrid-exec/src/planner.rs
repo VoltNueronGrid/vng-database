@@ -282,6 +282,10 @@ pub enum LogicalPlan {
     NamedWindow {
         input: Box<LogicalPlan>,
     },
+    /// Window PARTITION BY semantics wrapper (S3-WS1-47 has_window_partition support).
+    WindowPartition {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -342,6 +346,7 @@ impl LogicalPlan {
             LogicalPlan::AggregateFilter { input } => input.primary_table(),
             LogicalPlan::WindowFrame { input } => input.primary_table(),
             LogicalPlan::NamedWindow { input } => input.primary_table(),
+            LogicalPlan::WindowPartition { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -418,6 +423,7 @@ impl LogicalPlan {
             LogicalPlan::AggregateFilter { input } => input.has_aggregation(),
             LogicalPlan::WindowFrame { input } => input.has_aggregation(),
             LogicalPlan::NamedWindow { input } => input.has_aggregation(),
+            LogicalPlan::WindowPartition { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -887,6 +893,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.30,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::WindowPartition { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.25,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1442,13 +1456,22 @@ impl QueryPlanner {
             after_aggregate_filter
         };
 
-        // NamedWindow wrapper (S3-WS1-46 has_named_window detection): outermost node.
-        if sel.has_named_window {
+        // NamedWindow wrapper (S3-WS1-46 has_named_window detection).
+        let after_named_window = if sel.has_named_window {
             LogicalPlan::NamedWindow {
                 input: Box::new(after_window_frame),
             }
         } else {
             after_window_frame
+        };
+
+        // WindowPartition wrapper (S3-WS1-47 has_window_partition detection): outermost node.
+        if sel.has_window_partition {
+            LogicalPlan::WindowPartition {
+                input: Box::new(after_named_window),
+            }
+        } else {
+            after_named_window
         }
     }
 
@@ -1654,7 +1677,9 @@ mod tests {
     fn planner_window_fn_produces_window_fn_node() {
         let p = plan("SELECT id, RANK() OVER (PARTITION BY dept ORDER BY salary DESC) AS rnk FROM employees");
         assert!(
-            matches!(&p, LogicalPlan::WindowFn { window_func, .. } if window_func == "OVER"),
+            matches!(&p, LogicalPlan::WindowFn { window_func, .. } if window_func == "OVER")
+                || matches!(&p, LogicalPlan::WindowPartition { input }
+                    if matches!(input.as_ref(), LogicalPlan::WindowFn { window_func, .. } if window_func == "OVER")),
             "expected WindowFn node for window function query, got {p:?}"
         );
         assert_eq!(p.primary_table(), Some("employees"));
@@ -2149,7 +2174,9 @@ mod tests {
     fn planner_window_agg_select_produces_window_agg_node() {
         let p = plan("SELECT COUNT(id) OVER (PARTITION BY dept) FROM employees");
         assert!(
-            matches!(&p, LogicalPlan::WindowAgg { .. }),
+            matches!(&p, LogicalPlan::WindowAgg { .. })
+                || matches!(&p, LogicalPlan::WindowPartition { input }
+                    if matches!(input.as_ref(), LogicalPlan::WindowAgg { .. })),
             "COUNT() OVER must produce outermost WindowAgg node; got: {:?}", p
         );
         assert_eq!(p.primary_table(), Some("employees"));
@@ -2497,7 +2524,9 @@ mod tests {
     fn planner_named_window_select_produces_named_window_node() {
         let p = plan("SELECT SUM(v) OVER w FROM events WINDOW w AS (PARTITION BY grp ORDER BY ts)");
         assert!(
-            matches!(&p, LogicalPlan::NamedWindow { .. }),
+            matches!(&p, LogicalPlan::NamedWindow { .. })
+                || matches!(&p, LogicalPlan::WindowPartition { input }
+                    if matches!(input.as_ref(), LogicalPlan::NamedWindow { .. })),
             "named WINDOW clause must produce outermost NamedWindow node; got: {:?}", p
         );
         assert!(p.is_read_only());
@@ -2508,5 +2537,24 @@ mod tests {
         let c = cost("SELECT AVG(v) OVER w FROM events WINDOW w AS (ORDER BY ts)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "named WINDOW should route to OLAP");
         assert!(c.relative_cost >= 0.30, "NamedWindow must carry at least 0.30 cost overhead");
+    }
+
+    // ── S3-WS1-47: WindowPartition node tests ───────────────────────────────
+
+    #[test]
+    fn planner_window_partition_select_produces_window_partition_node() {
+        let p = plan("SELECT SUM(v) OVER (PARTITION BY grp ORDER BY ts) FROM events");
+        assert!(
+            matches!(&p, LogicalPlan::WindowPartition { .. }),
+            "PARTITION BY window clause must produce outermost WindowPartition node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_window_partition_routes_to_olap_path_with_penalty() {
+        let c = cost("SELECT SUM(v) OVER w FROM events WINDOW w AS (PARTITION BY grp ORDER BY ts)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "window PARTITION BY should route to OLAP");
+        assert!(c.relative_cost >= 0.25, "WindowPartition must carry at least 0.25 cost overhead");
     }
 }

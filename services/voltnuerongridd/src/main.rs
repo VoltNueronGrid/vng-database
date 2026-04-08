@@ -3014,6 +3014,20 @@ struct RowsValueNonBlankCountResponse {
     non_blank_value_count: usize,
 }
 
+// S3-WS1-47: wal/non_deleted/oldest + rows/key/non_blank/count structs
+
+#[derive(Debug, Serialize)]
+struct WalNonDeletedOldestResponse {
+    status: &'static str,
+    oldest_non_deleted_sequence: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsKeyNonBlankCountResponse {
+    status: &'static str,
+    non_blank_key_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4458,6 +4472,9 @@ async fn main() {
         // S3-WS1-46: wal/non_deleted/latest + rows/value/non_blank/count
         .route("/api/v1/store/wal/non_deleted/latest", get(wal_non_deleted_latest))
         .route("/api/v1/store/rows/value/non_blank/count", get(rows_value_non_blank_count))
+        // S3-WS1-47: wal/non_deleted/oldest + rows/key/non_blank/count
+        .route("/api/v1/store/wal/non_deleted/oldest", get(wal_non_deleted_oldest))
+        .route("/api/v1/store/rows/key/non_blank/count", get(rows_key_non_blank_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -10159,6 +10176,46 @@ async fn rows_value_non_blank_count(
     Ok((StatusCode::OK, Json(RowsValueNonBlankCountResponse {
         status: "ok",
         non_blank_value_count,
+    })))
+}
+
+// S3-WS1-47: wal/non_deleted/oldest endpoint
+async fn wal_non_deleted_oldest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalNonDeletedOldestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_non_deleted_oldest");
+    let oldest_non_deleted_sequence = wal
+        .wal_records()
+        .iter()
+        .filter(|r| r.value != "__deleted__")
+        .map(|r| r.sequence)
+        .min()
+        .unwrap_or(0);
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalNonDeletedOldestResponse {
+        status: "ok",
+        oldest_non_deleted_sequence,
+    })))
+}
+
+// S3-WS1-47: rows/key/non_blank/count endpoint
+async fn rows_key_non_blank_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsKeyNonBlankCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_key_non_blank_count");
+    let non_blank_key_count = rs
+        .export_rows_snapshot()
+        .into_iter()
+        .filter(|(k, _)| !k.trim().is_empty())
+        .count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsKeyNonBlankCountResponse {
+        status: "ok",
+        non_blank_key_count,
     })))
 }
 
@@ -24572,6 +24629,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_value_non_blank_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-47: wal_non_deleted_oldest tests
+
+    #[tokio::test]
+    async fn s11_ws1_47_wal_non_deleted_oldest_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_non_deleted_oldest(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.oldest_non_deleted_sequence, 0, "fresh WAL must have no non-deleted oldest sequence");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_47_wal_non_deleted_oldest_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_non_deleted_oldest(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-47: rows_key_non_blank_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_47_rows_key_non_blank_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_key_non_blank_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.non_blank_key_count, 0, "fresh store must have zero non-blank keys");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_47_rows_key_non_blank_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_key_non_blank_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
