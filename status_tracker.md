@@ -527,6 +527,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `HavingWithGroupBy { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.08 cost), and `plan_select()` (`has_having_with_group_by` outermost wrap after having-without-group-by). Tests: `planner_having_with_group_by_select_produces_having_with_group_by_node`, `cost_having_with_group_by_routes_to_olap_with_small_overhead`. Total: **152 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/having_with_group_by/count` and `GET /api/v1/store/rows/having_with_group_by/count` (operator-auth, HAVING-with-GROUP-BY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_64_*`). Total: **585 passed**.
 
+### 9.2be Session 89 Implementation Update (S3-WS1-65 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_group_by_rollup: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `GROUP BY ROLLUP(...)` (S3-WS1-65). Detection function `has_group_by_rollup(up)` matches uppercase `GROUP BY ROLLUP(` or `GROUP BY ROLLUP (`. Tests: `group_by_rollup_tests` module (3 tests). Total: **297 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `GroupByRollup { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.12 cost), and `plan_select()` (`has_group_by_rollup` outermost wrap after having-with-group-by). Tests: `planner_group_by_rollup_select_produces_group_by_rollup_node`, `cost_group_by_rollup_routes_to_olap_with_small_overhead`. Total: **154 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/group_by/rollup/count` and `GET /api/v1/store/rows/group_by/rollup/count` (operator-auth, GROUP-BY-ROLLUP usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_65_*`). Total: **589 passed**.
+
 ### 9.2at Session 78 Implementation Update (S3-WS1-54 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_case_expression: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY CASE expressions (for example `CASE ... END`) in SELECT/WITH queries (S3-WS1-54). Tests: `order_by_case_expression_tests` module (3 tests). Total: **264 passed**.

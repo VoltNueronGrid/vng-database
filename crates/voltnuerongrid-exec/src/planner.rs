@@ -354,6 +354,10 @@ pub enum LogicalPlan {
     HavingWithGroupBy {
         input: Box<LogicalPlan>,
     },
+    /// GROUP BY ROLLUP extension wrapper (S3-WS1-65 has_group_by_rollup support).
+    GroupByRollup {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -432,6 +436,7 @@ impl LogicalPlan {
             LogicalPlan::OffsetOnlyPagination { input } => input.primary_table(),
             LogicalPlan::HavingWithoutGroupBy { input } => input.primary_table(),
             LogicalPlan::HavingWithGroupBy { input } => input.primary_table(),
+            LogicalPlan::GroupByRollup { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -526,6 +531,7 @@ impl LogicalPlan {
             LogicalPlan::OffsetOnlyPagination { input } => input.has_aggregation(),
             LogicalPlan::HavingWithoutGroupBy { input } => input.has_aggregation(),
             LogicalPlan::HavingWithGroupBy { input } => input.has_aggregation(),
+            LogicalPlan::GroupByRollup { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1139,6 +1145,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.08,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::GroupByRollup { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.12,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1853,12 +1867,21 @@ impl QueryPlanner {
         };
 
         // HavingWithGroupBy wrapper (S3-WS1-64 has_having_with_group_by detection): outermost node.
-        if sel.has_having_with_group_by {
+        let after_having_with_group_by = if sel.has_having_with_group_by {
             LogicalPlan::HavingWithGroupBy {
                 input: Box::new(after_having_without_group_by),
             }
         } else {
             after_having_without_group_by
+        };
+
+        // GroupByRollup wrapper (S3-WS1-65 has_group_by_rollup detection): outermost node.
+        if sel.has_group_by_rollup {
+            LogicalPlan::GroupByRollup {
+                input: Box::new(after_having_with_group_by),
+            }
+        } else {
+            after_having_with_group_by
         }
     }
 
@@ -3277,5 +3300,24 @@ mod tests {
         let c = cost("SELECT id FROM users GROUP BY id HAVING id > 0");
         assert_eq!(c.recommended_path, QueryPath::Olap, "HAVING with GROUP BY should route to OLAP");
         assert!(c.relative_cost >= 0.08, "HavingWithGroupBy must carry at least 0.08 cost overhead");
+    }
+
+    // ── S3-WS1-65: GroupByRollup node tests ─────────────────────────
+
+    #[test]
+    fn planner_group_by_rollup_select_produces_group_by_rollup_node() {
+        let p = plan("SELECT region, SUM(sales) FROM orders GROUP BY ROLLUP(region)");
+        assert!(
+            matches!(&p, LogicalPlan::GroupByRollup { .. }),
+            "GROUP BY ROLLUP must produce outermost GroupByRollup node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_group_by_rollup_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT region, SUM(sales) FROM orders GROUP BY ROLLUP(region)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "GROUP BY ROLLUP should route to OLAP");
+        assert!(c.relative_cost >= 0.12, "GroupByRollup must carry at least 0.12 cost overhead");
     }
 }

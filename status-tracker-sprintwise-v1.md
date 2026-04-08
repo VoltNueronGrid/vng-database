@@ -868,6 +868,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 89 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 294→297, exec 152→154, service 585→589 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_group_by_rollup: bool` field + detection | `voltnuerongrid-sql` | Detects GROUP BY ROLLUP(...) usage (`S3-WS1-65`) | 3 (`group_by_rollup_tests` module) |
+| `GroupByRollup { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.12 cost overhead | 2 |
+| `GET /api/v1/store/wal/group_by/rollup/count` | `voltnuerongridd` | Count GROUP-BY-ROLLUP usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/group_by/rollup/count` | `voltnuerongridd` | Count GROUP-BY-ROLLUP usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

@@ -179,6 +179,8 @@ pub struct SelectStatement {
     pub has_having_without_group_by: bool,
     /// True when the query uses HAVING together with GROUP BY (S3-WS1-64).
     pub has_having_with_group_by: bool,
+    /// True when the query uses GROUP BY ROLLUP(...) (S3-WS1-65).
+    pub has_group_by_rollup: bool,
 }
 
 /// A parsed INSERT statement.
@@ -532,6 +534,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_having_with_group_by(&stmt) {
                     stmt.has_having_with_group_by = true;
                 }
+                if has_group_by_rollup(&up) {
+                    stmt.has_group_by_rollup = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -627,6 +632,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_having_with_group_by(&stmt) {
                     stmt.has_having_with_group_by = true;
+                }
+                if has_group_by_rollup(&up) {
+                    stmt.has_group_by_rollup = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3287,6 +3295,10 @@ fn has_having_with_group_by(stmt: &SelectStatement) -> bool {
     stmt.has_having && stmt.has_group_by
 }
 
+fn has_group_by_rollup(up: &str) -> bool {
+    up.contains("GROUP BY ROLLUP(") || up.contains("GROUP BY ROLLUP (")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3690,6 +3702,43 @@ mod having_with_group_by_tests {
         assert!(
             !s.has_having_with_group_by,
             "HAVING without GROUP BY must keep has_having_with_group_by = false"
+        );
+    }
+}
+
+// ─── S3-WS1-65: has_group_by_rollup tests ────────────────────────────────────
+
+#[cfg(test)]
+mod group_by_rollup_tests {
+    use super::*;
+
+    #[test]
+    fn select_group_by_rollup_sets_has_group_by_rollup() {
+        let stmt = parse_one("SELECT region, SUM(sales) FROM orders GROUP BY ROLLUP(region)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_group_by_rollup,
+            "GROUP BY ROLLUP must set has_group_by_rollup = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_group_by_rollup_sets_has_group_by_rollup() {
+        let stmt = parse_one("WITH t AS (SELECT region, sales FROM orders) SELECT region, SUM(sales) FROM t GROUP BY ROLLUP(region)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_group_by_rollup,
+            "WITH query GROUP BY ROLLUP must set has_group_by_rollup = true"
+        );
+    }
+
+    #[test]
+    fn select_without_rollup_keeps_has_group_by_rollup_false() {
+        let stmt = parse_one("SELECT region, SUM(sales) FROM orders GROUP BY region").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_group_by_rollup,
+            "Plain GROUP BY must keep has_group_by_rollup = false"
         );
     }
 }
