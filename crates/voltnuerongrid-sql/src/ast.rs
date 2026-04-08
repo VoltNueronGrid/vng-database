@@ -181,6 +181,8 @@ pub struct SelectStatement {
     pub has_having_with_group_by: bool,
     /// True when the query uses GROUP BY ROLLUP(...) (S3-WS1-65).
     pub has_group_by_rollup: bool,
+    /// True when the query uses GROUP BY CUBE(...) (S3-WS1-66).
+    pub has_group_by_cube: bool,
 }
 
 /// A parsed INSERT statement.
@@ -537,6 +539,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_group_by_rollup(&up) {
                     stmt.has_group_by_rollup = true;
                 }
+                if has_group_by_cube(&up) {
+                    stmt.has_group_by_cube = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -635,6 +640,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_group_by_rollup(&up) {
                     stmt.has_group_by_rollup = true;
+                }
+                if has_group_by_cube(&up) {
+                    stmt.has_group_by_cube = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3299,6 +3307,10 @@ fn has_group_by_rollup(up: &str) -> bool {
     up.contains("GROUP BY ROLLUP(") || up.contains("GROUP BY ROLLUP (")
 }
 
+fn has_group_by_cube(up: &str) -> bool {
+    up.contains("GROUP BY CUBE(") || up.contains("GROUP BY CUBE (")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3739,6 +3751,43 @@ mod group_by_rollup_tests {
         assert!(
             !s.has_group_by_rollup,
             "Plain GROUP BY must keep has_group_by_rollup = false"
+        );
+    }
+}
+
+// ─── S3-WS1-66: has_group_by_cube tests ──────────────────────────────────────
+
+#[cfg(test)]
+mod group_by_cube_tests {
+    use super::*;
+
+    #[test]
+    fn select_group_by_cube_sets_has_group_by_cube() {
+        let stmt = parse_one("SELECT region, SUM(sales) FROM orders GROUP BY CUBE(region, category)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_group_by_cube,
+            "GROUP BY CUBE must set has_group_by_cube = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_group_by_cube_sets_has_group_by_cube() {
+        let stmt = parse_one("WITH t AS (SELECT region, sales FROM orders) SELECT region, SUM(sales) FROM t GROUP BY CUBE(region)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_group_by_cube,
+            "WITH query GROUP BY CUBE must set has_group_by_cube = true"
+        );
+    }
+
+    #[test]
+    fn select_without_cube_keeps_has_group_by_cube_false() {
+        let stmt = parse_one("SELECT region, SUM(sales) FROM orders GROUP BY region").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_group_by_cube,
+            "Plain GROUP BY must keep has_group_by_cube = false"
         );
     }
 }

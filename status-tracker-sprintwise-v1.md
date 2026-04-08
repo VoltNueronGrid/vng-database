@@ -882,6 +882,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 90 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 297→300, exec 154→156, service 589→593 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_group_by_cube: bool` field + detection | `voltnuerongrid-sql` | Detects GROUP BY CUBE(...) usage (`S3-WS1-66`) | 3 (`group_by_cube_tests` module) |
+| `GroupByCube { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.15 cost overhead | 2 |
+| `GET /api/v1/store/wal/group_by/cube/count` | `voltnuerongridd` | Count GROUP-BY-CUBE usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/group_by/cube/count` | `voltnuerongridd` | Count GROUP-BY-CUBE usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

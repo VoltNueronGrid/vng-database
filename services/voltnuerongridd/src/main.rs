@@ -3280,6 +3280,20 @@ struct RowsGroupByRollupCountResponse {
     group_by_rollup_count: usize,
 }
 
+// S3-WS1-66: wal/group_by/cube/count + rows/group_by/cube/count structs
+
+#[derive(Debug, Serialize)]
+struct WalGroupByCubeCountResponse {
+    status: &'static str,
+    group_by_cube_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsGroupByCubeCountResponse {
+    status: &'static str,
+    group_by_cube_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4770,6 +4784,8 @@ async fn main() {
         .route("/api/v1/store/rows/having_with_group_by/count", get(rows_having_with_group_by_count))
         .route("/api/v1/store/wal/group_by/rollup/count", get(wal_group_by_rollup_count))
         .route("/api/v1/store/rows/group_by/rollup/count", get(rows_group_by_rollup_count))
+        .route("/api/v1/store/wal/group_by/cube/count", get(wal_group_by_cube_count))
+        .route("/api/v1/store/rows/group_by/cube/count", get(rows_group_by_cube_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -11272,6 +11288,50 @@ async fn rows_group_by_rollup_count(
     Ok((StatusCode::OK, Json(RowsGroupByRollupCountResponse {
         status: "ok",
         group_by_rollup_count,
+    })))
+}
+
+// S3-WS1-66: wal/group_by/cube/count endpoint
+async fn wal_group_by_cube_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalGroupByCubeCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_group_by_cube_count");
+    let mut group_by_cube_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains("GROUP BY CUBE(") || value_up.contains("GROUP BY CUBE (") {
+            group_by_cube_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalGroupByCubeCountResponse {
+        status: "ok",
+        group_by_cube_count,
+    })))
+}
+
+// S3-WS1-66: rows/group_by/cube/count endpoint
+async fn rows_group_by_cube_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsGroupByCubeCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_group_by_cube_count");
+    let mut group_by_cube_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains("GROUP BY CUBE(") || value_up.contains("GROUP BY CUBE (") {
+                group_by_cube_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsGroupByCubeCountResponse {
+        status: "ok",
+        group_by_cube_count,
     })))
 }
 
@@ -26483,6 +26543,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_group_by_rollup_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-66: wal_group_by_cube_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_66_wal_group_by_cube_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_group_by_cube_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.group_by_cube_count, 0, "fresh WAL must have zero GROUP-BY-CUBE counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_66_wal_group_by_cube_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_group_by_cube_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-66: rows_group_by_cube_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_66_rows_group_by_cube_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_group_by_cube_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.group_by_cube_count, 0, "fresh rows must have zero GROUP-BY-CUBE counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_66_rows_group_by_cube_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_group_by_cube_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

@@ -358,6 +358,10 @@ pub enum LogicalPlan {
     GroupByRollup {
         input: Box<LogicalPlan>,
     },
+    /// GROUP BY CUBE extension wrapper (S3-WS1-66 has_group_by_cube support).
+    GroupByCube {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -437,6 +441,7 @@ impl LogicalPlan {
             LogicalPlan::HavingWithoutGroupBy { input } => input.primary_table(),
             LogicalPlan::HavingWithGroupBy { input } => input.primary_table(),
             LogicalPlan::GroupByRollup { input } => input.primary_table(),
+            LogicalPlan::GroupByCube { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -532,6 +537,7 @@ impl LogicalPlan {
             LogicalPlan::HavingWithoutGroupBy { input } => input.has_aggregation(),
             LogicalPlan::HavingWithGroupBy { input } => input.has_aggregation(),
             LogicalPlan::GroupByRollup { input } => input.has_aggregation(),
+            LogicalPlan::GroupByCube { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1153,6 +1159,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.12,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::GroupByCube { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.15,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1876,12 +1890,21 @@ impl QueryPlanner {
         };
 
         // GroupByRollup wrapper (S3-WS1-65 has_group_by_rollup detection): outermost node.
-        if sel.has_group_by_rollup {
+        let after_group_by_rollup = if sel.has_group_by_rollup {
             LogicalPlan::GroupByRollup {
                 input: Box::new(after_having_with_group_by),
             }
         } else {
             after_having_with_group_by
+        };
+
+        // GroupByCube wrapper (S3-WS1-66 has_group_by_cube detection): outermost node.
+        if sel.has_group_by_cube {
+            LogicalPlan::GroupByCube {
+                input: Box::new(after_group_by_rollup),
+            }
+        } else {
+            after_group_by_rollup
         }
     }
 
@@ -3319,5 +3342,24 @@ mod tests {
         let c = cost("SELECT region, SUM(sales) FROM orders GROUP BY ROLLUP(region)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "GROUP BY ROLLUP should route to OLAP");
         assert!(c.relative_cost >= 0.12, "GroupByRollup must carry at least 0.12 cost overhead");
+    }
+
+    // ── S3-WS1-66: GroupByCube node tests ─────────────────────────
+
+    #[test]
+    fn planner_group_by_cube_select_produces_group_by_cube_node() {
+        let p = plan("SELECT region, SUM(sales) FROM orders GROUP BY CUBE(region, category)");
+        assert!(
+            matches!(&p, LogicalPlan::GroupByCube { .. }),
+            "GROUP BY CUBE must produce outermost GroupByCube node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_group_by_cube_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT region, SUM(sales) FROM orders GROUP BY CUBE(region, category)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "GROUP BY CUBE should route to OLAP");
+        assert!(c.relative_cost >= 0.15, "GroupByCube must carry at least 0.15 cost overhead");
     }
 }
