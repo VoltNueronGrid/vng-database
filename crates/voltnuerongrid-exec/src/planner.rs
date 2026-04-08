@@ -254,6 +254,10 @@ pub enum LogicalPlan {
     Intersect {
         input: Box<LogicalPlan>,
     },
+    /// QUALIFY clause semantics wrapper (S3-WS1-40 has_qualify support).
+    Qualify {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -307,6 +311,7 @@ impl LogicalPlan {
             LogicalPlan::UsingJoin { input } => input.primary_table(),
             LogicalPlan::Except { input } => input.primary_table(),
             LogicalPlan::Intersect { input } => input.primary_table(),
+            LogicalPlan::Qualify { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -376,6 +381,7 @@ impl LogicalPlan {
             LogicalPlan::UsingJoin { input } => input.has_aggregation(),
             LogicalPlan::Except { input } => input.has_aggregation(),
             LogicalPlan::Intersect { input } => input.has_aggregation(),
+            LogicalPlan::Qualify { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -789,6 +795,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
                     relative_cost: inner.relative_cost + 0.50,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Qualify { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.6) as u64,
+                    relative_cost: inner.relative_cost + 0.20,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1281,13 +1295,22 @@ impl QueryPlanner {
             after_using_join
         };
 
-        // Intersect wrapper (S3-WS1-39 has_intersect detection): outermost node.
-        if sel.has_intersect {
+        // Intersect wrapper (S3-WS1-39 has_intersect detection).
+        let after_intersect = if sel.has_intersect {
             LogicalPlan::Intersect {
                 input: Box::new(after_except),
             }
         } else {
             after_except
+        };
+
+        // Qualify wrapper (S3-WS1-40 has_qualify detection): outermost node.
+        if sel.has_qualify {
+            LogicalPlan::Qualify {
+                input: Box::new(after_intersect),
+            }
+        } else {
+            after_intersect
         }
     }
 
@@ -2214,5 +2237,24 @@ mod tests {
         let c = cost("SELECT id FROM s1 INTERSECT ALL SELECT id FROM s2");
         assert_eq!(c.recommended_path, QueryPath::Olap, "INTERSECT should route to OLAP");
         assert!(c.relative_cost >= 0.50, "Intersect must carry at least 0.50 cost overhead");
+    }
+
+    // ── S3-WS1-40: Qualify node tests ────────────────────────────────────────
+
+    #[test]
+    fn planner_qualify_select_produces_qualify_node() {
+        let p = plan("SELECT user_id FROM events QUALIFY score > 0.95");
+        assert!(
+            matches!(&p, LogicalPlan::Qualify { .. }),
+            "QUALIFY must produce outermost Qualify node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_qualify_routes_to_olap() {
+        let c = cost("SELECT user_id FROM events QUALIFY rank <= 3");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "QUALIFY should route to OLAP");
+        assert!(c.relative_cost >= 0.20, "Qualify must carry at least 0.20 cost overhead");
     }
 }

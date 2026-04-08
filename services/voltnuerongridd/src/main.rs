@@ -2911,6 +2911,20 @@ struct RowsKeyMinResponse {
     min_key: String,
 }
 
+// S3-WS1-40: wal/record/mutations + rows/field/cardinality structs
+
+#[derive(Debug, Serialize)]
+struct WalRecordMutationsResponse {
+    status: &'static str,
+    mutation_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsFieldCardinalityResponse {
+    status: &'static str,
+    distinct_field_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4334,6 +4348,9 @@ async fn main() {
         // S3-WS1-39: wal/record/active + rows/key/min
         .route("/api/v1/store/wal/record/active", get(wal_record_active))
         .route("/api/v1/store/rows/key/min", get(rows_key_min))
+        // S3-WS1-40: wal/record/mutations + rows/field/cardinality
+        .route("/api/v1/store/wal/record/mutations", get(wal_record_mutations))
+        .route("/api/v1/store/rows/field/cardinality", get(rows_field_cardinality))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9766,6 +9783,39 @@ async fn rows_key_min(
     drop(rs);
     let has_key = !min_key.is_empty();
     Ok((StatusCode::OK, Json(RowsKeyMinResponse { status: "ok", has_key, min_key })))
+}
+
+// S3-WS1-40: wal/record/mutations endpoint
+async fn wal_record_mutations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalRecordMutationsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_record_mutations");
+    let mutation_count = wal.wal_records().len();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalRecordMutationsResponse { status: "ok", mutation_count })))
+}
+
+// S3-WS1-40: rows/field/cardinality endpoint
+async fn rows_field_cardinality(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsFieldCardinalityResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_field_cardinality");
+    let mut fields = std::collections::BTreeSet::new();
+    for (_, row) in rs.export_rows_snapshot() {
+        for key in row.keys() {
+            fields.insert(key.to_string());
+        }
+    }
+    let distinct_field_count = fields.len();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsFieldCardinalityResponse {
+        status: "ok",
+        distinct_field_count,
+    })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23879,6 +23929,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_key_min(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-40: wal_record_mutations tests
+
+    #[tokio::test]
+    async fn s11_ws1_40_wal_record_mutations_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_record_mutations(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.mutation_count, 0, "fresh WAL must have zero mutation records");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_40_wal_record_mutations_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_record_mutations(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-40: rows_field_cardinality tests
+
+    #[tokio::test]
+    async fn s11_ws1_40_rows_field_cardinality_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_field_cardinality(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.distinct_field_count, 0, "fresh store must have zero distinct fields");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_40_rows_field_cardinality_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_field_cardinality(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

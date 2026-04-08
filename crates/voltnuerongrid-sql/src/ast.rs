@@ -129,6 +129,8 @@ pub struct SelectStatement {
     pub has_except: bool,
     /// True when the query uses an INTERSECT set operation (S3-WS1-39).
     pub has_intersect: bool,
+    /// True when the query uses a QUALIFY clause (S3-WS1-40).
+    pub has_qualify: bool,
 }
 
 /// A parsed INSERT statement.
@@ -389,6 +391,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect INTERSECT set operation (S3-WS1-39).
                 if up.contains(" INTERSECT ") {
                     stmt.has_intersect = true;
+                }
+                // Detect QUALIFY clause (S3-WS1-40).
+                if up.contains(" QUALIFY ") {
+                    stmt.has_qualify = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2477,5 +2483,33 @@ mod intersect_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_intersect, "plain SELECT without INTERSECT must have has_intersect = false");
+    }
+}
+
+// ─── S3-WS1-40: has_qualify tests ───────────────────────────────────────────
+
+#[cfg(test)]
+mod qualify_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_qualify_sets_has_qualify() {
+        let stmt = parse_one("SELECT id, ROW_NUMBER() OVER (PARTITION BY grp ORDER BY ts DESC) AS rn FROM events QUALIFY rn = 1").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_qualify, "QUALIFY clause must set has_qualify = true");
+    }
+
+    #[test]
+    fn select_with_qualify_and_predicate_sets_has_qualify() {
+        let stmt = parse_one("SELECT user_id FROM sessions QUALIFY score > 0.90").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_qualify, "QUALIFY predicate must set has_qualify = true");
+    }
+
+    #[test]
+    fn plain_select_has_qualify_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_qualify, "plain SELECT without QUALIFY must have has_qualify = false");
     }
 }

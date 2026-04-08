@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 64 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 219→222, exec 102→104, service 485→489 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_qualify: bool` field + detection | `voltnuerongrid-sql` | Detects `QUALIFY` clause (`S3-WS1-40`) | 3 (`qualify_tests` module) |
+| `Qualify { input }` plan node | `voltnuerongrid-exec` | OLAP node; 0.6x row reduction, +0.20 cost | 2 |
+| `GET /api/v1/store/wal/record/mutations` | `voltnuerongridd` | WAL mutation record count (operator-auth) | 2 |
+| `GET /api/v1/store/rows/field/cardinality` | `voltnuerongridd` | Distinct field-key cardinality across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 63 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)
