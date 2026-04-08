@@ -3056,6 +3056,20 @@ struct RowsKeyDuplicatesCountResponse {
     duplicate_key_count: usize,
 }
 
+// S3-WS1-50: wal/value/duplicates/count + rows/value/duplicates/count structs
+
+#[derive(Debug, Serialize)]
+struct WalValueDuplicatesCountResponse {
+    status: &'static str,
+    duplicate_value_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsValueDuplicatesCountResponse {
+    status: &'static str,
+    duplicate_value_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4509,6 +4523,9 @@ async fn main() {
         // S3-WS1-49: wal/record/total + rows/key/duplicates/count
         .route("/api/v1/store/wal/record/total", get(wal_record_total))
         .route("/api/v1/store/rows/key/duplicates/count", get(rows_key_duplicates_count))
+        // S3-WS1-50: wal/value/duplicates/count + rows/value/duplicates/count
+        .route("/api/v1/store/wal/value/duplicates/count", get(wal_value_duplicates_count))
+        .route("/api/v1/store/rows/value/duplicates/count", get(rows_value_duplicates_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -10326,6 +10343,46 @@ async fn rows_key_duplicates_count(
     Ok((StatusCode::OK, Json(RowsKeyDuplicatesCountResponse {
         status: "ok",
         duplicate_key_count,
+    })))
+}
+
+// S3-WS1-50: wal/value/duplicates/count endpoint
+async fn wal_value_duplicates_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalValueDuplicatesCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_value_duplicates_count");
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for rec in wal.wal_records() {
+        *counts.entry(rec.value.clone()).or_insert(0) += 1;
+    }
+    drop(wal);
+    let duplicate_value_count = counts.values().filter(|&&c| c > 1).count();
+    Ok((StatusCode::OK, Json(WalValueDuplicatesCountResponse {
+        status: "ok",
+        duplicate_value_count,
+    })))
+}
+
+// S3-WS1-50: rows/value/duplicates/count endpoint
+async fn rows_value_duplicates_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsValueDuplicatesCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_value_duplicates_count");
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            *counts.entry(value).or_insert(0) += 1;
+        }
+    }
+    drop(rs);
+    let duplicate_value_count = counts.values().filter(|&&c| c > 1).count();
+    Ok((StatusCode::OK, Json(RowsValueDuplicatesCountResponse {
+        status: "ok",
+        duplicate_value_count,
     })))
 }
 
@@ -24865,6 +24922,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_key_duplicates_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-50: wal_value_duplicates_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_50_wal_value_duplicates_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_value_duplicates_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.duplicate_value_count, 0, "fresh WAL must have zero duplicate values");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_50_wal_value_duplicates_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_value_duplicates_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-50: rows_value_duplicates_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_50_rows_value_duplicates_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_value_duplicates_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.duplicate_value_count, 0, "fresh store must have zero duplicate values");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_50_rows_value_duplicates_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_value_duplicates_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

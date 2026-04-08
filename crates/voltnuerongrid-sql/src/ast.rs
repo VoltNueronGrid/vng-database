@@ -149,6 +149,8 @@ pub struct SelectStatement {
     pub has_window_order: bool,
     /// True when ORDER BY uses NULLS FIRST/LAST (S3-WS1-49).
     pub has_nulls_ordering: bool,
+    /// True when ORDER BY uses COLLATE (S3-WS1-50).
+    pub has_order_by_collation: bool,
 }
 
 /// A parsed INSERT statement.
@@ -458,6 +460,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains("ORDER BY") && (up.contains("NULLS FIRST") || up.contains("NULLS LAST")) {
                     stmt.has_nulls_ordering = true;
                 }
+                // Detect ORDER BY ... COLLATE ... usage (S3-WS1-50).
+                if up.contains("ORDER BY") && up.contains("COLLATE") {
+                    stmt.has_order_by_collation = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -505,6 +511,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if up.contains("ORDER BY") && (up.contains("NULLS FIRST") || up.contains("NULLS LAST")) {
                     stmt.has_nulls_ordering = true;
+                }
+                if up.contains("ORDER BY") && up.contains("COLLATE") {
+                    stmt.has_order_by_collation = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2887,6 +2896,37 @@ mod nulls_ordering_tests {
         assert!(
             !s.has_nulls_ordering,
             "ORDER BY without NULLS FIRST/LAST must keep has_nulls_ordering = false"
+        );
+    }
+}
+
+// ─── S3-WS1-50: has_order_by_collation tests ───────────────────────────────
+
+#[cfg(test)]
+mod order_by_collation_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_with_collation_sets_has_order_by_collation() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY name COLLATE NOCASE").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_order_by_collation, "ORDER BY ... COLLATE must set has_order_by_collation = true");
+    }
+
+    #[test]
+    fn with_cte_order_by_with_collation_sets_has_order_by_collation() {
+        let stmt = parse_one("WITH t AS (SELECT id, name FROM users) SELECT id FROM t ORDER BY name COLLATE NOCASE").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_order_by_collation, "WITH query ORDER BY ... COLLATE must set has_order_by_collation = true");
+    }
+
+    #[test]
+    fn select_order_by_without_collation_keeps_has_order_by_collation_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY name").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_collation,
+            "ORDER BY without COLLATE must keep has_order_by_collation = false"
         );
     }
 }

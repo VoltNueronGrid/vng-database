@@ -672,6 +672,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 74 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 249→252, exec 122→124, service 525→529 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_order_by_collation: bool` field + detection | `voltnuerongrid-sql` | Detects `ORDER BY ... COLLATE ...` usage (`S3-WS1-50`) | 3 (`order_by_collation_tests` module) |
+| `CollationOrdering { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.10 cost overhead | 2 |
+| `GET /api/v1/store/wal/value/duplicates/count` | `voltnuerongridd` | Return duplicate-value count across WAL entries (operator-auth) | 2 |
+| `GET /api/v1/store/rows/value/duplicates/count` | `voltnuerongridd` | Return duplicate-value count across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 72 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

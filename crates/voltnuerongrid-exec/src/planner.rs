@@ -294,6 +294,10 @@ pub enum LogicalPlan {
     NullsOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY COLLATE semantics wrapper (S3-WS1-50 has_order_by_collation support).
+    CollationOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -357,6 +361,7 @@ impl LogicalPlan {
             LogicalPlan::WindowPartition { input } => input.primary_table(),
             LogicalPlan::WindowOrder { input } => input.primary_table(),
             LogicalPlan::NullsOrdering { input } => input.primary_table(),
+            LogicalPlan::CollationOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -436,6 +441,7 @@ impl LogicalPlan {
             LogicalPlan::WindowPartition { input } => input.has_aggregation(),
             LogicalPlan::WindowOrder { input } => input.has_aggregation(),
             LogicalPlan::NullsOrdering { input } => input.has_aggregation(),
+            LogicalPlan::CollationOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -925,6 +931,14 @@ impl QueryPlanner {
                 }
             }
             LogicalPlan::NullsOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.10,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::CollationOrdering { input } => {
                 let inner = Self::estimate_cost(input);
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
@@ -1511,13 +1525,22 @@ impl QueryPlanner {
             after_window_partition
         };
 
-        // NullsOrdering wrapper (S3-WS1-49 has_nulls_ordering detection): outermost node.
-        if sel.has_nulls_ordering {
+        // NullsOrdering wrapper (S3-WS1-49 has_nulls_ordering detection).
+        let after_nulls_ordering = if sel.has_nulls_ordering {
             LogicalPlan::NullsOrdering {
                 input: Box::new(after_window_order),
             }
         } else {
             after_window_order
+        };
+
+        // CollationOrdering wrapper (S3-WS1-50 has_order_by_collation detection): outermost node.
+        if sel.has_order_by_collation {
+            LogicalPlan::CollationOrdering {
+                input: Box::new(after_nulls_ordering),
+            }
+        } else {
+            after_nulls_ordering
         }
     }
 
@@ -2642,5 +2665,24 @@ mod tests {
         let c = cost("SELECT id FROM users ORDER BY name NULLS LAST");
         assert_eq!(c.recommended_path, QueryPath::Olap, "NULLS ordering should route to OLAP");
         assert!(c.relative_cost >= 0.10, "NullsOrdering must carry at least 0.10 cost overhead");
+    }
+
+    // ── S3-WS1-50: CollationOrdering node tests ─────────────────────────────
+
+    #[test]
+    fn planner_collation_ordering_select_produces_collation_ordering_node() {
+        let p = plan("SELECT id FROM users ORDER BY name COLLATE NOCASE");
+        assert!(
+            matches!(&p, LogicalPlan::CollationOrdering { .. }),
+            "ORDER BY COLLATE must produce outermost CollationOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_collation_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id FROM users ORDER BY name COLLATE NOCASE");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "COLLATE ordering should route to OLAP");
+        assert!(c.relative_cost >= 0.10, "CollationOrdering must carry at least 0.10 cost overhead");
     }
 }
