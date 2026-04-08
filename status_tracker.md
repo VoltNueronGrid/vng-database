@@ -539,6 +539,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `GroupByCube { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.15 cost), and `plan_select()` (`has_group_by_cube` outermost wrap after group-by-rollup). Tests: `planner_group_by_cube_select_produces_group_by_cube_node`, `cost_group_by_cube_routes_to_olap_with_small_overhead`. Total: **156 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/group_by/cube/count` and `GET /api/v1/store/rows/group_by/cube/count` (operator-auth, GROUP-BY-CUBE usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_66_*`). Total: **593 passed**.
 
+### 9.2bj Session 94 Implementation Update (S3-WS1-70 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_right_join: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `RIGHT JOIN` or `RIGHT OUTER JOIN` clauses (S3-WS1-70). Tests: `right_join_tests` module (3 tests). Total: **312 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `RightJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.13 cost), and `plan_select()` (`has_right_join` outermost wrap after left-join handling). Tests: `planner_right_join_produces_right_join_node`, `cost_right_join_routes_to_olap_with_overhead`. Total: **164 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/right/join/count` and `GET /api/v1/store/rows/right/join/count` (operator-auth, RIGHT-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_70_*`). Total: **609 passed**.
+
 ### 9.2bi Session 93 Implementation Update (S3-WS1-69 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_left_join: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `LEFT JOIN` or `LEFT OUTER JOIN` clauses (S3-WS1-69). Tests: `left_join_tests` module (3 tests). Total: **309 passed**.

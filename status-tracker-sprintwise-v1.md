@@ -896,6 +896,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 94 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 309→312, exec 162→164, service 605→609 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_right_join: bool` field + detection | `voltnuerongrid-sql` | Detects RIGHT JOIN / RIGHT OUTER JOIN usage (`S3-WS1-70`) | 3 (`right_join_tests` module) |
+| `RightJoin { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.13 cost overhead | 2 |
+| `GET /api/v1/store/wal/right/join/count` | `voltnuerongridd` | Count RIGHT-JOIN usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/right/join/count` | `voltnuerongridd` | Count RIGHT-JOIN usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 93 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)

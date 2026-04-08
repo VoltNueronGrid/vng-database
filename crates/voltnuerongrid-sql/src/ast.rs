@@ -189,6 +189,8 @@ pub struct SelectStatement {
     pub has_for_update: bool,
     /// True when the query uses LEFT JOIN / LEFT OUTER JOIN (S3-WS1-69).
     pub has_left_join: bool,
+    /// True when the query uses RIGHT JOIN / RIGHT OUTER JOIN (S3-WS1-70).
+    pub has_right_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -557,6 +559,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_left_join(&up) {
                     stmt.has_left_join = true;
                 }
+                if has_right_join(&up) {
+                    stmt.has_right_join = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -667,6 +672,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_left_join(&up) {
                     stmt.has_left_join = true;
+                }
+                if has_right_join(&up) {
+                    stmt.has_right_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3347,6 +3355,10 @@ fn has_left_join(up: &str) -> bool {
     up.contains(" LEFT JOIN ") || up.contains(" LEFT OUTER JOIN ")
 }
 
+fn has_right_join(up: &str) -> bool {
+    up.contains(" RIGHT JOIN ") || up.contains(" RIGHT OUTER JOIN ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3935,6 +3947,43 @@ mod left_join_tests {
         assert!(
             !s.has_left_join,
             "INNER JOIN must keep has_left_join = false"
+        );
+    }
+}
+
+// ─── S3-WS1-70: has_right_join tests ────────────────────────────────────────
+
+#[cfg(test)]
+mod right_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_right_join_sets_has_right_join() {
+        let stmt = parse_one("SELECT u.id, o.total FROM users u RIGHT JOIN orders o ON o.user_id = u.id").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_right_join,
+            "SELECT ... RIGHT JOIN must set has_right_join = true"
+        );
+    }
+
+    #[test]
+    fn select_right_outer_join_sets_has_right_join() {
+        let stmt = parse_one("SELECT u.id, o.total FROM users u RIGHT OUTER JOIN orders o ON o.user_id = u.id").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_right_join,
+            "SELECT ... RIGHT OUTER JOIN must set has_right_join = true"
+        );
+    }
+
+    #[test]
+    fn select_without_right_join_keeps_has_right_join_false() {
+        let stmt = parse_one("SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_right_join,
+            "INNER JOIN must keep has_right_join = false"
         );
     }
 }

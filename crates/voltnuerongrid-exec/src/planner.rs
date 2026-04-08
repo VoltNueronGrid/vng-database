@@ -374,6 +374,10 @@ pub enum LogicalPlan {
     LeftJoin {
         input: Box<LogicalPlan>,
     },
+    /// RIGHT JOIN / RIGHT OUTER JOIN wrapper (S3-WS1-70 has_right_join support).
+    RightJoin {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -457,6 +461,7 @@ impl LogicalPlan {
             LogicalPlan::SelectDistinctOn { input } => input.primary_table(),
             LogicalPlan::ForUpdate { input } => input.primary_table(),
             LogicalPlan::LeftJoin { input } => input.primary_table(),
+            LogicalPlan::RightJoin { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -556,6 +561,7 @@ impl LogicalPlan {
             LogicalPlan::SelectDistinctOn { input } => input.has_aggregation(),
             LogicalPlan::ForUpdate { input } => input.has_aggregation(),
             LogicalPlan::LeftJoin { input } => input.has_aggregation(),
+            LogicalPlan::RightJoin { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1209,6 +1215,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.12,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::RightJoin { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.13,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1968,12 +1982,21 @@ impl QueryPlanner {
         };
 
         // LeftJoin wrapper (S3-WS1-69 has_left_join detection): outermost node.
-        if sel.has_left_join {
+        let after_left_join = if sel.has_left_join {
             LogicalPlan::LeftJoin {
                 input: Box::new(after_for_update),
             }
         } else {
             after_for_update
+        };
+
+        // RightJoin wrapper (S3-WS1-70 has_right_join detection): outermost node.
+        if sel.has_right_join {
+            LogicalPlan::RightJoin {
+                input: Box::new(after_left_join),
+            }
+        } else {
+            after_left_join
         }
     }
 
@@ -3487,5 +3510,24 @@ mod tests {
         let c = cost("SELECT u.id, o.total FROM users u LEFT JOIN orders o ON o.user_id = u.id");
         assert_eq!(c.recommended_path, QueryPath::Olap, "LEFT JOIN should route to OLAP");
         assert!(c.relative_cost >= 0.12, "LeftJoin must carry at least 0.12 cost overhead");
+    }
+
+    // ── S3-WS1-70: RightJoin node tests ─────────────────────────
+
+    #[test]
+    fn planner_right_join_produces_right_join_node() {
+        let p = plan("SELECT u.id, o.total FROM users u RIGHT JOIN orders o ON o.user_id = u.id");
+        assert!(
+            matches!(&p, LogicalPlan::RightJoin { .. }),
+            "SELECT ... RIGHT JOIN must produce outermost RightJoin node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_right_join_routes_to_olap_with_overhead() {
+        let c = cost("SELECT u.id, o.total FROM users u RIGHT JOIN orders o ON o.user_id = u.id");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "RIGHT JOIN should route to OLAP");
+        assert!(c.relative_cost >= 0.13, "RightJoin must carry at least 0.13 cost overhead");
     }
 }
