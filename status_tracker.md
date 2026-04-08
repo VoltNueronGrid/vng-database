@@ -509,6 +509,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `LimitOffsetPagination { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLTP path, +0.03 cost), and `plan_select()` (`has_limit_offset_pagination` outermost wrap after multi-column ordering). Tests: `planner_limit_offset_pagination_select_produces_limit_offset_pagination_node`, `cost_limit_offset_pagination_routes_to_oltp_with_small_overhead`. Total: **146 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/pagination/limit_offset/count` and `GET /api/v1/store/rows/pagination/limit_offset/count` (operator-auth, LIMIT+OFFSET pagination usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_61_*`). Total: **573 passed**.
 
+### 9.2bb Session 86 Implementation Update (S3-WS1-62 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_offset_only_pagination: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that contain `OFFSET` without `LIMIT` (S3-WS1-62). Tests: `offset_only_pagination_tests` module (3 tests). Total: **288 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `OffsetOnlyPagination { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLTP path, +0.04 cost), and `plan_select()` (`has_offset_only_pagination` outermost wrap after limit+offset pagination). Tests: `planner_offset_only_pagination_select_produces_offset_only_pagination_node`, `cost_offset_only_pagination_routes_to_oltp_with_small_overhead`. Total: **148 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/pagination/offset_only/count` and `GET /api/v1/store/rows/pagination/offset_only/count` (operator-auth, OFFSET-only pagination usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_62_*`). Total: **577 passed**.
+
 ### 9.2at Session 78 Implementation Update (S3-WS1-54 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_case_expression: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY CASE expressions (for example `CASE ... END`) in SELECT/WITH queries (S3-WS1-54). Tests: `order_by_case_expression_tests` module (3 tests). Total: **264 passed**.

@@ -342,6 +342,10 @@ pub enum LogicalPlan {
     LimitOffsetPagination {
         input: Box<LogicalPlan>,
     },
+    /// OFFSET-only pagination semantics wrapper (S3-WS1-62 has_offset_only_pagination support).
+    OffsetOnlyPagination {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -417,6 +421,7 @@ impl LogicalPlan {
             LogicalPlan::RandAliasOrdering { input } => input.primary_table(),
             LogicalPlan::MultiColumnOrdering { input } => input.primary_table(),
             LogicalPlan::LimitOffsetPagination { input } => input.primary_table(),
+            LogicalPlan::OffsetOnlyPagination { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -508,6 +513,7 @@ impl LogicalPlan {
             LogicalPlan::RandAliasOrdering { input } => input.has_aggregation(),
             LogicalPlan::MultiColumnOrdering { input } => input.has_aggregation(),
             LogicalPlan::LimitOffsetPagination { input } => input.has_aggregation(),
+            LogicalPlan::OffsetOnlyPagination { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1097,6 +1103,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.03,
+                    recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::OffsetOnlyPagination { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.04,
                     recommended_path: QueryPath::Oltp,
                 }
             }
@@ -1784,12 +1798,21 @@ impl QueryPlanner {
         };
 
         // LimitOffsetPagination wrapper (S3-WS1-61 has_limit_offset_pagination detection): outermost node.
-        if sel.has_limit_offset_pagination {
+        let after_limit_offset_pagination = if sel.has_limit_offset_pagination {
             LogicalPlan::LimitOffsetPagination {
                 input: Box::new(after_multi_column_ordering),
             }
         } else {
             after_multi_column_ordering
+        };
+
+        // OffsetOnlyPagination wrapper (S3-WS1-62 has_offset_only_pagination detection): outermost node.
+        if sel.has_offset_only_pagination {
+            LogicalPlan::OffsetOnlyPagination {
+                input: Box::new(after_limit_offset_pagination),
+            }
+        } else {
+            after_limit_offset_pagination
         }
     }
 
@@ -3150,5 +3173,24 @@ mod tests {
         let c = cost("SELECT id FROM users LIMIT 10 OFFSET 5");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "LIMIT with OFFSET pagination should route to OLTP");
         assert!(c.relative_cost >= 0.03, "LimitOffsetPagination must carry at least 0.03 cost overhead");
+    }
+
+    // ── S3-WS1-62: OffsetOnlyPagination node tests ───────────────────────
+
+    #[test]
+    fn planner_offset_only_pagination_select_produces_offset_only_pagination_node() {
+        let p = plan("SELECT id FROM users OFFSET 5");
+        assert!(
+            matches!(&p, LogicalPlan::OffsetOnlyPagination { .. }),
+            "OFFSET without LIMIT must produce outermost OffsetOnlyPagination node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_offset_only_pagination_routes_to_oltp_with_small_overhead() {
+        let c = cost("SELECT id FROM users OFFSET 5");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "OFFSET-only pagination should route to OLTP");
+        assert!(c.relative_cost >= 0.04, "OffsetOnlyPagination must carry at least 0.04 cost overhead");
     }
 }

@@ -3224,6 +3224,20 @@ struct RowsPaginationLimitOffsetCountResponse {
     limit_offset_pagination_count: usize,
 }
 
+// S3-WS1-62: wal/pagination/offset_only/count + rows/pagination/offset_only/count structs
+
+#[derive(Debug, Serialize)]
+struct WalPaginationOffsetOnlyCountResponse {
+    status: &'static str,
+    offset_only_pagination_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsPaginationOffsetOnlyCountResponse {
+    status: &'static str,
+    offset_only_pagination_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4706,6 +4720,8 @@ async fn main() {
         .route("/api/v1/store/rows/order_by/multi_column/count", get(rows_order_by_multi_column_count))
         .route("/api/v1/store/wal/pagination/limit_offset/count", get(wal_pagination_limit_offset_count))
         .route("/api/v1/store/rows/pagination/limit_offset/count", get(rows_pagination_limit_offset_count))
+        .route("/api/v1/store/wal/pagination/offset_only/count", get(wal_pagination_offset_only_count))
+        .route("/api/v1/store/rows/pagination/offset_only/count", get(rows_pagination_offset_only_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -11032,6 +11048,50 @@ async fn rows_pagination_limit_offset_count(
     Ok((StatusCode::OK, Json(RowsPaginationLimitOffsetCountResponse {
         status: "ok",
         limit_offset_pagination_count,
+    })))
+}
+
+// S3-WS1-62: wal/pagination/offset_only/count endpoint
+async fn wal_pagination_offset_only_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalPaginationOffsetOnlyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_pagination_offset_only_count");
+    let mut offset_only_pagination_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains(" OFFSET ") && !value_up.contains(" LIMIT ") {
+            offset_only_pagination_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalPaginationOffsetOnlyCountResponse {
+        status: "ok",
+        offset_only_pagination_count,
+    })))
+}
+
+// S3-WS1-62: rows/pagination/offset_only/count endpoint
+async fn rows_pagination_offset_only_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsPaginationOffsetOnlyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_pagination_offset_only_count");
+    let mut offset_only_pagination_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains(" OFFSET ") && !value_up.contains(" LIMIT ") {
+                offset_only_pagination_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsPaginationOffsetOnlyCountResponse {
+        status: "ok",
+        offset_only_pagination_count,
     })))
 }
 
@@ -26075,6 +26135,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_pagination_limit_offset_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-62: wal_pagination_offset_only_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_62_wal_pagination_offset_only_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_pagination_offset_only_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.offset_only_pagination_count, 0, "fresh store must have zero OFFSET-only pagination counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_62_wal_pagination_offset_only_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_pagination_offset_only_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-62: rows_pagination_offset_only_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_62_rows_pagination_offset_only_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_pagination_offset_only_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.offset_only_pagination_count, 0, "fresh store must have zero OFFSET-only pagination counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_62_rows_pagination_offset_only_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_pagination_offset_only_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

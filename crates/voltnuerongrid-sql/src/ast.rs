@@ -173,6 +173,8 @@ pub struct SelectStatement {
     pub has_order_by_multi_column: bool,
     /// True when the query uses LIMIT and OFFSET together for pagination (S3-WS1-61).
     pub has_limit_offset_pagination: bool,
+    /// True when the query uses OFFSET without LIMIT for pagination (S3-WS1-62).
+    pub has_offset_only_pagination: bool,
 }
 
 /// A parsed INSERT statement.
@@ -517,6 +519,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_multi_column(&up) {
                     stmt.has_order_by_multi_column = true;
                 }
+                if has_offset_only_pagination(&up) {
+                    stmt.has_offset_only_pagination = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -597,6 +602,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_multi_column(&up) {
                     stmt.has_order_by_multi_column = true;
+                }
+                if has_offset_only_pagination(&up) {
+                    stmt.has_offset_only_pagination = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3245,6 +3253,10 @@ fn has_order_by_multi_column(up: &str) -> bool {
     false
 }
 
+fn has_offset_only_pagination(up: &str) -> bool {
+    up.contains(" OFFSET ") && !up.contains(" LIMIT ") && !up.contains(" FETCH ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3537,6 +3549,43 @@ mod limit_offset_pagination_tests {
         assert!(
             !s.has_limit_offset_pagination,
             "LIMIT without OFFSET must keep has_limit_offset_pagination = false"
+        );
+    }
+}
+
+// ─── S3-WS1-62: has_offset_only_pagination tests ─────────────────────────
+
+#[cfg(test)]
+mod offset_only_pagination_tests {
+    use super::*;
+
+    #[test]
+    fn select_offset_only_sets_has_offset_only_pagination() {
+        let stmt = parse_one("SELECT id FROM users OFFSET 5").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_offset_only_pagination,
+            "OFFSET without LIMIT must set has_offset_only_pagination = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_offset_only_sets_has_offset_only_pagination() {
+        let stmt = parse_one("WITH t AS (SELECT id FROM users) SELECT id FROM t OFFSET 8").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_offset_only_pagination,
+            "WITH query OFFSET without LIMIT must set has_offset_only_pagination = true"
+        );
+    }
+
+    #[test]
+    fn select_limit_offset_keeps_has_offset_only_pagination_false() {
+        let stmt = parse_one("SELECT id FROM users LIMIT 10 OFFSET 5").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_offset_only_pagination,
+            "LIMIT with OFFSET must keep has_offset_only_pagination = false"
         );
     }
 }

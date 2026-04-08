@@ -826,6 +826,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 86 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 285→288, exec 146→148, service 573→577 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_offset_only_pagination: bool` field + detection | `voltnuerongrid-sql` | Detects OFFSET-only pagination usage (`S3-WS1-62`) | 3 (`offset_only_pagination_tests` module) |
+| `OffsetOnlyPagination { input }` plan node | `voltnuerongrid-exec` | OLTP node; +0.04 cost overhead | 2 |
+| `GET /api/v1/store/wal/pagination/offset_only/count` | `voltnuerongridd` | Count OFFSET-only pagination usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/pagination/offset_only/count` | `voltnuerongridd` | Count OFFSET-only pagination usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)
