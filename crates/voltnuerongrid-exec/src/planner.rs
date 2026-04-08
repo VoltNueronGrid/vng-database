@@ -298,6 +298,10 @@ pub enum LogicalPlan {
     CollationOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY positional-index semantics wrapper (S3-WS1-51 has_order_by_positional support).
+    PositionalOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -362,6 +366,7 @@ impl LogicalPlan {
             LogicalPlan::WindowOrder { input } => input.primary_table(),
             LogicalPlan::NullsOrdering { input } => input.primary_table(),
             LogicalPlan::CollationOrdering { input } => input.primary_table(),
+            LogicalPlan::PositionalOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -442,6 +447,7 @@ impl LogicalPlan {
             LogicalPlan::WindowOrder { input } => input.has_aggregation(),
             LogicalPlan::NullsOrdering { input } => input.has_aggregation(),
             LogicalPlan::CollationOrdering { input } => input.has_aggregation(),
+            LogicalPlan::PositionalOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -943,6 +949,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.10,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::PositionalOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.08,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1534,13 +1548,21 @@ impl QueryPlanner {
             after_window_order
         };
 
-        // CollationOrdering wrapper (S3-WS1-50 has_order_by_collation detection): outermost node.
-        if sel.has_order_by_collation {
+        let after_collation_ordering = if sel.has_order_by_collation {
             LogicalPlan::CollationOrdering {
                 input: Box::new(after_nulls_ordering),
             }
         } else {
             after_nulls_ordering
+        };
+
+        // PositionalOrdering wrapper (S3-WS1-51 has_order_by_positional detection): outermost node.
+        if sel.has_order_by_positional {
+            LogicalPlan::PositionalOrdering {
+                input: Box::new(after_collation_ordering),
+            }
+        } else {
+            after_collation_ordering
         }
     }
 
@@ -2684,5 +2706,24 @@ mod tests {
         let c = cost("SELECT id FROM users ORDER BY name COLLATE NOCASE");
         assert_eq!(c.recommended_path, QueryPath::Olap, "COLLATE ordering should route to OLAP");
         assert!(c.relative_cost >= 0.10, "CollationOrdering must carry at least 0.10 cost overhead");
+    }
+
+    // ── S3-WS1-51: PositionalOrdering node tests ───────────────────────────
+
+    #[test]
+    fn planner_positional_ordering_select_produces_positional_ordering_node() {
+        let p = plan("SELECT id, name FROM users ORDER BY 1");
+        assert!(
+            matches!(&p, LogicalPlan::PositionalOrdering { .. }),
+            "ORDER BY positional index must produce outermost PositionalOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_positional_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id, name FROM users ORDER BY 2 DESC");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "positional ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.08, "PositionalOrdering must carry at least 0.08 cost overhead");
     }
 }

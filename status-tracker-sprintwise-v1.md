@@ -686,6 +686,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 75 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 252→255, exec 124→126, service 529→533 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_order_by_positional: bool` field + detection | `voltnuerongrid-sql` | Detects positional ORDER BY usage like `ORDER BY 1` (`S3-WS1-51`) | 3 (`order_by_positional_tests` module) |
+| `PositionalOrdering { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.08 cost overhead | 2 |
+| `GET /api/v1/store/wal/value/distinct/count` | `voltnuerongridd` | Return distinct-value count across WAL entries (operator-auth) | 2 |
+| `GET /api/v1/store/rows/value/distinct/count` | `voltnuerongridd` | Return distinct-value count across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 72 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

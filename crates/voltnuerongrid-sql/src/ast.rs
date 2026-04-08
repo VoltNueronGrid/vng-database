@@ -151,6 +151,8 @@ pub struct SelectStatement {
     pub has_nulls_ordering: bool,
     /// True when ORDER BY uses COLLATE (S3-WS1-50).
     pub has_order_by_collation: bool,
+    /// True when ORDER BY uses positional indexes like ORDER BY 1 (S3-WS1-51).
+    pub has_order_by_positional: bool,
 }
 
 /// A parsed INSERT statement.
@@ -464,6 +466,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains("ORDER BY") && up.contains("COLLATE") {
                     stmt.has_order_by_collation = true;
                 }
+                // Detect positional ORDER BY (S3-WS1-51).
+                if has_order_by_positional(&up) {
+                    stmt.has_order_by_positional = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -515,6 +521,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains("ORDER BY") && up.contains("COLLATE") {
                     stmt.has_order_by_collation = true;
                 }
+                if has_order_by_positional(&up) {
+                    stmt.has_order_by_positional = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "INSERT" => parse_insert(tokens).map(Statement::Insert),
@@ -533,6 +542,18 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
 }
 
 // ─── SELECT ───────────────────────────────────────────────────────────────────
+
+fn has_order_by_positional(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = up[idx + "ORDER BY".len()..].trim_start();
+        return tail
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_digit())
+            .unwrap_or(false);
+    }
+    false
+}
 
 fn parse_select(tokens: &[Token]) -> SelectStatement {
     let mut stmt = SelectStatement::default();
@@ -2927,6 +2948,37 @@ mod order_by_collation_tests {
         assert!(
             !s.has_order_by_collation,
             "ORDER BY without COLLATE must keep has_order_by_collation = false"
+        );
+    }
+}
+
+// ─── S3-WS1-51: has_order_by_positional tests ──────────────────────────────
+
+#[cfg(test)]
+mod order_by_positional_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_positional_sets_has_order_by_positional() {
+        let stmt = parse_one("SELECT id, name FROM users ORDER BY 1").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_order_by_positional, "ORDER BY positional index must set has_order_by_positional = true");
+    }
+
+    #[test]
+    fn with_cte_order_by_positional_sets_has_order_by_positional() {
+        let stmt = parse_one("WITH t AS (SELECT id, name FROM users) SELECT id, name FROM t ORDER BY 2 DESC").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_order_by_positional, "WITH query ORDER BY positional index must set has_order_by_positional = true");
+    }
+
+    #[test]
+    fn select_order_by_named_column_keeps_has_order_by_positional_false() {
+        let stmt = parse_one("SELECT id, name FROM users ORDER BY name").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_positional,
+            "ORDER BY named column must keep has_order_by_positional = false"
         );
     }
 }
