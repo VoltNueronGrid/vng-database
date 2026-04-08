@@ -338,6 +338,10 @@ pub enum LogicalPlan {
     MultiColumnOrdering {
         input: Box<LogicalPlan>,
     },
+    /// LIMIT+OFFSET pagination semantics wrapper (S3-WS1-61 has_limit_offset_pagination support).
+    LimitOffsetPagination {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -412,6 +416,7 @@ impl LogicalPlan {
             LogicalPlan::SeededRandomOrdering { input } => input.primary_table(),
             LogicalPlan::RandAliasOrdering { input } => input.primary_table(),
             LogicalPlan::MultiColumnOrdering { input } => input.primary_table(),
+            LogicalPlan::LimitOffsetPagination { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -502,6 +507,7 @@ impl LogicalPlan {
             LogicalPlan::SeededRandomOrdering { input } => input.has_aggregation(),
             LogicalPlan::RandAliasOrdering { input } => input.has_aggregation(),
             LogicalPlan::MultiColumnOrdering { input } => input.has_aggregation(),
+            LogicalPlan::LimitOffsetPagination { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1084,6 +1090,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.02,
                     recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::LimitOffsetPagination { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.03,
+                    recommended_path: QueryPath::Oltp,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -1761,12 +1775,21 @@ impl QueryPlanner {
         };
 
         // MultiColumnOrdering wrapper (S3-WS1-60 has_order_by_multi_column detection): outermost node.
-        if sel.has_order_by_multi_column {
+        let after_multi_column_ordering = if sel.has_order_by_multi_column {
             LogicalPlan::MultiColumnOrdering {
                 input: Box::new(after_rand_alias_ordering),
             }
         } else {
             after_rand_alias_ordering
+        };
+
+        // LimitOffsetPagination wrapper (S3-WS1-61 has_limit_offset_pagination detection): outermost node.
+        if sel.has_limit_offset_pagination {
+            LogicalPlan::LimitOffsetPagination {
+                input: Box::new(after_multi_column_ordering),
+            }
+        } else {
+            after_multi_column_ordering
         }
     }
 
@@ -2008,9 +2031,11 @@ mod tests {
     #[test]
     fn planner_select_with_offset_produces_offset_node() {
         let plan = plan("SELECT * FROM t LIMIT 10 OFFSET 5");
-        // The outermost plan node should be Offset wrapping a Limit
+        // Offset remains present, but newer wrappers may become outermost.
         assert!(
-            matches!(&plan, LogicalPlan::Offset { offset, .. } if *offset == 5),
+            matches!(&plan, LogicalPlan::Offset { offset, .. } if *offset == 5)
+                || matches!(&plan, LogicalPlan::LimitOffsetPagination { input }
+                    if matches!(&**input, LogicalPlan::Offset { offset, .. } if *offset == 5)),
             "LIMIT 10 OFFSET 5 should produce an Offset node with offset=5, got: {:?}", plan
         );
     }
@@ -3106,5 +3131,24 @@ mod tests {
         let c = cost("SELECT id, name FROM users ORDER BY id, name");
         assert_eq!(c.recommended_path, QueryPath::Olap, "multi-column ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.02, "MultiColumnOrdering must carry at least 0.02 cost overhead");
+    }
+
+    // ── S3-WS1-61: LimitOffsetPagination node tests ───────────────────────
+
+    #[test]
+    fn planner_limit_offset_pagination_select_produces_limit_offset_pagination_node() {
+        let p = plan("SELECT id FROM users LIMIT 10 OFFSET 5");
+        assert!(
+            matches!(&p, LogicalPlan::LimitOffsetPagination { .. }),
+            "LIMIT with OFFSET must produce outermost LimitOffsetPagination node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_limit_offset_pagination_routes_to_oltp_with_small_overhead() {
+        let c = cost("SELECT id FROM users LIMIT 10 OFFSET 5");
+        assert_eq!(c.recommended_path, QueryPath::Oltp, "LIMIT with OFFSET pagination should route to OLTP");
+        assert!(c.relative_cost >= 0.03, "LimitOffsetPagination must carry at least 0.03 cost overhead");
     }
 }

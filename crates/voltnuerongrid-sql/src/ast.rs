@@ -171,6 +171,8 @@ pub struct SelectStatement {
     pub has_order_by_rand_alias: bool,
     /// True when ORDER BY includes multiple sort keys (S3-WS1-60).
     pub has_order_by_multi_column: bool,
+    /// True when the query uses LIMIT and OFFSET together for pagination (S3-WS1-61).
+    pub has_limit_offset_pagination: bool,
 }
 
 /// A parsed INSERT statement.
@@ -764,6 +766,10 @@ fn parse_select(tokens: &[Token]) -> SelectStatement {
                 }
             }
         }
+    }
+
+    if stmt.limit.is_some() && stmt.offset.is_some() {
+        stmt.has_limit_offset_pagination = true;
     }
 
     stmt
@@ -3225,7 +3231,16 @@ fn has_order_by_multi_column(up: &str) -> bool {
             .split(" FETCH")
             .next()
             .unwrap_or(tail);
-        return first_clause.contains(',');
+
+        let mut depth = 0usize;
+        for ch in first_clause.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => return true,
+                _ => {}
+            }
+        }
     }
     false
 }
@@ -3480,11 +3495,48 @@ mod order_by_multi_column_tests {
 
     #[test]
     fn select_order_by_single_column_keeps_has_order_by_multi_column_false() {
-        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let stmt = parse_one("SELECT id, nickname FROM users ORDER BY COALESCE(id, nickname)").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(
             !s.has_order_by_multi_column,
-            "ORDER BY single column must keep has_order_by_multi_column = false"
+            "ORDER BY one expression with function args must keep has_order_by_multi_column = false"
+        );
+    }
+}
+
+// ─── S3-WS1-61: has_limit_offset_pagination tests ─────────────────────────
+
+#[cfg(test)]
+mod limit_offset_pagination_tests {
+    use super::*;
+
+    #[test]
+    fn select_limit_offset_sets_has_limit_offset_pagination() {
+        let stmt = parse_one("SELECT id FROM users LIMIT 10 OFFSET 5").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_limit_offset_pagination,
+            "LIMIT with OFFSET must set has_limit_offset_pagination = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_limit_offset_sets_has_limit_offset_pagination() {
+        let stmt = parse_one("WITH t AS (SELECT id FROM users) SELECT id FROM t LIMIT 20 OFFSET 2").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_limit_offset_pagination,
+            "WITH query LIMIT with OFFSET must set has_limit_offset_pagination = true"
+        );
+    }
+
+    #[test]
+    fn select_limit_only_keeps_has_limit_offset_pagination_false() {
+        let stmt = parse_one("SELECT id FROM users LIMIT 10").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_limit_offset_pagination,
+            "LIMIT without OFFSET must keep has_limit_offset_pagination = false"
         );
     }
 }

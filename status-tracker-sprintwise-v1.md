@@ -812,6 +812,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 85 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 282→285, exec 144→146, service 569→573 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_limit_offset_pagination: bool` field + detection | `voltnuerongrid-sql` | Detects combined LIMIT+OFFSET pagination (`S3-WS1-61`) | 3 (`limit_offset_pagination_tests` module) |
+| `LimitOffsetPagination { input }` plan node | `voltnuerongrid-exec` | OLTP node; +0.03 cost overhead | 2 |
+| `GET /api/v1/store/wal/pagination/limit_offset/count` | `voltnuerongridd` | Count LIMIT+OFFSET pagination usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/pagination/limit_offset/count` | `voltnuerongridd` | Count LIMIT+OFFSET pagination usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)
