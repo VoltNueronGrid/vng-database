@@ -2925,6 +2925,21 @@ struct RowsFieldCardinalityResponse {
     distinct_field_count: usize,
 }
 
+// S3-WS1-41: wal/record/deleted + rows/key/max structs
+
+#[derive(Debug, Serialize)]
+struct WalRecordDeletedResponse {
+    status: &'static str,
+    deleted_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsKeyMaxResponse {
+    status: &'static str,
+    has_key: bool,
+    max_key: String,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4351,6 +4366,9 @@ async fn main() {
         // S3-WS1-40: wal/record/mutations + rows/field/cardinality
         .route("/api/v1/store/wal/record/mutations", get(wal_record_mutations))
         .route("/api/v1/store/rows/field/cardinality", get(rows_field_cardinality))
+        // S3-WS1-41: wal/record/deleted + rows/key/max
+        .route("/api/v1/store/wal/record/deleted", get(wal_record_deleted))
+        .route("/api/v1/store/rows/key/max", get(rows_key_max))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9816,6 +9834,36 @@ async fn rows_field_cardinality(
         status: "ok",
         distinct_field_count,
     })))
+}
+
+// S3-WS1-41: wal/record/deleted endpoint
+async fn wal_record_deleted(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalRecordDeletedResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_record_deleted");
+    let deleted_count = wal.wal_records().iter().filter(|r| r.value == "__deleted__").count();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalRecordDeletedResponse { status: "ok", deleted_count })))
+}
+
+// S3-WS1-41: rows/key/max endpoint
+async fn rows_key_max(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsKeyMaxResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_key_max");
+    let max_key = rs
+        .export_rows_snapshot()
+        .into_iter()
+        .map(|(k, _)| k)
+        .max()
+        .unwrap_or_default();
+    drop(rs);
+    let has_key = !max_key.is_empty();
+    Ok((StatusCode::OK, Json(RowsKeyMaxResponse { status: "ok", has_key, max_key })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23971,6 +24019,49 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_field_cardinality(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-41: wal_record_deleted tests
+
+    #[tokio::test]
+    async fn s11_ws1_41_wal_record_deleted_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_record_deleted(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.deleted_count, 0, "fresh WAL must have zero deleted records");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_41_wal_record_deleted_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_record_deleted(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-41: rows_key_max tests
+
+    #[tokio::test]
+    async fn s11_ws1_41_rows_key_max_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_key_max(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.has_key, "fresh store must report no max key");
+        assert!(body.max_key.is_empty(), "fresh store must return empty max key");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_41_rows_key_max_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_key_max(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

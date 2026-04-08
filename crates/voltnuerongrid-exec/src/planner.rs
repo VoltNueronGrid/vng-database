@@ -258,6 +258,10 @@ pub enum LogicalPlan {
     Qualify {
         input: Box<LogicalPlan>,
     },
+    /// WITH ... AS (...) CTE semantics wrapper (S3-WS1-41 has_with_cte support).
+    WithCte {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -312,6 +316,7 @@ impl LogicalPlan {
             LogicalPlan::Except { input } => input.primary_table(),
             LogicalPlan::Intersect { input } => input.primary_table(),
             LogicalPlan::Qualify { input } => input.primary_table(),
+            LogicalPlan::WithCte { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -382,6 +387,7 @@ impl LogicalPlan {
             LogicalPlan::Except { input } => input.has_aggregation(),
             LogicalPlan::Intersect { input } => input.has_aggregation(),
             LogicalPlan::Qualify { input } => input.has_aggregation(),
+            LogicalPlan::WithCte { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -803,6 +809,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.6) as u64,
                     relative_cost: inner.relative_cost + 0.20,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::WithCte { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.15,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1304,13 +1318,22 @@ impl QueryPlanner {
             after_except
         };
 
-        // Qualify wrapper (S3-WS1-40 has_qualify detection): outermost node.
-        if sel.has_qualify {
+        // Qualify wrapper (S3-WS1-40 has_qualify detection).
+        let after_qualify = if sel.has_qualify {
             LogicalPlan::Qualify {
                 input: Box::new(after_intersect),
             }
         } else {
             after_intersect
+        };
+
+        // WithCte wrapper (S3-WS1-41 has_with_cte detection): outermost node.
+        if sel.has_with_cte {
+            LogicalPlan::WithCte {
+                input: Box::new(after_qualify),
+            }
+        } else {
+            after_qualify
         }
     }
 
@@ -2256,5 +2279,24 @@ mod tests {
         let c = cost("SELECT user_id FROM events QUALIFY rank <= 3");
         assert_eq!(c.recommended_path, QueryPath::Olap, "QUALIFY should route to OLAP");
         assert!(c.relative_cost >= 0.20, "Qualify must carry at least 0.20 cost overhead");
+    }
+
+    // ── S3-WS1-41: WithCte node tests ───────────────────────────────────────
+
+    #[test]
+    fn planner_with_cte_select_produces_with_cte_node() {
+        let p = plan("WITH recent AS (SELECT id FROM orders) SELECT id FROM recent");
+        assert!(
+            matches!(&p, LogicalPlan::WithCte { .. }),
+            "WITH CTE must produce outermost WithCte node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_with_cte_routes_to_olap() {
+        let c = cost("WITH x AS (SELECT id FROM events) SELECT id FROM x");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "WITH CTE should route to OLAP");
+        assert!(c.relative_cost >= 0.15, "WithCte must carry at least 0.15 cost overhead");
     }
 }

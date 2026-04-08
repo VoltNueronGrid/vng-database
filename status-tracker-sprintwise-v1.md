@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 65 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 222→225, exec 104→106, service 489→493 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_with_cte: bool` field + detection | `voltnuerongrid-sql` | Detects `WITH ... AS (...)` CTE clause (`S3-WS1-41`) | 3 (`with_cte_tests` module) |
+| `WithCte { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.15 cost overhead | 2 |
+| `GET /api/v1/store/wal/record/deleted` | `voltnuerongridd` | Count deleted/tombstone WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/key/max` | `voltnuerongridd` | Maximum key in row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 64 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

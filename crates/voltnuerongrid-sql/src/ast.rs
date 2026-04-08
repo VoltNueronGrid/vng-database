@@ -131,6 +131,8 @@ pub struct SelectStatement {
     pub has_intersect: bool,
     /// True when the query uses a QUALIFY clause (S3-WS1-40).
     pub has_qualify: bool,
+    /// True when the query uses a WITH ... AS (...) CTE clause (S3-WS1-41).
+    pub has_with_cte: bool,
 }
 
 /// A parsed INSERT statement.
@@ -395,6 +397,26 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect QUALIFY clause (S3-WS1-40).
                 if up.contains(" QUALIFY ") {
                     stmt.has_qualify = true;
+                }
+                // Detect WITH ... AS (...) CTE clause (S3-WS1-41).
+                if up.trim_start().starts_with("WITH ") && up.contains(" AS (") {
+                    stmt.has_with_cte = true;
+                }
+                Ok(Statement::Select(stmt))
+            }
+            "WITH" => {
+                let select_pos = tokens
+                    .iter()
+                    .position(|t| matches!(t, Token::Keyword(k) if k.eq_ignore_ascii_case("SELECT")))
+                    .unwrap_or(0);
+                let mut stmt = if select_pos < tokens.len() {
+                    parse_select(&tokens[select_pos..])
+                } else {
+                    SelectStatement::default()
+                };
+                let up = raw.to_ascii_uppercase();
+                if up.trim_start().starts_with("WITH ") && up.contains(" AS (") {
+                    stmt.has_with_cte = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2511,5 +2533,33 @@ mod qualify_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_qualify, "plain SELECT without QUALIFY must have has_qualify = false");
+    }
+}
+
+// ─── S3-WS1-41: has_with_cte tests ──────────────────────────────────────────
+
+#[cfg(test)]
+mod with_cte_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_single_cte_sets_has_with_cte() {
+        let stmt = parse_one("WITH recent AS (SELECT id FROM orders) SELECT id FROM recent").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_with_cte, "WITH CTE must set has_with_cte = true");
+    }
+
+    #[test]
+    fn select_with_multiple_cte_sets_has_with_cte() {
+        let stmt = parse_one("WITH a AS (SELECT id FROM t1), b AS (SELECT id FROM t2) SELECT id FROM a").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_with_cte, "multiple CTE clauses must set has_with_cte = true");
+    }
+
+    #[test]
+    fn plain_select_has_with_cte_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_with_cte, "plain SELECT without WITH CTE must have has_with_cte = false");
     }
 }
