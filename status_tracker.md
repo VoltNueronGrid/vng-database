@@ -479,6 +479,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `RandomOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.20 cost), and `plan_select()` (`has_order_by_random` outermost wrap after direction ordering). Tests: `planner_random_ordering_select_produces_random_ordering_node`, `cost_random_ordering_routes_to_olap_with_small_overhead`. Total: **136 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/order_by/random/count` and `GET /api/v1/store/rows/order_by/random/count` (operator-auth, random ORDER BY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_56_*`). Total: **553 passed**.
 
+### 9.2aw Session 81 Implementation Update (S3-WS1-57 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_random_seeded: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY seeded random-function usage (`RANDOM(seed)`) while excluding unseeded `RANDOM()` in SELECT/WITH queries (S3-WS1-57). Tests: `order_by_random_seeded_tests` module (3 tests). Total: **273 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `SeededRandomOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.22 cost), and `plan_select()` (`has_order_by_random_seeded` outermost wrap after random ordering). Tests: `planner_seeded_random_ordering_select_produces_seeded_random_ordering_node`, `cost_seeded_random_ordering_routes_to_olap_with_small_overhead`. Total: **138 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/order_by/random_seeded/count` and `GET /api/v1/store/rows/order_by/random_seeded/count` (operator-auth, seeded random ORDER BY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_57_*`). Total: **557 passed**.
+
 ### 9.2at Session 78 Implementation Update (S3-WS1-54 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_case_expression: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY CASE expressions (for example `CASE ... END`) in SELECT/WITH queries (S3-WS1-54). Tests: `order_by_case_expression_tests` module (3 tests). Total: **264 passed**.

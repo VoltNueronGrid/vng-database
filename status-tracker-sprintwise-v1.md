@@ -756,6 +756,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 81 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 270→273, exec 136→138, service 553→557 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_order_by_random_seeded: bool` field + detection | `voltnuerongrid-sql` | Detects seeded ORDER BY random-function usage (`S3-WS1-57`) | 3 (`order_by_random_seeded_tests` module) |
+| `SeededRandomOrdering { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.22 cost overhead | 2 |
+| `GET /api/v1/store/wal/order_by/random_seeded/count` | `voltnuerongridd` | Count seeded random ORDER BY usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/order_by/random_seeded/count` | `voltnuerongridd` | Count seeded random ORDER BY usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)
