@@ -330,6 +330,10 @@ pub enum LogicalPlan {
     SeededRandomOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY RAND() alias semantics wrapper (S3-WS1-59 has_order_by_rand_alias support).
+    RandAliasOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -402,6 +406,7 @@ impl LogicalPlan {
             LogicalPlan::AscDirectionOrdering { input } => input.primary_table(),
             LogicalPlan::RandomOrdering { input } => input.primary_table(),
             LogicalPlan::SeededRandomOrdering { input } => input.primary_table(),
+            LogicalPlan::RandAliasOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -490,6 +495,7 @@ impl LogicalPlan {
             LogicalPlan::AscDirectionOrdering { input } => input.has_aggregation(),
             LogicalPlan::RandomOrdering { input } => input.has_aggregation(),
             LogicalPlan::SeededRandomOrdering { input } => input.has_aggregation(),
+            LogicalPlan::RandAliasOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1055,6 +1061,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.22,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::RandAliasOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.19,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1715,12 +1729,21 @@ impl QueryPlanner {
         };
 
         // SeededRandomOrdering wrapper (S3-WS1-57 has_order_by_random_seeded detection): outermost node.
-        if sel.has_order_by_random_seeded {
+        let after_seeded_random_ordering = if sel.has_order_by_random_seeded {
             LogicalPlan::SeededRandomOrdering {
                 input: Box::new(after_random_ordering),
             }
         } else {
             after_random_ordering
+        };
+
+        // RandAliasOrdering wrapper (S3-WS1-59 has_order_by_rand_alias detection): outermost node.
+        if sel.has_order_by_rand_alias {
+            LogicalPlan::RandAliasOrdering {
+                input: Box::new(after_seeded_random_ordering),
+            }
+        } else {
+            after_seeded_random_ordering
         }
     }
 
@@ -3022,5 +3045,24 @@ mod tests {
         let c = cost("SELECT id FROM users ORDER BY id ASC");
         assert_eq!(c.recommended_path, QueryPath::Olap, "ASC ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.03, "AscDirectionOrdering must carry at least 0.03 cost overhead");
+    }
+
+    // ── S3-WS1-59: RandAliasOrdering node tests ────────────────────────────
+
+    #[test]
+    fn planner_rand_alias_ordering_select_produces_rand_alias_ordering_node() {
+        let p = plan("SELECT id FROM users ORDER BY RAND()");
+        assert!(
+            matches!(&p, LogicalPlan::RandAliasOrdering { .. }),
+            "ORDER BY RAND() must produce outermost RandAliasOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_rand_alias_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id FROM users ORDER BY RAND()");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "RAND ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.19, "RandAliasOrdering must carry at least 0.19 cost overhead");
     }
 }

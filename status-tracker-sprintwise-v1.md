@@ -784,6 +784,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 83 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 276→279, exec 140→142, service 561→565 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_order_by_rand_alias: bool` field + detection | `voltnuerongrid-sql` | Detects explicit ORDER BY `RAND()` alias usage (`S3-WS1-59`) | 3 (`order_by_rand_alias_tests` module) |
+| `RandAliasOrdering { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.19 cost overhead | 2 |
+| `GET /api/v1/store/wal/order_by/rand_alias/count` | `voltnuerongridd` | Count `RAND()` alias ORDER BY usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/order_by/rand_alias/count` | `voltnuerongridd` | Count `RAND()` alias ORDER BY usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

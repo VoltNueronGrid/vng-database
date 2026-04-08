@@ -167,6 +167,8 @@ pub struct SelectStatement {
     pub has_order_by_random: bool,
     /// True when ORDER BY uses seeded RANDOM(seed) function-based ordering (S3-WS1-57).
     pub has_order_by_random_seeded: bool,
+    /// True when ORDER BY uses RAND() function alias ordering (S3-WS1-59).
+    pub has_order_by_rand_alias: bool,
 }
 
 /// A parsed INSERT statement.
@@ -505,6 +507,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_random_seeded(&up) {
                     stmt.has_order_by_random_seeded = true;
                 }
+                if has_order_by_rand_alias(&up) {
+                    stmt.has_order_by_rand_alias = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -579,6 +584,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_random_seeded(&up) {
                     stmt.has_order_by_random_seeded = true;
+                }
+                if has_order_by_rand_alias(&up) {
+                    stmt.has_order_by_rand_alias = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3187,6 +3195,15 @@ fn has_order_by_random_seeded(up: &str) -> bool {
     false
 }
 
+fn has_order_by_rand_alias(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = &up[idx + "ORDER BY".len()..];
+        let tail_upper = tail.to_uppercase();
+        return tail_upper.contains("RAND()");
+    }
+    false
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3368,6 +3385,43 @@ mod order_by_asc_direction_tests {
         assert!(
             !s.has_order_by_asc_direction,
             "ORDER BY DESC must keep has_order_by_asc_direction = false"
+        );
+    }
+}
+
+// ─── S3-WS1-59: has_order_by_rand_alias tests ─────────────────────────────
+
+#[cfg(test)]
+mod order_by_rand_alias_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_rand_sets_has_order_by_rand_alias() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY RAND()").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_rand_alias,
+            "ORDER BY RAND() must set has_order_by_rand_alias = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_order_by_rand_sets_has_order_by_rand_alias() {
+        let stmt = parse_one("WITH t AS (SELECT id FROM users) SELECT id FROM t ORDER BY RAND()").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_rand_alias,
+            "WITH query ORDER BY RAND() must set has_order_by_rand_alias = true"
+        );
+    }
+
+    #[test]
+    fn select_order_by_random_keeps_has_order_by_rand_alias_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY RANDOM()").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_rand_alias,
+            "ORDER BY RANDOM() must keep has_order_by_rand_alias = false"
         );
     }
 }
