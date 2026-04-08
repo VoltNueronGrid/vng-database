@@ -161,6 +161,8 @@ pub struct SelectStatement {
     pub has_order_by_case_expression: bool,
     /// True when ORDER BY uses DESC (descending direction) versus default ASC (S3-WS1-55).
     pub has_order_by_desc_direction: bool,
+    /// True when ORDER BY explicitly uses ASC direction (S3-WS1-58).
+    pub has_order_by_asc_direction: bool,
     /// True when ORDER BY uses RANDOM()/RAND() function-based random ordering (S3-WS1-56).
     pub has_order_by_random: bool,
     /// True when ORDER BY uses seeded RANDOM(seed) function-based ordering (S3-WS1-57).
@@ -494,6 +496,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_desc_direction(&up) {
                     stmt.has_order_by_desc_direction = true;
                 }
+                if has_order_by_asc_direction(&up) {
+                    stmt.has_order_by_asc_direction = true;
+                }
                 if has_order_by_random(&up) {
                     stmt.has_order_by_random = true;
                 }
@@ -565,6 +570,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_desc_direction(&up) {
                     stmt.has_order_by_desc_direction = true;
+                }
+                if has_order_by_asc_direction(&up) {
+                    stmt.has_order_by_asc_direction = true;
                 }
                 if has_order_by_random(&up) {
                     stmt.has_order_by_random = true;
@@ -3144,6 +3152,15 @@ fn has_order_by_desc_direction(up: &str) -> bool {
     false
 }
 
+fn has_order_by_asc_direction(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = &up[idx + "ORDER BY".len()..];
+        let tail_upper = tail.to_uppercase();
+        return tail_upper.contains(" ASC") || tail_upper.starts_with("ASC");
+    }
+    false
+}
+
 fn has_order_by_random(up: &str) -> bool {
     if let Some(idx) = up.find("ORDER BY") {
         let tail = &up[idx + "ORDER BY".len()..];
@@ -3314,6 +3331,43 @@ mod order_by_random_seeded_tests {
         assert!(
             !s.has_order_by_random_seeded,
             "ORDER BY RANDOM() must keep has_order_by_random_seeded = false"
+        );
+    }
+}
+
+// ─── S3-WS1-58: has_order_by_asc_direction tests ───────────────────────────
+
+#[cfg(test)]
+mod order_by_asc_direction_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_asc_sets_has_order_by_asc_direction() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id ASC").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_asc_direction,
+            "ORDER BY ASC must set has_order_by_asc_direction = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_order_by_asc_sets_has_order_by_asc_direction() {
+        let stmt = parse_one("WITH t AS (SELECT id FROM users) SELECT id FROM t ORDER BY id ASC").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_asc_direction,
+            "WITH query ORDER BY ASC must set has_order_by_asc_direction = true"
+        );
+    }
+
+    #[test]
+    fn select_order_by_desc_keeps_has_order_by_asc_direction_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id DESC").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_asc_direction,
+            "ORDER BY DESC must keep has_order_by_asc_direction = false"
         );
     }
 }

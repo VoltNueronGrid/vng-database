@@ -485,6 +485,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `SeededRandomOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.22 cost), and `plan_select()` (`has_order_by_random_seeded` outermost wrap after random ordering). Tests: `planner_seeded_random_ordering_select_produces_seeded_random_ordering_node`, `cost_seeded_random_ordering_routes_to_olap_with_small_overhead`. Total: **138 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/order_by/random_seeded/count` and `GET /api/v1/store/rows/order_by/random_seeded/count` (operator-auth, seeded random ORDER BY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_57_*`). Total: **557 passed**.
 
+### 9.2ax Session 82 Implementation Update (S3-WS1-58 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_asc_direction: bool` field to `SelectStatement` (ast.rs). Detects explicit ORDER BY ASC direction in SELECT/WITH queries (S3-WS1-58). Tests: `order_by_asc_direction_tests` module (3 tests). Total: **276 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `AscDirectionOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.03 cost), and `plan_select()` (`has_order_by_asc_direction` outermost wrap after desc direction). Tests: `planner_asc_direction_ordering_select_produces_asc_direction_ordering_node`, `cost_asc_direction_ordering_routes_to_olap_with_small_overhead`. Total: **140 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/order_by/asc_direction/count` and `GET /api/v1/store/rows/order_by/asc_direction/count` (operator-auth, ASC direction usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_58_*`). Total: **561 passed**.
+
 ### 9.2at Session 78 Implementation Update (S3-WS1-54 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_case_expression: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY CASE expressions (for example `CASE ... END`) in SELECT/WITH queries (S3-WS1-54). Tests: `order_by_case_expression_tests` module (3 tests). Total: **264 passed**.

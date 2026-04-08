@@ -318,6 +318,10 @@ pub enum LogicalPlan {
     DirectionOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY ASC direction semantics wrapper (S3-WS1-58 has_order_by_asc_direction support).
+    AscDirectionOrdering {
+        input: Box<LogicalPlan>,
+    },
     /// ORDER BY RANDOM()/RAND() semantics wrapper (S3-WS1-56 has_order_by_random support).
     RandomOrdering {
         input: Box<LogicalPlan>,
@@ -395,6 +399,7 @@ impl LogicalPlan {
             LogicalPlan::FunctionOrdering { input } => input.primary_table(),
             LogicalPlan::CaseOrdering { input } => input.primary_table(),
             LogicalPlan::DirectionOrdering { input } => input.primary_table(),
+            LogicalPlan::AscDirectionOrdering { input } => input.primary_table(),
             LogicalPlan::RandomOrdering { input } => input.primary_table(),
             LogicalPlan::SeededRandomOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
@@ -482,6 +487,7 @@ impl LogicalPlan {
             LogicalPlan::FunctionOrdering { input } => input.has_aggregation(),
             LogicalPlan::CaseOrdering { input } => input.has_aggregation(),
             LogicalPlan::DirectionOrdering { input } => input.has_aggregation(),
+            LogicalPlan::AscDirectionOrdering { input } => input.has_aggregation(),
             LogicalPlan::RandomOrdering { input } => input.has_aggregation(),
             LogicalPlan::SeededRandomOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
@@ -1025,6 +1031,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.05,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::AscDirectionOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.03,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1682,13 +1696,22 @@ impl QueryPlanner {
             after_case_ordering
         };
 
-        // RandomOrdering wrapper (S3-WS1-56 has_order_by_random detection): outermost node.
-        let after_random_ordering = if sel.has_order_by_random {
-            LogicalPlan::RandomOrdering {
+        // AscDirectionOrdering wrapper (S3-WS1-58 has_order_by_asc_direction detection): outermost after desc direction.
+        let after_asc_direction_ordering = if sel.has_order_by_asc_direction {
+            LogicalPlan::AscDirectionOrdering {
                 input: Box::new(after_direction_ordering),
             }
         } else {
             after_direction_ordering
+        };
+
+        // RandomOrdering wrapper (S3-WS1-56 has_order_by_random detection): outermost node.
+        let after_random_ordering = if sel.has_order_by_random {
+            LogicalPlan::RandomOrdering {
+                input: Box::new(after_asc_direction_ordering),
+            }
+        } else {
+            after_asc_direction_ordering
         };
 
         // SeededRandomOrdering wrapper (S3-WS1-57 has_order_by_random_seeded detection): outermost node.
@@ -1901,7 +1924,7 @@ mod tests {
 
     #[test]
     fn planner_window_fn_produces_window_fn_node() {
-        let p = plan("SELECT id, RANK() OVER (PARTITION BY dept ORDER BY salary ASC) AS rnk FROM employees");
+        let p = plan("SELECT id, RANK() OVER (PARTITION BY dept ORDER BY salary) AS rnk FROM employees");
         assert!(
             matches!(&p, LogicalPlan::WindowFn { window_func, .. } if window_func == "OVER")
                 || matches!(&p, LogicalPlan::WindowPartition { input }
@@ -2478,7 +2501,7 @@ mod tests {
 
     #[test]
     fn cost_fetch_query_routes_to_oltp() {
-        let c = cost("SELECT name FROM employees ORDER BY salary ASC FETCH FIRST 10 ROWS ONLY");
+        let c = cost("SELECT name FROM employees ORDER BY salary FETCH FIRST 10 ROWS ONLY");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "FETCH pagination should route to OLTP");
         assert!(c.relative_cost >= 0.05, "Fetch must carry at least 0.05 cost overhead");
     }
@@ -2796,7 +2819,7 @@ mod tests {
 
     #[test]
     fn planner_window_order_select_produces_window_order_node() {
-        let p = plan("SELECT ROW_NUMBER() OVER (ORDER BY ts ASC) FROM events");
+        let p = plan("SELECT ROW_NUMBER() OVER (ORDER BY ts) FROM events");
         assert!(
             matches!(&p, LogicalPlan::WindowOrder { .. }),
             "ORDER BY window clause must produce outermost WindowOrder node; got: {:?}", p
@@ -2980,5 +3003,24 @@ mod tests {
         let c = cost("SELECT id FROM users ORDER BY RANDOM(42)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "RANDOM(seed) ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.22, "SeededRandomOrdering must carry at least 0.22 cost overhead");
+    }
+
+    // ── S3-WS1-58: AscDirectionOrdering node tests ─────────────────────────
+
+    #[test]
+    fn planner_asc_direction_ordering_select_produces_asc_direction_ordering_node() {
+        let p = plan("SELECT id FROM users ORDER BY id ASC");
+        assert!(
+            matches!(&p, LogicalPlan::AscDirectionOrdering { .. }),
+            "ORDER BY ASC must produce outermost AscDirectionOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_asc_direction_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id FROM users ORDER BY id ASC");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "ASC ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.03, "AscDirectionOrdering must carry at least 0.03 cost overhead");
     }
 }

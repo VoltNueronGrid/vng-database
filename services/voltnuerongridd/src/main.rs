@@ -3168,6 +3168,20 @@ struct RowsOrderByRandomSeededCountResponse {
     random_seeded_order_count: usize,
 }
 
+// S3-WS1-58: wal/order_by/asc_direction/count + rows/order_by/asc_direction/count structs
+
+#[derive(Debug, Serialize)]
+struct WalOrderByAscDirectionCountResponse {
+    status: &'static str,
+    asc_direction_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsOrderByAscDirectionCountResponse {
+    status: &'static str,
+    asc_direction_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4642,6 +4656,8 @@ async fn main() {
         .route("/api/v1/store/rows/order_by/random/count", get(rows_order_by_random_count))
         .route("/api/v1/store/wal/order_by/random_seeded/count", get(wal_order_by_random_seeded_count))
         .route("/api/v1/store/rows/order_by/random_seeded/count", get(rows_order_by_random_seeded_count))
+        .route("/api/v1/store/wal/order_by/asc_direction/count", get(wal_order_by_asc_direction_count))
+        .route("/api/v1/store/rows/order_by/asc_direction/count", get(rows_order_by_asc_direction_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -10786,6 +10802,50 @@ async fn rows_order_by_random_seeded_count(
     Ok((StatusCode::OK, Json(RowsOrderByRandomSeededCountResponse {
         status: "ok",
         random_seeded_order_count,
+    })))
+}
+
+// S3-WS1-58: wal/order_by/asc_direction/count endpoint
+async fn wal_order_by_asc_direction_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalOrderByAscDirectionCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_order_by_asc_direction_count");
+    let mut asc_direction_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains(" ASC") || value_up.starts_with("ASC") {
+            asc_direction_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalOrderByAscDirectionCountResponse {
+        status: "ok",
+        asc_direction_count,
+    })))
+}
+
+// S3-WS1-58: rows/order_by/asc_direction/count endpoint
+async fn rows_order_by_asc_direction_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsOrderByAscDirectionCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_order_by_asc_direction_count");
+    let mut asc_direction_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains(" ASC") || value_up.starts_with("ASC") {
+                asc_direction_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsOrderByAscDirectionCountResponse {
+        status: "ok",
+        asc_direction_count,
     })))
 }
 
@@ -25661,6 +25721,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_order_by_random_seeded_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-58: wal_order_by_asc_direction_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_58_wal_order_by_asc_direction_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_order_by_asc_direction_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.asc_direction_count, 0, "fresh store must have zero ASC direction counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_58_wal_order_by_asc_direction_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_order_by_asc_direction_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-58: rows_order_by_asc_direction_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_58_rows_order_by_asc_direction_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_order_by_asc_direction_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.asc_direction_count, 0, "fresh store must have zero ASC direction counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_58_rows_order_by_asc_direction_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_order_by_asc_direction_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
