@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 70 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 237→240, exec 114→116, service 509→513 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_named_window: bool` field + detection | `voltnuerongrid-sql` | Detects named window clause `WINDOW ... AS (...)` (`S3-WS1-46`) | 3 (`named_window_tests` module) |
+| `NamedWindow { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.30 cost overhead | 2 |
+| `GET /api/v1/store/wal/non_deleted/latest` | `voltnuerongridd` | Return latest non-deleted WAL sequence (operator-auth) | 2 |
+| `GET /api/v1/store/rows/value/non_blank/count` | `voltnuerongridd` | Count non-blank values across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 69 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

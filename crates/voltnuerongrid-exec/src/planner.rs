@@ -278,6 +278,10 @@ pub enum LogicalPlan {
     WindowFrame {
         input: Box<LogicalPlan>,
     },
+    /// Named window clause semantics wrapper (S3-WS1-46 has_named_window support).
+    NamedWindow {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -337,6 +341,7 @@ impl LogicalPlan {
             LogicalPlan::NotExists { input } => input.primary_table(),
             LogicalPlan::AggregateFilter { input } => input.primary_table(),
             LogicalPlan::WindowFrame { input } => input.primary_table(),
+            LogicalPlan::NamedWindow { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -412,6 +417,7 @@ impl LogicalPlan {
             LogicalPlan::NotExists { input } => input.has_aggregation(),
             LogicalPlan::AggregateFilter { input } => input.has_aggregation(),
             LogicalPlan::WindowFrame { input } => input.has_aggregation(),
+            LogicalPlan::NamedWindow { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -873,6 +879,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.55,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::NamedWindow { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.30,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1419,13 +1433,22 @@ impl QueryPlanner {
             after_not_exists
         };
 
-        // WindowFrame wrapper (S3-WS1-45 has_window_frame detection): outermost node.
-        if sel.has_window_frame {
+        // WindowFrame wrapper (S3-WS1-45 has_window_frame detection).
+        let after_window_frame = if sel.has_window_frame {
             LogicalPlan::WindowFrame {
                 input: Box::new(after_aggregate_filter),
             }
         } else {
             after_aggregate_filter
+        };
+
+        // NamedWindow wrapper (S3-WS1-46 has_named_window detection): outermost node.
+        if sel.has_named_window {
+            LogicalPlan::NamedWindow {
+                input: Box::new(after_window_frame),
+            }
+        } else {
+            after_window_frame
         }
     }
 
@@ -2466,5 +2489,24 @@ mod tests {
         let c = cost("SELECT SUM(v) OVER (ORDER BY ts RANGE UNBOUNDED PRECEDING) FROM events");
         assert_eq!(c.recommended_path, QueryPath::Olap, "window frame should route to OLAP");
         assert!(c.relative_cost >= 0.55, "WindowFrame must carry at least 0.55 cost overhead");
+    }
+
+    // ── S3-WS1-46: NamedWindow node tests ───────────────────────────────────
+
+    #[test]
+    fn planner_named_window_select_produces_named_window_node() {
+        let p = plan("SELECT SUM(v) OVER w FROM events WINDOW w AS (PARTITION BY grp ORDER BY ts)");
+        assert!(
+            matches!(&p, LogicalPlan::NamedWindow { .. }),
+            "named WINDOW clause must produce outermost NamedWindow node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_named_window_routes_to_olap_path_with_penalty() {
+        let c = cost("SELECT AVG(v) OVER w FROM events WINDOW w AS (ORDER BY ts)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "named WINDOW should route to OLAP");
+        assert!(c.relative_cost >= 0.30, "NamedWindow must carry at least 0.30 cost overhead");
     }
 }

@@ -141,6 +141,8 @@ pub struct SelectStatement {
     pub has_filter: bool,
     /// True when the query uses an explicit window frame clause (S3-WS1-45).
     pub has_window_frame: bool,
+    /// True when the query defines a named window via WINDOW ... AS (...) (S3-WS1-46).
+    pub has_named_window: bool,
 }
 
 /// A parsed INSERT statement.
@@ -430,6 +432,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 {
                     stmt.has_window_frame = true;
                 }
+                // Detect named window definition clause (S3-WS1-46).
+                if up.contains(" WINDOW ") && up.contains(" AS (") {
+                    stmt.has_named_window = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -461,6 +467,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     || up.contains("RANGE UNBOUNDED")
                 {
                     stmt.has_window_frame = true;
+                }
+                if up.contains(" WINDOW ") && up.contains(" AS (") {
+                    stmt.has_named_window = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2719,6 +2728,37 @@ mod window_frame_tests {
         assert!(
             !s.has_window_frame,
             "window function without explicit ROWS/RANGE frame must keep has_window_frame = false"
+        );
+    }
+}
+
+// ─── S3-WS1-46: has_named_window tests ──────────────────────────────────────
+
+#[cfg(test)]
+mod named_window_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_named_window_sets_has_named_window() {
+        let stmt = parse_one("SELECT SUM(v) OVER w FROM events WINDOW w AS (PARTITION BY grp ORDER BY ts)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_named_window, "WINDOW ... AS (...) must set has_named_window = true");
+    }
+
+    #[test]
+    fn with_cte_and_named_window_sets_has_named_window() {
+        let stmt = parse_one("WITH t AS (SELECT * FROM events) SELECT SUM(v) OVER w FROM t WINDOW w AS (ORDER BY ts)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_named_window, "named WINDOW in WITH query must set has_named_window = true");
+    }
+
+    #[test]
+    fn plain_window_without_window_clause_has_named_window_false() {
+        let stmt = parse_one("SELECT SUM(v) OVER (PARTITION BY grp ORDER BY ts) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_named_window,
+            "OVER (...) without WINDOW clause must keep has_named_window = false"
         );
     }
 }
