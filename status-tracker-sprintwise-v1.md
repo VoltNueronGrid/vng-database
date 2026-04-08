@@ -840,6 +840,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 87 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 288→291, exec 148→150, service 577→581 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_having_without_group_by: bool` field + detection | `voltnuerongrid-sql` | Detects HAVING without GROUP BY usage (`S3-WS1-63`) | 3 (`having_without_group_by_tests` module) |
+| `HavingWithoutGroupBy { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.06 cost overhead | 2 |
+| `GET /api/v1/store/wal/having_without_group_by/count` | `voltnuerongridd` | Count HAVING-without-GROUP-BY usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/having_without_group_by/count` | `voltnuerongridd` | Count HAVING-without-GROUP-BY usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

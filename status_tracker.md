@@ -515,6 +515,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `OffsetOnlyPagination { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLTP path, +0.04 cost), and `plan_select()` (`has_offset_only_pagination` outermost wrap after limit+offset pagination). Tests: `planner_offset_only_pagination_select_produces_offset_only_pagination_node`, `cost_offset_only_pagination_routes_to_oltp_with_small_overhead`. Total: **148 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/pagination/offset_only/count` and `GET /api/v1/store/rows/pagination/offset_only/count` (operator-auth, OFFSET-only pagination usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_62_*`). Total: **577 passed**.
 
+### 9.2bc Session 87 Implementation Update (S3-WS1-63 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_having_without_group_by: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `HAVING` without `GROUP BY` (S3-WS1-63). Tests: `having_without_group_by_tests` module (3 tests). Total: **291 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `HavingWithoutGroupBy { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.06 cost), and `plan_select()` (`has_having_without_group_by` outermost wrap after offset-only pagination). Tests: `planner_having_without_group_by_select_produces_having_without_group_by_node`, `cost_having_without_group_by_routes_to_olap_with_small_overhead`. Total: **150 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/having_without_group_by/count` and `GET /api/v1/store/rows/having_without_group_by/count` (operator-auth, HAVING-without-GROUP-BY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_63_*`). Total: **581 passed**.
+
 ### 9.2at Session 78 Implementation Update (S3-WS1-54 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_case_expression: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY CASE expressions (for example `CASE ... END`) in SELECT/WITH queries (S3-WS1-54). Tests: `order_by_case_expression_tests` module (3 tests). Total: **264 passed**.

@@ -346,6 +346,10 @@ pub enum LogicalPlan {
     OffsetOnlyPagination {
         input: Box<LogicalPlan>,
     },
+    /// HAVING without GROUP BY semantics wrapper (S3-WS1-63 has_having_without_group_by support).
+    HavingWithoutGroupBy {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -422,6 +426,7 @@ impl LogicalPlan {
             LogicalPlan::MultiColumnOrdering { input } => input.primary_table(),
             LogicalPlan::LimitOffsetPagination { input } => input.primary_table(),
             LogicalPlan::OffsetOnlyPagination { input } => input.primary_table(),
+            LogicalPlan::HavingWithoutGroupBy { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -514,6 +519,7 @@ impl LogicalPlan {
             LogicalPlan::MultiColumnOrdering { input } => input.has_aggregation(),
             LogicalPlan::LimitOffsetPagination { input } => input.has_aggregation(),
             LogicalPlan::OffsetOnlyPagination { input } => input.has_aggregation(),
+            LogicalPlan::HavingWithoutGroupBy { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1112,6 +1118,14 @@ impl QueryPlanner {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.04,
                     recommended_path: QueryPath::Oltp,
+                }
+            }
+            LogicalPlan::HavingWithoutGroupBy { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.06,
+                    recommended_path: QueryPath::Olap,
                 }
             }
             LogicalPlan::WindowFn { input, .. } => {
@@ -1807,12 +1821,21 @@ impl QueryPlanner {
         };
 
         // OffsetOnlyPagination wrapper (S3-WS1-62 has_offset_only_pagination detection): outermost node.
-        if sel.has_offset_only_pagination {
+        let after_offset_only_pagination = if sel.has_offset_only_pagination {
             LogicalPlan::OffsetOnlyPagination {
                 input: Box::new(after_limit_offset_pagination),
             }
         } else {
             after_limit_offset_pagination
+        };
+
+        // HavingWithoutGroupBy wrapper (S3-WS1-63 has_having_without_group_by detection): outermost node.
+        if sel.has_having_without_group_by {
+            LogicalPlan::HavingWithoutGroupBy {
+                input: Box::new(after_offset_only_pagination),
+            }
+        } else {
+            after_offset_only_pagination
         }
     }
 
@@ -3192,5 +3215,24 @@ mod tests {
         let c = cost("SELECT id FROM users OFFSET 5");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "OFFSET-only pagination should route to OLTP");
         assert!(c.relative_cost >= 0.04, "OffsetOnlyPagination must carry at least 0.04 cost overhead");
+    }
+
+    // ── S3-WS1-63: HavingWithoutGroupBy node tests ──────────────────────
+
+    #[test]
+    fn planner_having_without_group_by_select_produces_having_without_group_by_node() {
+        let p = plan("SELECT id FROM users HAVING id > 0");
+        assert!(
+            matches!(&p, LogicalPlan::HavingWithoutGroupBy { .. }),
+            "HAVING without GROUP BY must produce outermost HavingWithoutGroupBy node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_having_without_group_by_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id FROM users HAVING id > 0");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "HAVING without GROUP BY should route to OLAP");
+        assert!(c.relative_cost >= 0.06, "HavingWithoutGroupBy must carry at least 0.06 cost overhead");
     }
 }
