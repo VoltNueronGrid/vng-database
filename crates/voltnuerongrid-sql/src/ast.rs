@@ -119,6 +119,8 @@ pub struct SelectStatement {
     pub has_cross_join: bool,
     /// True when the query uses a full-text search predicate (MATCH/AGAINST or @@) (S3-WS1-34).
     pub has_full_text_search: bool,
+    /// True when the query uses GROUPING SETS in GROUP BY (S3-WS1-35).
+    pub has_grouping_sets: bool,
 }
 
 /// A parsed INSERT statement.
@@ -359,6 +361,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect full-text search predicate MATCH/AGAINST or @@ (S3-WS1-34).
                 if up.contains("MATCH (") || up.contains(" @@ ") || up.contains("MATCH(") {
                     stmt.has_full_text_search = true;
+                }
+                // Detect GROUPING SETS construct in GROUP BY (S3-WS1-35).
+                if up.contains("GROUPING SETS") {
+                    stmt.has_grouping_sets = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2307,5 +2313,33 @@ mod full_text_search_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_full_text_search, "plain SELECT without full-text search must have has_full_text_search = false");
+    }
+}
+
+// ─── S3-WS1-35: has_grouping_sets tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod grouping_sets_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_grouping_sets_sets_has_grouping_sets() {
+        let stmt = parse_one("SELECT region, product, SUM(amount) FROM sales GROUP BY GROUPING SETS ((region), (product))").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_grouping_sets, "GROUPING SETS must set has_grouping_sets = true");
+    }
+
+    #[test]
+    fn select_with_grouping_sets_and_where_sets_has_grouping_sets() {
+        let stmt = parse_one("SELECT dept, role, COUNT(*) FROM staff WHERE active = 1 GROUP BY GROUPING SETS ((dept), (role))").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_grouping_sets, "GROUPING SETS with WHERE must set has_grouping_sets = true");
+    }
+
+    #[test]
+    fn plain_select_has_grouping_sets_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_grouping_sets, "plain SELECT without GROUPING SETS must have has_grouping_sets = false");
     }
 }

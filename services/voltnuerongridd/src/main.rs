@@ -2833,6 +2833,21 @@ struct RowsDistinctCountResponse {
     distinct_count: usize,
 }
 
+// S3-WS1-35: wal/delete/count + rows/key/median structs
+
+#[derive(Debug, Serialize)]
+struct WalDeleteCountResponse {
+    status: &'static str,
+    delete_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsKeyMedianResponse {
+    status: &'static str,
+    has_key: bool,
+    median_key: String,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4241,6 +4256,9 @@ async fn main() {
         // S3-WS1-34: wal/size/bytes + rows/distinct/count
         .route("/api/v1/store/wal/size/bytes", get(wal_size_bytes))
         .route("/api/v1/store/rows/distinct/count", get(rows_distinct_count))
+        // S3-WS1-35: wal/delete/count + rows/key/median
+        .route("/api/v1/store/wal/delete/count", get(wal_delete_count))
+        .route("/api/v1/store/rows/key/median", get(rows_key_median))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9524,6 +9542,37 @@ async fn rows_distinct_count(
     let distinct_count = rs.total_row_count();
     drop(rs);
     Ok((StatusCode::OK, Json(RowsDistinctCountResponse { status: "ok", distinct_count })))
+}
+
+// S3-WS1-35: wal/delete/count endpoint
+async fn wal_delete_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalDeleteCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_delete_count");
+    let delete_count = wal.wal_records().iter().filter(|r| r.value == "__deleted__").count();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalDeleteCountResponse { status: "ok", delete_count })))
+}
+
+// S3-WS1-35: rows/key/median endpoint
+async fn rows_key_median(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsKeyMedianResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_key_median");
+    let mut keys: Vec<String> = rs.export_rows_snapshot().into_iter().map(|(k, _)| k).collect();
+    drop(rs);
+    keys.sort();
+    let has_key = !keys.is_empty();
+    let median_key = if has_key {
+        keys[keys.len() / 2].clone()
+    } else {
+        String::new()
+    };
+    Ok((StatusCode::OK, Json(RowsKeyMedianResponse { status: "ok", has_key, median_key })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23419,6 +23468,49 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_distinct_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-35: wal_delete_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_35_wal_delete_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_delete_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.delete_count, 0, "fresh WAL must have zero delete records");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_35_wal_delete_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_delete_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-35: rows_key_median tests
+
+    #[tokio::test]
+    async fn s11_ws1_35_rows_key_median_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_key_median(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.has_key, "fresh store must report no median key");
+        assert!(body.median_key.is_empty(), "fresh store must return empty median key");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_35_rows_key_median_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_key_median(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

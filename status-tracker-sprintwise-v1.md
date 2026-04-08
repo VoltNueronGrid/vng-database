@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 59 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 204→207, exec 92→94, service 465→469 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_grouping_sets: bool` field + detection | `voltnuerongrid-sql` | Detects `GROUPING SETS` in grouped SELECT (`S3-WS1-35`) | 3 (`grouping_sets_tests` module) |
+| `GroupingSets { input }` plan node | `voltnuerongrid-exec` | OLAP node; 1.5x row amplification, +0.70 cost | 2 |
+| `GET /api/v1/store/wal/delete/count` | `voltnuerongridd` | Count WAL tombstone delete records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/key/median` | `voltnuerongridd` | Median key from sorted MVCC snapshot keys (operator-auth) | 2 |
+
+---
+
 ## Session 58 Implementation Log
 
 **Date:** 2026-04-07 (Sprint 9 continuation)

@@ -234,6 +234,10 @@ pub enum LogicalPlan {
     FullTextSearch {
         input: Box<LogicalPlan>,
     },
+    /// GROUPING SETS aggregate grouping strategy (S3-WS1-35 has_grouping_sets support).
+    GroupingSets {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -282,6 +286,7 @@ impl LogicalPlan {
             LogicalPlan::Values { input } => input.primary_table(),
             LogicalPlan::CrossJoin { input } => input.primary_table(),
             LogicalPlan::FullTextSearch { input } => input.primary_table(),
+            LogicalPlan::GroupingSets { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -346,6 +351,7 @@ impl LogicalPlan {
             LogicalPlan::Values { input } => input.has_aggregation(),
             LogicalPlan::CrossJoin { input } => input.has_aggregation(),
             LogicalPlan::FullTextSearch { input } => input.has_aggregation(),
+            LogicalPlan::GroupingSets { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -719,6 +725,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.3) as u64,
                     relative_cost: inner.relative_cost + 0.60,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::GroupingSets { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 1.5) as u64,
+                    relative_cost: inner.relative_cost + 0.70,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1166,13 +1180,22 @@ impl QueryPlanner {
             after_values
         };
 
-        // FullTextSearch wrapper (S3-WS1-34 has_full_text_search detection): outermost node.
-        if sel.has_full_text_search {
+        // FullTextSearch wrapper (S3-WS1-34 has_full_text_search detection).
+        let after_full_text_search = if sel.has_full_text_search {
             LogicalPlan::FullTextSearch {
                 input: Box::new(after_cross_join),
             }
         } else {
             after_cross_join
+        };
+
+        // GroupingSets wrapper (S3-WS1-35 has_grouping_sets detection): outermost node.
+        if sel.has_grouping_sets {
+            LogicalPlan::GroupingSets {
+                input: Box::new(after_full_text_search),
+            }
+        } else {
+            after_full_text_search
         }
     }
 
@@ -2003,5 +2026,25 @@ mod tests {
         let c = cost("SELECT id FROM docs WHERE to_tsvector(content) @@ plainto_tsquery('search')");
         assert_eq!(c.recommended_path, QueryPath::Olap, "full-text search should route to OLAP");
         assert!(c.relative_cost >= 0.60, "FullTextSearch must carry at least 0.60 cost overhead");
+    }
+
+    // ── S3-WS1-35: GroupingSets node tests ───────────────────────────────────
+
+    #[test]
+    fn planner_grouping_sets_select_produces_grouping_sets_node() {
+        let p = plan("SELECT region, product, SUM(amount) FROM sales GROUP BY GROUPING SETS ((region), (product))");
+        assert!(
+            matches!(&p, LogicalPlan::GroupingSets { .. }),
+            "GROUPING SETS must produce outermost GroupingSets node; got: {:?}", p
+        );
+        assert_eq!(p.primary_table(), Some("sales"));
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_grouping_sets_routes_to_olap() {
+        let c = cost("SELECT dept, role, COUNT(*) FROM staff GROUP BY GROUPING SETS ((dept), (role))");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "GROUPING SETS should route to OLAP");
+        assert!(c.relative_cost >= 0.70, "GroupingSets must carry at least 0.70 cost overhead");
     }
 }
