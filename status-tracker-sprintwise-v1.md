@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 68 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 231→234, exec 110→112, service 501→505 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_filter: bool` field + detection | `voltnuerongrid-sql` | Detects aggregate `FILTER (WHERE ...)` clause (`S3-WS1-44`) | 3 (`filter_agg_tests` module) |
+| `AggregateFilter { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.60 cost overhead | 2 |
+| `GET /api/v1/store/wal/non_deleted/span` | `voltnuerongridd` | Oldest/newest non-deleted WAL sequence and span (operator-auth) | 2 |
+| `GET /api/v1/store/rows/value/non_empty/count` | `voltnuerongridd` | Count non-empty values across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 67 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

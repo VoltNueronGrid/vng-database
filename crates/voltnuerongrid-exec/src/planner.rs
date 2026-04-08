@@ -270,6 +270,10 @@ pub enum LogicalPlan {
     NotExists {
         input: Box<LogicalPlan>,
     },
+    /// Aggregate FILTER (WHERE ...) clause semantics wrapper (S3-WS1-44 has_filter support).
+    AggregateFilter {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -327,6 +331,7 @@ impl LogicalPlan {
             LogicalPlan::WithCte { input } => input.primary_table(),
             LogicalPlan::RecursiveCte { input } => input.primary_table(),
             LogicalPlan::NotExists { input } => input.primary_table(),
+            LogicalPlan::AggregateFilter { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -400,6 +405,7 @@ impl LogicalPlan {
             LogicalPlan::WithCte { input } => input.has_aggregation(),
             LogicalPlan::RecursiveCte { input } => input.has_aggregation(),
             LogicalPlan::NotExists { input } => input.has_aggregation(),
+            LogicalPlan::AggregateFilter { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -845,6 +851,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.8) as u64,
                     relative_cost: inner.relative_cost + 2.00,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::AggregateFilter { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.60,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1373,13 +1387,22 @@ impl QueryPlanner {
             after_with_cte
         };
 
-        // NotExists wrapper (S3-WS1-43 has_not_exists detection): outermost node.
-        if sel.has_not_exists {
+        // NotExists wrapper (S3-WS1-43 has_not_exists detection).
+        let after_not_exists = if sel.has_not_exists {
             LogicalPlan::NotExists {
                 input: Box::new(after_recursive_cte),
             }
         } else {
             after_recursive_cte
+        };
+
+        // AggregateFilter wrapper (S3-WS1-44 has_filter detection): outermost node.
+        if sel.has_filter {
+            LogicalPlan::AggregateFilter {
+                input: Box::new(after_not_exists),
+            }
+        } else {
+            after_not_exists
         }
     }
 
@@ -2382,5 +2405,24 @@ mod tests {
         let c = cost("SELECT id FROM users WHERE NOT EXISTS (SELECT 1 FROM sessions)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "NOT EXISTS should route to OLAP");
         assert!(c.relative_cost >= 2.00, "NotExists must carry at least 2.00 cost overhead");
+    }
+
+    // ── S3-WS1-44: AggregateFilter node tests ───────────────────────────────
+
+    #[test]
+    fn planner_aggregate_filter_select_produces_aggregate_filter_node() {
+        let p = plan("SELECT COUNT(*) FILTER (WHERE active = 1) FROM users");
+        assert!(
+            matches!(&p, LogicalPlan::AggregateFilter { .. }),
+            "FILTER (WHERE ...) must produce outermost AggregateFilter node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_aggregate_filter_routes_to_olap_path_with_penalty() {
+        let c = cost("SELECT SUM(amount) FILTER (WHERE kind = 'paid') FROM tx");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "aggregate FILTER should route to OLAP");
+        assert!(c.relative_cost >= 0.60, "AggregateFilter must carry at least 0.60 cost overhead");
     }
 }

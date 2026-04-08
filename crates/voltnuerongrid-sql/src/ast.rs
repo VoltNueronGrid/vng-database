@@ -137,6 +137,8 @@ pub struct SelectStatement {
     pub has_recursive_cte: bool,
     /// True when the query uses a NOT EXISTS subquery predicate (S3-WS1-43).
     pub has_not_exists: bool,
+    /// True when the query uses an aggregate FILTER (WHERE ...) clause (S3-WS1-44).
+    pub has_filter: bool,
 }
 
 /// A parsed INSERT statement.
@@ -414,6 +416,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains("NOT EXISTS(") || up.contains("NOT EXISTS (") {
                     stmt.has_not_exists = true;
                 }
+                // Detect aggregate FILTER (WHERE ...) clause (S3-WS1-44).
+                if up.contains("FILTER (") || up.contains("FILTER(") {
+                    stmt.has_filter = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -435,6 +441,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if up.contains("NOT EXISTS(") || up.contains("NOT EXISTS (") {
                     stmt.has_not_exists = true;
+                }
+                if up.contains("FILTER (") || up.contains("FILTER(") {
+                    stmt.has_filter = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2635,5 +2644,33 @@ mod not_exists_tests {
         let stmt = parse_one("SELECT id FROM users WHERE EXISTS (SELECT 1 FROM sessions)").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_not_exists, "EXISTS without NOT must have has_not_exists = false");
+    }
+}
+
+// ─── S3-WS1-44: has_filter tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod filter_agg_tests {
+    use super::*;
+
+    #[test]
+    fn select_count_filter_where_sets_has_filter() {
+        let stmt = parse_one("SELECT COUNT(*) FILTER (WHERE active = 1) FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_filter, "aggregate FILTER clause must set has_filter = true");
+    }
+
+    #[test]
+    fn select_sum_filter_with_multiple_aggregates_sets_has_filter() {
+        let stmt = parse_one("SELECT SUM(amount) FILTER(WHERE kind = 'paid'), COUNT(*) FROM tx").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_filter, "FILTER(WHERE ...) must set has_filter = true");
+    }
+
+    #[test]
+    fn plain_select_without_filter_has_filter_false() {
+        let stmt = parse_one("SELECT COUNT(*) FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_filter, "plain SELECT without FILTER must have has_filter = false");
     }
 }
