@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 72 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 243→246, exec 118→120, service 517→521 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_window_order: bool` field + detection | `voltnuerongrid-sql` | Detects window `ORDER BY` clauses without `PARTITION BY` (`S3-WS1-48`) | 3 (`window_order_tests` module) |
+| `WindowOrder { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.20 cost overhead | 2 |
+| `GET /api/v1/store/wal/non_deleted/newest` | `voltnuerongridd` | Return newest non-deleted WAL sequence (operator-auth) | 2 |
+| `GET /api/v1/store/rows/value/blank/count` | `voltnuerongridd` | Count blank values across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 71 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

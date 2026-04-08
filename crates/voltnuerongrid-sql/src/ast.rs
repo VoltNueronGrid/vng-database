@@ -145,6 +145,8 @@ pub struct SelectStatement {
     pub has_named_window: bool,
     /// True when a window clause uses PARTITION BY (S3-WS1-47).
     pub has_window_partition: bool,
+    /// True when a window clause uses ORDER BY without PARTITION BY (S3-WS1-48).
+    pub has_window_order: bool,
 }
 
 /// A parsed INSERT statement.
@@ -442,6 +444,14 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains("PARTITION BY") {
                     stmt.has_window_partition = true;
                 }
+                // Detect window ORDER BY usage without PARTITION BY (S3-WS1-48).
+                if ((up.contains("OVER (") || up.contains("OVER("))
+                    || (up.contains(" WINDOW ") && up.contains(" AS (")))
+                    && up.contains("ORDER BY")
+                    && !up.contains("PARTITION BY")
+                {
+                    stmt.has_window_order = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -479,6 +489,13 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if up.contains("PARTITION BY") {
                     stmt.has_window_partition = true;
+                }
+                if ((up.contains("OVER (") || up.contains("OVER("))
+                    || (up.contains(" WINDOW ") && up.contains(" AS (")))
+                    && up.contains("ORDER BY")
+                    && !up.contains("PARTITION BY")
+                {
+                    stmt.has_window_order = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2799,6 +2816,37 @@ mod window_partition_tests {
         assert!(
             !s.has_window_partition,
             "window clause without PARTITION BY must keep has_window_partition = false"
+        );
+    }
+}
+
+// ─── S3-WS1-48: has_window_order tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod window_order_tests {
+    use super::*;
+
+    #[test]
+    fn select_over_order_by_sets_has_window_order() {
+        let stmt = parse_one("SELECT ROW_NUMBER() OVER (ORDER BY ts DESC) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_window_order, "OVER (...) with ORDER BY must set has_window_order = true");
+    }
+
+    #[test]
+    fn named_window_with_order_by_sets_has_window_order() {
+        let stmt = parse_one("SELECT SUM(v) OVER w FROM events WINDOW w AS (ORDER BY ts)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_window_order, "named window ORDER BY must set has_window_order = true");
+    }
+
+    #[test]
+    fn partition_by_with_order_does_not_set_has_window_order() {
+        let stmt = parse_one("SELECT SUM(v) OVER (PARTITION BY grp ORDER BY ts) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_window_order,
+            "PARTITION BY windows are tracked by has_window_partition and should keep has_window_order = false"
         );
     }
 }

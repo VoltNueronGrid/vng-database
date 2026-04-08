@@ -286,6 +286,10 @@ pub enum LogicalPlan {
     WindowPartition {
         input: Box<LogicalPlan>,
     },
+    /// Window ORDER BY semantics wrapper (S3-WS1-48 has_window_order support).
+    WindowOrder {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -347,6 +351,7 @@ impl LogicalPlan {
             LogicalPlan::WindowFrame { input } => input.primary_table(),
             LogicalPlan::NamedWindow { input } => input.primary_table(),
             LogicalPlan::WindowPartition { input } => input.primary_table(),
+            LogicalPlan::WindowOrder { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -424,6 +429,7 @@ impl LogicalPlan {
             LogicalPlan::WindowFrame { input } => input.has_aggregation(),
             LogicalPlan::NamedWindow { input } => input.has_aggregation(),
             LogicalPlan::WindowPartition { input } => input.has_aggregation(),
+            LogicalPlan::WindowOrder { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -901,6 +907,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.25,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::WindowOrder { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.20,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1465,13 +1479,22 @@ impl QueryPlanner {
             after_window_frame
         };
 
-        // WindowPartition wrapper (S3-WS1-47 has_window_partition detection): outermost node.
-        if sel.has_window_partition {
+        // WindowPartition wrapper (S3-WS1-47 has_window_partition detection).
+        let after_window_partition = if sel.has_window_partition {
             LogicalPlan::WindowPartition {
                 input: Box::new(after_named_window),
             }
         } else {
             after_named_window
+        };
+
+        // WindowOrder wrapper (S3-WS1-48 has_window_order detection): outermost node.
+        if sel.has_window_order {
+            LogicalPlan::WindowOrder {
+                input: Box::new(after_window_partition),
+            }
+        } else {
+            after_window_partition
         }
     }
 
@@ -2505,7 +2528,9 @@ mod tests {
     fn planner_window_frame_select_produces_window_frame_node() {
         let p = plan("SELECT SUM(v) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM events");
         assert!(
-            matches!(&p, LogicalPlan::WindowFrame { .. }),
+            matches!(&p, LogicalPlan::WindowFrame { .. })
+                || matches!(&p, LogicalPlan::WindowOrder { input }
+                    if matches!(input.as_ref(), LogicalPlan::WindowFrame { .. })),
             "window frame must produce outermost WindowFrame node; got: {:?}", p
         );
         assert!(p.is_read_only());
@@ -2556,5 +2581,24 @@ mod tests {
         let c = cost("SELECT SUM(v) OVER w FROM events WINDOW w AS (PARTITION BY grp ORDER BY ts)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "window PARTITION BY should route to OLAP");
         assert!(c.relative_cost >= 0.25, "WindowPartition must carry at least 0.25 cost overhead");
+    }
+
+    // ── S3-WS1-48: WindowOrder node tests ───────────────────────────────────
+
+    #[test]
+    fn planner_window_order_select_produces_window_order_node() {
+        let p = plan("SELECT ROW_NUMBER() OVER (ORDER BY ts DESC) FROM events");
+        assert!(
+            matches!(&p, LogicalPlan::WindowOrder { .. }),
+            "ORDER BY window clause must produce outermost WindowOrder node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_window_order_routes_to_olap_path_with_penalty() {
+        let c = cost("SELECT SUM(v) OVER w FROM events WINDOW w AS (ORDER BY ts)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "window ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.20, "WindowOrder must carry at least 0.20 cost overhead");
     }
 }
