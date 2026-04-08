@@ -728,6 +728,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 79 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 264→267, exec 132→134, service 545→549 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_order_by_desc_direction: bool` field + detection | `voltnuerongrid-sql` | Detects ORDER BY DESC direction (`S3-WS1-55`) | 3 (`order_by_desc_direction_tests` module) |
+| `DirectionOrdering { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.05 cost overhead | 2 |
+| `GET /api/v1/store/wal/order_by/desc_direction/count` | `voltnuerongridd` | Count DESC direction usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/order_by/desc_direction/count` | `voltnuerongridd` | Count DESC direction usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

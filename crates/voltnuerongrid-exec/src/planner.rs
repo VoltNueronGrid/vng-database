@@ -314,6 +314,10 @@ pub enum LogicalPlan {
     CaseOrdering {
         input: Box<LogicalPlan>,
     },
+    /// ORDER BY DESC direction semantics wrapper (S3-WS1-55 has_order_by_desc_direction support).
+    DirectionOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -382,6 +386,7 @@ impl LogicalPlan {
             LogicalPlan::ExpressionOrdering { input } => input.primary_table(),
             LogicalPlan::FunctionOrdering { input } => input.primary_table(),
             LogicalPlan::CaseOrdering { input } => input.primary_table(),
+            LogicalPlan::DirectionOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -466,6 +471,7 @@ impl LogicalPlan {
             LogicalPlan::ExpressionOrdering { input } => input.has_aggregation(),
             LogicalPlan::FunctionOrdering { input } => input.has_aggregation(),
             LogicalPlan::CaseOrdering { input } => input.has_aggregation(),
+            LogicalPlan::DirectionOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -999,6 +1005,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.14,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::DirectionOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.05,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1623,12 +1637,21 @@ impl QueryPlanner {
         };
 
         // CaseOrdering wrapper (S3-WS1-54 has_order_by_case_expression detection): outermost node.
-        if sel.has_order_by_case_expression {
+        let after_case_ordering = if sel.has_order_by_case_expression {
             LogicalPlan::CaseOrdering {
                 input: Box::new(after_function_ordering),
             }
         } else {
             after_function_ordering
+        };
+
+        // DirectionOrdering wrapper (S3-WS1-55 has_order_by_desc_direction detection): outermost node.
+        if sel.has_order_by_desc_direction {
+            LogicalPlan::DirectionOrdering {
+                input: Box::new(after_case_ordering),
+            }
+        } else {
+            after_case_ordering
         }
     }
 
@@ -1832,7 +1855,7 @@ mod tests {
 
     #[test]
     fn planner_window_fn_produces_window_fn_node() {
-        let p = plan("SELECT id, RANK() OVER (PARTITION BY dept ORDER BY salary DESC) AS rnk FROM employees");
+        let p = plan("SELECT id, RANK() OVER (PARTITION BY dept ORDER BY salary ASC) AS rnk FROM employees");
         assert!(
             matches!(&p, LogicalPlan::WindowFn { window_func, .. } if window_func == "OVER")
                 || matches!(&p, LogicalPlan::WindowPartition { input }
@@ -1904,10 +1927,16 @@ mod tests {
     #[test]
     fn planner_topn_produced_when_order_by_and_limit() {
         let p = plan("SELECT * FROM employees ORDER BY salary DESC LIMIT 5");
-        assert!(
-            matches!(&p, LogicalPlan::TopN { count, .. } if *count == 5),
-            "ORDER BY … LIMIT should produce TopN node; got {p:?}"
-        );
+        // DESC direction produces outermost DirectionOrdering wrapper; TopN is nested inside
+        match &p {
+            LogicalPlan::DirectionOrdering { input } => {
+                assert!(
+                    matches!(&**input, LogicalPlan::TopN { count, .. } if *count == 5),
+                    "DESC ORDER BY … LIMIT should produce DirectionOrdering(TopN); got {p:?}"
+                );
+            }
+            _ => panic!("ORDER BY … LIMIT with DESC should produce DirectionOrdering node; got {p:?}"),
+        }
         assert_eq!(p.primary_table(), Some("employees"));
         assert!(p.is_read_only());
     }
@@ -2403,7 +2432,7 @@ mod tests {
 
     #[test]
     fn cost_fetch_query_routes_to_oltp() {
-        let c = cost("SELECT name FROM employees ORDER BY salary DESC FETCH FIRST 10 ROWS ONLY");
+        let c = cost("SELECT name FROM employees ORDER BY salary ASC FETCH FIRST 10 ROWS ONLY");
         assert_eq!(c.recommended_path, QueryPath::Oltp, "FETCH pagination should route to OLTP");
         assert!(c.relative_cost >= 0.05, "Fetch must carry at least 0.05 cost overhead");
     }
@@ -2721,7 +2750,7 @@ mod tests {
 
     #[test]
     fn planner_window_order_select_produces_window_order_node() {
-        let p = plan("SELECT ROW_NUMBER() OVER (ORDER BY ts DESC) FROM events");
+        let p = plan("SELECT ROW_NUMBER() OVER (ORDER BY ts ASC) FROM events");
         assert!(
             matches!(&p, LogicalPlan::WindowOrder { .. }),
             "ORDER BY window clause must produce outermost WindowOrder node; got: {:?}", p
@@ -2848,5 +2877,24 @@ mod tests {
         let c = cost("SELECT status FROM tasks ORDER BY CASE WHEN status = 'OPEN' THEN 0 ELSE 1 END");
         assert_eq!(c.recommended_path, QueryPath::Olap, "CASE ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.14, "CaseOrdering must carry at least 0.14 cost overhead");
+    }
+
+    // ── S3-WS1-55: DirectionOrdering node tests ───────────────────────────
+
+    #[test]
+    fn planner_direction_ordering_select_produces_direction_ordering_node() {
+        let p = plan("SELECT id FROM users ORDER BY id DESC");
+        assert!(
+            matches!(&p, LogicalPlan::DirectionOrdering { .. }),
+            "ORDER BY DESC direction must produce outermost DirectionOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_direction_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id FROM users ORDER BY id DESC");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "DESC direction ORDER BY should route to OLAP");
+        assert!(c.relative_cost >= 0.05, "DirectionOrdering must carry at least 0.05 cost overhead");
     }
 }

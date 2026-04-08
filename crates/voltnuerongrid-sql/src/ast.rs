@@ -159,6 +159,8 @@ pub struct SelectStatement {
     pub has_order_by_function_expression: bool,
     /// True when ORDER BY uses CASE expressions (S3-WS1-54).
     pub has_order_by_case_expression: bool,
+    /// True when ORDER BY uses DESC (descending direction) versus default ASC (S3-WS1-55).
+    pub has_order_by_desc_direction: bool,
 }
 
 /// A parsed INSERT statement.
@@ -485,6 +487,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_order_by_case_expression(&up) {
                     stmt.has_order_by_case_expression = true;
                 }
+                if has_order_by_desc_direction(&up) {
+                    stmt.has_order_by_desc_direction = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -547,6 +552,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_order_by_case_expression(&up) {
                     stmt.has_order_by_case_expression = true;
+                }
+                if has_order_by_desc_direction(&up) {
+                    stmt.has_order_by_desc_direction = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3112,6 +3120,14 @@ fn has_order_by_case_expression(up: &str) -> bool {
     false
 }
 
+fn has_order_by_desc_direction(up: &str) -> bool {
+    if let Some(idx) = up.find("ORDER BY") {
+        let tail = &up[idx + "ORDER BY".len()..];
+        return tail.to_uppercase().contains(" DESC") || tail.starts_with("DESC");
+    }
+    false
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3145,6 +3161,43 @@ mod order_by_case_expression_tests {
         assert!(
             !s.has_order_by_case_expression,
             "ORDER BY named column must keep has_order_by_case_expression = false"
+        );
+    }
+}
+
+// ─── S3-WS1-55: has_order_by_desc_direction tests ────────────────────────────
+
+#[cfg(test)]
+mod order_by_desc_direction_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_desc_sets_has_order_by_desc_direction() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id DESC").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_desc_direction,
+            "ORDER BY DESC must set has_order_by_desc_direction = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_order_by_desc_sets_has_order_by_desc_direction() {
+        let stmt = parse_one("WITH t AS (SELECT id FROM users) SELECT id FROM t ORDER BY id DESC").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_order_by_desc_direction,
+            "WITH query ORDER BY DESC must set has_order_by_desc_direction = true"
+        );
+    }
+
+    #[test]
+    fn select_order_by_asc_keeps_has_order_by_desc_direction_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id ASC").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_order_by_desc_direction,
+            "ORDER BY ASC must keep has_order_by_desc_direction = false"
         );
     }
 }
