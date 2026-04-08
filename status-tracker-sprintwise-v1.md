@@ -854,6 +854,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 88 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 291→294, exec 150→152, service 581→585 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_having_with_group_by: bool` field + detection | `voltnuerongrid-sql` | Detects HAVING with GROUP BY usage (`S3-WS1-64`) | 3 (`having_with_group_by_tests` module) |
+| `HavingWithGroupBy { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.08 cost overhead | 2 |
+| `GET /api/v1/store/wal/having_with_group_by/count` | `voltnuerongridd` | Count HAVING-with-GROUP-BY usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/having_with_group_by/count` | `voltnuerongridd` | Count HAVING-with-GROUP-BY usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

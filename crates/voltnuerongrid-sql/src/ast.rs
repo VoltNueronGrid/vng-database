@@ -177,6 +177,8 @@ pub struct SelectStatement {
     pub has_offset_only_pagination: bool,
     /// True when the query uses HAVING without GROUP BY (S3-WS1-63).
     pub has_having_without_group_by: bool,
+    /// True when the query uses HAVING together with GROUP BY (S3-WS1-64).
+    pub has_having_with_group_by: bool,
 }
 
 /// A parsed INSERT statement.
@@ -527,6 +529,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_having_without_group_by(&stmt) {
                     stmt.has_having_without_group_by = true;
                 }
+                if has_having_with_group_by(&stmt) {
+                    stmt.has_having_with_group_by = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -619,6 +624,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_having_without_group_by(&stmt) {
                     stmt.has_having_without_group_by = true;
+                }
+                if has_having_with_group_by(&stmt) {
+                    stmt.has_having_with_group_by = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3275,6 +3283,10 @@ fn has_having_without_group_by(stmt: &SelectStatement) -> bool {
     stmt.has_having && !stmt.has_group_by
 }
 
+fn has_having_with_group_by(stmt: &SelectStatement) -> bool {
+    stmt.has_having && stmt.has_group_by
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3641,6 +3653,43 @@ mod having_without_group_by_tests {
         assert!(
             !s.has_having_without_group_by,
             "HAVING with GROUP BY must keep has_having_without_group_by = false"
+        );
+    }
+}
+
+// ─── S3-WS1-64: has_having_with_group_by tests ───────────────────────────
+
+#[cfg(test)]
+mod having_with_group_by_tests {
+    use super::*;
+
+    #[test]
+    fn select_group_by_having_sets_has_having_with_group_by() {
+        let stmt = parse_one("SELECT id FROM users GROUP BY id HAVING id > 0").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_having_with_group_by,
+            "HAVING with GROUP BY must set has_having_with_group_by = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_group_by_having_sets_has_having_with_group_by() {
+        let stmt = parse_one("WITH t AS (SELECT id FROM users) SELECT id FROM t GROUP BY id HAVING id > 0").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_having_with_group_by,
+            "WITH query HAVING with GROUP BY must set has_having_with_group_by = true"
+        );
+    }
+
+    #[test]
+    fn select_having_without_group_by_keeps_has_having_with_group_by_false() {
+        let stmt = parse_one("SELECT id FROM users HAVING id > 0").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_having_with_group_by,
+            "HAVING without GROUP BY must keep has_having_with_group_by = false"
         );
     }
 }

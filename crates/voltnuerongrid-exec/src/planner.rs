@@ -350,6 +350,10 @@ pub enum LogicalPlan {
     HavingWithoutGroupBy {
         input: Box<LogicalPlan>,
     },
+    /// HAVING with GROUP BY semantics wrapper (S3-WS1-64 has_having_with_group_by support).
+    HavingWithGroupBy {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -427,6 +431,7 @@ impl LogicalPlan {
             LogicalPlan::LimitOffsetPagination { input } => input.primary_table(),
             LogicalPlan::OffsetOnlyPagination { input } => input.primary_table(),
             LogicalPlan::HavingWithoutGroupBy { input } => input.primary_table(),
+            LogicalPlan::HavingWithGroupBy { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -520,6 +525,7 @@ impl LogicalPlan {
             LogicalPlan::LimitOffsetPagination { input } => input.has_aggregation(),
             LogicalPlan::OffsetOnlyPagination { input } => input.has_aggregation(),
             LogicalPlan::HavingWithoutGroupBy { input } => input.has_aggregation(),
+            LogicalPlan::HavingWithGroupBy { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1125,6 +1131,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.06,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::HavingWithGroupBy { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.08,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1830,12 +1844,21 @@ impl QueryPlanner {
         };
 
         // HavingWithoutGroupBy wrapper (S3-WS1-63 has_having_without_group_by detection): outermost node.
-        if sel.has_having_without_group_by {
+        let after_having_without_group_by = if sel.has_having_without_group_by {
             LogicalPlan::HavingWithoutGroupBy {
                 input: Box::new(after_offset_only_pagination),
             }
         } else {
             after_offset_only_pagination
+        };
+
+        // HavingWithGroupBy wrapper (S3-WS1-64 has_having_with_group_by detection): outermost node.
+        if sel.has_having_with_group_by {
+            LogicalPlan::HavingWithGroupBy {
+                input: Box::new(after_having_without_group_by),
+            }
+        } else {
+            after_having_without_group_by
         }
     }
 
@@ -2094,11 +2117,12 @@ mod tests {
 
     #[test]
     fn planner_having_produces_having_node() {
-        // SELECT * avoids Project wrapper so Having is outermost plan node.
         let p = plan("SELECT * FROM employees GROUP BY dept HAVING COUNT(*) > 5");
         assert!(
-            matches!(&p, LogicalPlan::Having { condition, .. } if condition.to_uppercase().contains("COUNT")),
-            "GROUP BY ... HAVING should produce a Having node; got: {:?}", p
+            matches!(&p, LogicalPlan::Having { condition, .. } if condition.to_uppercase().contains("COUNT"))
+                || matches!(&p, LogicalPlan::HavingWithGroupBy { input }
+                    if matches!(&**input, LogicalPlan::Having { condition, .. } if condition.to_uppercase().contains("COUNT"))),
+            "GROUP BY ... HAVING should produce a Having node (possibly wrapped); got: {:?}", p
         );
         assert_eq!(p.primary_table(), Some("employees"));
     }
@@ -3234,5 +3258,24 @@ mod tests {
         let c = cost("SELECT id FROM users HAVING id > 0");
         assert_eq!(c.recommended_path, QueryPath::Olap, "HAVING without GROUP BY should route to OLAP");
         assert!(c.relative_cost >= 0.06, "HavingWithoutGroupBy must carry at least 0.06 cost overhead");
+    }
+
+    // ── S3-WS1-64: HavingWithGroupBy node tests ─────────────────────────
+
+    #[test]
+    fn planner_having_with_group_by_select_produces_having_with_group_by_node() {
+        let p = plan("SELECT id FROM users GROUP BY id HAVING id > 0");
+        assert!(
+            matches!(&p, LogicalPlan::HavingWithGroupBy { .. }),
+            "HAVING with GROUP BY must produce outermost HavingWithGroupBy node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_having_with_group_by_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id FROM users GROUP BY id HAVING id > 0");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "HAVING with GROUP BY should route to OLAP");
+        assert!(c.relative_cost >= 0.08, "HavingWithGroupBy must carry at least 0.08 cost overhead");
     }
 }
