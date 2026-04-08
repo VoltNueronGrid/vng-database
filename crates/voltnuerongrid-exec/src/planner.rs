@@ -250,6 +250,10 @@ pub enum LogicalPlan {
     Except {
         input: Box<LogicalPlan>,
     },
+    /// INTERSECT set operation semantics wrapper (S3-WS1-39 has_intersect support).
+    Intersect {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -302,6 +306,7 @@ impl LogicalPlan {
             LogicalPlan::NaturalJoin { input } => input.primary_table(),
             LogicalPlan::UsingJoin { input } => input.primary_table(),
             LogicalPlan::Except { input } => input.primary_table(),
+            LogicalPlan::Intersect { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -370,6 +375,7 @@ impl LogicalPlan {
             LogicalPlan::NaturalJoin { input } => input.has_aggregation(),
             LogicalPlan::UsingJoin { input } => input.has_aggregation(),
             LogicalPlan::Except { input } => input.has_aggregation(),
+            LogicalPlan::Intersect { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -775,6 +781,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 0.8) as u64,
                     relative_cost: inner.relative_cost + 0.45,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Intersect { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: (inner.estimated_rows as f64 * 0.7) as u64,
+                    relative_cost: inner.relative_cost + 0.50,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1258,13 +1272,22 @@ impl QueryPlanner {
             after_natural_join
         };
 
-        // Except wrapper (S3-WS1-38 has_except detection): outermost node.
-        if sel.has_except {
+        // Except wrapper (S3-WS1-38 has_except detection).
+        let after_except = if sel.has_except {
             LogicalPlan::Except {
                 input: Box::new(after_using_join),
             }
         } else {
             after_using_join
+        };
+
+        // Intersect wrapper (S3-WS1-39 has_intersect detection): outermost node.
+        if sel.has_intersect {
+            LogicalPlan::Intersect {
+                input: Box::new(after_except),
+            }
+        } else {
+            after_except
         }
     }
 
@@ -2172,5 +2195,24 @@ mod tests {
         let c = cost("SELECT id FROM s1 EXCEPT ALL SELECT id FROM s2");
         assert_eq!(c.recommended_path, QueryPath::Olap, "EXCEPT should route to OLAP");
         assert!(c.relative_cost >= 0.45, "Except must carry at least 0.45 cost overhead");
+    }
+
+    // ── S3-WS1-39: Intersect node tests ──────────────────────────────────────
+
+    #[test]
+    fn planner_intersect_select_produces_intersect_node() {
+        let p = plan("SELECT id FROM active_users INTERSECT SELECT id FROM premium_users");
+        assert!(
+            matches!(&p, LogicalPlan::Intersect { .. }),
+            "INTERSECT must produce outermost Intersect node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_intersect_routes_to_olap() {
+        let c = cost("SELECT id FROM s1 INTERSECT ALL SELECT id FROM s2");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "INTERSECT should route to OLAP");
+        assert!(c.relative_cost >= 0.50, "Intersect must carry at least 0.50 cost overhead");
     }
 }

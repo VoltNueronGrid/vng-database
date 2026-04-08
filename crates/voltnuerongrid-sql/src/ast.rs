@@ -127,6 +127,8 @@ pub struct SelectStatement {
     pub has_using_join: bool,
     /// True when the query uses an EXCEPT set operation (S3-WS1-38).
     pub has_except: bool,
+    /// True when the query uses an INTERSECT set operation (S3-WS1-39).
+    pub has_intersect: bool,
 }
 
 /// A parsed INSERT statement.
@@ -383,6 +385,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect EXCEPT set operation (S3-WS1-38).
                 if up.contains(" EXCEPT ") {
                     stmt.has_except = true;
+                }
+                // Detect INTERSECT set operation (S3-WS1-39).
+                if up.contains(" INTERSECT ") {
+                    stmt.has_intersect = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2443,5 +2449,33 @@ mod except_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_except, "plain SELECT without EXCEPT must have has_except = false");
+    }
+}
+
+// ─── S3-WS1-39: has_intersect tests ─────────────────────────────────────────
+
+#[cfg(test)]
+mod intersect_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_intersect_sets_has_intersect() {
+        let stmt = parse_one("SELECT id FROM active_users INTERSECT SELECT id FROM premium_users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_intersect, "INTERSECT set operation must set has_intersect = true");
+    }
+
+    #[test]
+    fn select_with_intersect_all_sets_has_intersect() {
+        let stmt = parse_one("SELECT id FROM s1 INTERSECT ALL SELECT id FROM s2").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_intersect, "INTERSECT ALL must set has_intersect = true");
+    }
+
+    #[test]
+    fn plain_select_has_intersect_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_intersect, "plain SELECT without INTERSECT must have has_intersect = false");
     }
 }
