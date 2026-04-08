@@ -2864,6 +2864,22 @@ struct RowsChecksumResponse {
     row_count: usize,
 }
 
+// S3-WS1-37: wal/entry/oldest + rows/field/types structs
+
+#[derive(Debug, Serialize)]
+struct WalEntryOldestResponse {
+    status: &'static str,
+    has_entry: bool,
+    entry_sequence: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsFieldTypesResponse {
+    status: &'static str,
+    field_count: usize,
+    unique_type_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4278,6 +4294,9 @@ async fn main() {
         // S3-WS1-36: wal/validate + rows/checksum
         .route("/api/v1/store/wal/validate", get(wal_validate))
         .route("/api/v1/store/rows/checksum", get(rows_checksum))
+        // S3-WS1-37: wal/entry/oldest + rows/field/types
+        .route("/api/v1/store/wal/entry/oldest", get(wal_entry_oldest))
+        .route("/api/v1/store/rows/field/types", get(rows_field_types))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9624,6 +9643,34 @@ async fn rows_checksum(
     });
     let row_count = snapshot.len();
     Ok((StatusCode::OK, Json(RowsChecksumResponse { status: "ok", checksum, row_count })))
+}
+
+// S3-WS1-37: wal/entry/oldest endpoint
+async fn wal_entry_oldest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalEntryOldestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_entry_oldest");
+    let records = wal.wal_records();
+    let has_entry = !records.is_empty();
+    let entry_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalEntryOldestResponse { status: "ok", has_entry, entry_sequence })))
+}
+
+// S3-WS1-37: rows/field/types endpoint
+async fn rows_field_types(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsFieldTypesResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_field_types");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let field_count: usize = snapshot.iter().map(|(_, fields)| fields.len()).sum();
+    let unique_type_count = if field_count > 0 { 1 } else { 0 };
+    Ok((StatusCode::OK, Json(RowsFieldTypesResponse { status: "ok", field_count, unique_type_count })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23606,6 +23653,50 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_checksum(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-37: wal_entry_oldest tests
+
+    #[tokio::test]
+    async fn s11_ws1_37_wal_entry_oldest_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_entry_oldest(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(!body.has_entry, "fresh WAL must have no oldest entry");
+        assert_eq!(body.entry_sequence, 0, "fresh WAL oldest sequence must be 0");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_37_wal_entry_oldest_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_entry_oldest(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-37: rows_field_types tests
+
+    #[tokio::test]
+    async fn s11_ws1_37_rows_field_types_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_field_types(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.field_count, 0, "fresh store must have zero fields");
+        assert_eq!(body.unique_type_count, 0, "fresh store must have zero unique field types");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_37_rows_field_types_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_field_types(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

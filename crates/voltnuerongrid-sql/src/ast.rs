@@ -123,6 +123,8 @@ pub struct SelectStatement {
     pub has_grouping_sets: bool,
     /// True when the query uses a NATURAL JOIN clause (S3-WS1-36).
     pub has_natural_join: bool,
+    /// True when the query uses a JOIN ... USING (...) clause (S3-WS1-37).
+    pub has_using_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -371,6 +373,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect NATURAL JOIN clause (S3-WS1-36).
                 if up.contains("NATURAL JOIN") {
                     stmt.has_natural_join = true;
+                }
+                // Detect JOIN ... USING (...) clause (S3-WS1-37).
+                if up.contains(" USING (") || up.contains("USING(") {
+                    stmt.has_using_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2375,5 +2381,33 @@ mod natural_join_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_natural_join, "plain SELECT without NATURAL JOIN must have has_natural_join = false");
+    }
+}
+
+// ─── S3-WS1-37: has_using_join tests ────────────────────────────────────────
+
+#[cfg(test)]
+mod using_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_join_using_sets_has_using_join() {
+        let stmt = parse_one("SELECT c.id, o.total FROM customers c JOIN orders o USING (customer_id)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_using_join, "JOIN ... USING must set has_using_join = true");
+    }
+
+    #[test]
+    fn select_with_left_join_using_sets_has_using_join() {
+        let stmt = parse_one("SELECT u.id, p.title FROM users u LEFT JOIN posts p USING (user_id)").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_using_join, "LEFT JOIN ... USING must set has_using_join = true");
+    }
+
+    #[test]
+    fn plain_select_has_using_join_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_using_join, "plain SELECT without USING join must have has_using_join = false");
     }
 }

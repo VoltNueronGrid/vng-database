@@ -242,6 +242,10 @@ pub enum LogicalPlan {
     NaturalJoin {
         input: Box<LogicalPlan>,
     },
+    /// JOIN ... USING (...) clause semantics wrapper (S3-WS1-37 has_using_join support).
+    UsingJoin {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -292,6 +296,7 @@ impl LogicalPlan {
             LogicalPlan::FullTextSearch { input } => input.primary_table(),
             LogicalPlan::GroupingSets { input } => input.primary_table(),
             LogicalPlan::NaturalJoin { input } => input.primary_table(),
+            LogicalPlan::UsingJoin { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -358,6 +363,7 @@ impl LogicalPlan {
             LogicalPlan::FullTextSearch { input } => input.has_aggregation(),
             LogicalPlan::GroupingSets { input } => input.has_aggregation(),
             LogicalPlan::NaturalJoin { input } => input.has_aggregation(),
+            LogicalPlan::UsingJoin { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -747,6 +753,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.35,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::UsingJoin { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.25,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1212,13 +1226,22 @@ impl QueryPlanner {
             after_full_text_search
         };
 
-        // NaturalJoin wrapper (S3-WS1-36 has_natural_join detection): outermost node.
-        if sel.has_natural_join {
+        // NaturalJoin wrapper (S3-WS1-36 has_natural_join detection).
+        let after_natural_join = if sel.has_natural_join {
             LogicalPlan::NaturalJoin {
                 input: Box::new(after_grouping_sets),
             }
         } else {
             after_grouping_sets
+        };
+
+        // UsingJoin wrapper (S3-WS1-37 has_using_join detection): outermost node.
+        if sel.has_using_join {
+            LogicalPlan::UsingJoin {
+                input: Box::new(after_natural_join),
+            }
+        } else {
+            after_natural_join
         }
     }
 
@@ -2088,5 +2111,24 @@ mod tests {
         let c = cost("SELECT p.id FROM products p NATURAL JOIN inventory i WHERE p.active = 1");
         assert_eq!(c.recommended_path, QueryPath::Olap, "NATURAL JOIN should route to OLAP");
         assert!(c.relative_cost >= 0.35, "NaturalJoin must carry at least 0.35 cost overhead");
+    }
+
+    // ── S3-WS1-37: UsingJoin node tests ──────────────────────────────────────
+
+    #[test]
+    fn planner_using_join_select_produces_using_join_node() {
+        let p = plan("SELECT c.id, o.total FROM customers c JOIN orders o USING (customer_id)");
+        assert!(
+            matches!(&p, LogicalPlan::UsingJoin { .. }),
+            "JOIN ... USING must produce outermost UsingJoin node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_using_join_routes_to_olap() {
+        let c = cost("SELECT u.id, p.title FROM users u LEFT JOIN posts p USING (user_id)");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "JOIN ... USING should route to OLAP");
+        assert!(c.relative_cost >= 0.25, "UsingJoin must carry at least 0.25 cost overhead");
     }
 }

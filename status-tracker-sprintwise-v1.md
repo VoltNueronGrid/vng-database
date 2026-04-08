@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 61 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 210→213, exec 96→98, service 473→477 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_using_join: bool` field + detection | `voltnuerongrid-sql` | Detects `JOIN ... USING (...)` clause (`S3-WS1-37`) | 3 (`using_join_tests` module) |
+| `UsingJoin { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.25 cost overhead | 2 |
+| `GET /api/v1/store/wal/entry/oldest` | `voltnuerongridd` | Oldest WAL entry sequence + has_entry (operator-auth) | 2 |
+| `GET /api/v1/store/rows/field/types` | `voltnuerongridd` | Total field count + unique type count estimate (operator-auth) | 2 |
+
+---
+
 ## Session 60 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)
