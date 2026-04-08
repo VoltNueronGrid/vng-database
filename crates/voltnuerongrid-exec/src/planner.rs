@@ -290,6 +290,10 @@ pub enum LogicalPlan {
     WindowOrder {
         input: Box<LogicalPlan>,
     },
+    /// NULLS FIRST/LAST ordering semantics wrapper (S3-WS1-49 has_nulls_ordering support).
+    NullsOrdering {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -352,6 +356,7 @@ impl LogicalPlan {
             LogicalPlan::NamedWindow { input } => input.primary_table(),
             LogicalPlan::WindowPartition { input } => input.primary_table(),
             LogicalPlan::WindowOrder { input } => input.primary_table(),
+            LogicalPlan::NullsOrdering { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -430,6 +435,7 @@ impl LogicalPlan {
             LogicalPlan::NamedWindow { input } => input.has_aggregation(),
             LogicalPlan::WindowPartition { input } => input.has_aggregation(),
             LogicalPlan::WindowOrder { input } => input.has_aggregation(),
+            LogicalPlan::NullsOrdering { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -915,6 +921,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.20,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::NullsOrdering { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.10,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1488,13 +1502,22 @@ impl QueryPlanner {
             after_named_window
         };
 
-        // WindowOrder wrapper (S3-WS1-48 has_window_order detection): outermost node.
-        if sel.has_window_order {
+        // WindowOrder wrapper (S3-WS1-48 has_window_order detection).
+        let after_window_order = if sel.has_window_order {
             LogicalPlan::WindowOrder {
                 input: Box::new(after_window_partition),
             }
         } else {
             after_window_partition
+        };
+
+        // NullsOrdering wrapper (S3-WS1-49 has_nulls_ordering detection): outermost node.
+        if sel.has_nulls_ordering {
+            LogicalPlan::NullsOrdering {
+                input: Box::new(after_window_order),
+            }
+        } else {
+            after_window_order
         }
     }
 
@@ -2600,5 +2623,24 @@ mod tests {
         let c = cost("SELECT SUM(v) OVER w FROM events WINDOW w AS (ORDER BY ts)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "window ORDER BY should route to OLAP");
         assert!(c.relative_cost >= 0.20, "WindowOrder must carry at least 0.20 cost overhead");
+    }
+
+    // ── S3-WS1-49: NullsOrdering node tests ─────────────────────────────────
+
+    #[test]
+    fn planner_nulls_ordering_select_produces_nulls_ordering_node() {
+        let p = plan("SELECT id FROM users ORDER BY name NULLS FIRST");
+        assert!(
+            matches!(&p, LogicalPlan::NullsOrdering { .. }),
+            "NULLS FIRST/LAST ordering must produce outermost NullsOrdering node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_nulls_ordering_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT id FROM users ORDER BY name NULLS LAST");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "NULLS ordering should route to OLAP");
+        assert!(c.relative_cost >= 0.10, "NullsOrdering must carry at least 0.10 cost overhead");
     }
 }

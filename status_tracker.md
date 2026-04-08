@@ -437,6 +437,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `WindowOrder { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.20 cost), and `plan_select()` (`has_window_order` outermost wrap with `after_window_partition` let binding). Tests: `planner_window_order_select_produces_window_order_node`, `cost_window_order_routes_to_olap_path_with_penalty`. Total: **120 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/non_deleted/newest` (operator-auth, returns newest non-deleted WAL sequence) and `GET /api/v1/store/rows/value/blank/count` (operator-auth, counts blank values across row snapshot). Tests: 4 new tests (`s11_ws1_48_*`). Total: **521 passed**.
 
+### 9.2ao Session 73 Implementation Update (S3-WS1-49 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_nulls_ordering: bool` field to `SelectStatement` (ast.rs). Detects `NULLS FIRST/LAST` usage in ORDER BY clauses for SELECT/WITH queries (S3-WS1-49). Tests: `nulls_ordering_tests` module (3 tests). Total: **249 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `NullsOrdering { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.10 cost), and `plan_select()` (`has_nulls_ordering` outermost wrap with `after_window_order` let binding). Tests: `planner_nulls_ordering_select_produces_nulls_ordering_node`, `cost_nulls_ordering_routes_to_olap_with_small_overhead`. Total: **122 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/record/total` (operator-auth, returns total WAL record count) and `GET /api/v1/store/rows/key/duplicates/count` (operator-auth, returns duplicate-key count across row snapshot). Tests: 4 new tests (`s11_ws1_49_*`). Total: **525 passed**.
+
 ### 9.2am Session 71 Implementation Update (S3-WS1-47 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_window_partition: bool` field to `SelectStatement` (ast.rs). Detects `PARTITION BY` window clauses in SELECT/WITH queries (S3-WS1-47). Tests: `window_partition_tests` module (3 tests). Total: **243 passed**.

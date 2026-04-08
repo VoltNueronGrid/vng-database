@@ -3042,6 +3042,20 @@ struct RowsValueBlankCountResponse {
     blank_value_count: usize,
 }
 
+// S3-WS1-49: wal/record/total + rows/key/duplicates/count structs
+
+#[derive(Debug, Serialize)]
+struct WalRecordTotalResponse {
+    status: &'static str,
+    total_record_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsKeyDuplicatesCountResponse {
+    status: &'static str,
+    duplicate_key_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4492,6 +4506,9 @@ async fn main() {
         // S3-WS1-48: wal/non_deleted/newest + rows/value/blank/count
         .route("/api/v1/store/wal/non_deleted/newest", get(wal_non_deleted_newest))
         .route("/api/v1/store/rows/value/blank/count", get(rows_value_blank_count))
+        // S3-WS1-49: wal/record/total + rows/key/duplicates/count
+        .route("/api/v1/store/wal/record/total", get(wal_record_total))
+        .route("/api/v1/store/rows/key/duplicates/count", get(rows_key_duplicates_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -10274,6 +10291,41 @@ async fn rows_value_blank_count(
     Ok((StatusCode::OK, Json(RowsValueBlankCountResponse {
         status: "ok",
         blank_value_count,
+    })))
+}
+
+// S3-WS1-49: wal/record/total endpoint
+async fn wal_record_total(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalRecordTotalResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_record_total");
+    let total_record_count = wal.wal_records().len();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalRecordTotalResponse {
+        status: "ok",
+        total_record_count,
+    })))
+}
+
+// S3-WS1-49: rows/key/duplicates/count endpoint
+async fn rows_key_duplicates_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsKeyDuplicatesCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_key_duplicates_count");
+    let snapshot = rs.export_rows_snapshot();
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for (key, _) in snapshot {
+        *counts.entry(key).or_insert(0) += 1;
+    }
+    let duplicate_key_count = counts.values().filter(|&&c| c > 1).count();
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsKeyDuplicatesCountResponse {
+        status: "ok",
+        duplicate_key_count,
     })))
 }
 
@@ -24771,6 +24823,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_value_blank_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-49: wal_record_total tests
+
+    #[tokio::test]
+    async fn s11_ws1_49_wal_record_total_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_record_total(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.total_record_count, 0, "fresh WAL must have zero records");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_49_wal_record_total_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_record_total(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-49: rows_key_duplicates_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_49_rows_key_duplicates_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_key_duplicates_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.duplicate_key_count, 0, "fresh store must have zero duplicate keys");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_49_rows_key_duplicates_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_key_duplicates_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

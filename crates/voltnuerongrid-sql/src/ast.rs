@@ -147,6 +147,8 @@ pub struct SelectStatement {
     pub has_window_partition: bool,
     /// True when a window clause uses ORDER BY without PARTITION BY (S3-WS1-48).
     pub has_window_order: bool,
+    /// True when ORDER BY uses NULLS FIRST/LAST (S3-WS1-49).
+    pub has_nulls_ordering: bool,
 }
 
 /// A parsed INSERT statement.
@@ -452,6 +454,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 {
                     stmt.has_window_order = true;
                 }
+                // Detect NULLS FIRST/LAST ordering (S3-WS1-49).
+                if up.contains("ORDER BY") && (up.contains("NULLS FIRST") || up.contains("NULLS LAST")) {
+                    stmt.has_nulls_ordering = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -496,6 +502,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     && !up.contains("PARTITION BY")
                 {
                     stmt.has_window_order = true;
+                }
+                if up.contains("ORDER BY") && (up.contains("NULLS FIRST") || up.contains("NULLS LAST")) {
+                    stmt.has_nulls_ordering = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2847,6 +2856,37 @@ mod window_order_tests {
         assert!(
             !s.has_window_order,
             "PARTITION BY windows are tracked by has_window_partition and should keep has_window_order = false"
+        );
+    }
+}
+
+// ─── S3-WS1-49: has_nulls_ordering tests ───────────────────────────────────
+
+#[cfg(test)]
+mod nulls_ordering_tests {
+    use super::*;
+
+    #[test]
+    fn select_order_by_nulls_first_sets_has_nulls_ordering() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY name NULLS FIRST").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_nulls_ordering, "ORDER BY ... NULLS FIRST must set has_nulls_ordering = true");
+    }
+
+    #[test]
+    fn select_order_by_nulls_last_sets_has_nulls_ordering() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY name NULLS LAST").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_nulls_ordering, "ORDER BY ... NULLS LAST must set has_nulls_ordering = true");
+    }
+
+    #[test]
+    fn select_order_by_without_nulls_keeps_has_nulls_ordering_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY name").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_nulls_ordering,
+            "ORDER BY without NULLS FIRST/LAST must keep has_nulls_ordering = false"
         );
     }
 }

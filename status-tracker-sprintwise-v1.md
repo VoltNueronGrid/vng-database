@@ -658,6 +658,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 73 Implementation Log
+
+**Date:** 2026-04-08 (Sprint 9 continuation)
+**Test Baseline → New:** sql 246→249, exec 120→122, service 521→525 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_nulls_ordering: bool` field + detection | `voltnuerongrid-sql` | Detects `NULLS FIRST/LAST` in ORDER BY clauses (`S3-WS1-49`) | 3 (`nulls_ordering_tests` module) |
+| `NullsOrdering { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.10 cost overhead | 2 |
+| `GET /api/v1/store/wal/record/total` | `voltnuerongridd` | Return total WAL record count (operator-auth) | 2 |
+| `GET /api/v1/store/rows/key/duplicates/count` | `voltnuerongridd` | Return duplicate-key count across row snapshot (operator-auth) | 2 |
+
+---
+
 ## Session 72 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)
