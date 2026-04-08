@@ -3294,6 +3294,20 @@ struct RowsGroupByCubeCountResponse {
     group_by_cube_count: usize,
 }
 
+// S3-WS1-67: wal/select/distinct_on/count + rows/select/distinct_on/count structs
+
+#[derive(Debug, Serialize)]
+struct WalSelectDistinctOnCountResponse {
+    status: &'static str,
+    select_distinct_on_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsSelectDistinctOnCountResponse {
+    status: &'static str,
+    select_distinct_on_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4786,6 +4800,8 @@ async fn main() {
         .route("/api/v1/store/rows/group_by/rollup/count", get(rows_group_by_rollup_count))
         .route("/api/v1/store/wal/group_by/cube/count", get(wal_group_by_cube_count))
         .route("/api/v1/store/rows/group_by/cube/count", get(rows_group_by_cube_count))
+        .route("/api/v1/store/wal/select/distinct_on/count", get(wal_select_distinct_on_count))
+        .route("/api/v1/store/rows/select/distinct_on/count", get(rows_select_distinct_on_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -11332,6 +11348,50 @@ async fn rows_group_by_cube_count(
     Ok((StatusCode::OK, Json(RowsGroupByCubeCountResponse {
         status: "ok",
         group_by_cube_count,
+    })))
+}
+
+// S3-WS1-67: wal/select/distinct_on/count endpoint
+async fn wal_select_distinct_on_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalSelectDistinctOnCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_select_distinct_on_count");
+    let mut select_distinct_on_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains("SELECT DISTINCT ON (") {
+            select_distinct_on_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalSelectDistinctOnCountResponse {
+        status: "ok",
+        select_distinct_on_count,
+    })))
+}
+
+// S3-WS1-67: rows/select/distinct_on/count endpoint
+async fn rows_select_distinct_on_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsSelectDistinctOnCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_select_distinct_on_count");
+    let mut select_distinct_on_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains("SELECT DISTINCT ON (") {
+                select_distinct_on_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsSelectDistinctOnCountResponse {
+        status: "ok",
+        select_distinct_on_count,
     })))
 }
 
@@ -26585,6 +26645,48 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_group_by_cube_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-67: wal_select_distinct_on_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_67_wal_select_distinct_on_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_select_distinct_on_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.select_distinct_on_count, 0, "fresh WAL must have zero SELECT-DISTINCT-ON counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_67_wal_select_distinct_on_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_select_distinct_on_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-67: rows_select_distinct_on_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_67_rows_select_distinct_on_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_select_distinct_on_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.select_distinct_on_count, 0, "fresh rows must have zero SELECT-DISTINCT-ON counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_67_rows_select_distinct_on_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_select_distinct_on_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

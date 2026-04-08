@@ -533,6 +533,18 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `GroupByRollup { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.12 cost), and `plan_select()` (`has_group_by_rollup` outermost wrap after having-with-group-by). Tests: `planner_group_by_rollup_select_produces_group_by_rollup_node`, `cost_group_by_rollup_routes_to_olap_with_small_overhead`. Total: **154 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/group_by/rollup/count` and `GET /api/v1/store/rows/group_by/rollup/count` (operator-auth, GROUP-BY-ROLLUP usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_65_*`). Total: **589 passed**.
 
+### 9.2bf Session 90 Implementation Update (S3-WS1-66 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_group_by_cube: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `GROUP BY CUBE(...)` (S3-WS1-66). Tests: `group_by_cube_tests` module (3 tests). Total: **300 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `GroupByCube { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.15 cost), and `plan_select()` (`has_group_by_cube` outermost wrap after group-by-rollup). Tests: `planner_group_by_cube_select_produces_group_by_cube_node`, `cost_group_by_cube_routes_to_olap_with_small_overhead`. Total: **156 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/group_by/cube/count` and `GET /api/v1/store/rows/group_by/cube/count` (operator-auth, GROUP-BY-CUBE usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_66_*`). Total: **593 passed**.
+
+### 9.2bg Session 91 Implementation Update (S3-WS1-67 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_select_distinct_on: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `SELECT DISTINCT ON (...)` (PostgreSQL-style per-partition deduplication) (S3-WS1-67). Tests: `select_distinct_on_tests` module (3 tests). Total: **303 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `SelectDistinctOn { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.07 cost), and `plan_select()` (`has_select_distinct_on` outermost wrap after group-by-cube). Tests: `planner_select_distinct_on_produces_select_distinct_on_node`, `cost_select_distinct_on_routes_to_olap_with_small_overhead`. Total: **158 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/select/distinct_on/count` and `GET /api/v1/store/rows/select/distinct_on/count` (operator-auth, SELECT-DISTINCT-ON usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_67_*`). Total: **597 passed**.
+
 ### 9.2at Session 78 Implementation Update (S3-WS1-54 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_order_by_case_expression: bool` field to `SelectStatement` (ast.rs). Detects ORDER BY CASE expressions (for example `CASE ... END`) in SELECT/WITH queries (S3-WS1-54). Tests: `order_by_case_expression_tests` module (3 tests). Total: **264 passed**.

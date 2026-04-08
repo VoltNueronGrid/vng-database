@@ -362,6 +362,10 @@ pub enum LogicalPlan {
     GroupByCube {
         input: Box<LogicalPlan>,
     },
+    /// SELECT DISTINCT ON (...) deduplication wrapper (S3-WS1-67 has_select_distinct_on support).
+    SelectDistinctOn {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -442,6 +446,7 @@ impl LogicalPlan {
             LogicalPlan::HavingWithGroupBy { input } => input.primary_table(),
             LogicalPlan::GroupByRollup { input } => input.primary_table(),
             LogicalPlan::GroupByCube { input } => input.primary_table(),
+            LogicalPlan::SelectDistinctOn { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -538,6 +543,7 @@ impl LogicalPlan {
             LogicalPlan::HavingWithGroupBy { input } => input.has_aggregation(),
             LogicalPlan::GroupByRollup { input } => input.has_aggregation(),
             LogicalPlan::GroupByCube { input } => input.has_aggregation(),
+            LogicalPlan::SelectDistinctOn { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1167,6 +1173,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.15,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::SelectDistinctOn { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.07,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1899,12 +1913,21 @@ impl QueryPlanner {
         };
 
         // GroupByCube wrapper (S3-WS1-66 has_group_by_cube detection): outermost node.
-        if sel.has_group_by_cube {
+        let after_group_by_cube = if sel.has_group_by_cube {
             LogicalPlan::GroupByCube {
                 input: Box::new(after_group_by_rollup),
             }
         } else {
             after_group_by_rollup
+        };
+
+        // SelectDistinctOn wrapper (S3-WS1-67 has_select_distinct_on detection): outermost node.
+        if sel.has_select_distinct_on {
+            LogicalPlan::SelectDistinctOn {
+                input: Box::new(after_group_by_cube),
+            }
+        } else {
+            after_group_by_cube
         }
     }
 
@@ -3361,5 +3384,24 @@ mod tests {
         let c = cost("SELECT region, SUM(sales) FROM orders GROUP BY CUBE(region, category)");
         assert_eq!(c.recommended_path, QueryPath::Olap, "GROUP BY CUBE should route to OLAP");
         assert!(c.relative_cost >= 0.15, "GroupByCube must carry at least 0.15 cost overhead");
+    }
+
+    // ── S3-WS1-67: SelectDistinctOn node tests ─────────────────────────
+
+    #[test]
+    fn planner_select_distinct_on_produces_select_distinct_on_node() {
+        let p = plan("SELECT DISTINCT ON (region) region, name FROM employees");
+        assert!(
+            matches!(&p, LogicalPlan::SelectDistinctOn { .. }),
+            "SELECT DISTINCT ON must produce outermost SelectDistinctOn node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_select_distinct_on_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT DISTINCT ON (region) region, name FROM employees");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "SELECT DISTINCT ON should route to OLAP");
+        assert!(c.relative_cost >= 0.07, "SelectDistinctOn must carry at least 0.07 cost overhead");
     }
 }

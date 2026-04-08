@@ -896,6 +896,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 91 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 300→303, exec 156→158, service 593→597 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_select_distinct_on: bool` field + detection | `voltnuerongrid-sql` | Detects SELECT DISTINCT ON (...) usage (`S3-WS1-67`) | 3 (`select_distinct_on_tests` module) |
+| `SelectDistinctOn { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.07 cost overhead | 2 |
+| `GET /api/v1/store/wal/select/distinct_on/count` | `voltnuerongridd` | Count SELECT-DISTINCT-ON usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/select/distinct_on/count` | `voltnuerongridd` | Count SELECT-DISTINCT-ON usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 78 Implementation Log
 
 **Date:** 2026-04-08 (Sprint 9 continuation)

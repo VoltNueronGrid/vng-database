@@ -183,6 +183,8 @@ pub struct SelectStatement {
     pub has_group_by_rollup: bool,
     /// True when the query uses GROUP BY CUBE(...) (S3-WS1-66).
     pub has_group_by_cube: bool,
+    /// True when the query uses SELECT DISTINCT ON (...) (S3-WS1-67).
+    pub has_select_distinct_on: bool,
 }
 
 /// A parsed INSERT statement.
@@ -542,6 +544,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_group_by_cube(&up) {
                     stmt.has_group_by_cube = true;
                 }
+                if has_select_distinct_on(&up) {
+                    stmt.has_select_distinct_on = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -643,6 +648,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_group_by_cube(&up) {
                     stmt.has_group_by_cube = true;
+                }
+                if has_select_distinct_on(&up) {
+                    stmt.has_select_distinct_on = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3311,6 +3319,10 @@ fn has_group_by_cube(up: &str) -> bool {
     up.contains("GROUP BY CUBE(") || up.contains("GROUP BY CUBE (")
 }
 
+fn has_select_distinct_on(up: &str) -> bool {
+    up.contains("SELECT DISTINCT ON (")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -3788,6 +3800,43 @@ mod group_by_cube_tests {
         assert!(
             !s.has_group_by_cube,
             "Plain GROUP BY must keep has_group_by_cube = false"
+        );
+    }
+}
+
+// ─── S3-WS1-67: has_select_distinct_on tests ──────────────────────────────────
+
+#[cfg(test)]
+mod select_distinct_on_tests {
+    use super::*;
+
+    #[test]
+    fn select_distinct_on_sets_has_select_distinct_on() {
+        let stmt = parse_one("SELECT DISTINCT ON (region) region, name FROM employees").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_select_distinct_on,
+            "SELECT DISTINCT ON must set has_select_distinct_on = true"
+        );
+    }
+
+    #[test]
+    fn with_cte_select_distinct_on_sets_has_select_distinct_on() {
+        let stmt = parse_one("WITH t AS (SELECT region, name FROM employees) SELECT DISTINCT ON (region) region, name FROM t").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            s.has_select_distinct_on,
+            "WITH query SELECT DISTINCT ON must set has_select_distinct_on = true"
+        );
+    }
+
+    #[test]
+    fn select_without_distinct_on_keeps_has_select_distinct_on_false() {
+        let stmt = parse_one("SELECT DISTINCT region FROM employees").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(
+            !s.has_select_distinct_on,
+            "SELECT DISTINCT (without ON) must keep has_select_distinct_on = false"
         );
     }
 }
