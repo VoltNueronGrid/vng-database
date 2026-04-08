@@ -2848,6 +2848,22 @@ struct RowsKeyMedianResponse {
     median_key: String,
 }
 
+// S3-WS1-36: wal/validate + rows/checksum structs
+
+#[derive(Debug, Serialize)]
+struct WalValidateResponse {
+    status: &'static str,
+    valid: bool,
+    record_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsChecksumResponse {
+    status: &'static str,
+    checksum: u64,
+    row_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4259,6 +4275,9 @@ async fn main() {
         // S3-WS1-35: wal/delete/count + rows/key/median
         .route("/api/v1/store/wal/delete/count", get(wal_delete_count))
         .route("/api/v1/store/rows/key/median", get(rows_key_median))
+        // S3-WS1-36: wal/validate + rows/checksum
+        .route("/api/v1/store/wal/validate", get(wal_validate))
+        .route("/api/v1/store/rows/checksum", get(rows_checksum))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -9573,6 +9592,38 @@ async fn rows_key_median(
         String::new()
     };
     Ok((StatusCode::OK, Json(RowsKeyMedianResponse { status: "ok", has_key, median_key })))
+}
+
+// S3-WS1-36: wal/validate endpoint
+async fn wal_validate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalValidateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state.wal_engine.lock().expect("wal_engine lock wal_validate");
+    let records = wal.wal_records();
+    let valid = records.windows(2).all(|w| w[0].sequence <= w[1].sequence);
+    let record_count = records.len();
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalValidateResponse { status: "ok", valid, record_count })))
+}
+
+// S3-WS1-36: rows/checksum endpoint
+async fn rows_checksum(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsChecksumResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state.row_store.lock().expect("row_store lock rows_checksum");
+    let snapshot = rs.export_rows_snapshot();
+    drop(rs);
+    let mut keys: Vec<String> = snapshot.iter().map(|(k, _)| k.clone()).collect();
+    keys.sort();
+    let checksum = keys.iter().fold(0_u64, |acc, k| {
+        k.as_bytes().iter().fold(acc, |a, b| a.wrapping_add(*b as u64))
+    });
+    let row_count = snapshot.len();
+    Ok((StatusCode::OK, Json(RowsChecksumResponse { status: "ok", checksum, row_count })))
 }
 
 /// S7-WS6-01: Return accumulated vote grant/reject counts for the current Raft node.
@@ -23511,6 +23562,50 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_key_median(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-36: wal_validate tests
+
+    #[tokio::test]
+    async fn s11_ws1_36_wal_validate_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_validate(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert!(body.valid, "fresh WAL sequence ordering must be valid");
+        assert_eq!(body.record_count, 0, "fresh WAL must have zero records");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_36_wal_validate_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_validate(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-36: rows_checksum tests
+
+    #[tokio::test]
+    async fn s11_ws1_36_rows_checksum_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_checksum(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.row_count, 0, "fresh store must have zero rows");
+        assert_eq!(body.checksum, 0, "fresh store checksum must be zero");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_36_rows_checksum_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_checksum(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

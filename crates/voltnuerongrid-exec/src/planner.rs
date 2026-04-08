@@ -238,6 +238,10 @@ pub enum LogicalPlan {
     GroupingSets {
         input: Box<LogicalPlan>,
     },
+    /// NATURAL JOIN clause semantics wrapper (S3-WS1-36 has_natural_join support).
+    NaturalJoin {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -287,6 +291,7 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin { input } => input.primary_table(),
             LogicalPlan::FullTextSearch { input } => input.primary_table(),
             LogicalPlan::GroupingSets { input } => input.primary_table(),
+            LogicalPlan::NaturalJoin { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -352,6 +357,7 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin { input } => input.has_aggregation(),
             LogicalPlan::FullTextSearch { input } => input.has_aggregation(),
             LogicalPlan::GroupingSets { input } => input.has_aggregation(),
+            LogicalPlan::NaturalJoin { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -733,6 +739,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: (inner.estimated_rows as f64 * 1.5) as u64,
                     relative_cost: inner.relative_cost + 0.70,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::NaturalJoin { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.35,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -1189,13 +1203,22 @@ impl QueryPlanner {
             after_cross_join
         };
 
-        // GroupingSets wrapper (S3-WS1-35 has_grouping_sets detection): outermost node.
-        if sel.has_grouping_sets {
+        // GroupingSets wrapper (S3-WS1-35 has_grouping_sets detection).
+        let after_grouping_sets = if sel.has_grouping_sets {
             LogicalPlan::GroupingSets {
                 input: Box::new(after_full_text_search),
             }
         } else {
             after_full_text_search
+        };
+
+        // NaturalJoin wrapper (S3-WS1-36 has_natural_join detection): outermost node.
+        if sel.has_natural_join {
+            LogicalPlan::NaturalJoin {
+                input: Box::new(after_grouping_sets),
+            }
+        } else {
+            after_grouping_sets
         }
     }
 
@@ -2046,5 +2069,24 @@ mod tests {
         let c = cost("SELECT dept, role, COUNT(*) FROM staff GROUP BY GROUPING SETS ((dept), (role))");
         assert_eq!(c.recommended_path, QueryPath::Olap, "GROUPING SETS should route to OLAP");
         assert!(c.relative_cost >= 0.70, "GroupingSets must carry at least 0.70 cost overhead");
+    }
+
+    // ── S3-WS1-36: NaturalJoin node tests ────────────────────────────────────
+
+    #[test]
+    fn planner_natural_join_select_produces_natural_join_node() {
+        let p = plan("SELECT c.id, o.total FROM customers c NATURAL JOIN orders o");
+        assert!(
+            matches!(&p, LogicalPlan::NaturalJoin { .. }),
+            "NATURAL JOIN must produce outermost NaturalJoin node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_natural_join_routes_to_olap() {
+        let c = cost("SELECT p.id FROM products p NATURAL JOIN inventory i WHERE p.active = 1");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "NATURAL JOIN should route to OLAP");
+        assert!(c.relative_cost >= 0.35, "NaturalJoin must carry at least 0.35 cost overhead");
     }
 }

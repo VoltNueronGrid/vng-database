@@ -121,6 +121,8 @@ pub struct SelectStatement {
     pub has_full_text_search: bool,
     /// True when the query uses GROUPING SETS in GROUP BY (S3-WS1-35).
     pub has_grouping_sets: bool,
+    /// True when the query uses a NATURAL JOIN clause (S3-WS1-36).
+    pub has_natural_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -365,6 +367,10 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect GROUPING SETS construct in GROUP BY (S3-WS1-35).
                 if up.contains("GROUPING SETS") {
                     stmt.has_grouping_sets = true;
+                }
+                // Detect NATURAL JOIN clause (S3-WS1-36).
+                if up.contains("NATURAL JOIN") {
+                    stmt.has_natural_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -2341,5 +2347,33 @@ mod grouping_sets_tests {
         let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(!s.has_grouping_sets, "plain SELECT without GROUPING SETS must have has_grouping_sets = false");
+    }
+}
+
+// ─── S3-WS1-36: has_natural_join tests ──────────────────────────────────────
+
+#[cfg(test)]
+mod natural_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_natural_join_sets_has_natural_join() {
+        let stmt = parse_one("SELECT c.id, o.total FROM customers c NATURAL JOIN orders o").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_natural_join, "NATURAL JOIN must set has_natural_join = true");
+    }
+
+    #[test]
+    fn select_with_natural_join_and_filter_sets_has_natural_join() {
+        let stmt = parse_one("SELECT p.id FROM products p NATURAL JOIN inventory i WHERE p.active = 1").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_natural_join, "NATURAL JOIN with WHERE must set has_natural_join = true");
+    }
+
+    #[test]
+    fn plain_select_has_natural_join_is_false() {
+        let stmt = parse_one("SELECT id FROM orders WHERE amount > 50").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(!s.has_natural_join, "plain SELECT without NATURAL JOIN must have has_natural_join = false");
     }
 }
