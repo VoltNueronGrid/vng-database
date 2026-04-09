@@ -9,7 +9,7 @@
     "WS8A",
     "REQ-30"
   ],
-  "generated_at_utc": "2026-03-06T02:58:22.1150784Z",
+  "generated_at_utc": "2026-04-09T16:03:22.2212233Z",
   "sources": {
     "summary": "tests/kpi/results/ws8a/ws8a-gate-summary.json",
     "matrix": "tests/kpi/results/ws8a/ws8a-agent-authoring-matrix.json",

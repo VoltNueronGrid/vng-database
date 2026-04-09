@@ -6,7 +6,8 @@
     "action": "autonomous_action_authorize",
     "kind": "autonomous",
     "outcome": "allow",
-    "details_json": "{\"trace_id\":\"atrace-101\",\"action\":\"schema_change\",\"requested_scope\":\"database\",\"decision\":\"allow\",\"reason\":\"policy satisfied\"}"
+    "details_json": "{\"trace_id\":\"atrace-101\",\"action\":\"schema_change\",\"requested_scope\":\"database\",\"decision\":\"allow\",\"reason\":\"policy satisfied\"}",
+    "chain_hash": "cbf29ce484222325"
   },
   {
     "event_id": 2,
@@ -15,7 +16,8 @@
     "action": "autonomous_action_authorize",
     "kind": "autonomous",
     "outcome": "deny",
-    "details_json": "{\"trace_id\":\"atrace-102\",\"action\":\"plugin_install\",\"requested_scope\":\"cluster\",\"decision\":\"deny\",\"reason\":\"mode too low\"}"
+    "details_json": "{\"trace_id\":\"atrace-102\",\"action\":\"plugin_install\",\"requested_scope\":\"cluster\",\"decision\":\"deny\",\"reason\":\"mode too low\"}",
+    "chain_hash": "cbf29ce484222325"
   },
   {
     "event_id": 3,
@@ -24,6 +26,7 @@
     "action": "autonomous_emergency_stop",
     "kind": "security",
     "outcome": "ok",
-    "details_json": "{\"enabled\":true,\"reason\":\"manual\"}"
+    "details_json": "{\"enabled\":true,\"reason\":\"manual\"}",
+    "chain_hash": "cbf29ce484222325"
   }
 ]
