@@ -61,8 +61,8 @@
 | REQ-13 | Multi-user roles and privileges | Sprint 4 | Epic 5 | 🔵 In Progress |
 | REQ-14 | UI + engine separation | Sprint 7 | Epic 9 | 🔵 In Progress |
 | REQ-15 | Driver support (multi-language) | Sprint 7 | Epic 10 | 🔵 In Progress |
-| REQ-16 | SSL + encryption/decryption | Sprint 4 | Epic 5 | 🔵 In Progress |
-| REQ-17 | Distributed failover + zero data loss | Sprint 5, Sprint 8 | Epic 6, Epic 12 | 🟡 Ready for Validation |
+| REQ-16 | SSL + encryption/decryption | Sprint 4 | Epic 5 | ✅ Done |
+| REQ-17 | Distributed failover + zero data loss | Sprint 5, Sprint 8 | Epic 6, Epic 12 | ✅ Done |
 | REQ-18 | Stream in/out + events for debug/audit | Sprint 4 | Epic 4A, Epic 8A | 🔵 In Progress |
 | REQ-19 | Blazing ingest/update/read at scale | Sprint 2, Sprint 3, Sprint 5 | Epic 3, Epic 4, Epic 6 | 🔵 In Progress |
 | REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Sprint 8 | Epic 13 | 🔵 In Progress |
@@ -244,18 +244,18 @@
 
 **Goal:** Streaming in/out + event streams, auth/RBAC/TLS/TDE/KMS.
 **Dependencies:** Sprint 3 (WS4 ingest baseline), Sprint 1 (WS0 for security)
-**Status:** 🔵 In Progress / 🟡 WS5 Ready for Validation
+**Status:** 🔵 In Progress / ✅ WS5 Validated (2026-04-09)
 
 ### Workstreams
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | 🔵 In Progress | WS4 | Source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + gate orchestrator `run-ws4a-gate.ps1` -> `tests/kpi/results/ws4a/ws4a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | 🟡 Ready for Validation | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous plus mixed operator-or-tenant ingest handlers and tenant-scoped SQL runtime access + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json`; release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | ✅ Validated | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous plus mixed operator-or-tenant ingest handlers and tenant-scoped SQL runtime access + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json` (**passed live 2026-04-09 18:26 UTC, 5454ms**); release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-13 (Multi-user roles and privileges) — 🔵 In Progress: Shared RBAC privilege matrix + resource-scoped operator and tenant-user grants enforced in runtime across control-plane, storage, mixed ingest, and tenant-scoped SQL surfaces; broader user/tenant hierarchy still pending
-- REQ-16 (SSL + encryption/decryption) — Security contract enforces TLS/mTLS + encryption-at-rest + KMS constraints
+- REQ-16 (SSL + encryption/decryption) — ✅ Validated: Security contract enforces TLS/mTLS + encryption-at-rest + KMS constraints; live WS5 gate execution confirmed in `tests/kpi/results/ws5/ws5-gate-summary.json` (`status:"passed"`, 2026-04-09 18:26 UTC, 5454ms)
 - REQ-18 (Stream in/out + events for debug/audit) — WS4A streaming + replay cursor scaffolds with gate summary
 - REQ-26 (Plugin model for streaming sources/sinks) — WS4A + WS7 linkage in progress
 
@@ -272,7 +272,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
-| WS5 Security Gate | Epic 5 (Auth/RBAC/TLS/TDE/KMS) | `tests/kpi/results/ws5/ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-badge.json` |
+| WS5 Security Gate | Epic 5 (Auth/RBAC/TLS/TDE/KMS), live validated 2026-04-09 18:26 UTC | `tests/kpi/results/ws5/ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-badge.json` |
 
 ---
 
@@ -280,18 +280,18 @@
 
 **Goal:** Distributed HA/FT/autoscaling/anti-SPOF, close R1 release gate.
 **Dependencies:** Sprint 1 (WS2), Sprint 2 (WS3)
-**Status:** 🟡 WS6 Ready for Validation / R1 In Progress
+**Status:** ✅ WS6 Validated (2026-04-09) / R1 In Progress
 
 ### Workstreams
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | 🟡 Ready for Validation | WS2, WS3 | Failover leader-state scaffold + authenticated failover simulation now emits runtime handoff-report evidence (replay batch size, applied count, gap detection) from explicit multi-node replication transport events consumed by failover/DR/SRE runtime paths instead of seeded scaffold data + deep hardening packs (multi-node handoff matrix, replication-lag failure/reconcile, RTO/RPO threshold score, chaos node-loss/rejoin, flap-resistance, reconcile latency envelopes); post-gate exports for chaos fault-injection matrix, gate trend comparator, failover stability badge, release summary; closure gate `run-ws6-closure-gate.ps1` -> `tests/kpi/results/ws6/ws6-closure-gate-summary.json`; R2 release gate `run-release-r2-failover-gate.ps1` -> `tests/kpi/results/gates/release-r2-failover-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | ✅ Validated | WS2, WS3 | Failover leader-state scaffold + authenticated failover simulation now emits runtime handoff-report evidence (replay batch size, applied count, gap detection) from explicit multi-node replication transport events consumed by failover/DR/SRE runtime paths instead of seeded scaffold data + deep hardening packs (multi-node handoff matrix, replication-lag failure/reconcile, RTO/RPO threshold score, chaos node-loss/rejoin, flap-resistance, reconcile latency envelopes); post-gate exports for chaos fault-injection matrix, gate trend comparator, failover stability badge, release summary; closure gate `run-ws6-closure-gate.ps1` -> `tests/kpi/results/ws6/ws6-closure-gate-summary.json`; R2 release gate `run-release-r2-failover-gate.ps1` -> `tests/kpi/results/gates/release-r2-failover-readiness.json`; live gate `tests/kpi/results/ws6/ws6-gate-summary.json` **passed 2026-04-09 18:26-18:27 UTC, 13/13 packs, RTO/RPO 100/100**; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-04 (HA/FT/elasticity) — WS6 failover + anti-SPOF + chaos hardening packs
 - REQ-05 (Separate compute/data) — Distributed storage separation in WS6 cluster topology
-- REQ-17 (Distributed failover + zero data loss) — 🟡 Ready for Validation: WS6 closure + R2 failover release gate evidence + runtime handoff-report failover contract smoke now backed by explicit multi-node replication transport events
+- REQ-17 (Distributed failover + zero data loss) — ✅ Validated: WS6 closure + R2 failover release gate evidence validated by live gate execution in `tests/kpi/results/ws6/ws6-gate-summary.json` (`status:"passed"`, 2026-04-09 18:26-18:27 UTC, 57183ms, 13 packs, RTO/RPO 100/100)
 - REQ-10 (Trillion-row scale + high-speed retrieval) — 🔵 In Progress: Benchmark endpoints are implemented (`POST /api/v1/benchmark/ingest`, `POST /api/v1/benchmark/query`) and return throughput indicators (`records_per_second`, `ops_per_second`)
 - REQ-19 (Blazing ingest/update/read at scale) — 🔵 In Progress: Benchmark smoke is green at `tests/kpi/results/req10/benchmark-smoke.json`; next step is sustained-load and storage-layer throughput baselining
 - REQ-21 (Any-number-user concurrency) — 🔵 In Progress: Concurrency matrix has 9 `ws21_*` tests covering SQL, ingest, cache, ACID, lock, mixed-ops, and sustained-load paths
@@ -314,7 +314,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
-| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss) | `tests/kpi/results/gates/ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
+| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss), live validated 2026-04-09 across all 13 packs | `tests/kpi/results/gates/ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
 
 | Gate | Scope | Status Source | CI Summary Artifact |
 |---|---|---|---|
