@@ -209,6 +209,8 @@ pub struct SelectStatement {
     pub has_apply: bool,
     /// True when the query uses LEFT SEMI JOIN (S3-WS1-79).
     pub has_left_semi_join: bool,
+    /// True when the query uses LEFT ANTI JOIN (S3-WS1-80).
+    pub has_left_anti_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -607,6 +609,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_left_semi_join(&up) {
                     stmt.has_left_semi_join = true;
                 }
+                if has_left_anti_join(&up) {
+                    stmt.has_left_anti_join = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -747,6 +752,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_left_semi_join(&up) {
                     stmt.has_left_semi_join = true;
+                }
+                if has_left_anti_join(&up) {
+                    stmt.has_left_anti_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3467,6 +3475,10 @@ fn has_left_semi_join(up: &str) -> bool {
     up.contains(" LEFT SEMI JOIN ")
 }
 
+fn has_left_anti_join(up: &str) -> bool {
+    up.contains(" LEFT ANTI JOIN ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4519,6 +4531,55 @@ mod left_semi_join_tests {
         assert!(
             !s.has_left_semi_join,
             "SELECT without LEFT SEMI JOIN must keep has_left_semi_join = false"
+        );
+    }
+}
+
+// ─── S3-WS1-80: has_left_anti_join tests ───────────────────────────────────
+
+#[cfg(test)]
+mod left_anti_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_left_anti_join_sets_has_left_anti_join() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u LEFT ANTI JOIN orders o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_left_anti_join,
+            "SELECT ... LEFT ANTI JOIN must set has_left_anti_join = true"
+        );
+    }
+
+    #[test]
+    fn select_anti_join_keeps_has_left_anti_join_false() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u ANTI JOIN orders o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_left_anti_join,
+            "ANTI JOIN must keep has_left_anti_join = false"
+        );
+    }
+
+    #[test]
+    fn select_without_left_anti_join_keeps_has_left_anti_join_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_left_anti_join,
+            "SELECT without LEFT ANTI JOIN must keep has_left_anti_join = false"
         );
     }
 }

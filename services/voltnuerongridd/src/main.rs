@@ -3476,6 +3476,20 @@ struct RowsLeftSemiJoinCountResponse {
     left_semi_join_count: usize,
 }
 
+// S3-WS1-80: wal/left/anti/join/count + rows/left/anti/join/count structs
+
+#[derive(Debug, Serialize)]
+struct WalLeftAntiJoinCountResponse {
+    status: &'static str,
+    left_anti_join_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsLeftAntiJoinCountResponse {
+    status: &'static str,
+    left_anti_join_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4994,6 +5008,8 @@ async fn main() {
         .route("/api/v1/store/rows/apply/count", get(rows_apply_count))
         .route("/api/v1/store/wal/left/semi/join/count", get(wal_left_semi_join_count))
         .route("/api/v1/store/rows/left/semi/join/count", get(rows_left_semi_join_count))
+        .route("/api/v1/store/wal/left/anti/join/count", get(wal_left_anti_join_count))
+        .route("/api/v1/store/rows/left/anti/join/count", get(rows_left_anti_join_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -12166,6 +12182,56 @@ async fn rows_left_semi_join_count(
     Ok((StatusCode::OK, Json(RowsLeftSemiJoinCountResponse {
         status: "ok",
         left_semi_join_count,
+    })))
+}
+
+// S3-WS1-80: wal/left/anti/join/count endpoint
+async fn wal_left_anti_join_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalLeftAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state
+        .wal_engine
+        .lock()
+        .expect("wal_engine lock wal_left_anti_join_count");
+    let mut left_anti_join_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains(" LEFT ANTI JOIN ") {
+            left_anti_join_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalLeftAntiJoinCountResponse {
+        status: "ok",
+        left_anti_join_count,
+    })))
+}
+
+// S3-WS1-80: rows/left/anti/join/count endpoint
+async fn rows_left_anti_join_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsLeftAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state
+        .row_store
+        .lock()
+        .expect("row_store lock rows_left_anti_join_count");
+    let mut left_anti_join_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains(" LEFT ANTI JOIN ") {
+                left_anti_join_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsLeftAntiJoinCountResponse {
+        status: "ok",
+        left_anti_join_count,
     })))
 }
 
@@ -28025,6 +28091,56 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_left_semi_join_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-80: wal_left_anti_join_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_80_wal_left_anti_join_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_left_anti_join_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.left_anti_join_count,
+            0,
+            "fresh WAL must have zero LEFT ANTI JOIN counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_80_wal_left_anti_join_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_left_anti_join_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-80: rows_left_anti_join_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_80_rows_left_anti_join_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_left_anti_join_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.left_anti_join_count,
+            0,
+            "fresh rows must have zero LEFT ANTI JOIN counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_80_rows_left_anti_join_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_left_anti_join_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
