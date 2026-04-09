@@ -442,6 +442,10 @@ pub enum LogicalPlan {
     AggregateDistinct {
         input: Box<LogicalPlan>,
     },
+    /// Table alias semantics wrapper (S3-WS1-87 has_table_alias support).
+    TableAlias {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -542,6 +546,7 @@ impl LogicalPlan {
             LogicalPlan::FullAntiJoin { input } => input.primary_table(),
             LogicalPlan::UnionAll { input } => input.primary_table(),
             LogicalPlan::AggregateDistinct { input } => input.primary_table(),
+            LogicalPlan::TableAlias { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -658,6 +663,7 @@ impl LogicalPlan {
             LogicalPlan::FullAntiJoin { input } => input.has_aggregation(),
             LogicalPlan::UnionAll { input } => input.has_aggregation(),
             LogicalPlan::AggregateDistinct { input } => input.has_aggregation(),
+            LogicalPlan::TableAlias { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1447,6 +1453,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.17,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::TableAlias { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.04,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -2359,12 +2373,21 @@ impl QueryPlanner {
         };
 
         // AggregateDistinct wrapper (S3-WS1-86 has_aggregate_distinct detection): outermost node.
-        if sel.has_aggregate_distinct {
+        let after_aggregate_distinct = if sel.has_aggregate_distinct {
             LogicalPlan::AggregateDistinct {
                 input: Box::new(after_union_all),
             }
         } else {
             after_union_all
+        };
+
+        // TableAlias wrapper (S3-WS1-87 has_table_alias detection): outermost node.
+        if sel.has_table_alias {
+            LogicalPlan::TableAlias {
+                input: Box::new(after_aggregate_distinct),
+            }
+        } else {
+            after_aggregate_distinct
         }
     }
 
@@ -4211,5 +4234,24 @@ mod tests {
         let c = cost("SELECT COUNT(DISTINCT user_id) FROM events");
         assert_eq!(c.recommended_path, QueryPath::Olap, "aggregate DISTINCT should route to OLAP");
         assert!(c.relative_cost >= 0.17, "AggregateDistinct must carry at least 0.17 cost overhead");
+    }
+
+    // ── S3-WS1-87: TableAlias wrapper tests ──────────────────────────────
+
+    #[test]
+    fn planner_table_alias_produces_table_alias_node() {
+        let p = plan("SELECT u.id FROM users AS u");
+        assert!(
+            matches!(&p, LogicalPlan::TableAlias { .. }),
+            "FROM ... AS alias must produce outermost TableAlias node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_table_alias_routes_to_olap_with_small_overhead() {
+        let c = cost("SELECT u.id FROM users AS u");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "table alias should route to OLAP");
+        assert!(c.relative_cost >= 0.04, "TableAlias must carry at least 0.04 cost overhead");
     }
 }

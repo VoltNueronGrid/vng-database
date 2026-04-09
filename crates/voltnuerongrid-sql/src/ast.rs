@@ -63,6 +63,8 @@ pub struct SelectStatement {
     pub has_null_literal: bool,
     /// True when the query contains a GROUP BY clause (S3-WS1-06).
     pub has_group_by: bool,
+    /// True when the query uses explicit table aliases with AS in FROM/JOIN clauses (S3-WS1-87).
+    pub has_table_alias: bool,
     /// True when the query contains an ORDER BY clause (S3-WS1-06).
     pub has_order_by: bool,
     /// True when the query contains a HAVING clause (S3-WS1-06).
@@ -345,6 +347,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 // Detect GROUP BY clause (S3-WS1-06).
                 if up.contains("GROUP BY") {
                     stmt.has_group_by = true;
+                }
+                if has_table_alias(&up) {
+                    stmt.has_table_alias = true;
                 }
                 // Detect ORDER BY clause (S3-WS1-06).
                 if up.contains("ORDER BY") {
@@ -672,6 +677,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if up.contains("GROUP BY") {
                     stmt.has_group_by = true;
+                }
+                if has_table_alias(&up) {
+                    stmt.has_table_alias = true;
                 }
                 if up.contains("HAVING") {
                     stmt.has_having = true;
@@ -4948,6 +4956,79 @@ mod aggregate_distinct_tests {
         assert!(
             !s.has_aggregate_distinct,
             "COUNT(...) without DISTINCT must keep has_aggregate_distinct = false"
+        );
+    }
+}
+
+fn has_table_alias(up: &str) -> bool {
+    has_alias_after_anchor(up, " FROM ", true) || has_alias_after_anchor(up, " JOIN ", false)
+}
+
+fn has_alias_after_anchor(up: &str, anchor: &str, stop_at_join: bool) -> bool {
+    let mut scan_from = 0usize;
+    while let Some(rel_pos) = up[scan_from..].find(anchor) {
+        let start = scan_from + rel_pos + anchor.len();
+        let tail = &up[start..];
+        let mut stops = vec![" ON ", " WHERE ", " GROUP BY ", " HAVING ", " ORDER BY ", " LIMIT ", " OFFSET ", " UNION "];
+        if stop_at_join {
+            stops.push(" JOIN ");
+        }
+        let end = stops
+            .iter()
+            .filter_map(|kw| tail.find(kw))
+            .min()
+            .unwrap_or(tail.len());
+        let source_seg = &tail[..end];
+        if source_seg.contains(" AS ") && !source_seg.contains(" AS (") {
+            return true;
+        }
+        scan_from = start;
+    }
+    false
+}
+
+// ─── S3-WS1-87: has_table_alias tests ───────────────────────────────────────
+
+#[cfg(test)]
+mod table_alias_tests {
+    use super::*;
+
+    #[test]
+    fn select_from_alias_sets_has_table_alias() {
+        let stmt = parse_one("SELECT u.id FROM users AS u WHERE u.id > 0").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_table_alias,
+            "FROM ... AS alias must set has_table_alias = true"
+        );
+    }
+
+    #[test]
+    fn select_join_alias_sets_has_table_alias() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u JOIN orders AS o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_table_alias,
+            "JOIN ... AS alias must set has_table_alias = true"
+        );
+    }
+
+    #[test]
+    fn select_without_alias_keeps_has_table_alias_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_table_alias,
+            "SELECT without table aliases must keep has_table_alias = false"
         );
     }
 }

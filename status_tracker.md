@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-09 (session 110)
+**Last updated:** 2026-04-09 (session 111)
 
 ---
 
@@ -616,6 +616,12 @@ A tracker row moves to **Done** only when:
 - **SQL (`voltnuerongrid-sql`)**: Added `has_full_semi_join: bool` field to `SelectStatement` (ast.rs). Detects explicit `FULL SEMI JOIN` clauses in SELECT/WITH queries (S3-WS1-83). Tests: `full_semi_join_tests` module (3 tests). Total: **351 passed**.
 - **Exec (`voltnuerongrid-exec`)**: Added `FullSemiJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.14 cost), and `plan_select()` (`has_full_semi_join` outermost wrap after right-anti-join handling). Tests: `planner_full_semi_join_produces_full_semi_join_node`, `cost_full_semi_join_routes_to_olap_with_overhead`. Total: **190 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/full/semi/join/count` and `GET /api/v1/store/rows/full/semi/join/count` (operator-auth, explicit FULL-SEMI-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_83_*`). Total: **661 passed**.
+
+### 9.2ca Session 111 Implementation Update (S3-WS1-87 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_table_alias: bool` field to `SelectStatement` (ast.rs). Detects explicit table aliases using `AS` in FROM/JOIN clauses for SELECT/WITH queries (S3-WS1-87). Tests: `table_alias_tests` module (3 tests). Total: **363 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `TableAlias { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.04 cost), and `plan_select()` (`has_table_alias` outermost wrap after aggregate-distinct handling). Tests: `planner_table_alias_produces_table_alias_node`, `cost_table_alias_routes_to_olap_with_small_overhead`. Total: **198 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/table/alias/count` and `GET /api/v1/store/rows/table/alias/count` (operator-auth, table-alias usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_87_*`). Total: **677 passed**.
 
 ### 9.2bz Session 110 Implementation Update (S3-WS1-86 + service endpoints)
 

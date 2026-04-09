@@ -3574,6 +3574,47 @@ struct RowsAggregateDistinctCountResponse {
     aggregate_distinct_count: usize,
 }
 
+// S3-WS1-87: wal/table/alias/count + rows/table/alias/count structs
+
+#[derive(Debug, Serialize)]
+struct WalTableAliasCountResponse {
+    status: &'static str,
+    table_alias_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsTableAliasCountResponse {
+    status: &'static str,
+    table_alias_count: usize,
+}
+
+fn contains_table_alias_sql(up: &str) -> bool {
+    contains_alias_after_anchor(up, " FROM ", true) || contains_alias_after_anchor(up, " JOIN ", false)
+}
+
+fn contains_alias_after_anchor(up: &str, anchor: &str, stop_at_join: bool) -> bool {
+    let mut scan_from = 0usize;
+    while let Some(rel_pos) = up[scan_from..].find(anchor) {
+        let start = scan_from + rel_pos + anchor.len();
+        let tail = &up[start..];
+        let mut stops = vec![" ON ", " WHERE ", " GROUP BY ", " HAVING ", " ORDER BY ", " LIMIT ", " OFFSET ", " UNION "];
+        if stop_at_join {
+            stops.push(" JOIN ");
+        }
+        let end = stops
+            .iter()
+            .filter_map(|kw| tail.find(kw))
+            .min()
+            .unwrap_or(tail.len());
+        let source_seg = &tail[..end];
+        if source_seg.contains(" AS ") && !source_seg.contains(" AS (") {
+            return true;
+        }
+        scan_from = start;
+    }
+    false
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -5106,6 +5147,8 @@ async fn main() {
         .route("/api/v1/store/rows/union/all/count", get(rows_union_all_count))
         .route("/api/v1/store/wal/aggregate/distinct/count", get(wal_aggregate_distinct_count))
         .route("/api/v1/store/rows/aggregate/distinct/count", get(rows_aggregate_distinct_count))
+        .route("/api/v1/store/wal/table/alias/count", get(wal_table_alias_count))
+        .route("/api/v1/store/rows/table/alias/count", get(rows_table_alias_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -12638,6 +12681,56 @@ async fn rows_aggregate_distinct_count(
     Ok((StatusCode::OK, Json(RowsAggregateDistinctCountResponse {
         status: "ok",
         aggregate_distinct_count,
+    })))
+}
+
+// S3-WS1-87: wal/table/alias/count endpoint
+async fn wal_table_alias_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalTableAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state
+        .wal_engine
+        .lock()
+        .expect("wal_engine lock wal_table_alias_count");
+    let mut table_alias_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if contains_table_alias_sql(&value_up) {
+            table_alias_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalTableAliasCountResponse {
+        status: "ok",
+        table_alias_count,
+    })))
+}
+
+// S3-WS1-87: rows/table/alias/count endpoint
+async fn rows_table_alias_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsTableAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state
+        .row_store
+        .lock()
+        .expect("row_store lock rows_table_alias_count");
+    let mut table_alias_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if contains_table_alias_sql(&value_up) {
+                table_alias_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsTableAliasCountResponse {
+        status: "ok",
+        table_alias_count,
     })))
 }
 
@@ -28847,6 +28940,56 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_aggregate_distinct_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-87: wal_table_alias_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_87_wal_table_alias_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_table_alias_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.table_alias_count,
+            0,
+            "fresh WAL must have zero table-alias counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_87_wal_table_alias_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_table_alias_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-87: rows_table_alias_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_87_rows_table_alias_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_table_alias_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.table_alias_count,
+            0,
+            "fresh rows must have zero table-alias counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_87_rows_table_alias_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_table_alias_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

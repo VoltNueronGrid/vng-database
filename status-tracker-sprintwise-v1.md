@@ -1687,6 +1687,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 111 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline -> New:** sql 360->363, exec 196->198, service 673->677 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_table_alias: bool` field + detection | `voltnuerongrid-sql` | Detects explicit table aliases using `AS` in FROM/JOIN clauses for SELECT/WITH queries (`S3-WS1-87`) | 3 (`table_alias_tests` module) |
+| `TableAlias { input }` plan node | `voltnuerongrid-exec` | OLAP-routed table-alias wrapper in `LogicalPlan`; +0.04 cost overhead | 2 |
+| `GET /api/v1/store/wal/table/alias/count` | `voltnuerongridd` | Counts table-alias usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/table/alias/count` | `voltnuerongridd` | Counts table-alias usage in row snapshot values (operator-auth) | 2 |
+
+---
+
 ## Session 110 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
