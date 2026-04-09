@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-14 (session 20)
+**Last updated:** 2026-04-09 (session 101)
 
 ---
 
@@ -1586,6 +1586,20 @@ Release Gate Impact: <none|medium|high>
 | `CrossApply { input }` plan node | `voltnuerongrid-exec` | OLAP-routed cross apply wrapper in `LogicalPlan`; +0.12 cost overhead | 2 |
 | `GET /api/v1/store/wal/cross/apply/count` | `voltnuerongridd` | Counts explicit CROSS APPLY usage in WAL records (operator-auth) | 2 |
 | `GET /api/v1/store/rows/cross/apply/count` | `voltnuerongridd` | Counts explicit CROSS APPLY usage in row snapshot values (operator-auth) | 2 |
+
+---
+
+## Session 101 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 330→333, exec 176→178, service 633→637 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_outer_apply: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `OUTER APPLY` in SELECT/WITH queries (`S3-WS1-77`) | 3 (`outer_apply_tests` module) |
+| `OuterApply { input }` plan node | `voltnuerongrid-exec` | OLAP-routed outer apply wrapper in `LogicalPlan`; +0.13 cost overhead | 2 |
+| `GET /api/v1/store/wal/outer/apply/count` | `voltnuerongridd` | Counts explicit OUTER APPLY usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/outer/apply/count` | `voltnuerongridd` | Counts explicit OUTER APPLY usage in row snapshot values (operator-auth) | 2 |
 
 ---
 

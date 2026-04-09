@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-14 (session 26)
+**Last updated:** 2026-04-09 (session 101)
 
 ---
 
@@ -574,6 +574,12 @@ A tracker row moves to **Done** only when:
 - **SQL (`voltnuerongrid-sql`)**: Added `has_cross_apply: bool` field to `SelectStatement` (ast.rs). Detects explicit `CROSS APPLY` clauses in SELECT/WITH queries (S3-WS1-76). Tests: `cross_apply_tests` module (3 tests). Total: **330 passed**.
 - **Exec (`voltnuerongrid-exec`)**: Added `CrossApply { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.12 cost), and `plan_select()` (`has_cross_apply` outermost wrap after anti-join handling). Tests: `planner_cross_apply_produces_cross_apply_node`, `cost_cross_apply_routes_to_olap_with_overhead`. Total: **176 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/cross/apply/count` and `GET /api/v1/store/rows/cross/apply/count` (operator-auth, explicit CROSS-APPLY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_76_*`). Total: **633 passed**.
+
+### 9.2bq Session 101 Implementation Update (S3-WS1-77 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_outer_apply: bool` field to `SelectStatement` (ast.rs). Detects explicit `OUTER APPLY` clauses in SELECT/WITH queries (S3-WS1-77). Tests: `outer_apply_tests` module (3 tests). Total: **333 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `OuterApply { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.13 cost), and `plan_select()` (`has_outer_apply` outermost wrap after cross-apply handling). Tests: `planner_outer_apply_produces_outer_apply_node`, `cost_outer_apply_routes_to_olap_with_overhead`. Total: **178 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/outer/apply/count` and `GET /api/v1/store/rows/outer/apply/count` (operator-auth, explicit OUTER-APPLY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_77_*`). Total: **637 passed**.
 
 ### 9.2bj Session 94 Implementation Update (S3-WS1-70 + service endpoints)
 

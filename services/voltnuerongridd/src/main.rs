@@ -3434,6 +3434,20 @@ struct RowsCrossApplyCountResponse {
     cross_apply_count: usize,
 }
 
+// S3-WS1-77: wal/outer/apply/count + rows/outer/apply/count structs
+
+#[derive(Debug, Serialize)]
+struct WalOuterApplyCountResponse {
+    status: &'static str,
+    outer_apply_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsOuterApplyCountResponse {
+    status: &'static str,
+    outer_apply_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4946,6 +4960,8 @@ async fn main() {
         .route("/api/v1/store/rows/anti/join/count", get(rows_anti_join_count))
         .route("/api/v1/store/wal/cross/apply/count", get(wal_cross_apply_count))
         .route("/api/v1/store/rows/cross/apply/count", get(rows_cross_apply_count))
+        .route("/api/v1/store/wal/outer/apply/count", get(wal_outer_apply_count))
+        .route("/api/v1/store/rows/outer/apply/count", get(rows_outer_apply_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -11968,6 +11984,56 @@ async fn rows_cross_apply_count(
     Ok((StatusCode::OK, Json(RowsCrossApplyCountResponse {
         status: "ok",
         cross_apply_count,
+    })))
+}
+
+// S3-WS1-77: wal/outer/apply/count endpoint
+async fn wal_outer_apply_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalOuterApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state
+        .wal_engine
+        .lock()
+        .expect("wal_engine lock wal_outer_apply_count");
+    let mut outer_apply_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains(" OUTER APPLY ") {
+            outer_apply_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalOuterApplyCountResponse {
+        status: "ok",
+        outer_apply_count,
+    })))
+}
+
+// S3-WS1-77: rows/outer/apply/count endpoint
+async fn rows_outer_apply_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsOuterApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state
+        .row_store
+        .lock()
+        .expect("row_store lock rows_outer_apply_count");
+    let mut outer_apply_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains(" OUTER APPLY ") {
+                outer_apply_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsOuterApplyCountResponse {
+        status: "ok",
+        outer_apply_count,
     })))
 }
 
@@ -27685,6 +27751,56 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_cross_apply_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-77: wal_outer_apply_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_77_wal_outer_apply_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_outer_apply_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.outer_apply_count,
+            0,
+            "fresh WAL must have zero OUTER APPLY counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_77_wal_outer_apply_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_outer_apply_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-77: rows_outer_apply_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_77_rows_outer_apply_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_outer_apply_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.outer_apply_count,
+            0,
+            "fresh rows must have zero OUTER APPLY counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_77_rows_outer_apply_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_outer_apply_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
