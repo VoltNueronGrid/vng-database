@@ -551,6 +551,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `InnerJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.11 cost), and `plan_select()` (`has_inner_join` outermost wrap after full-outer join handling). Tests: `planner_inner_join_produces_inner_join_node`, `cost_inner_join_routes_to_olap_with_overhead`. Total: **168 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/inner/join/count` and `GET /api/v1/store/rows/inner/join/count` (operator-auth, explicit INNER-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_72_*`). Total: **617 passed**.
 
+### 9.2bm Session 97 Implementation Update (S3-WS1-73 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_straight_join: bool` field to `SelectStatement` (ast.rs). Detects explicit `STRAIGHT_JOIN` clauses in SELECT/WITH queries (S3-WS1-73). Tests: `straight_join_tests` module (3 tests). Total: **321 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `StraightJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.09 cost), and `plan_select()` (`has_straight_join` outermost wrap after inner-join handling). Tests: `planner_straight_join_produces_straight_join_node`, `cost_straight_join_routes_to_olap_with_overhead`. Total: **170 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/straight/join/count` and `GET /api/v1/store/rows/straight/join/count` (operator-auth, explicit STRAIGHT_JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_73_*`). Total: **621 passed**.
+
 ### 9.2bj Session 94 Implementation Update (S3-WS1-70 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_right_join: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `RIGHT JOIN` or `RIGHT OUTER JOIN` clauses (S3-WS1-70). Tests: `right_join_tests` module (3 tests). Total: **312 passed**.

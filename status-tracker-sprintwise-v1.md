@@ -1533,6 +1533,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 97 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 318→321, exec 168→170, service 617→621 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_straight_join: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `STRAIGHT_JOIN` in SELECT/WITH queries (`S3-WS1-73`) | 3 (`straight_join_tests` module) |
+| `StraightJoin { input }` plan node | `voltnuerongrid-exec` | OLAP-routed straight join wrapper in `LogicalPlan`; +0.09 cost overhead | 2 |
+| `GET /api/v1/store/wal/straight/join/count` | `voltnuerongridd` | Counts explicit STRAIGHT_JOIN usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/straight/join/count` | `voltnuerongridd` | Counts explicit STRAIGHT_JOIN usage in row snapshot values (operator-auth) | 2 |
+
+---
+
 ## Definition of Done (Tracker)
 
 A tracker row moves to **Done** only when:

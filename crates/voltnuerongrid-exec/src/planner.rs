@@ -386,6 +386,10 @@ pub enum LogicalPlan {
     InnerJoin {
         input: Box<LogicalPlan>,
     },
+    /// STRAIGHT_JOIN wrapper (S3-WS1-73 has_straight_join support).
+    StraightJoin {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -472,6 +476,7 @@ impl LogicalPlan {
             LogicalPlan::RightJoin { input } => input.primary_table(),
             LogicalPlan::FullOuterJoin { input } => input.primary_table(),
             LogicalPlan::InnerJoin { input } => input.primary_table(),
+            LogicalPlan::StraightJoin { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -574,6 +579,7 @@ impl LogicalPlan {
             LogicalPlan::RightJoin { input } => input.has_aggregation(),
             LogicalPlan::FullOuterJoin { input } => input.has_aggregation(),
             LogicalPlan::InnerJoin { input } => input.has_aggregation(),
+            LogicalPlan::StraightJoin { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1251,6 +1257,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.11,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::StraightJoin { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.09,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -2037,12 +2051,21 @@ impl QueryPlanner {
         };
 
         // InnerJoin wrapper (S3-WS1-72 has_inner_join detection): outermost node.
-        if sel.has_inner_join {
+        let after_inner_join = if sel.has_inner_join {
             LogicalPlan::InnerJoin {
                 input: Box::new(after_full_outer_join),
             }
         } else {
             after_full_outer_join
+        };
+
+        // StraightJoin wrapper (S3-WS1-73 has_straight_join detection): outermost node.
+        if sel.has_straight_join {
+            LogicalPlan::StraightJoin {
+                input: Box::new(after_inner_join),
+            }
+        } else {
+            after_inner_join
         }
     }
 
@@ -3613,5 +3636,24 @@ mod tests {
         let c = cost("SELECT u.id, o.total FROM users u INNER JOIN orders o ON o.user_id = u.id");
         assert_eq!(c.recommended_path, QueryPath::Olap, "INNER JOIN should route to OLAP");
         assert!(c.relative_cost >= 0.11, "InnerJoin must carry at least 0.11 cost overhead");
+    }
+
+    // ── S3-WS1-73: StraightJoin node tests ──────────────────────
+
+    #[test]
+    fn planner_straight_join_produces_straight_join_node() {
+        let p = plan("SELECT u.id, o.total FROM users u STRAIGHT_JOIN orders o ON o.user_id = u.id");
+        assert!(
+            matches!(&p, LogicalPlan::StraightJoin { .. }),
+            "SELECT ... STRAIGHT_JOIN must produce outermost StraightJoin node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_straight_join_routes_to_olap_with_overhead() {
+        let c = cost("SELECT u.id, o.total FROM users u STRAIGHT_JOIN orders o ON o.user_id = u.id");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "STRAIGHT_JOIN should route to OLAP");
+        assert!(c.relative_cost >= 0.09, "StraightJoin must carry at least 0.09 cost overhead");
     }
 }

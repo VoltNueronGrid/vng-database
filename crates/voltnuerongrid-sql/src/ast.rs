@@ -195,6 +195,8 @@ pub struct SelectStatement {
     pub has_full_outer_join: bool,
     /// True when the query uses INNER JOIN or bare JOIN (S3-WS1-72).
     pub has_inner_join: bool,
+    /// True when the query uses STRAIGHT_JOIN (S3-WS1-73).
+    pub has_straight_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -572,6 +574,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_inner_join(&up) {
                     stmt.has_inner_join = true;
                 }
+                if has_straight_join(&up) {
+                    stmt.has_straight_join = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -691,6 +696,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_inner_join(&up) {
                     stmt.has_inner_join = true;
+                }
+                if has_straight_join(&up) {
+                    stmt.has_straight_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3383,6 +3391,10 @@ fn has_inner_join(up: &str) -> bool {
     up.contains(" INNER JOIN ")
 }
 
+fn has_straight_join(up: &str) -> bool {
+    up.contains(" STRAIGHT_JOIN ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4093,6 +4105,54 @@ mod inner_join_tests {
         assert!(
             !s.has_inner_join,
             "LEFT JOIN must keep has_inner_join = false"
+        );
+    }
+}
+
+// ─── S3-WS1-73: has_straight_join tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod straight_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_straight_join_sets_has_straight_join() {
+        let stmt =
+            parse_one("SELECT u.id, o.total FROM users u STRAIGHT_JOIN orders o ON o.user_id = u.id")
+                .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_straight_join,
+            "SELECT ... STRAIGHT_JOIN must set has_straight_join = true"
+        );
+    }
+
+    #[test]
+    fn select_inner_join_keeps_has_straight_join_false() {
+        let stmt = parse_one(
+            "SELECT u.id, o.total FROM users u INNER JOIN orders o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_straight_join,
+            "INNER JOIN must keep has_straight_join = false"
+        );
+    }
+
+    #[test]
+    fn select_without_straight_join_keeps_has_straight_join_false() {
+        let stmt = parse_one("SELECT id, name FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_straight_join,
+            "SELECT without STRAIGHT_JOIN must keep has_straight_join = false"
         );
     }
 }
