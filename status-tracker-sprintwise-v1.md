@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 119)
+**Last updated:** 2026-04-09 (session 121)
 
 ---
 
@@ -1701,6 +1701,18 @@ Release Gate Impact: <none|medium|high>
 
 ## Session 119 Validation Update
 
+## Session 120 Validation Update
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Scope:** WS7 plugin gate rerun + R3 plugin release gate refresh
+
+| Item | Artifact | Result | Next Step |
+|---|---|---|---|
+| WS7 gate rerun | `tests/kpi/results/ws7/ws7-gate-summary.json` | **passed** | Re-run WS7 gate after plugin policy/integrity changes |
+| R3 plugin release gate rerun | `tests/kpi/results/gates/agent-run-release-r3-plugin-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` | Refresh R3 plugin linkage after WS7 or WS9A feature slices |
+
+---
+
 **Date:** 2026-04-09 (Sprint 9 continuation)
 **Scope:** WS6 failover gate rerun + Ops/Resilience cluster release gate refresh
 
@@ -1783,6 +1795,19 @@ Release Gate Impact: <none|medium|high>
 | `TableAlias { input }` plan node | `voltnuerongrid-exec` | OLAP-routed table-alias wrapper in `LogicalPlan`; +0.04 cost overhead | 2 |
 | `GET /api/v1/store/wal/table/alias/count` | `voltnuerongridd` | Counts table-alias usage in WAL records (operator-auth) | 2 |
 | `GET /api/v1/store/rows/table/alias/count` | `voltnuerongridd` | Counts table-alias usage in row snapshot values (operator-auth) | 2 |
+
+---
+
+## Session 121 Validation Update
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Scope:** DX/API cluster release gate + Ops/Resilience cluster release gate + WS3 HTAP performance gate refresh
+
+| Item | Artifact | Result | Next Step |
+|---|---|---|---|
+| DX/API cluster release gate | `tests/kpi/results/gates/release-dx-api-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` | Continue gating WS9/WS9A/WS10 feature slices for Studio/IDE/Driver maturity |
+| Ops/Resilience cluster release gate | `tests/kpi/results/gates/release-ops-resilience-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` | Continue gating WS12/WS13/WS14 feature slices for SRE/cloud/config evolution |
+| WS3 HTAP performance gate | `tests/kpi/results/ws3/ws3-gate-summary.json` | **passed** | Next WS3 update: continue monitoring performance score trends and HTAP routing correctness |
 
 ---
 

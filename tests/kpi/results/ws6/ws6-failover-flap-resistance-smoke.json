@@ -1,49 +1,49 @@
 ﻿{
     "smoke":  "ws6-failover-flap-resistance",
     "status":  "passed",
-    "timestamp_utc":  "2026-03-09T08:41:23.7556249Z",
+    "timestamp_utc":  "2026-04-09T18:27:16.8379502Z",
     "command":  "cargo test -p voltnuerongridd failover_rotate_leader_ -- --nocapture",
     "cycles":  5,
     "cycle_max_ms":  6000,
     "latency_envelope":  {
-                             "p95_cycle_ms":  1401,
-                             "max_cycle_ms_observed":  1659
+                             "p95_cycle_ms":  1214,
+                             "max_cycle_ms_observed":  1287
                          },
     "cycle_results":  [
                           {
                               "cycle":  1,
                               "status":  "passed",
-                              "duration_ms":  1401,
+                              "duration_ms":  1198,
                               "max_cycle_ms":  6000,
-                              "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+                              "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           },
                           {
                               "cycle":  2,
                               "status":  "passed",
-                              "duration_ms":  1091,
+                              "duration_ms":  1287,
                               "max_cycle_ms":  6000,
-                              "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+                              "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           },
                           {
                               "cycle":  3,
                               "status":  "passed",
-                              "duration_ms":  1168,
+                              "duration_ms":  1214,
                               "max_cycle_ms":  6000,
-                              "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+                              "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           },
                           {
                               "cycle":  4,
                               "status":  "passed",
-                              "duration_ms":  1659,
+                              "duration_ms":  1204,
                               "max_cycle_ms":  6000,
-                              "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+                              "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           },
                           {
                               "cycle":  5,
                               "status":  "passed",
-                              "duration_ms":  1134,
+                              "duration_ms":  1145,
                               "max_cycle_ms":  6000,
-                              "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 2 tests\ntest tests::failover_rotate_leader_updates_state ... ok\ntest tests::failover_rotate_leader_uses_fallback_for_blank_request ... ok"
+                              "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           }
                       ]
 }

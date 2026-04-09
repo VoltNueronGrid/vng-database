@@ -1,81 +1,81 @@
 {
-    "smoke":  "ws9-studio-api-contract",
-    "status":  "passed",
-    "command":  "node ui/voltnuerongrid-studio/scripts/check-contracts.mjs + static Studio API contract checks",
-    "started_at_utc":  "2026-03-08T08:13:58.6408022Z",
-    "finished_at_utc":  "2026-03-08T08:13:59.7236704Z",
-    "duration_ms":  1083,
-    "output_excerpt":  "studio contract check passed",
-    "checks":  [
-                   {
-                       "check":  "types_file_exists",
-                       "ok":  true,
-                       "detail":  "ui/voltnuerongrid-studio/src/api/types.ts"
-                   },
-                   {
-                       "check":  "client_file_exists",
-                       "ok":  true,
-                       "detail":  "ui/voltnuerongrid-studio/src/api/client.ts"
-                   },
-                   {
-                       "check":  "contract_script_exists",
-                       "ok":  true,
-                       "detail":  "ui/voltnuerongrid-studio/scripts/check-contracts.mjs"
-                   },
-                   {
-                       "check":  "contract_script_executes",
-                       "ok":  true,
-                       "detail":  "check-contracts.mjs exit_code=0"
-                   },
-                   {
-                       "check":  "types_has_trace_id",
-                       "ok":  true,
-                       "detail":  "trace_id in UI types"
-                   },
-                   {
-                       "check":  "types_has_sql_execute_response",
-                       "ok":  true,
-                       "detail":  "SqlExecuteResponse contract exists"
-                   },
-                   {
-                       "check":  "types_has_route_path_union",
-                       "ok":  true,
-                       "detail":  "RoutePath includes oltp/olap/hybrid"
-                   },
-                   {
-                       "check":  "client_has_sql_execute_endpoint",
-                       "ok":  true,
-                       "detail":  "sql execute endpoint"
-                   },
-                   {
-                       "check":  "client_has_authorize_endpoint",
-                       "ok":  true,
-                       "detail":  "authorize endpoint"
-                   },
-                   {
-                       "check":  "client_has_audit_events_endpoint",
-                       "ok":  true,
-                       "detail":  "audit events endpoint"
-                   },
-                   {
-                       "check":  "client_has_action_records_endpoint",
-                       "ok":  true,
-                       "detail":  "action records endpoint"
-                   },
-                   {
-                       "check":  "client_sets_admin_header",
-                       "ok":  true,
-                       "detail":  "admin header wiring"
-                   },
-                   {
-                       "check":  "client_sets_operator_header",
-                       "ok":  true,
-                       "detail":  "operator header wiring"
-                   },
-                   {
-                       "check":  "client_sets_session_header",
-                       "ok":  true,
-                       "detail":  "session header wiring"
-                   }
-               ]
+  "smoke": "ws9-studio-api-contract",
+  "status": "passed",
+  "command": "node ui/voltnuerongrid-studio/scripts/check-contracts.mjs + static Studio API contract checks",
+  "started_at_utc": "2026-04-09T16:12:07.5001107Z",
+  "finished_at_utc": "2026-04-09T16:12:09.0372066Z",
+  "duration_ms": 1537,
+  "output_excerpt": "studio contract check passed",
+  "checks": [
+    {
+      "check": "types_file_exists",
+      "ok": true,
+      "detail": "ui/voltnuerongrid-studio/src/api/types.ts"
+    },
+    {
+      "check": "client_file_exists",
+      "ok": true,
+      "detail": "ui/voltnuerongrid-studio/src/api/client.ts"
+    },
+    {
+      "check": "contract_script_exists",
+      "ok": true,
+      "detail": "ui/voltnuerongrid-studio/scripts/check-contracts.mjs"
+    },
+    {
+      "check": "contract_script_executes",
+      "ok": true,
+      "detail": "check-contracts.mjs exit_code=0"
+    },
+    {
+      "check": "types_has_trace_id",
+      "ok": true,
+      "detail": "trace_id in UI types"
+    },
+    {
+      "check": "types_has_sql_execute_response",
+      "ok": true,
+      "detail": "SqlExecuteResponse contract exists"
+    },
+    {
+      "check": "types_has_route_path_union",
+      "ok": true,
+      "detail": "RoutePath includes oltp/olap/hybrid"
+    },
+    {
+      "check": "client_has_sql_execute_endpoint",
+      "ok": true,
+      "detail": "sql execute endpoint"
+    },
+    {
+      "check": "client_has_authorize_endpoint",
+      "ok": true,
+      "detail": "authorize endpoint"
+    },
+    {
+      "check": "client_has_audit_events_endpoint",
+      "ok": true,
+      "detail": "audit events endpoint"
+    },
+    {
+      "check": "client_has_action_records_endpoint",
+      "ok": true,
+      "detail": "action records endpoint"
+    },
+    {
+      "check": "client_sets_admin_header",
+      "ok": true,
+      "detail": "admin header wiring"
+    },
+    {
+      "check": "client_sets_operator_header",
+      "ok": true,
+      "detail": "operator header wiring"
+    },
+    {
+      "check": "client_sets_session_header",
+      "ok": true,
+      "detail": "session header wiring"
+    }
+  ]
 }

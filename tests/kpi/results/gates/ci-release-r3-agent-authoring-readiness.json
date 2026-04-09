@@ -2,7 +2,7 @@
   "gate": "release-r3-agent-authoring-readiness",
   "status": "passed",
   "release": "R3",
-  "generated_at_utc": "2026-03-06T02:58:43.6356159Z",
+  "generated_at_utc": "2026-04-09T16:07:19.2825916Z",
   "checks": {
     "ws8a_closure": {
       "exit_code": 0,

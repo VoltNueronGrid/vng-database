@@ -166,3 +166,59 @@ Current repo state is design-first. The commands below are the intended runbooks
 Current state: architecture and delivery documentation is defined.  
 Next step: scaffold Rust workspace and implement Phase 1 core engine foundations.
 
+## Github Agents:
+- status-tracker-10x-executor agent:
+  - Runs your status-tracker workflow as a strict 10-item queue, sequentially.
+  - Uses multiple subagents in parallel for read-only discovery each iteration.
+  - Implements one slice per iteration across SQL, exec, and service layers.
+  - Updates both tracker files each iteration:
+  - status_tracker.md
+  - status-tracker-sprintwise-v1.md
+  - Runs targeted tests and full suites.
+  - Creates one commit per successful iteration and pushes immediately.
+  - Stops immediately on first failed iteration and reports the blocker.
+  - Sample prompts:
+    - Run the status-tracker 10x executor from the next pending S3-WS1 session.
+    - Run the status-tracker 10x executor for only 3 iterations as a dry run.
+    - Run the status-tracker 10x executor starting from Session 96.
+  
+- run-status-tracker-queue prompt:
+  - invoke your custom agent Status Tracker 10x Executor
+  - accept only one argument: iteration count
+  - auto-discover the next pending status-tracker step
+  - not require or request a starting session
+  - stop on first failure and report blocker details
+  - How to use:
+    - run prompt: Run Status Tracker Queue
+    - argument example: 3
+
+- combinedly:
+  - Run only the custom agent (separately)
+    - Open chat agent picker.
+    - Select Status Tracker 10x Executor.
+    - Give only a number as input.
+      Examples: 3, 1, 10
+    - Behavior:
+      - Runs exactly that many iterations.
+      - If you leave it empty, it defaults to 10.
+  - Run only the companion prompt (separately)
+      - In chat, type slash and choose Run Status Tracker Queue.
+      - Pass the number as the argument.
+      - Examples:
+        ```
+          /Run Status Tracker Queue 3
+          /Run Status Tracker Queue 1
+          /Run Status Tracker Queue 5
+        ```
+      - Behavior:
+        - The prompt passes the count to the agent.
+        - It auto-finds the next pending tracker step.
+        - No starting session is needed.
+        - Run them combined
+        - This is effectively option 2, because the prompt is wired to invoke the custom agent.
+        - So combined usage is the same command:
+        - Example:
+          - /Run Status Tracker Queue 4
+        - Quick recommendation:
+          - Use the prompt for daily use.
+          - Use the agent directly only when you want manual control or quick debugging.

@@ -3,9 +3,9 @@
   "status": "passed",
   "command": "cargo run -p voltnuerongrid-audit-companion -- --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json",
   "report_path": "tests/kpi/results/ws8a/audit-companion-report.json",
-  "started_at_utc": "2026-04-09T16:03:16.3639750Z",
-  "finished_at_utc": "2026-04-09T16:03:18.4575057Z",
-  "duration_ms": 2094,
+  "started_at_utc": "2026-04-09T16:07:06.6957519Z",
+  "finished_at_utc": "2026-04-09T16:07:08.7968719Z",
+  "duration_ms": 2101,
   "validation_ok": true,
-  "output_excerpt": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running `D:\\by\\target\\debug\\voltnuerongrid-audit-companion.exe --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json`\naudit companion report written: tests/kpi/results/ws8a/audit-companion-report.json\n"
+  "output_excerpt": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running `D:\\by\\target\\debug\\voltnuerongrid-audit-companion.exe --audit-file tests/kpi/fixtures/ws8a/audit-events-sample.json --action-file tests/kpi/fixtures/ws8/control-plane-records-sample.json --trace-id atrace-101 --action autonomous_action_authorize --out tests/kpi/results/ws8a/audit-companion-report.json`\naudit companion report written: tests/kpi/results/ws8a/audit-companion-report.json\n"
 }

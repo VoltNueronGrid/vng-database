@@ -10,7 +10,7 @@
     "REQ-09",
     "REQ-26"
   ],
-  "generated_at_utc": "2026-03-06T05:46:03.4132040Z",
+  "generated_at_utc": "2026-04-09T16:22:58.4071463Z",
   "sources": {
     "summary": "tests/kpi/results/ws7/ws7-gate-summary.json",
     "compliance_matrix": "tests/kpi/results/ws7/ws7-compliance-matrix.json",

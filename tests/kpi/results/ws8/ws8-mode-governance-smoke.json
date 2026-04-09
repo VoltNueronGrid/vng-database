@@ -1,14 +1,14 @@
 {
-    "smoke":  "ws8-mode-governance",
-    "status":  "passed",
-    "runtime_path":  "services/voltnuerongridd/src/main.rs",
-    "command":  "cargo test -p voltnuerongridd ws12_dr_hook_denies_when_mode_below_policy -- --nocapture",
-    "timestamp_utc":  "2026-03-08T08:28:08.2228944Z",
-    "checks":  {
-                   "dr_hook_denies_when_mode_below_policy_test":  true,
-                   "autonomous_mode_disabled_path_present":  true,
-                   "deny_mode_policy_decision_present":  true,
-                   "fast_failover_requires_autonomous_mode":  true
-               },
-    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_dr_hook_denies_when_mode_below_policy ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.00s\n\n"
+  "smoke": "ws8-mode-governance",
+  "status": "passed",
+  "runtime_path": "services/voltnuerongridd/src/main.rs",
+  "command": "cargo test -p voltnuerongridd ws12_dr_hook_denies_when_mode_below_policy -- --nocapture",
+  "timestamp_utc": "2026-04-09T16:07:02.4251690Z",
+  "checks": {
+    "dr_hook_denies_when_mode_below_policy_test": true,
+    "autonomous_mode_disabled_path_present": true,
+    "deny_mode_policy_decision_present": true,
+    "fast_failover_requires_autonomous_mode": true
+  },
+  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22617:35\n      |\n22617 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\n\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22633:35\n      |\n22633 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n\nwarning: variant `Failed` is never constructed\n  --> services\\voltnuerongridd\\src\\main.rs:97:5\n   |\n93 | enum AcidTxState {\n   |      ----------- variant in this enum\n..."
 }

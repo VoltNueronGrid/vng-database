@@ -2,8 +2,8 @@
   "smoke": "ws12-reliability-sre-baseline",
   "status": "passed",
   "command": "cargo test -p voltnuerongridd ws12_",
-  "started_at_utc": "2026-03-07T01:12:33.5678850Z",
-  "finished_at_utc": "2026-03-07T01:12:36.7867765Z",
-  "duration_ms": 3219,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.89s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-454173c58e939023.exe)\n\nrunning 18 tests\ntest tests::ws12_dr_hook_denies_when_mode_below_policy ... ok\ntest tests::ws12_dr_hook_applies_cooldown_window ... ok\ntest tests::ws12_dr_hook_executes_failover_when_not_dry_run ... ok\ntest tests::ws12_failure_budget_snapshot_computes_remaining ... ok\ntest tests::ws12_failure_signal_queues_auto_remediation ... ok\ntest tests::ws12_evaluate_rate_limit_denies_when_hard_limit_exceeded ... ok\ntest tests::ws12_failure_budget_alert_escalates_to_critical ... ok\ntest tests::ws12_retry_plan_builds_monotonic_backoff ... ok\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\ntest tests::ws12_retry_backoff_growth_is_capped ... ok\ntest tests::ws12_gate_criteria_detects_critical_signal ... ok\ntest tests::ws12_gate_export_writes_artifact ... ok\ntest tests::ws12_dr_hook_rejects_unsupported_hook ... ok\ntest tests::ws12_policy_state_loads_legacy_snapshot_format ... ok\ntest tests::ws12_scheduler_queue_enqueues_tasks ... ok\ntest tests::ws12_evaluate_rate_limit_allows_with_burst_allowance ... ok"
+  "started_at_utc": "2026-04-09T16:18:13.1588702Z",
+  "finished_at_utc": "2026-04-09T16:18:14.6035309Z",
+  "duration_ms": 1445,
+  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22617:35\n      |\n22617 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22633:35\n      |\n22633 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n  --> services\\voltnuerongridd\\src\\main.rs:97:5\n   |\n93 | enum AcidTxState {\n   |      ----------- variant in this enum\n..."
 }

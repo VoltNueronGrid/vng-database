@@ -1,15 +1,15 @@
 {
-    "gate":  "ws9",
-    "status":  "passed",
-    "started_at_utc":  "2026-03-08T08:13:58.6048037Z",
-    "finished_at_utc":  "2026-03-08T08:13:59.8221073Z",
-    "duration_ms":  1217,
-    "packs":  [
-                  {
-                      "pack":  "ws9-studio-smoke",
-                      "status":  "passed",
-                      "detail":  "ok",
-                      "artifact":  "tests/kpi/results/ws9/studio-smoke.json"
-                  }
-              ]
+  "gate": "ws9",
+  "status": "passed",
+  "started_at_utc": "2026-04-09T16:12:07.4805659Z",
+  "finished_at_utc": "2026-04-09T16:12:09.0403874Z",
+  "duration_ms": 1560,
+  "packs": [
+    {
+      "pack": "ws9-studio-smoke",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws9/studio-smoke.json"
+    }
+  ]
 }

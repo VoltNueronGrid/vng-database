@@ -1,17 +1,17 @@
 {
-    "report":  "ws8-gate-trend-comparison",
-    "status":  "passed",
-    "trend_state":  "stable",
-    "generated_at_utc":  "2026-03-08T08:28:15.0830748Z",
-    "current_summary":  "tests/kpi/results/ws8/ws8-gate-summary.json",
-    "prior_summary":  "tests/kpi/results/ws8/ws8-gate-summary.previous.json",
-    "gate_status":  {
-                        "before":  "passed",
-                        "after":  "passed"
-                    },
-    "duration_ms":  {
-                        "before":  16028,
-                        "after":  15757,
-                        "delta":  -271
-                    }
+  "report": "ws8-gate-trend-comparison",
+  "status": "passed",
+  "trend_state": "stable",
+  "generated_at_utc": "2026-04-09T16:07:08.8501410Z",
+  "current_summary": "tests/kpi/results/ws8/ws8-gate-summary.json",
+  "prior_summary": "tests/kpi/results/ws8/ws8-gate-summary.previous.json",
+  "gate_status": {
+    "before": "passed",
+    "after": "passed"
+  },
+  "duration_ms": {
+    "before": 2430746,
+    "after": 15085,
+    "delta": -2415661
+  }
 }

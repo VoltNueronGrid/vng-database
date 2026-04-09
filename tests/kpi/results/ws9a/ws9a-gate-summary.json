@@ -1,9 +1,9 @@
 {
   "gate": "ws9a",
   "status": "passed",
-  "started_at_utc": "2026-03-06T00:50:17.6972769Z",
-  "finished_at_utc": "2026-03-06T00:50:17.7282451Z",
-  "duration_ms": 31,
+  "started_at_utc": "2026-04-09T16:22:58.4502716Z",
+  "finished_at_utc": "2026-04-09T16:22:58.4955238Z",
+  "duration_ms": 45,
   "packs": [
     {
       "pack": "ws9a-ide-contract-smoke",

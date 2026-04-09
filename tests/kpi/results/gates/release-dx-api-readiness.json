@@ -8,9 +8,9 @@
     "WS9A",
     "WS10"
   ],
-  "started_at_utc": "2026-03-05T17:24:30.2802837Z",
-  "finished_at_utc": "2026-03-05T17:24:40.1828604Z",
-  "duration_ms": 9903,
+  "started_at_utc": "2026-04-09T16:12:03.0101428Z",
+  "finished_at_utc": "2026-04-09T16:27:14.2374590Z",
+  "duration_ms": 911227,
   "packs": [
     {
       "pack": "ws5-security-gate",
@@ -36,5 +36,9 @@
       "detail": "ok",
       "artifact": "tests/kpi/results/ws10/ws10-gate-summary.json"
     }
-  ]
+  ],
+  "highlights": {
+    "ws5_runtime_pack_included": false,
+    "ws5_runtime_pack_status": "not_included"
+  }
 }

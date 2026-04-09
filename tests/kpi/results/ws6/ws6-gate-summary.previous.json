@@ -1,9 +1,9 @@
 {
     "gate":  "ws6",
     "status":  "passed",
-    "started_at_utc":  "2026-03-09T08:38:32.4178982Z",
-    "finished_at_utc":  "2026-03-09T08:40:11.0027847Z",
-    "duration_ms":  98585,
+    "started_at_utc":  "2026-03-09T08:40:37.3664339Z",
+    "finished_at_utc":  "2026-03-09T08:42:01.9926653Z",
+    "duration_ms":  84626,
     "packs":  [
                   {
                       "pack":  "ws6-failover-simulation",

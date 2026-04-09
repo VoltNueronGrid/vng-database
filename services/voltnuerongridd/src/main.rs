@@ -4972,7 +4972,6 @@ async fn main() {
         .route("/api/v1/cluster/chaos/history", get(chaos_history))
         // S7-WS6-04: Chaos fire drill
         .route("/api/v1/cluster/chaos/fire-drill", post(chaos_fire_drill))
-        .route("/api/v1/store/wal/checkpoint", post(wal_force_checkpoint))
         // S8-WS10-02: Driver wire protocol info + session connect + disconnect
         .route("/api/v1/driver/protocol/info", get(driver_protocol_info))
         .route("/api/v1/driver/connect", post(driver_connect))

@@ -1,7 +1,7 @@
 {
   "report": "ws7-plugin-compliance-matrix",
   "status": "passed",
-  "generated_at_utc": "2026-03-06T05:46:03.1723258Z",
+  "generated_at_utc": "2026-04-09T16:22:58.2474653Z",
   "source_summary": "tests/kpi/results/ws7/ws7-gate-summary.json",
   "total_controls": 3,
   "passed_controls": 3,

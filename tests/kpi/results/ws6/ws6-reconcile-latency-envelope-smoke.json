@@ -1,11 +1,11 @@
 ﻿{
     "smoke":  "ws6-reconcile-latency-envelope",
     "status":  "passed",
-    "timestamp_utc":  "2026-03-09T08:41:30.3236896Z",
+    "timestamp_utc":  "2026-04-09T18:27:21.9842668Z",
     "command":  "cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture",
     "iterations":  3,
     "latency_envelope":  {
-                             "p95_ms":  1184,
+                             "p95_ms":  1245,
                              "p95_max_ms":  6000,
                              "pass":  true
                          },
@@ -13,20 +13,20 @@
                         {
                             "iteration":  1,
                             "status":  "passed",
-                            "duration_ms":  1378,
-                            "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
+                            "duration_ms":  1245,
+                            "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                         },
                         {
                             "iteration":  2,
                             "status":  "passed",
-                            "duration_ms":  1184,
-                            "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
+                            "duration_ms":  1502,
+                            "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                         },
                         {
                             "iteration":  3,
                             "status":  "passed",
-                            "duration_ms":  1097,
-                            "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s\n     Running unittests src\\main.rs (target\\debug\\deps\\voltnuerongridd-4a4990988cbee318.exe)\n\nrunning 1 test\ntest tests::ws12_reconcile_marks_critical_resolved ... ok\n"
+                            "duration_ms":  1214,
+                            "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                         }
                     ]
 }
