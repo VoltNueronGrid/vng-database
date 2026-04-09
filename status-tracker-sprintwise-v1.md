@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 101)
+**Last updated:** 2026-04-09 (session 102)
 
 ---
 
@@ -1600,6 +1600,20 @@ Release Gate Impact: <none|medium|high>
 | `OuterApply { input }` plan node | `voltnuerongrid-exec` | OLAP-routed outer apply wrapper in `LogicalPlan`; +0.13 cost overhead | 2 |
 | `GET /api/v1/store/wal/outer/apply/count` | `voltnuerongridd` | Counts explicit OUTER APPLY usage in WAL records (operator-auth) | 2 |
 | `GET /api/v1/store/rows/outer/apply/count` | `voltnuerongridd` | Counts explicit OUTER APPLY usage in row snapshot values (operator-auth) | 2 |
+
+---
+
+## Session 102 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 333→336, exec 178→180, service 637→641 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_apply: bool` field + detection | `voltnuerongrid-sql` | Detects generic `APPLY` clauses in SELECT/WITH queries (`S3-WS1-78`) | 3 (`apply_tests` module) |
+| `Apply { input }` plan node | `voltnuerongrid-exec` | OLAP-routed generic apply wrapper in `LogicalPlan`; +0.05 cost overhead | 2 |
+| `GET /api/v1/store/wal/apply/count` | `voltnuerongridd` | Counts generic APPLY usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/apply/count` | `voltnuerongridd` | Counts generic APPLY usage in row snapshot values (operator-auth) | 2 |
 
 ---
 

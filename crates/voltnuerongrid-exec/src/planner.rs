@@ -406,6 +406,10 @@ pub enum LogicalPlan {
     OuterApply {
         input: Box<LogicalPlan>,
     },
+    /// Generic APPLY wrapper (S3-WS1-78 has_apply support).
+    Apply {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -497,6 +501,7 @@ impl LogicalPlan {
             LogicalPlan::AntiJoin { input } => input.primary_table(),
             LogicalPlan::CrossApply { input } => input.primary_table(),
             LogicalPlan::OuterApply { input } => input.primary_table(),
+            LogicalPlan::Apply { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -604,6 +609,7 @@ impl LogicalPlan {
             LogicalPlan::AntiJoin { input } => input.has_aggregation(),
             LogicalPlan::CrossApply { input } => input.has_aggregation(),
             LogicalPlan::OuterApply { input } => input.has_aggregation(),
+            LogicalPlan::Apply { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1321,6 +1327,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.13,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::Apply { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.05,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -2152,12 +2166,21 @@ impl QueryPlanner {
         };
 
         // OuterApply wrapper (S3-WS1-77 has_outer_apply detection): outermost node.
-        if sel.has_outer_apply {
+        let after_outer_apply = if sel.has_outer_apply {
             LogicalPlan::OuterApply {
                 input: Box::new(after_cross_apply),
             }
         } else {
             after_cross_apply
+        };
+
+        // Apply wrapper (S3-WS1-78 has_apply detection): outermost node.
+        if sel.has_apply {
+            LogicalPlan::Apply {
+                input: Box::new(after_outer_apply),
+            }
+        } else {
+            after_outer_apply
         }
     }
 
@@ -3793,8 +3816,13 @@ mod tests {
     fn planner_cross_apply_produces_cross_apply_node() {
         let p = plan("SELECT u.id FROM users u CROSS APPLY (SELECT 1) x");
         assert!(
-            matches!(&p, LogicalPlan::CrossApply { .. }),
-            "SELECT ... CROSS APPLY must produce outermost CrossApply node; got: {:?}", p
+            matches!(
+                &p,
+                LogicalPlan::Apply {
+                    input: inner
+                } if matches!(&**inner, LogicalPlan::CrossApply { .. })
+            ),
+            "SELECT ... CROSS APPLY must include Apply -> CrossApply wrappers; got: {:?}", p
         );
         assert!(p.is_read_only());
     }
@@ -3812,8 +3840,13 @@ mod tests {
     fn planner_outer_apply_produces_outer_apply_node() {
         let p = plan("SELECT u.id FROM users u OUTER APPLY (SELECT 1) x");
         assert!(
-            matches!(&p, LogicalPlan::OuterApply { .. }),
-            "SELECT ... OUTER APPLY must produce outermost OuterApply node; got: {:?}", p
+            matches!(
+                &p,
+                LogicalPlan::Apply {
+                    input: inner
+                } if matches!(&**inner, LogicalPlan::OuterApply { .. })
+            ),
+            "SELECT ... OUTER APPLY must include Apply -> OuterApply wrappers; got: {:?}", p
         );
         assert!(p.is_read_only());
     }
@@ -3823,5 +3856,24 @@ mod tests {
         let c = cost("SELECT u.id FROM users u OUTER APPLY (SELECT 1) x");
         assert_eq!(c.recommended_path, QueryPath::Olap, "OUTER APPLY should route to OLAP");
         assert!(c.relative_cost >= 0.13, "OuterApply must carry at least 0.13 cost overhead");
+    }
+
+    // ── S3-WS1-78: Apply node tests ─────────────────────────────
+
+    #[test]
+    fn planner_apply_produces_apply_node() {
+        let p = plan("SELECT u.id FROM users u CROSS APPLY (SELECT 1) x");
+        assert!(
+            matches!(&p, LogicalPlan::Apply { .. }),
+            "SELECT ... APPLY must produce outermost Apply node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_apply_routes_to_olap_with_overhead() {
+        let c = cost("SELECT u.id FROM users u OUTER APPLY (SELECT 1) x");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "APPLY should route to OLAP");
+        assert!(c.relative_cost >= 0.05, "Apply must carry at least 0.05 cost overhead");
     }
 }

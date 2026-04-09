@@ -205,6 +205,8 @@ pub struct SelectStatement {
     pub has_cross_apply: bool,
     /// True when the query uses OUTER APPLY (S3-WS1-77).
     pub has_outer_apply: bool,
+    /// True when the query uses any APPLY clause (S3-WS1-78).
+    pub has_apply: bool,
 }
 
 /// A parsed INSERT statement.
@@ -597,6 +599,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_outer_apply(&up) {
                     stmt.has_outer_apply = true;
                 }
+                if has_apply(&up) {
+                    stmt.has_apply = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -731,6 +736,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_outer_apply(&up) {
                     stmt.has_outer_apply = true;
+                }
+                if has_apply(&up) {
+                    stmt.has_apply = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3443,6 +3451,10 @@ fn has_outer_apply(up: &str) -> bool {
     up.contains(" OUTER APPLY ")
 }
 
+fn has_apply(up: &str) -> bool {
+    up.contains(" APPLY ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4397,6 +4409,55 @@ mod outer_apply_tests {
         assert!(
             !s.has_outer_apply,
             "SELECT without OUTER APPLY must keep has_outer_apply = false"
+        );
+    }
+}
+
+// ─── S3-WS1-78: has_apply tests ───────────────────────────────────────────
+
+#[cfg(test)]
+mod apply_tests {
+    use super::*;
+
+    #[test]
+    fn select_cross_apply_sets_has_apply() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u CROSS APPLY (SELECT 1) x",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_apply,
+            "SELECT ... CROSS APPLY must set has_apply = true"
+        );
+    }
+
+    #[test]
+    fn select_outer_apply_sets_has_apply() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u OUTER APPLY (SELECT 1) x",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_apply,
+            "SELECT ... OUTER APPLY must set has_apply = true"
+        );
+    }
+
+    #[test]
+    fn select_without_apply_keeps_has_apply_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_apply,
+            "SELECT without APPLY must keep has_apply = false"
         );
     }
 }
