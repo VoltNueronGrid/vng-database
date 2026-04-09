@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 105)
+**Last updated:** 2026-04-09 (session 106)
 
 ---
 
@@ -1656,6 +1656,20 @@ Release Gate Impact: <none|medium|high>
 | `RightSemiJoin { input }` plan node | `voltnuerongrid-exec` | OLAP-routed RIGHT-SEMI-JOIN wrapper in `LogicalPlan`; +0.12 cost overhead | 2 |
 | `GET /api/v1/store/wal/right/semi/join/count` | `voltnuerongridd` | Counts explicit RIGHT SEMI JOIN usage in WAL records (operator-auth) | 2 |
 | `GET /api/v1/store/rows/right/semi/join/count` | `voltnuerongridd` | Counts explicit RIGHT SEMI JOIN usage in row snapshot values (operator-auth) | 2 |
+
+---
+
+## Session 106 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline -> New:** sql 345->348, exec 186->188, service 653->657 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_right_anti_join: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `RIGHT ANTI JOIN` in SELECT/WITH queries (`S3-WS1-82`) | 3 (`right_anti_join_tests` module) |
+| `RightAntiJoin { input }` plan node | `voltnuerongrid-exec` | OLAP-routed RIGHT-ANTI-JOIN wrapper in `LogicalPlan`; +0.13 cost overhead | 2 |
+| `GET /api/v1/store/wal/right/anti/join/count` | `voltnuerongridd` | Counts explicit RIGHT ANTI JOIN usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/right/anti/join/count` | `voltnuerongridd` | Counts explicit RIGHT ANTI JOIN usage in row snapshot values (operator-auth) | 2 |
 
 ---
 
