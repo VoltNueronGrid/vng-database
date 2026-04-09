@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 114)
+**Last updated:** 2026-04-09 (session 115)
 
 ---
 
@@ -335,14 +335,14 @@
 |---|---|---|---|---|---|---|
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | 🟡 Ready for Validation | WS1, WS4A | Signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 extended gate with compliance matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws7/ws7-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-plugin-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | 🔵 In Progress | WS1, WS6 | Typed autonomous action execution records + guardrail decision trace IDs + mode-governance/blast-radius policy-deny evidence; post-gate autonomy matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws8/ws8-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-autonomous-readiness.json`; **2026-04-09 rerun:** `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` is blocked with failed pack `ws8a-audit-companion`; workflow wiring in `.github/workflows/ci.yml` |
-| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | 🔴 Blocked | WS4A, WS5 | Audit event contract + append-only sink + runtime emission + companion query/export filters + AI agent authoring/object-plugin workflow evidence; WS8A gate -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`; closure gate -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`; **2026-04-09 rerun:** `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` is blocked with failed pack `ws8a-audit-companion`; workflow wiring in `.github/workflows/ci.yml` |
+| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | 🔴 Blocked | WS4A, WS5 | Audit event contract + append-only sink + runtime emission + companion query/export filters + AI agent authoring/object-plugin workflow evidence; WS8A gate -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`; closure gate -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`; **2026-04-09 rerun:** `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` is blocked with failed pack `ws8a-audit-companion`; root cause in `tests/kpi/results/ws8a/audit-companion-smoke.json`: fixture parse error `missing field chain_hash` in `tests/kpi/fixtures/ws8a/audit-events-sample.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-01 (ANSI SQL + AI chat/extract) — WS8 AI-native control plane
 - REQ-09 (Extensible plugin ecosystem) — 🟡 Ready for Validation: WS7 closure hardening with plugin boundary/integrity/policy gates
 - REQ-26 (Plugin model for streaming sources/sinks) — WS7 plugin registration boundary + signed manifest policy/revocation checks
 - REQ-29 (Fully autonomous operations) — 🔴 Blocked: WS8 gate rerun artifact `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` failed on pack `ws8a-audit-companion` (`release_readiness=blocked`)
-- REQ-30 (AI agent authoring) — 🔴 Blocked: WS8A gate rerun artifact `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` failed on pack `ws8a-audit-companion` (`release_readiness=blocked`)
+- REQ-30 (AI agent authoring) — 🔴 Blocked: WS8A gate rerun artifact `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` failed on pack `ws8a-audit-companion` (`release_readiness=blocked`); root cause is fixture schema mismatch (`missing field chain_hash`) in `tests/kpi/fixtures/ws8a/audit-events-sample.json`
 
 ### Sprint 6 Deliverables
 - [x] WS7: Signed manifest schema + checksum + keyring trust/revocation hooks
@@ -1692,6 +1692,17 @@ Release Gate Impact: <none|medium|high>
 ## Session 113 Validation Update
 
 ## Session 114 Validation Update
+
+## Session 115 Validation Update
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Scope:** WS8A audit-companion blocker root-cause capture
+
+| Item | Artifact | Result | Next Step |
+|---|---|---|---|
+| WS8A audit-companion failure analysis | `tests/kpi/results/ws8a/audit-companion-smoke.json` | **failed** parse: `missing field chain_hash` in fixture `tests/kpi/fixtures/ws8a/audit-events-sample.json` | Update fixture events to include required `chain_hash`, then re-run `run-ws8a-gate.ps1`, `run-ws8-gate.ps1`, and R3 autonomous/agent-authoring release gates |
+
+---
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
 **Scope:** WS8 + WS8A gate evidence refresh
