@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-09 (session 107)
+**Last updated:** 2026-04-09 (session 108)
 
 ---
 
@@ -616,6 +616,12 @@ A tracker row moves to **Done** only when:
 - **SQL (`voltnuerongrid-sql`)**: Added `has_full_semi_join: bool` field to `SelectStatement` (ast.rs). Detects explicit `FULL SEMI JOIN` clauses in SELECT/WITH queries (S3-WS1-83). Tests: `full_semi_join_tests` module (3 tests). Total: **351 passed**.
 - **Exec (`voltnuerongrid-exec`)**: Added `FullSemiJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.14 cost), and `plan_select()` (`has_full_semi_join` outermost wrap after right-anti-join handling). Tests: `planner_full_semi_join_produces_full_semi_join_node`, `cost_full_semi_join_routes_to_olap_with_overhead`. Total: **190 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/full/semi/join/count` and `GET /api/v1/store/rows/full/semi/join/count` (operator-auth, explicit FULL-SEMI-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_83_*`). Total: **661 passed**.
+
+### 9.2bx Session 108 Implementation Update (S3-WS1-84 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_full_anti_join: bool` field to `SelectStatement` (ast.rs). Detects explicit `FULL ANTI JOIN` clauses in SELECT/WITH queries (S3-WS1-84). Tests: `full_anti_join_tests` module (3 tests). Total: **354 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `FullAntiJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.15 cost), and `plan_select()` (`has_full_anti_join` outermost wrap after full-semi-join handling). Tests: `planner_full_anti_join_produces_full_anti_join_node`, `cost_full_anti_join_routes_to_olap_with_overhead`. Total: **192 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/full/anti/join/count` and `GET /api/v1/store/rows/full/anti/join/count` (operator-auth, explicit FULL-ANTI-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_84_*`). Total: **665 passed**.
 
 ### 9.2bj Session 94 Implementation Update (S3-WS1-70 + service endpoints)
 

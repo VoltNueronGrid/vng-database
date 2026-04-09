@@ -217,6 +217,8 @@ pub struct SelectStatement {
     pub has_right_anti_join: bool,
     /// True when the query uses FULL SEMI JOIN (S3-WS1-83).
     pub has_full_semi_join: bool,
+    /// True when the query uses FULL ANTI JOIN (S3-WS1-84).
+    pub has_full_anti_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -627,6 +629,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_full_semi_join(&up) {
                     stmt.has_full_semi_join = true;
                 }
+                if has_full_anti_join(&up) {
+                    stmt.has_full_anti_join = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -779,6 +784,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_full_semi_join(&up) {
                     stmt.has_full_semi_join = true;
+                }
+                if has_full_anti_join(&up) {
+                    stmt.has_full_anti_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3515,6 +3523,10 @@ fn has_full_semi_join(up: &str) -> bool {
     up.contains(" FULL SEMI JOIN ")
 }
 
+fn has_full_anti_join(up: &str) -> bool {
+    up.contains(" FULL ANTI JOIN ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4763,6 +4775,55 @@ mod full_semi_join_tests {
         assert!(
             !s.has_full_semi_join,
             "SELECT without FULL SEMI JOIN must keep has_full_semi_join = false"
+        );
+    }
+}
+
+// ─── S3-WS1-84: has_full_anti_join tests ───────────────────────────────────
+
+#[cfg(test)]
+mod full_anti_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_full_anti_join_sets_has_full_anti_join() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u FULL ANTI JOIN orders o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_full_anti_join,
+            "SELECT ... FULL ANTI JOIN must set has_full_anti_join = true"
+        );
+    }
+
+    #[test]
+    fn select_anti_join_keeps_has_full_anti_join_false() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u ANTI JOIN orders o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_full_anti_join,
+            "ANTI JOIN must keep has_full_anti_join = false"
+        );
+    }
+
+    #[test]
+    fn select_without_full_anti_join_keeps_has_full_anti_join_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_full_anti_join,
+            "SELECT without FULL ANTI JOIN must keep has_full_anti_join = false"
         );
     }
 }

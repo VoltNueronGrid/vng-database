@@ -1687,6 +1687,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 108 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline -> New:** sql 351->354, exec 190->192, service 661->665 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_full_anti_join: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `FULL ANTI JOIN` in SELECT/WITH queries (`S3-WS1-84`) | 3 (`full_anti_join_tests` module) |
+| `FullAntiJoin { input }` plan node | `voltnuerongrid-exec` | OLAP-routed FULL-ANTI-JOIN wrapper in `LogicalPlan`; +0.15 cost overhead | 2 |
+| `GET /api/v1/store/wal/full/anti/join/count` | `voltnuerongridd` | Counts explicit FULL ANTI JOIN usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/full/anti/join/count` | `voltnuerongridd` | Counts explicit FULL ANTI JOIN usage in row snapshot values (operator-auth) | 2 |
+
+---
+
 ## Definition of Done (Tracker)
 
 A tracker row moves to **Done** only when:
