@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 116)
+**Last updated:** 2026-04-09 (session 117)
 
 ---
 
@@ -334,8 +334,8 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | 🟡 Ready for Validation | WS1, WS4A | Signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 extended gate with compliance matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws7/ws7-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-plugin-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | 🟡 Ready for Validation | WS1, WS6 | Typed autonomous action execution records + guardrail decision trace IDs + mode-governance/blast-radius policy-deny evidence; post-gate autonomy matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws8/ws8-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-autonomous-readiness.json`; **2026-04-09 remediation rerun:** `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` passed after WS8A fixture chain-hash fix; workflow wiring in `.github/workflows/ci.yml` |
-| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | 🟡 Ready for Validation | WS4A, WS5 | Audit event contract + append-only sink + runtime emission + companion query/export filters + AI agent authoring/object-plugin workflow evidence; WS8A gate -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`; closure gate -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`; **2026-04-09 remediation rerun:** `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` passed after fixing `tests/kpi/fixtures/ws8a/audit-events-sample.json` to include required `chain_hash`; workflow wiring in `.github/workflows/ci.yml` |
+| WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | 🟡 Ready for Validation | WS1, WS6 | Typed autonomous action execution records + guardrail decision trace IDs + mode-governance/blast-radius policy-deny evidence; post-gate autonomy matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws8/ws8-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-autonomous-readiness.json` (refreshed 2026-04-09 after WS8 rerun); **2026-04-09 remediation rerun:** `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` passed after WS8A fixture chain-hash fix; workflow wiring in `.github/workflows/ci.yml` |
+| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | 🟡 Ready for Validation | WS4A, WS5 | Audit event contract + append-only sink + runtime emission + companion query/export filters + AI agent authoring/object-plugin workflow evidence; WS8A gate -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`; closure gate -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json` (refreshed 2026-04-09 after WS8A rerun); **2026-04-09 remediation rerun:** `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` passed after fixing `tests/kpi/fixtures/ws8a/audit-events-sample.json` to include required `chain_hash`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-01 (ANSI SQL + AI chat/extract) — WS8 AI-native control plane

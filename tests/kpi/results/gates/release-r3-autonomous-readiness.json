@@ -2,7 +2,7 @@
   "gate": "release-r3-autonomous-readiness",
   "status": "passed",
   "release": "R3",
-  "generated_at_utc": "2026-03-08T08:48:57.6068972Z",
+  "generated_at_utc": "2026-04-09T16:06:31.1943381Z",
   "checks": {
     "ws8_closure": {
       "exit_code": 0,
@@ -12,8 +12,8 @@
     "ws8_release_summary": {
       "release_readiness": "ready_for_validation",
       "source": "tests/kpi/results/gates/ws8-release-readiness.json",
-      "ws8_runtime_pack_included": true,
-      "ws8_runtime_pack_status": "passed"
+      "ws8_runtime_pack_included": false,
+      "ws8_runtime_pack_status": "not_included"
     },
     "ws7_closure": {
       "exit_code": 0,
@@ -22,8 +22,8 @@
     }
   },
   "highlights": {
-    "ws8_runtime_pack_included": true,
-    "ws8_runtime_pack_status": "passed",
-    "ws8_runtime_pack_artifact": "tests/kpi/results/ws8/tenant-autonomous-runtime-smoke.json"
+    "ws8_runtime_pack_included": false,
+    "ws8_runtime_pack_status": "not_included",
+    "ws8_runtime_pack_artifact": "not_included"
   }
 }
