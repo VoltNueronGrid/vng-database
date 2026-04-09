@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 106)
+**Last updated:** 2026-04-09 (session 107)
 
 ---
 
@@ -52,10 +52,10 @@
 | REQ-04 | HA/FT/elasticity/i18n/UTF-8 | Sprint 5, Sprint 7 | Epic 6, Epic 11, Epic 12 | 🔵 In Progress |
 | REQ-05 | Separate compute and data files | Sprint 1, Sprint 5 | Epic 2, Epic 6 | 🔵 In Progress |
 | REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Sprint 3, Sprint 6 | Epic 4, Epic 4A, Epic 7 | 🔵 In Progress |
-| REQ-07 | Multithreaded high-speed import | Sprint 3 | Epic 4 | ⬜ Not Started |
+| REQ-07 | Multithreaded high-speed import | Sprint 3 | Epic 4 | 🔵 In Progress |
 | REQ-08 | Local + cloud SaaS operation | Sprint 8 | Epic 13 | ⬜ Not Started |
 | REQ-09 | Extensible plugin ecosystem | Sprint 6 | Epic 7 | 🟡 Ready for Validation |
-| REQ-10 | Trillion-row scale + high-speed retrieval | Sprint 2, Sprint 5 | Epic 2, Epic 3, Epic 6 | ⬜ Not Started |
+| REQ-10 | Trillion-row scale + high-speed retrieval | Sprint 2, Sprint 5 | Epic 2, Epic 3, Epic 6 | 🔵 In Progress |
 | REQ-11 | Indexes + constraints | Sprint 1 | Epic 2, Epic 15 | 🔵 In Progress |
 | REQ-12 | Seeded functions + plan-plat parity | Sprint 1, Sprint 2 | Epic 1, Epic 1A | 🔵 In Progress |
 | REQ-13 | Multi-user roles and privileges | Sprint 4 | Epic 5 | 🔵 In Progress |
@@ -64,15 +64,15 @@
 | REQ-16 | SSL + encryption/decryption | Sprint 4 | Epic 5 | 🔵 In Progress |
 | REQ-17 | Distributed failover + zero data loss | Sprint 5, Sprint 8 | Epic 6, Epic 12 | 🟡 Ready for Validation |
 | REQ-18 | Stream in/out + events for debug/audit | Sprint 4 | Epic 4A, Epic 8A | 🔵 In Progress |
-| REQ-19 | Blazing ingest/update/read at scale | Sprint 2, Sprint 3, Sprint 5 | Epic 3, Epic 4, Epic 6 | ⬜ Not Started |
+| REQ-19 | Blazing ingest/update/read at scale | Sprint 2, Sprint 3, Sprint 5 | Epic 3, Epic 4, Epic 6 | 🔵 In Progress |
 | REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Sprint 8 | Epic 13 | 🔵 In Progress |
-| REQ-21 | Any-number-user concurrency | Sprint 2, Sprint 5, Sprint 7 | Epic 3, Epic 10, Epic 12 | ⬜ Not Started |
+| REQ-21 | Any-number-user concurrency | Sprint 2, Sprint 5, Sprint 7 | Epic 3, Epic 10, Epic 12 | 🔵 In Progress |
 | REQ-22 | Pessimistic locking | Sprint 3 | Epic 1, Epic 3 | ✅ Done |
 | REQ-23 | ACID transactions | Sprint 1, Sprint 2 | Epic 1, Epic 2, Epic 3 | 🔵 In Progress |
 | REQ-24 | Config via properties/YAML/JSON | Sprint 8 | Epic 14 | 🔵 In Progress |
 | REQ-25 | Native connection + pooling | Sprint 7, Sprint 8 | Epic 10, Epic 14 | 🔵 In Progress |
 | REQ-26 | Plugin model for streaming sources/sinks | Sprint 4, Sprint 6 | Epic 4A, Epic 7 | 🔵 In Progress |
-| REQ-27 | Native cache engine (Redis-like compat) | Sprint 2, Sprint 8 | Epic 3, Epic 14 | ⬜ Not Started |
+| REQ-27 | Native cache engine (Redis-like compat) | Sprint 2, Sprint 8 | Epic 3, Epic 14 | 🔵 In Progress |
 | REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Sprint 7 | Epic 9A | 🔵 In Progress |
 | REQ-29 | Fully autonomous operations | Sprint 6, Sprint 8 | Epic 8, Epic 14 | 🟡 Ready for Validation |
 | REQ-30 | AI agent authoring for objects/plugins | Sprint 6 | Epic 8, Epic 7 | 🟡 Ready for Validation |
@@ -203,8 +203,8 @@
 
 ### Requirements Covered
 - REQ-06 (CSV/Parquet/JSON/Excel + enterprise ingest) — WS4 ingest scaffold + CSV/JSON parser connectors with runtime endpoints now protected by mixed operator-or-tenant RBAC and backed by updated smoke evidence
-- REQ-07 (Multithreaded high-speed import) — ⬜ Not Started: Ingest throughput benchmark pending
-- REQ-19 (Blazing ingest/update/read at scale) — ⬜ Not Started: KPI benchmark gates pending
+- REQ-07 (Multithreaded high-speed import) — 🔵 In Progress: Chunked loader + HTTP endpoint `/api/v1/ingest/chunked` + async Tokio fan-out dispatch are implemented in runtime with integration coverage; next milestone is benchmarking against real storage backends
+- REQ-19 (Blazing ingest/update/read at scale) — 🔵 In Progress: Benchmark scaffold is live via `/api/v1/benchmark/ingest` and `/api/v1/benchmark/query`; smoke script `tests/kpi/scripts/run-req10-benchmark-smoke.ps1` writes `tests/kpi/results/req10/benchmark-smoke.json` (8/8 checks)
 - REQ-22 (Pessimistic locking) — WS22 runtime scaffold with conflict/ownership enforcement + contention metrics endpoint for trend analysis
 
 ### Sprint 3 Deliverables
@@ -292,9 +292,9 @@
 - REQ-04 (HA/FT/elasticity) — WS6 failover + anti-SPOF + chaos hardening packs
 - REQ-05 (Separate compute/data) — Distributed storage separation in WS6 cluster topology
 - REQ-17 (Distributed failover + zero data loss) — 🟡 Ready for Validation: WS6 closure + R2 failover release gate evidence + runtime handoff-report failover contract smoke now backed by explicit multi-node replication transport events
-- REQ-10 (Trillion-row scale retrieval) — ⬜ Not Started: Scale benchmark report pending
-- REQ-19 (Blazing performance at scale) — ⬜ Not Started: KPI benchmark gates pending
-- REQ-21 (Any-number-user concurrency) — ⬜ Not Started: Concurrency stress tests pending
+- REQ-10 (Trillion-row scale + high-speed retrieval) — 🔵 In Progress: Benchmark endpoints are implemented (`POST /api/v1/benchmark/ingest`, `POST /api/v1/benchmark/query`) and return throughput indicators (`records_per_second`, `ops_per_second`)
+- REQ-19 (Blazing ingest/update/read at scale) — 🔵 In Progress: Benchmark smoke is green at `tests/kpi/results/req10/benchmark-smoke.json`; next step is sustained-load and storage-layer throughput baselining
+- REQ-21 (Any-number-user concurrency) — 🔵 In Progress: Concurrency matrix has 9 `ws21_*` tests covering SQL, ingest, cache, ACID, lock, mixed-ops, and sustained-load paths
 
 ### Sprint 5 Deliverables
 - [x] WS6: Failover leader-state scaffold + authenticated simulation endpoint
@@ -438,7 +438,7 @@
 
 ### Requirements Covered
 - REQ-04 (HA/FT/elasticity) — WS12 reliability contracts + DR hooks
-- REQ-08 (Local + cloud SaaS operation) — ⬜ Not Started: Local/cloud deployment smoke tests pending
+- REQ-08 (Local + cloud SaaS operation) — 🔵 In Progress: Cloud SaaS smoke (`tests/kpi/scripts/run-req08-cloud-saas-smoke.ps1`) passes with 37 checks and artifact `tests/kpi/results/req08/cloud-saas-smoke.json`; live endpoint smoke remains pending credential handoff
 - REQ-17 (Distributed failover + zero data loss) — WS12 SRE DR automation contracts
 - REQ-20 (Azure/AWS/GCP/OCI + Docker + K8s) — WS13 multi-cloud profile gates
 - REQ-24 (Config via properties/YAML/JSON) — WS14 schema/conformance gates
@@ -516,7 +516,7 @@
 | H-08 | Autonomous plugin supply-chain hardening | Security + AI Platform | P1 | ⬜ Not Started | 0% | Plugin builder pipeline pending | Supply-chain validation policy draft |
 
 ### Requirements Covered (Not Started — pending in this sprint)
-- REQ-27 (Native cache engine, Redis-like compat) — ⬜ Not Started: Cache failover/invalidation tests
+- REQ-27 (Native cache engine, Redis-like compat) — 🔵 In Progress: Runtime endpoint `/api/v1/cache/redis/command` now supports core Redis-like commands with 13 passing `ws27_*` tests; next steps are RESP3 wire protocol, persistence, and cluster fan-out
 
 ### Sprint 10 Deliverables
 - [ ] H-05: KMS outage simulation + multi-region fallback
@@ -548,9 +548,9 @@
 
 ### Requirements Covered (Not Started — pending in this sprint)
 - REQ-08 (Local + cloud SaaS operation) — ⬜ Not Started: Full local/cloud SaaS smoke tests
-- REQ-10 (Trillion-row scale retrieval) — ⬜ Not Started: Scale benchmark report
+- REQ-10 (Trillion-row scale retrieval) — 🔵 In Progress: Benchmark scaffold is implemented and now needs large-scale and distributed validation runs
 - REQ-11 (Indexes + constraints) — 🔵 In Progress: B-tree index engine (IndexManager, BTreeIndex with create/drop/lookup/range_scan + unique enforcement) and constraint validator (ConstraintManager with PK/Unique/NotNull) in voltnuerongrid-store crate + runtime endpoints + smoke/gate evidence
-- REQ-21 (Any-number-user concurrency) — ⬜ Not Started: Concurrency stress tests
+- REQ-21 (Any-number-user concurrency) — 🔵 In Progress: 9 `ws21_*` concurrency tests are passing; pending HTTP-level harness and multi-tenant sustained-load evidence
 
 ### Sprint 11 Deliverables
 - [ ] H-09: Cross-IDE parity + permission tests
