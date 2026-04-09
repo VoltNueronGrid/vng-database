@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 113)
+**Last updated:** 2026-04-09 (session 114)
 
 ---
 
@@ -33,7 +33,7 @@
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | 🔵 In Progress |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Mixed (WS5 Ready for Validation) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation |
-| Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🔵 Mixed (WS8 gate rerun blocked) |
+| Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🔴 Blocked (WS8 + WS8A gate reruns blocked) |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🔵 Mixed |
@@ -75,7 +75,7 @@
 | REQ-27 | Native cache engine (Redis-like compat) | Sprint 2, Sprint 8 | Epic 3, Epic 14 | 🔵 In Progress |
 | REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Sprint 7 | Epic 9A | 🔵 In Progress |
 | REQ-29 | Fully autonomous operations | Sprint 6, Sprint 8 | Epic 8, Epic 14 | 🔵 In Progress |
-| REQ-30 | AI agent authoring for objects/plugins | Sprint 6 | Epic 8, Epic 7 | 🟡 Ready for Validation |
+| REQ-30 | AI agent authoring for objects/plugins | Sprint 6 | Epic 8, Epic 7 | 🔴 Blocked |
 | REQ-31 | HTAP (OLTP + OLAP) extreme performance | Sprint 2 | Epic 2, Epic 3 | 🔵 In Progress |
 
 ---
@@ -327,7 +327,7 @@
 
 **Goal:** Plugin framework + connector pack, AI-native control plane, audit engine + AI agent authoring.
 **Dependencies:** Sprint 1 (WS1), Sprint 4 (WS4A, WS5), Sprint 5 (WS6)
-**Status:** 🟡 All Ready for Validation
+**Status:** 🔴 Blocked (WS8 and WS8A gate reruns)
 
 ### Workstreams
 
@@ -335,14 +335,14 @@
 |---|---|---|---|---|---|---|
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | 🟡 Ready for Validation | WS1, WS4A | Signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 extended gate with compliance matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws7/ws7-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-plugin-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | 🔵 In Progress | WS1, WS6 | Typed autonomous action execution records + guardrail decision trace IDs + mode-governance/blast-radius policy-deny evidence; post-gate autonomy matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws8/ws8-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-autonomous-readiness.json`; **2026-04-09 rerun:** `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` is blocked with failed pack `ws8a-audit-companion`; workflow wiring in `.github/workflows/ci.yml` |
-| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | 🟡 Ready for Validation | WS4A, WS5 | Audit event contract + append-only sink + runtime emission + companion query/export filters + AI agent authoring/object-plugin workflow evidence; WS8A gate -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`; closure gate -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | 🔴 Blocked | WS4A, WS5 | Audit event contract + append-only sink + runtime emission + companion query/export filters + AI agent authoring/object-plugin workflow evidence; WS8A gate -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`; closure gate -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`; **2026-04-09 rerun:** `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` is blocked with failed pack `ws8a-audit-companion`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-01 (ANSI SQL + AI chat/extract) — WS8 AI-native control plane
 - REQ-09 (Extensible plugin ecosystem) — 🟡 Ready for Validation: WS7 closure hardening with plugin boundary/integrity/policy gates
 - REQ-26 (Plugin model for streaming sources/sinks) — WS7 plugin registration boundary + signed manifest policy/revocation checks
-- REQ-29 (Fully autonomous operations) — 🟡 Ready for Validation: WS8 autonomous control-plane, guardrail policy, audit linkage, autonomy matrix, stability badge
-- REQ-30 (AI agent authoring) — 🟡 Ready for Validation: WS8A agent authoring workflow smoke (object + plugin controls), matrix/trend/badge artifacts
+- REQ-29 (Fully autonomous operations) — 🔴 Blocked: WS8 gate rerun artifact `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` failed on pack `ws8a-audit-companion` (`release_readiness=blocked`)
+- REQ-30 (AI agent authoring) — 🔴 Blocked: WS8A gate rerun artifact `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` failed on pack `ws8a-audit-companion` (`release_readiness=blocked`)
 
 ### Sprint 6 Deliverables
 - [x] WS7: Signed manifest schema + checksum + keyring trust/revocation hooks
@@ -1690,6 +1690,18 @@ Release Gate Impact: <none|medium|high>
 ## Session 112 Implementation Log
 
 ## Session 113 Validation Update
+
+## Session 114 Validation Update
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Scope:** WS8 + WS8A gate evidence refresh
+
+| Item | Artifact | Result | Next Step |
+|---|---|---|---|
+| WS8 gate rerun | `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` | **failed** (`ws8a-audit-companion`) | Fix failing `ws8a-audit-companion` pack and re-run WS8 gate + R3 autonomous release gate |
+| WS8A gate rerun | `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` | **failed** (`ws8a-audit-companion`) | Fix failing `ws8a-audit-companion` pack and re-run WS8A gate + R3 agent-authoring release gate |
+
+---
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
 **Scope:** WS8 autonomous gate evidence refresh
