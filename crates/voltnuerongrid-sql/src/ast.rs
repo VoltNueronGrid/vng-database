@@ -51,6 +51,8 @@ pub struct SelectStatement {
     pub has_window_fn: bool,
     /// True when the raw SQL contains an aggregate function call (COUNT, SUM, AVG, MIN, MAX) (S3-WS1-04).
     pub has_agg_fn: bool,
+    /// True when the query contains DISTINCT-qualified aggregate functions (S3-WS1-86).
+    pub has_aggregate_distinct: bool,
     /// True when `SELECT DISTINCT` is used (S3-WS1-04).
     pub is_distinct: bool,
     /// LIMIT value, if present.
@@ -328,6 +330,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     || up_trim.contains("MAX(")
                 {
                     stmt.has_agg_fn = true;
+                }
+                if has_aggregate_distinct(&up) {
+                    stmt.has_aggregate_distinct = true;
                 }
                 // Detect SELECT DISTINCT keyword (S3-WS1-04).
                 if up_trim.starts_with("SELECTDISTINCT") {
@@ -652,6 +657,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 let up = raw.to_ascii_uppercase();
                 if up.trim_start().starts_with("WITH ") && up.contains(" AS (") {
                     stmt.has_with_cte = true;
+                }
+                if has_aggregate_distinct(&up) {
+                    stmt.has_aggregate_distinct = true;
                 }
                 if up.contains(" UNION ") {
                     stmt.has_union = true;
@@ -3542,6 +3550,15 @@ fn has_union_all(up: &str) -> bool {
     up.contains(" UNION ALL ")
 }
 
+fn has_aggregate_distinct(up: &str) -> bool {
+    let up_trim = up.replace(' ', "");
+    up_trim.contains("COUNT(DISTINCT")
+        || up_trim.contains("SUM(DISTINCT")
+        || up_trim.contains("AVG(DISTINCT")
+        || up_trim.contains("MIN(DISTINCT")
+        || up_trim.contains("MAX(DISTINCT")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4885,6 +4902,52 @@ mod union_all_tests {
         assert!(
             !s.has_union_all,
             "UNION without ALL must keep has_union_all = false"
+        );
+    }
+}
+
+// ─── S3-WS1-86: has_aggregate_distinct tests ───────────────────────────────
+
+#[cfg(test)]
+mod aggregate_distinct_tests {
+    use super::*;
+
+    #[test]
+    fn select_count_distinct_sets_has_aggregate_distinct() {
+        let stmt = parse_one("SELECT COUNT(DISTINCT user_id) FROM events").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_aggregate_distinct,
+            "COUNT(DISTINCT ...) must set has_aggregate_distinct = true"
+        );
+    }
+
+    #[test]
+    fn with_sum_distinct_sets_has_aggregate_distinct() {
+        let stmt = parse_one(
+            "WITH t AS (SELECT amount FROM payments) SELECT SUM(DISTINCT amount) FROM t",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_aggregate_distinct,
+            "WITH query using SUM(DISTINCT ...) must set has_aggregate_distinct = true"
+        );
+    }
+
+    #[test]
+    fn select_regular_aggregate_keeps_has_aggregate_distinct_false() {
+        let stmt = parse_one("SELECT COUNT(user_id) FROM events").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_aggregate_distinct,
+            "COUNT(...) without DISTINCT must keep has_aggregate_distinct = false"
         );
     }
 }

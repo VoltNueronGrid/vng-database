@@ -438,6 +438,10 @@ pub enum LogicalPlan {
     UnionAll {
         input: Box<LogicalPlan>,
     },
+    /// DISTINCT-qualified aggregate wrapper (S3-WS1-86 has_aggregate_distinct support).
+    AggregateDistinct {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -537,6 +541,7 @@ impl LogicalPlan {
             LogicalPlan::FullSemiJoin { input } => input.primary_table(),
             LogicalPlan::FullAntiJoin { input } => input.primary_table(),
             LogicalPlan::UnionAll { input } => input.primary_table(),
+            LogicalPlan::AggregateDistinct { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -652,6 +657,7 @@ impl LogicalPlan {
             LogicalPlan::FullSemiJoin { input } => input.has_aggregation(),
             LogicalPlan::FullAntiJoin { input } => input.has_aggregation(),
             LogicalPlan::UnionAll { input } => input.has_aggregation(),
+            LogicalPlan::AggregateDistinct { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1433,6 +1439,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.16,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::AggregateDistinct { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.17,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -2336,12 +2350,21 @@ impl QueryPlanner {
         };
 
         // UnionAll wrapper (S3-WS1-85 has_union_all detection): outermost node.
-        if sel.has_union_all {
+        let after_union_all = if sel.has_union_all {
             LogicalPlan::UnionAll {
                 input: Box::new(after_full_anti_join),
             }
         } else {
             after_full_anti_join
+        };
+
+        // AggregateDistinct wrapper (S3-WS1-86 has_aggregate_distinct detection): outermost node.
+        if sel.has_aggregate_distinct {
+            LogicalPlan::AggregateDistinct {
+                input: Box::new(after_union_all),
+            }
+        } else {
+            after_union_all
         }
     }
 
@@ -4169,5 +4192,24 @@ mod tests {
         let c = cost("SELECT id FROM users UNION ALL SELECT id FROM users_archive");
         assert_eq!(c.recommended_path, QueryPath::Olap, "UNION ALL should route to OLAP");
         assert!(c.relative_cost >= 0.16, "UnionAll must carry at least 0.16 cost overhead");
+    }
+
+    // ── S3-WS1-86: AggregateDistinct wrapper tests ───────────────────────
+
+    #[test]
+    fn planner_aggregate_distinct_produces_aggregate_distinct_node() {
+        let p = plan("SELECT COUNT(DISTINCT user_id) FROM events");
+        assert!(
+            matches!(&p, LogicalPlan::AggregateDistinct { .. }),
+            "COUNT(DISTINCT ...) must produce outermost AggregateDistinct node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_aggregate_distinct_routes_to_olap_with_overhead() {
+        let c = cost("SELECT COUNT(DISTINCT user_id) FROM events");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "aggregate DISTINCT should route to OLAP");
+        assert!(c.relative_cost >= 0.17, "AggregateDistinct must carry at least 0.17 cost overhead");
     }
 }

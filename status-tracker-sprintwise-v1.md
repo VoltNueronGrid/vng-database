@@ -1687,6 +1687,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 110 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline -> New:** sql 357->360, exec 194->196, service 669->673 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_aggregate_distinct: bool` field + detection | `voltnuerongrid-sql` | Detects DISTINCT-qualified aggregate calls (COUNT/SUM/AVG/MIN/MAX DISTINCT) in SELECT/WITH queries (`S3-WS1-86`) | 3 (`aggregate_distinct_tests` module) |
+| `AggregateDistinct { input }` plan node | `voltnuerongrid-exec` | OLAP-routed DISTINCT-aggregate wrapper in `LogicalPlan`; +0.17 cost overhead | 2 |
+| `GET /api/v1/store/wal/aggregate/distinct/count` | `voltnuerongridd` | Counts DISTINCT-qualified aggregate usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/aggregate/distinct/count` | `voltnuerongridd` | Counts DISTINCT-qualified aggregate usage in row snapshot values (operator-auth) | 2 |
+
+---
+
 ## Session 109 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
