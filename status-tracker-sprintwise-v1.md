@@ -1550,7 +1550,7 @@ Release Gate Impact: <none|medium|high>
 ## Session 98 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
-**Test Baseline → New:** sql 321→324, exec 170→172, service 621→625 (+10 total)
+**Test Baseline → New:** sql 321→324, exec 170→172, service 621→625 (+9 total)
 
 | Item | Crate | Change | Tests Added |
 |---|---|---|---|
@@ -1564,7 +1564,7 @@ Release Gate Impact: <none|medium|high>
 ## Session 99 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
-**Test Baseline → New:** sql 324→327, exec 172→174, service 625→629 (+10 total)
+**Test Baseline → New:** sql 324→327, exec 172→174, service 625→629 (+9 total)
 
 | Item | Crate | Change | Tests Added |
 |---|---|---|---|
@@ -1572,6 +1572,20 @@ Release Gate Impact: <none|medium|high>
 | `AntiJoin { input }` plan node | `voltnuerongrid-exec` | OLAP-routed anti join wrapper in `LogicalPlan`; +0.11 cost overhead | 2 |
 | `GET /api/v1/store/wal/anti/join/count` | `voltnuerongridd` | Counts explicit ANTI JOIN usage in WAL records (operator-auth) | 2 |
 | `GET /api/v1/store/rows/anti/join/count` | `voltnuerongridd` | Counts explicit ANTI JOIN usage in row snapshot values (operator-auth) | 2 |
+
+---
+
+## Session 100 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 327→330, exec 174→176, service 629→633 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_cross_apply: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `CROSS APPLY` in SELECT/WITH queries (`S3-WS1-76`) | 3 (`cross_apply_tests` module) |
+| `CrossApply { input }` plan node | `voltnuerongrid-exec` | OLAP-routed cross apply wrapper in `LogicalPlan`; +0.12 cost overhead | 2 |
+| `GET /api/v1/store/wal/cross/apply/count` | `voltnuerongridd` | Counts explicit CROSS APPLY usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/cross/apply/count` | `voltnuerongridd` | Counts explicit CROSS APPLY usage in row snapshot values (operator-auth) | 2 |
 
 ---
 

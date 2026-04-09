@@ -569,6 +569,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `AntiJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.11 cost), and `plan_select()` (`has_anti_join` outermost wrap after semi-join handling). Tests: `planner_anti_join_produces_anti_join_node`, `cost_anti_join_routes_to_olap_with_overhead`. Total: **174 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/anti/join/count` and `GET /api/v1/store/rows/anti/join/count` (operator-auth, explicit ANTI-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_75_*`). Total: **629 passed**.
 
+### 9.2bp Session 100 Implementation Update (S3-WS1-76 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_cross_apply: bool` field to `SelectStatement` (ast.rs). Detects explicit `CROSS APPLY` clauses in SELECT/WITH queries (S3-WS1-76). Tests: `cross_apply_tests` module (3 tests). Total: **330 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `CrossApply { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.12 cost), and `plan_select()` (`has_cross_apply` outermost wrap after anti-join handling). Tests: `planner_cross_apply_produces_cross_apply_node`, `cost_cross_apply_routes_to_olap_with_overhead`. Total: **176 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/cross/apply/count` and `GET /api/v1/store/rows/cross/apply/count` (operator-auth, explicit CROSS-APPLY usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_76_*`). Total: **633 passed**.
+
 ### 9.2bj Session 94 Implementation Update (S3-WS1-70 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_right_join: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `RIGHT JOIN` or `RIGHT OUTER JOIN` clauses (S3-WS1-70). Tests: `right_join_tests` module (3 tests). Total: **312 passed**.

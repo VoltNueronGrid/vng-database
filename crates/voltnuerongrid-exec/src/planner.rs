@@ -398,6 +398,10 @@ pub enum LogicalPlan {
     AntiJoin {
         input: Box<LogicalPlan>,
     },
+    /// CROSS APPLY wrapper (S3-WS1-76 has_cross_apply support).
+    CrossApply {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -487,6 +491,7 @@ impl LogicalPlan {
             LogicalPlan::StraightJoin { input } => input.primary_table(),
             LogicalPlan::SemiJoin { input } => input.primary_table(),
             LogicalPlan::AntiJoin { input } => input.primary_table(),
+            LogicalPlan::CrossApply { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -592,6 +597,7 @@ impl LogicalPlan {
             LogicalPlan::StraightJoin { input } => input.has_aggregation(),
             LogicalPlan::SemiJoin { input } => input.has_aggregation(),
             LogicalPlan::AntiJoin { input } => input.has_aggregation(),
+            LogicalPlan::CrossApply { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1293,6 +1299,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.11,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::CrossApply { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.12,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -2106,12 +2120,21 @@ impl QueryPlanner {
         };
 
         // AntiJoin wrapper (S3-WS1-75 has_anti_join detection): outermost node.
-        if sel.has_anti_join {
+        let after_anti_join = if sel.has_anti_join {
             LogicalPlan::AntiJoin {
                 input: Box::new(after_semi_join),
             }
         } else {
             after_semi_join
+        };
+
+        // CrossApply wrapper (S3-WS1-76 has_cross_apply detection): outermost node.
+        if sel.has_cross_apply {
+            LogicalPlan::CrossApply {
+                input: Box::new(after_anti_join),
+            }
+        } else {
+            after_anti_join
         }
     }
 
@@ -3739,5 +3762,24 @@ mod tests {
         let c = cost("SELECT u.id FROM users u ANTI JOIN orders o ON o.user_id = u.id");
         assert_eq!(c.recommended_path, QueryPath::Olap, "ANTI JOIN should route to OLAP");
         assert!(c.relative_cost >= 0.11, "AntiJoin must carry at least 0.11 cost overhead");
+    }
+
+    // ── S3-WS1-76: CrossApply node tests ────────────────────────
+
+    #[test]
+    fn planner_cross_apply_produces_cross_apply_node() {
+        let p = plan("SELECT u.id FROM users u CROSS APPLY (SELECT 1) x");
+        assert!(
+            matches!(&p, LogicalPlan::CrossApply { .. }),
+            "SELECT ... CROSS APPLY must produce outermost CrossApply node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_cross_apply_routes_to_olap_with_overhead() {
+        let c = cost("SELECT u.id FROM users u CROSS APPLY (SELECT 1) x");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "CROSS APPLY should route to OLAP");
+        assert!(c.relative_cost >= 0.12, "CrossApply must carry at least 0.12 cost overhead");
     }
 }

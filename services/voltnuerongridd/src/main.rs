@@ -3420,6 +3420,20 @@ struct RowsAntiJoinCountResponse {
     anti_join_count: usize,
 }
 
+// S3-WS1-76: wal/cross/apply/count + rows/cross/apply/count structs
+
+#[derive(Debug, Serialize)]
+struct WalCrossApplyCountResponse {
+    status: &'static str,
+    cross_apply_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsCrossApplyCountResponse {
+    status: &'static str,
+    cross_apply_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4930,6 +4944,8 @@ async fn main() {
         .route("/api/v1/store/rows/semi/join/count", get(rows_semi_join_count))
         .route("/api/v1/store/wal/anti/join/count", get(wal_anti_join_count))
         .route("/api/v1/store/rows/anti/join/count", get(rows_anti_join_count))
+        .route("/api/v1/store/wal/cross/apply/count", get(wal_cross_apply_count))
+        .route("/api/v1/store/rows/cross/apply/count", get(rows_cross_apply_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -11902,6 +11918,56 @@ async fn rows_anti_join_count(
     Ok((StatusCode::OK, Json(RowsAntiJoinCountResponse {
         status: "ok",
         anti_join_count,
+    })))
+}
+
+// S3-WS1-76: wal/cross/apply/count endpoint
+async fn wal_cross_apply_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalCrossApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state
+        .wal_engine
+        .lock()
+        .expect("wal_engine lock wal_cross_apply_count");
+    let mut cross_apply_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains(" CROSS APPLY ") {
+            cross_apply_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalCrossApplyCountResponse {
+        status: "ok",
+        cross_apply_count,
+    })))
+}
+
+// S3-WS1-76: rows/cross/apply/count endpoint
+async fn rows_cross_apply_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsCrossApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state
+        .row_store
+        .lock()
+        .expect("row_store lock rows_cross_apply_count");
+    let mut cross_apply_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains(" CROSS APPLY ") {
+                cross_apply_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsCrossApplyCountResponse {
+        status: "ok",
+        cross_apply_count,
     })))
 }
 
@@ -27569,6 +27635,56 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_anti_join_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-76: wal_cross_apply_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_76_wal_cross_apply_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_cross_apply_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.cross_apply_count,
+            0,
+            "fresh WAL must have zero CROSS APPLY counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_76_wal_cross_apply_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_cross_apply_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-76: rows_cross_apply_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_76_rows_cross_apply_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_cross_apply_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.cross_apply_count,
+            0,
+            "fresh rows must have zero CROSS APPLY counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_76_rows_cross_apply_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_cross_apply_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

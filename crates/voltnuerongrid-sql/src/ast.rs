@@ -201,6 +201,8 @@ pub struct SelectStatement {
     pub has_semi_join: bool,
     /// True when the query uses ANTI JOIN (S3-WS1-75).
     pub has_anti_join: bool,
+    /// True when the query uses CROSS APPLY (S3-WS1-76).
+    pub has_cross_apply: bool,
 }
 
 /// A parsed INSERT statement.
@@ -587,6 +589,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_anti_join(&up) {
                     stmt.has_anti_join = true;
                 }
+                if has_cross_apply(&up) {
+                    stmt.has_cross_apply = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -715,6 +720,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_anti_join(&up) {
                     stmt.has_anti_join = true;
+                }
+                if has_cross_apply(&up) {
+                    stmt.has_cross_apply = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3419,6 +3427,10 @@ fn has_anti_join(up: &str) -> bool {
     up.contains(" ANTI JOIN ")
 }
 
+fn has_cross_apply(up: &str) -> bool {
+    up.contains(" CROSS APPLY ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4275,6 +4287,55 @@ mod anti_join_tests {
         assert!(
             !s.has_anti_join,
             "SELECT without ANTI JOIN must keep has_anti_join = false"
+        );
+    }
+}
+
+// ─── S3-WS1-76: has_cross_apply tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod cross_apply_tests {
+    use super::*;
+
+    #[test]
+    fn select_cross_apply_sets_has_cross_apply() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u CROSS APPLY (SELECT 1) x",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_cross_apply,
+            "SELECT ... CROSS APPLY must set has_cross_apply = true"
+        );
+    }
+
+    #[test]
+    fn select_outer_apply_keeps_has_cross_apply_false() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u OUTER APPLY (SELECT 1) x",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_cross_apply,
+            "OUTER APPLY must keep has_cross_apply = false"
+        );
+    }
+
+    #[test]
+    fn select_without_cross_apply_keeps_has_cross_apply_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_cross_apply,
+            "SELECT without CROSS APPLY must keep has_cross_apply = false"
         );
     }
 }
