@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-09 (session 104)
+**Last updated:** 2026-04-09 (session 105)
 
 ---
 
@@ -598,6 +598,12 @@ A tracker row moves to **Done** only when:
 - **SQL (`voltnuerongrid-sql`)**: Added `has_left_anti_join: bool` field to `SelectStatement` (ast.rs). Detects explicit `LEFT ANTI JOIN` clauses in SELECT/WITH queries (S3-WS1-80). Tests: `left_anti_join_tests` module (3 tests). Total: **342 passed**.
 - **Exec (`voltnuerongrid-exec`)**: Added `LeftAntiJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.11 cost), and `plan_select()` (`has_left_anti_join` outermost wrap after left-semi-join handling). Tests: `planner_left_anti_join_produces_left_anti_join_node`, `cost_left_anti_join_routes_to_olap_with_overhead`. Total: **184 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/left/anti/join/count` and `GET /api/v1/store/rows/left/anti/join/count` (operator-auth, explicit LEFT-ANTI-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_80_*`). Total: **649 passed**.
+
+### 9.2bu Session 105 Implementation Update (S3-WS1-81 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_right_semi_join: bool` field to `SelectStatement` (ast.rs). Detects explicit `RIGHT SEMI JOIN` clauses in SELECT/WITH queries (S3-WS1-81). Tests: `right_semi_join_tests` module (3 tests). Total: **345 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `RightSemiJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.12 cost), and `plan_select()` (`has_right_semi_join` outermost wrap after left-anti-join handling). Tests: `planner_right_semi_join_produces_right_semi_join_node`, `cost_right_semi_join_routes_to_olap_with_overhead`. Total: **186 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/right/semi/join/count` and `GET /api/v1/store/rows/right/semi/join/count` (operator-auth, explicit RIGHT-SEMI-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_81_*`). Total: **653 passed**.
 
 ### 9.2bj Session 94 Implementation Update (S3-WS1-70 + service endpoints)
 
