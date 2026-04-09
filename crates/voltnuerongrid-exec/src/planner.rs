@@ -426,6 +426,10 @@ pub enum LogicalPlan {
     RightAntiJoin {
         input: Box<LogicalPlan>,
     },
+    /// FULL SEMI JOIN wrapper (S3-WS1-83 has_full_semi_join support).
+    FullSemiJoin {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -522,6 +526,7 @@ impl LogicalPlan {
             LogicalPlan::LeftAntiJoin { input } => input.primary_table(),
             LogicalPlan::RightSemiJoin { input } => input.primary_table(),
             LogicalPlan::RightAntiJoin { input } => input.primary_table(),
+            LogicalPlan::FullSemiJoin { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -634,6 +639,7 @@ impl LogicalPlan {
             LogicalPlan::LeftAntiJoin { input } => input.has_aggregation(),
             LogicalPlan::RightSemiJoin { input } => input.has_aggregation(),
             LogicalPlan::RightAntiJoin { input } => input.has_aggregation(),
+            LogicalPlan::FullSemiJoin { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1391,6 +1397,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.13,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::FullSemiJoin { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.14,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -2267,12 +2281,21 @@ impl QueryPlanner {
         };
 
         // RightAntiJoin wrapper (S3-WS1-82 has_right_anti_join detection): outermost node.
-        if sel.has_right_anti_join {
+        let after_right_anti_join = if sel.has_right_anti_join {
             LogicalPlan::RightAntiJoin {
                 input: Box::new(after_right_semi_join),
             }
         } else {
             after_right_semi_join
+        };
+
+        // FullSemiJoin wrapper (S3-WS1-83 has_full_semi_join detection): outermost node.
+        if sel.has_full_semi_join {
+            LogicalPlan::FullSemiJoin {
+                input: Box::new(after_right_anti_join),
+            }
+        } else {
+            after_right_anti_join
         }
     }
 
@@ -4043,5 +4066,24 @@ mod tests {
         let c = cost("SELECT u.id FROM users u RIGHT ANTI JOIN orders o ON o.user_id = u.id");
         assert_eq!(c.recommended_path, QueryPath::Olap, "RIGHT ANTI JOIN should route to OLAP");
         assert!(c.relative_cost >= 0.13, "RightAntiJoin must carry at least 0.13 cost overhead");
+    }
+
+    // ── S3-WS1-83: FullSemiJoin node tests ──────────────────────
+
+    #[test]
+    fn planner_full_semi_join_produces_full_semi_join_node() {
+        let p = plan("SELECT u.id FROM users u FULL SEMI JOIN orders o ON o.user_id = u.id");
+        assert!(
+            matches!(&p, LogicalPlan::FullSemiJoin { .. }),
+            "SELECT ... FULL SEMI JOIN must produce outermost FullSemiJoin node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_full_semi_join_routes_to_olap_with_overhead() {
+        let c = cost("SELECT u.id FROM users u FULL SEMI JOIN orders o ON o.user_id = u.id");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "FULL SEMI JOIN should route to OLAP");
+        assert!(c.relative_cost >= 0.14, "FullSemiJoin must carry at least 0.14 cost overhead");
     }
 }

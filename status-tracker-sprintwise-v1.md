@@ -1673,6 +1673,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 107 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline -> New:** sql 348->351, exec 188->190, service 657->661 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_full_semi_join: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `FULL SEMI JOIN` in SELECT/WITH queries (`S3-WS1-83`) | 3 (`full_semi_join_tests` module) |
+| `FullSemiJoin { input }` plan node | `voltnuerongrid-exec` | OLAP-routed FULL-SEMI-JOIN wrapper in `LogicalPlan`; +0.14 cost overhead | 2 |
+| `GET /api/v1/store/wal/full/semi/join/count` | `voltnuerongridd` | Counts explicit FULL SEMI JOIN usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/full/semi/join/count` | `voltnuerongridd` | Counts explicit FULL SEMI JOIN usage in row snapshot values (operator-auth) | 2 |
+
+---
+
 ## Definition of Done (Tracker)
 
 A tracker row moves to **Done** only when:
