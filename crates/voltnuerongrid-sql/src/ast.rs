@@ -193,6 +193,8 @@ pub struct SelectStatement {
     pub has_right_join: bool,
     /// True when the query uses FULL JOIN / FULL OUTER JOIN (S3-WS1-71).
     pub has_full_outer_join: bool,
+    /// True when the query uses INNER JOIN or bare JOIN (S3-WS1-72).
+    pub has_inner_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -567,6 +569,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_full_outer_join(&up) {
                     stmt.has_full_outer_join = true;
                 }
+                if has_inner_join(&up) {
+                    stmt.has_inner_join = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -683,6 +688,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_full_outer_join(&up) {
                     stmt.has_full_outer_join = true;
+                }
+                if has_inner_join(&up) {
+                    stmt.has_inner_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3371,6 +3379,10 @@ fn has_full_outer_join(up: &str) -> bool {
     up.contains(" FULL JOIN ") || up.contains(" FULL OUTER JOIN ")
 }
 
+fn has_inner_join(up: &str) -> bool {
+    up.contains(" INNER JOIN ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4033,6 +4045,54 @@ mod full_outer_join_tests {
         assert!(
             !s.has_full_outer_join,
             "RIGHT JOIN must keep has_full_outer_join = false"
+        );
+    }
+}
+
+// ─── S3-WS1-72: has_inner_join tests ────────────────────────────────────────
+
+#[cfg(test)]
+mod inner_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_inner_join_sets_has_inner_join() {
+        let stmt = parse_one(
+            "SELECT u.id, o.total FROM users u INNER JOIN orders o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_inner_join,
+            "SELECT ... INNER JOIN must set has_inner_join = true"
+        );
+    }
+
+    #[test]
+    fn select_bare_join_keeps_has_inner_join_false() {
+        let stmt =
+            parse_one("SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id")
+                .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_inner_join,
+            "SELECT ... JOIN must keep has_inner_join = false"
+        );
+    }
+
+    #[test]
+    fn select_without_inner_join_keeps_has_inner_join_false() {
+        let stmt = parse_one("SELECT u.id, o.total FROM users u LEFT JOIN orders o ON o.user_id = u.id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_inner_join,
+            "LEFT JOIN must keep has_inner_join = false"
         );
     }
 }

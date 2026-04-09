@@ -1519,6 +1519,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 96 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 315→318, exec 166→168, service 613→617 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_inner_join: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `INNER JOIN` in SELECT/WITH queries (`S3-WS1-72`) | 3 (`inner_join_tests` module) |
+| `InnerJoin { input }` plan node | `voltnuerongrid-exec` | OLAP-routed inner join wrapper in `LogicalPlan`; +0.11 cost overhead | 2 |
+| `GET /api/v1/store/wal/inner/join/count` | `voltnuerongridd` | Counts explicit INNER JOIN usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/inner/join/count` | `voltnuerongridd` | Counts explicit INNER JOIN usage in row snapshot values (operator-auth) | 2 |
+
+---
+
 ## Definition of Done (Tracker)
 
 A tracker row moves to **Done** only when:
