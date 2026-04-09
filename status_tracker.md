@@ -924,6 +924,7 @@ A tracker row moves to **Done** only when:
 - H-10 governance baseline is now gate-linked with passing artifacts (`tests/kpi/results/h10/h10-governance-checklist.json`, `tests/kpi/results/h10/h10-gate-summary.json`, `tests/kpi/results/gates/h10-release-readiness.json`); next step is ARB ratification evidence injection.
 - Add a tooling hardening follow-up to stabilize Windows PowerShell gate/evidence summary artifact regeneration so release-facing JSON does not require manual synchronization after validated smoke runs.
 - Repair the default WSL/Codacy installer path, or explicitly document the fallback path when automated Codacy analysis cannot run during file edits.
+- Execute tracker-evidence hygiene pass for WS3 + Ops/Resilience: rerun `run-ws3-gate.ps1` and `run-release-ops-resilience-gate.ps1`, then ensure primary artifacts are refreshed (or explicitly annotated when CI/agent artifacts are the newest evidence).
 
 ### 9.4 Owner Assignment Matrix (Published)
 
