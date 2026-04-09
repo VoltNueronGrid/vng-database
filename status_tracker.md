@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-09 (session 112)
+**Last updated:** 2026-04-09 (session 113)
 
 ---
 
@@ -315,13 +315,13 @@ Actual gate artifact status verified by code/artifact inspection and live runs. 
 | WS5 gate | passed | ready_for_validation | All packs passing. |
 | WS6 gate | passed | ready_for_validation | All packs passing. |
 | WS7 gate | — | ready_for_validation | Release artifact shows ready. |
-| WS8 gate | passed | ready_for_validation | All packs passing including tenant autonomous runtime. |
+| WS8 gate | **failed** (2026-04-09 rerun) | **blocked** | `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` reports failed pack `ws8a-audit-companion`; fix/re-run required before promoting WS8/R3 autonomous evidence. |
 | WS8A gate | — | ready_for_validation | Release artifact shows ready. |
 | WS9/WS9A/WS10 | — | ready_for_validation | DX/API cluster gate: ready_for_validation. |
 | WS11–WS15 | — | ready_for_validation | Ops/Resilience cluster gate: ready_for_validation. |
 | R1 release gate | **passed** | **ready_for_validation** | `release-r1-sql-udf-readiness.json` green after full `run-release-r1-sql-udf-gate.ps1` (2026-04-06); packs include `r1-baseline-checklist`, `ws1-closure-gate`, `ws22-closure-gate`. Local default-path runs mirror `ci-release-r1-sql-udf-readiness.json` for parity with `.github/workflows/ci.yml`. |
 | R2 failover gate | — | ready_for_validation | `release-r2-failover-readiness.json` shows ready. |
-| R3 autonomous gate | passed | — (checks empty) | `release-r3-autonomous-readiness.json` generated 2026-03-08; check fields are empty objects. Needs re-run. |
+| R3 autonomous gate | stale | — (checks empty) | `release-r3-autonomous-readiness.json` generated 2026-03-08 has empty checks; latest WS8 rerun is blocked (`ws8a-audit-companion` failed), so R3 autonomous release evidence must be refreshed after remediation. |
 | R3 plugin gate | — | ready_for_validation | `release-r3-plugin-readiness.json` shows ready. |
 
 **Crate stub inventory (as of 2026-04-04):**
