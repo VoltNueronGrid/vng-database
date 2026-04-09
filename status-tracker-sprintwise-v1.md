@@ -1687,6 +1687,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 109 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline -> New:** sql 354->357, exec 192->194, service 665->669 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_union_all: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `UNION ALL` in SELECT/WITH queries (`S3-WS1-85`) | 3 (`union_all_tests` module) |
+| `UnionAll { input }` plan node | `voltnuerongrid-exec` | OLAP-routed UNION-ALL wrapper in `LogicalPlan`; +0.16 cost overhead | 2 |
+| `GET /api/v1/store/wal/union/all/count` | `voltnuerongridd` | Counts explicit UNION ALL usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/union/all/count` | `voltnuerongridd` | Counts explicit UNION ALL usage in row snapshot values (operator-auth) | 2 |
+
+---
+
 ## Session 108 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)

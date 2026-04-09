@@ -43,6 +43,8 @@ pub struct SelectStatement {
     pub join: Option<JoinClause>,
     /// True when the raw SQL contains a UNION / UNION ALL set operation (S3-WS1-04).
     pub has_union: bool,
+    /// True when the raw SQL contains a UNION ALL set operation (S3-WS1-85).
+    pub has_union_all: bool,
     /// True when the raw SQL contains a correlated or scalar subquery `(SELECT …)` (S3-WS1-04).
     pub has_subquery: bool,
     /// True when the raw SQL contains a window function call `OVER (` (S3-WS1-04).
@@ -307,6 +309,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 let up = raw.to_ascii_uppercase();
                 if up.contains(" UNION ") {
                     stmt.has_union = true;
+                }
+                if has_union_all(&up) {
+                    stmt.has_union_all = true;
                 }
                 // Detect correlated / scalar subqueries: any `(SELECT …)` (S3-WS1-04).
                 if up.contains("(SELECT") || up.contains("( SELECT") {
@@ -647,6 +652,12 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 let up = raw.to_ascii_uppercase();
                 if up.trim_start().starts_with("WITH ") && up.contains(" AS (") {
                     stmt.has_with_cte = true;
+                }
+                if up.contains(" UNION ") {
+                    stmt.has_union = true;
+                }
+                if has_union_all(&up) {
+                    stmt.has_union_all = true;
                 }
                 if up.trim_start().starts_with("WITH RECURSIVE ") && up.contains(" AS (") {
                     stmt.has_recursive_cte = true;
@@ -3527,6 +3538,10 @@ fn has_full_anti_join(up: &str) -> bool {
     up.contains(" FULL ANTI JOIN ")
 }
 
+fn has_union_all(up: &str) -> bool {
+    up.contains(" UNION ALL ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4824,6 +4839,52 @@ mod full_anti_join_tests {
         assert!(
             !s.has_full_anti_join,
             "SELECT without FULL ANTI JOIN must keep has_full_anti_join = false"
+        );
+    }
+}
+
+// ─── S3-WS1-85: has_union_all tests ────────────────────────────────────────
+
+#[cfg(test)]
+mod union_all_tests {
+    use super::*;
+
+    #[test]
+    fn select_union_all_sets_has_union_all() {
+        let stmt = parse_one("SELECT id FROM users UNION ALL SELECT id FROM users_archive").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_union_all,
+            "SELECT ... UNION ALL must set has_union_all = true"
+        );
+    }
+
+    #[test]
+    fn with_union_all_sets_has_union_all() {
+        let stmt = parse_one(
+            "WITH u AS (SELECT id FROM users) SELECT id FROM u UNION ALL SELECT id FROM u",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_union_all,
+            "WITH query using UNION ALL must set has_union_all = true"
+        );
+    }
+
+    #[test]
+    fn select_union_distinct_keeps_has_union_all_false() {
+        let stmt = parse_one("SELECT id FROM users UNION SELECT id FROM users_archive").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_union_all,
+            "UNION without ALL must keep has_union_all = false"
         );
     }
 }

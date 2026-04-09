@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-09 (session 108)
+**Last updated:** 2026-04-09 (session 109)
 
 ---
 
@@ -616,6 +616,12 @@ A tracker row moves to **Done** only when:
 - **SQL (`voltnuerongrid-sql`)**: Added `has_full_semi_join: bool` field to `SelectStatement` (ast.rs). Detects explicit `FULL SEMI JOIN` clauses in SELECT/WITH queries (S3-WS1-83). Tests: `full_semi_join_tests` module (3 tests). Total: **351 passed**.
 - **Exec (`voltnuerongrid-exec`)**: Added `FullSemiJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.14 cost), and `plan_select()` (`has_full_semi_join` outermost wrap after right-anti-join handling). Tests: `planner_full_semi_join_produces_full_semi_join_node`, `cost_full_semi_join_routes_to_olap_with_overhead`. Total: **190 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/full/semi/join/count` and `GET /api/v1/store/rows/full/semi/join/count` (operator-auth, explicit FULL-SEMI-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_83_*`). Total: **661 passed**.
+
+### 9.2by Session 109 Implementation Update (S3-WS1-85 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_union_all: bool` field to `SelectStatement` (ast.rs). Detects explicit `UNION ALL` set-operation usage in SELECT/WITH queries (S3-WS1-85). Tests: `union_all_tests` module (3 tests). Total: **357 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `UnionAll { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.16 cost), and `plan_select()` (`has_union_all` outermost wrap after full-anti-join handling). Tests: `planner_union_all_produces_union_all_node`, `cost_union_all_routes_to_olap_with_overhead`. Total: **194 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/union/all/count` and `GET /api/v1/store/rows/union/all/count` (operator-auth, UNION-ALL usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_85_*`). Total: **669 passed**.
 
 ### 9.2bx Session 108 Implementation Update (S3-WS1-84 + service endpoints)
 

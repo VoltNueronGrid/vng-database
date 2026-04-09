@@ -3546,6 +3546,20 @@ struct RowsFullAntiJoinCountResponse {
     full_anti_join_count: usize,
 }
 
+// S3-WS1-85: wal/union/all/count + rows/union/all/count structs
+
+#[derive(Debug, Serialize)]
+struct WalUnionAllCountResponse {
+    status: &'static str,
+    union_all_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsUnionAllCountResponse {
+    status: &'static str,
+    union_all_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -5074,6 +5088,8 @@ async fn main() {
         .route("/api/v1/store/rows/full/semi/join/count", get(rows_full_semi_join_count))
         .route("/api/v1/store/wal/full/anti/join/count", get(wal_full_anti_join_count))
         .route("/api/v1/store/rows/full/anti/join/count", get(rows_full_anti_join_count))
+        .route("/api/v1/store/wal/union/all/count", get(wal_union_all_count))
+        .route("/api/v1/store/rows/union/all/count", get(rows_union_all_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -12496,6 +12512,56 @@ async fn rows_full_anti_join_count(
     Ok((StatusCode::OK, Json(RowsFullAntiJoinCountResponse {
         status: "ok",
         full_anti_join_count,
+    })))
+}
+
+// S3-WS1-85: wal/union/all/count endpoint
+async fn wal_union_all_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalUnionAllCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state
+        .wal_engine
+        .lock()
+        .expect("wal_engine lock wal_union_all_count");
+    let mut union_all_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains(" UNION ALL ") {
+            union_all_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalUnionAllCountResponse {
+        status: "ok",
+        union_all_count,
+    })))
+}
+
+// S3-WS1-85: rows/union/all/count endpoint
+async fn rows_union_all_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsUnionAllCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state
+        .row_store
+        .lock()
+        .expect("row_store lock rows_union_all_count");
+    let mut union_all_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains(" UNION ALL ") {
+                union_all_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsUnionAllCountResponse {
+        status: "ok",
+        union_all_count,
     })))
 }
 
@@ -28605,6 +28671,56 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_full_anti_join_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-85: wal_union_all_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_85_wal_union_all_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_union_all_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.union_all_count,
+            0,
+            "fresh WAL must have zero UNION ALL counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_85_wal_union_all_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_union_all_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-85: rows_union_all_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_85_rows_union_all_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_union_all_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.union_all_count,
+            0,
+            "fresh rows must have zero UNION ALL counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_85_rows_union_all_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_union_all_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
