@@ -1687,6 +1687,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 112 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline -> New:** sql 363->366, exec 198->200, service 677->681 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_column_alias: bool` field + detection | `voltnuerongrid-sql` | Detects column-level aliases in SELECT list (e.g. `expr AS alias`) before FROM keyword; excludes CAST args and subquery aliases (`S3-WS1-88`) | 3 (`column_alias_tests` module) |
+| `ColumnAlias { input }` plan node | `voltnuerongrid-exec` | OLAP-routed column-alias wrapper in `LogicalPlan`; +0.03 cost overhead; inserted after `after_project` so higher-level feature wrappers remain outermost | 2 |
+| `GET /api/v1/store/wal/sql/column/alias/count` | `voltnuerongridd` | Counts column-alias usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/sql/column/alias/count` | `voltnuerongridd` | Counts column-alias usage in row snapshot values (operator-auth) | 2 |
+
+---
+
 ## Session 111 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)

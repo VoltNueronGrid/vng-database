@@ -65,6 +65,8 @@ pub struct SelectStatement {
     pub has_group_by: bool,
     /// True when the query uses explicit table aliases with AS in FROM/JOIN clauses (S3-WS1-87).
     pub has_table_alias: bool,
+    /// True when the SELECT list contains column-level aliases (e.g. `expr AS alias`) (S3-WS1-88).
+    pub has_column_alias: bool,
     /// True when the query contains an ORDER BY clause (S3-WS1-06).
     pub has_order_by: bool,
     /// True when the query contains a HAVING clause (S3-WS1-06).
@@ -350,6 +352,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_table_alias(&up) {
                     stmt.has_table_alias = true;
+                }
+                if has_column_alias(&up) {
+                    stmt.has_column_alias = true;
                 }
                 // Detect ORDER BY clause (S3-WS1-06).
                 if up.contains("ORDER BY") {
@@ -680,6 +685,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_table_alias(&up) {
                     stmt.has_table_alias = true;
+                }
+                if has_column_alias(&up) {
+                    stmt.has_column_alias = true;
                 }
                 if up.contains("HAVING") {
                     stmt.has_having = true;
@@ -4979,10 +4987,44 @@ fn has_alias_after_anchor(up: &str, anchor: &str, stop_at_join: bool) -> bool {
             .min()
             .unwrap_or(tail.len());
         let source_seg = &tail[..end];
-        if source_seg.contains(" AS ") && !source_seg.contains(" AS (") {
+        // Exclude derived-table / subquery aliases (") AS name") - not simple table aliases.
+        if source_seg.contains(" AS ")
+            && !source_seg.contains(" AS (")
+            && !source_seg.contains(") AS ")
+        {
             return true;
         }
         scan_from = start;
+    }
+    false
+}
+
+/// Detects column-level aliases in the SELECT projection list (e.g. `expr AS alias`).
+/// Only scans the portion of the query before the first FROM keyword, so table
+/// aliases in FROM/JOIN clauses are excluded. CAST expressions (`CAST(x AS TYPE)`)
+/// are excluded by checking that the alias word is not immediately followed by `)`.
+fn has_column_alias(up: &str) -> bool {
+    let select_end = up.find(" FROM ").unwrap_or(up.len());
+    let select_list = &up[..select_end];
+    let mut search_from = 0;
+    while let Some(rel_pos) = select_list[search_from..].find(" AS ") {
+        let abs_pos = search_from + rel_pos;
+        let after_as = abs_pos + 4; // skip " AS "
+        let rest = &select_list[after_as..];
+        let word_end = rest
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(rest.len());
+        // Skip if there is no alias word (e.g. `name AS (` in a CTE definition).
+        if word_end == 0 {
+            search_from = after_as;
+            continue;
+        }
+        // Skip if the character right after the alias word is ')' — it is a CAST type argument.
+        if word_end < rest.len() && rest.as_bytes()[word_end] == b')' {
+            search_from = after_as;
+            continue;
+        }
+        return true;
     }
     false
 }
@@ -5029,6 +5071,49 @@ mod table_alias_tests {
         assert!(
             !s.has_table_alias,
             "SELECT without table aliases must keep has_table_alias = false"
+        );
+    }
+}
+
+// ─── S3-WS1-88: has_column_alias tests ───────────────────────────────────────
+
+#[cfg(test)]
+mod column_alias_tests {
+    use super::*;
+
+    #[test]
+    fn select_with_column_alias_sets_has_column_alias() {
+        let stmt = parse_one("SELECT price * 0.9 AS discounted FROM products").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_column_alias,
+            "SELECT expr AS alias must set has_column_alias = true"
+        );
+    }
+
+    #[test]
+    fn select_multiple_column_aliases_sets_has_column_alias() {
+        let stmt = parse_one("SELECT name AS label, price AS cost FROM products").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_column_alias,
+            "Multiple column aliases must set has_column_alias = true"
+        );
+    }
+
+    #[test]
+    fn select_without_column_alias_keeps_has_column_alias_false() {
+        let stmt = parse_one("SELECT id, name FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_column_alias,
+            "SELECT without column aliases must keep has_column_alias = false"
         );
     }
 }

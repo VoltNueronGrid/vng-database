@@ -3592,6 +3592,44 @@ fn contains_table_alias_sql(up: &str) -> bool {
     contains_alias_after_anchor(up, " FROM ", true) || contains_alias_after_anchor(up, " JOIN ", false)
 }
 
+// S3-WS1-88: wal/sql/column/alias/count + rows/sql/column/alias/count structs
+
+#[derive(Debug, Serialize)]
+struct WalColumnAliasCountResponse {
+    status: &'static str,
+    column_alias_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsColumnAliasCountResponse {
+    status: &'static str,
+    column_alias_count: usize,
+}
+
+fn contains_column_alias_sql(up: &str) -> bool {
+    let select_end = up.find(" FROM ").unwrap_or(up.len());
+    let select_list = &up[..select_end];
+    let mut search_from = 0;
+    while let Some(rel_pos) = select_list[search_from..].find(" AS ") {
+        let abs_pos = search_from + rel_pos;
+        let after_as = abs_pos + 4;
+        let rest = &select_list[after_as..];
+        let word_end = rest
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(rest.len());
+        if word_end == 0 {
+            search_from = after_as;
+            continue;
+        }
+        if word_end < rest.len() && rest.as_bytes()[word_end] == b')' {
+            search_from = after_as;
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
 fn contains_alias_after_anchor(up: &str, anchor: &str, stop_at_join: bool) -> bool {
     let mut scan_from = 0usize;
     while let Some(rel_pos) = up[scan_from..].find(anchor) {
@@ -3607,7 +3645,11 @@ fn contains_alias_after_anchor(up: &str, anchor: &str, stop_at_join: bool) -> bo
             .min()
             .unwrap_or(tail.len());
         let source_seg = &tail[..end];
-        if source_seg.contains(" AS ") && !source_seg.contains(" AS (") {
+        // Exclude derived-table / subquery aliases (") AS name") - not simple table aliases.
+        if source_seg.contains(" AS ")
+            && !source_seg.contains(" AS (")
+            && !source_seg.contains(") AS ")
+        {
             return true;
         }
         scan_from = start;
@@ -5149,6 +5191,8 @@ async fn main() {
         .route("/api/v1/store/rows/aggregate/distinct/count", get(rows_aggregate_distinct_count))
         .route("/api/v1/store/wal/table/alias/count", get(wal_table_alias_count))
         .route("/api/v1/store/rows/table/alias/count", get(rows_table_alias_count))
+        .route("/api/v1/store/wal/sql/column/alias/count", get(wal_column_alias_count))
+        .route("/api/v1/store/rows/sql/column/alias/count", get(rows_column_alias_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -12731,6 +12775,56 @@ async fn rows_table_alias_count(
     Ok((StatusCode::OK, Json(RowsTableAliasCountResponse {
         status: "ok",
         table_alias_count,
+    })))
+}
+
+// S3-WS1-88: wal/sql/column/alias/count endpoint
+async fn wal_column_alias_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalColumnAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state
+        .wal_engine
+        .lock()
+        .expect("wal_engine lock wal_column_alias_count");
+    let mut column_alias_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if contains_column_alias_sql(&value_up) {
+            column_alias_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalColumnAliasCountResponse {
+        status: "ok",
+        column_alias_count,
+    })))
+}
+
+// S3-WS1-88: rows/sql/column/alias/count endpoint
+async fn rows_column_alias_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsColumnAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state
+        .row_store
+        .lock()
+        .expect("row_store lock rows_column_alias_count");
+    let mut column_alias_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if contains_column_alias_sql(&value_up) {
+                column_alias_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsColumnAliasCountResponse {
+        status: "ok",
+        column_alias_count,
     })))
 }
 
@@ -28990,6 +29084,56 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_table_alias_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-88: wal_column_alias_count + rows_column_alias_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_88_wal_column_alias_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_column_alias_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.column_alias_count,
+            0,
+            "fresh WAL must have zero column-alias counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_88_wal_column_alias_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_column_alias_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-88: rows_column_alias_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_88_rows_column_alias_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_column_alias_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.column_alias_count,
+            0,
+            "fresh rows must have zero column-alias counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_88_rows_column_alias_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_column_alias_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

@@ -617,6 +617,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `FullSemiJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.14 cost), and `plan_select()` (`has_full_semi_join` outermost wrap after right-anti-join handling). Tests: `planner_full_semi_join_produces_full_semi_join_node`, `cost_full_semi_join_routes_to_olap_with_overhead`. Total: **190 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/full/semi/join/count` and `GET /api/v1/store/rows/full/semi/join/count` (operator-auth, explicit FULL-SEMI-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_83_*`). Total: **661 passed**.
 
+### 9.2cb Session 112 Implementation Update (S3-WS1-88 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_column_alias: bool` field to `SelectStatement` (ast.rs). Detects column-level aliases in the SELECT projection list (e.g. `price * 0.9 AS discounted`) by scanning the portion before FROM, excluding CAST arguments and CTE patterns (S3-WS1-88). Also refined `has_alias_after_anchor` to exclude derived-table / subquery aliases (`) AS name`) preventing false positives in LATERAL/VALUES tests. Tests: `column_alias_tests` module (3 tests). Total: **366 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `ColumnAlias { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.03 cost), and `plan_select()` (`has_column_alias` wrap applied after `after_project`, below all higher-level feature wrappers, ensuring existing outermost-node tests remain unaffected). Tests: `planner_column_alias_produces_column_alias_node`, `cost_column_alias_routes_to_olap_with_overhead`. Total: **200 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/sql/column/alias/count` and `GET /api/v1/store/rows/sql/column/alias/count` (operator-auth, column-alias usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_88_*`). Total: **681 passed**.
+
 ### 9.2ca Session 111 Implementation Update (S3-WS1-87 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_table_alias: bool` field to `SelectStatement` (ast.rs). Detects explicit table aliases using `AS` in FROM/JOIN clauses for SELECT/WITH queries (S3-WS1-87). Tests: `table_alias_tests` module (3 tests). Total: **363 passed**.

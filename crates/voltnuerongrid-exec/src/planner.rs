@@ -446,6 +446,10 @@ pub enum LogicalPlan {
     TableAlias {
         input: Box<LogicalPlan>,
     },
+    /// Column alias semantics wrapper (S3-WS1-88 has_column_alias support).
+    ColumnAlias {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -547,6 +551,7 @@ impl LogicalPlan {
             LogicalPlan::UnionAll { input } => input.primary_table(),
             LogicalPlan::AggregateDistinct { input } => input.primary_table(),
             LogicalPlan::TableAlias { input } => input.primary_table(),
+            LogicalPlan::ColumnAlias { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -664,6 +669,7 @@ impl LogicalPlan {
             LogicalPlan::UnionAll { input } => input.has_aggregation(),
             LogicalPlan::AggregateDistinct { input } => input.has_aggregation(),
             LogicalPlan::TableAlias { input } => input.has_aggregation(),
+            LogicalPlan::ColumnAlias { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1464,6 +1470,14 @@ impl QueryPlanner {
                     recommended_path: QueryPath::Olap,
                 }
             }
+            LogicalPlan::ColumnAlias { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.03,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
             LogicalPlan::WindowFn { input, .. } => {
                 let inner = Self::estimate_cost(input);
                 CostEstimate {
@@ -1624,17 +1638,28 @@ impl QueryPlanner {
         };
 
         // UNION (S3-WS1-04 has_union detection): wrap in Union node with synthetic rhs
+        // ColumnAlias wrapper (S3-WS1-88): wraps after_project so it sits above Project
+        // but below all other feature wrappers (Window, Case, Union, CTE, etc.).
+        let after_column_alias = if sel.has_column_alias {
+            LogicalPlan::ColumnAlias {
+                input: Box::new(after_project),
+            }
+        } else {
+            after_project
+        };
+
+        // UNION (S3-WS1-04 has_union detection): wrap in Union node with synthetic rhs
         let after_union = if sel.has_union {
             let rhs_table = sel.table.clone().unwrap_or_else(|| "<union_rhs>".to_string());
             LogicalPlan::Union {
-                left: Box::new(after_project),
+                left: Box::new(after_column_alias),
                 right: Box::new(LogicalPlan::Scan {
                     table: rhs_table,
                     filter: None,
                 }),
             }
         } else {
-            after_project
+            after_column_alias
         };
 
         // Window function (S3-WS1-04 has_window_fn detection): wrap outermost node.
@@ -4253,5 +4278,24 @@ mod tests {
         let c = cost("SELECT u.id FROM users AS u");
         assert_eq!(c.recommended_path, QueryPath::Olap, "table alias should route to OLAP");
         assert!(c.relative_cost >= 0.04, "TableAlias must carry at least 0.04 cost overhead");
+    }
+
+    // ── S3-WS1-88: ColumnAlias wrapper tests ─────────────────────────────
+
+    #[test]
+    fn planner_column_alias_produces_column_alias_node() {
+        let p = plan("SELECT price * 0.9 AS discounted FROM products");
+        assert!(
+            matches!(&p, LogicalPlan::ColumnAlias { .. }),
+            "SELECT expr AS alias must produce outermost ColumnAlias node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_column_alias_routes_to_olap_with_overhead() {
+        let c = cost("SELECT name AS label FROM customers");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "column alias should route to OLAP");
+        assert!(c.relative_cost >= 0.03, "ColumnAlias must carry at least 0.03 cost overhead");
     }
 }
