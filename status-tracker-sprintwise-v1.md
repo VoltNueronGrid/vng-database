@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 102)
+**Last updated:** 2026-04-09 (session 103)
 
 ---
 
@@ -1614,6 +1614,20 @@ Release Gate Impact: <none|medium|high>
 | `Apply { input }` plan node | `voltnuerongrid-exec` | OLAP-routed generic apply wrapper in `LogicalPlan`; +0.05 cost overhead | 2 |
 | `GET /api/v1/store/wal/apply/count` | `voltnuerongridd` | Counts generic APPLY usage in WAL records (operator-auth) | 2 |
 | `GET /api/v1/store/rows/apply/count` | `voltnuerongridd` | Counts generic APPLY usage in row snapshot values (operator-auth) | 2 |
+
+---
+
+## Session 103 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 336→339, exec 180→182, service 641→645 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_left_semi_join: bool` field + detection | `voltnuerongrid-sql` | Detects explicit `LEFT SEMI JOIN` in SELECT/WITH queries (`S3-WS1-79`) | 3 (`left_semi_join_tests` module) |
+| `LeftSemiJoin { input }` plan node | `voltnuerongrid-exec` | OLAP-routed LEFT-SEMI-JOIN wrapper in `LogicalPlan`; +0.10 cost overhead | 2 |
+| `GET /api/v1/store/wal/left/semi/join/count` | `voltnuerongridd` | Counts explicit LEFT SEMI JOIN usage in WAL records (operator-auth) | 2 |
+| `GET /api/v1/store/rows/left/semi/join/count` | `voltnuerongridd` | Counts explicit LEFT SEMI JOIN usage in row snapshot values (operator-auth) | 2 |
 
 ---
 
