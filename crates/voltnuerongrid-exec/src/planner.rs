@@ -390,6 +390,10 @@ pub enum LogicalPlan {
     StraightJoin {
         input: Box<LogicalPlan>,
     },
+    /// SEMI JOIN wrapper (S3-WS1-74 has_semi_join support).
+    SemiJoin {
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -477,6 +481,7 @@ impl LogicalPlan {
             LogicalPlan::FullOuterJoin { input } => input.primary_table(),
             LogicalPlan::InnerJoin { input } => input.primary_table(),
             LogicalPlan::StraightJoin { input } => input.primary_table(),
+            LogicalPlan::SemiJoin { input } => input.primary_table(),
             LogicalPlan::Distinct { input } => input.primary_table(),
             LogicalPlan::Offset { input, .. } => input.primary_table(),
             LogicalPlan::Having { input, .. } => input.primary_table(),
@@ -580,6 +585,7 @@ impl LogicalPlan {
             LogicalPlan::FullOuterJoin { input } => input.has_aggregation(),
             LogicalPlan::InnerJoin { input } => input.has_aggregation(),
             LogicalPlan::StraightJoin { input } => input.has_aggregation(),
+            LogicalPlan::SemiJoin { input } => input.has_aggregation(),
             LogicalPlan::Distinct { input } => input.has_aggregation(),
             LogicalPlan::Offset { input, .. } => input.has_aggregation(),
             LogicalPlan::Having { input, .. } => input.has_aggregation(),
@@ -1265,6 +1271,14 @@ impl QueryPlanner {
                 CostEstimate {
                     estimated_rows: inner.estimated_rows,
                     relative_cost: inner.relative_cost + 0.09,
+                    recommended_path: QueryPath::Olap,
+                }
+            }
+            LogicalPlan::SemiJoin { input } => {
+                let inner = Self::estimate_cost(input);
+                CostEstimate {
+                    estimated_rows: inner.estimated_rows,
+                    relative_cost: inner.relative_cost + 0.10,
                     recommended_path: QueryPath::Olap,
                 }
             }
@@ -2060,12 +2074,21 @@ impl QueryPlanner {
         };
 
         // StraightJoin wrapper (S3-WS1-73 has_straight_join detection): outermost node.
-        if sel.has_straight_join {
+        let after_straight_join = if sel.has_straight_join {
             LogicalPlan::StraightJoin {
                 input: Box::new(after_inner_join),
             }
         } else {
             after_inner_join
+        };
+
+        // SemiJoin wrapper (S3-WS1-74 has_semi_join detection): outermost node.
+        if sel.has_semi_join {
+            LogicalPlan::SemiJoin {
+                input: Box::new(after_straight_join),
+            }
+        } else {
+            after_straight_join
         }
     }
 
@@ -3655,5 +3678,24 @@ mod tests {
         let c = cost("SELECT u.id, o.total FROM users u STRAIGHT_JOIN orders o ON o.user_id = u.id");
         assert_eq!(c.recommended_path, QueryPath::Olap, "STRAIGHT_JOIN should route to OLAP");
         assert!(c.relative_cost >= 0.09, "StraightJoin must carry at least 0.09 cost overhead");
+    }
+
+    // ── S3-WS1-74: SemiJoin node tests ──────────────────────────
+
+    #[test]
+    fn planner_semi_join_produces_semi_join_node() {
+        let p = plan("SELECT u.id FROM users u SEMI JOIN orders o ON o.user_id = u.id");
+        assert!(
+            matches!(&p, LogicalPlan::SemiJoin { .. }),
+            "SELECT ... SEMI JOIN must produce outermost SemiJoin node; got: {:?}", p
+        );
+        assert!(p.is_read_only());
+    }
+
+    #[test]
+    fn cost_semi_join_routes_to_olap_with_overhead() {
+        let c = cost("SELECT u.id FROM users u SEMI JOIN orders o ON o.user_id = u.id");
+        assert_eq!(c.recommended_path, QueryPath::Olap, "SEMI JOIN should route to OLAP");
+        assert!(c.relative_cost >= 0.10, "SemiJoin must carry at least 0.10 cost overhead");
     }
 }

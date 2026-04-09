@@ -197,6 +197,8 @@ pub struct SelectStatement {
     pub has_inner_join: bool,
     /// True when the query uses STRAIGHT_JOIN (S3-WS1-73).
     pub has_straight_join: bool,
+    /// True when the query uses SEMI JOIN (S3-WS1-74).
+    pub has_semi_join: bool,
 }
 
 /// A parsed INSERT statement.
@@ -577,6 +579,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_straight_join(&up) {
                     stmt.has_straight_join = true;
                 }
+                if has_semi_join(&up) {
+                    stmt.has_semi_join = true;
+                }
                 Ok(Statement::Select(stmt))
             }
             "WITH" => {
@@ -699,6 +704,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 if has_straight_join(&up) {
                     stmt.has_straight_join = true;
+                }
+                if has_semi_join(&up) {
+                    stmt.has_semi_join = true;
                 }
                 Ok(Statement::Select(stmt))
             }
@@ -3395,6 +3403,10 @@ fn has_straight_join(up: &str) -> bool {
     up.contains(" STRAIGHT_JOIN ")
 }
 
+fn has_semi_join(up: &str) -> bool {
+    up.contains(" SEMI JOIN ")
+}
+
 // ─── S3-WS1-54: has_order_by_case_expression tests ─────────────────────────
 
 #[cfg(test)]
@@ -4153,6 +4165,55 @@ mod straight_join_tests {
         assert!(
             !s.has_straight_join,
             "SELECT without STRAIGHT_JOIN must keep has_straight_join = false"
+        );
+    }
+}
+
+// ─── S3-WS1-74: has_semi_join tests ───────────────────────────────────────
+
+#[cfg(test)]
+mod semi_join_tests {
+    use super::*;
+
+    #[test]
+    fn select_semi_join_sets_has_semi_join() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u SEMI JOIN orders o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            s.has_semi_join,
+            "SELECT ... SEMI JOIN must set has_semi_join = true"
+        );
+    }
+
+    #[test]
+    fn select_inner_join_keeps_has_semi_join_false() {
+        let stmt = parse_one(
+            "SELECT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id",
+        )
+        .unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_semi_join,
+            "INNER JOIN must keep has_semi_join = false"
+        );
+    }
+
+    #[test]
+    fn select_without_semi_join_keeps_has_semi_join_false() {
+        let stmt = parse_one("SELECT id FROM users ORDER BY id").unwrap();
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select")
+        };
+        assert!(
+            !s.has_semi_join,
+            "SELECT without SEMI JOIN must keep has_semi_join = false"
         );
     }
 }
