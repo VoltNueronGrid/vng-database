@@ -3406,6 +3406,20 @@ struct RowsSemiJoinCountResponse {
     semi_join_count: usize,
 }
 
+// S3-WS1-75: wal/anti/join/count + rows/anti/join/count structs
+
+#[derive(Debug, Serialize)]
+struct WalAntiJoinCountResponse {
+    status: &'static str,
+    anti_join_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsAntiJoinCountResponse {
+    status: &'static str,
+    anti_join_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4914,6 +4928,8 @@ async fn main() {
         .route("/api/v1/store/rows/straight/join/count", get(rows_straight_join_count))
         .route("/api/v1/store/wal/semi/join/count", get(wal_semi_join_count))
         .route("/api/v1/store/rows/semi/join/count", get(rows_semi_join_count))
+        .route("/api/v1/store/wal/anti/join/count", get(wal_anti_join_count))
+        .route("/api/v1/store/rows/anti/join/count", get(rows_anti_join_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -11836,6 +11852,56 @@ async fn rows_semi_join_count(
     Ok((StatusCode::OK, Json(RowsSemiJoinCountResponse {
         status: "ok",
         semi_join_count,
+    })))
+}
+
+// S3-WS1-75: wal/anti/join/count endpoint
+async fn wal_anti_join_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state
+        .wal_engine
+        .lock()
+        .expect("wal_engine lock wal_anti_join_count");
+    let mut anti_join_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains(" ANTI JOIN ") {
+            anti_join_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalAntiJoinCountResponse {
+        status: "ok",
+        anti_join_count,
+    })))
+}
+
+// S3-WS1-75: rows/anti/join/count endpoint
+async fn rows_anti_join_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state
+        .row_store
+        .lock()
+        .expect("row_store lock rows_anti_join_count");
+    let mut anti_join_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains(" ANTI JOIN ") {
+                anti_join_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsAntiJoinCountResponse {
+        status: "ok",
+        anti_join_count,
     })))
 }
 
@@ -27457,6 +27523,52 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_semi_join_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-75: wal_anti_join_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_75_wal_anti_join_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_anti_join_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.anti_join_count, 0, "fresh WAL must have zero ANTI JOIN counts");
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_75_wal_anti_join_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_anti_join_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-75: rows_anti_join_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_75_rows_anti_join_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_anti_join_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.anti_join_count,
+            0,
+            "fresh rows must have zero ANTI JOIN counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_75_rows_anti_join_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_anti_join_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }
