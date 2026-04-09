@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 117)
+**Last updated:** 2026-04-09 (session 118)
 
 ---
 
@@ -1696,6 +1696,18 @@ Release Gate Impact: <none|medium|high>
 ## Session 115 Validation Update
 
 ## Session 116 Validation Update
+
+## Session 118 Validation Update
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Scope:** WS5 security gate rerun + DX/API cluster release gate posture check
+
+| Item | Artifact | Result | Next Step |
+|---|---|---|---|
+| WS5 security gate rerun | `tests/kpi/results/ws5/agent-run-ws5-gate-summary.json` | **passed** (pack: `ws5-security-smoke`) | Keep WS5 runtime/auth evidence current when RBAC or security contracts change |
+| DX/API cluster release gate | `tests/kpi/results/gates/release-dx-api-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` | Re-run full DX/API cluster gate after new WS9/WS9A/WS10 feature slices |
+
+---
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
 **Scope:** WS8A fixture remediation and WS8/WS8A gate recovery
