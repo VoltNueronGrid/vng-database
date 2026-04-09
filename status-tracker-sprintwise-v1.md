@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 118)
+**Last updated:** 2026-04-09 (session 119)
 
 ---
 
@@ -1698,6 +1698,18 @@ Release Gate Impact: <none|medium|high>
 ## Session 116 Validation Update
 
 ## Session 118 Validation Update
+
+## Session 119 Validation Update
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Scope:** WS6 failover gate rerun + Ops/Resilience cluster release gate refresh
+
+| Item | Artifact | Result | Next Step |
+|---|---|---|---|
+| WS6 gate rerun | `tests/kpi/results/ws6/agent-run-ws6-gate-summary.json` | **passed** (all WS6 failover/chaos/release packs green) | Re-run WS6 gate after next failover-runtime changes to keep closure evidence fresh |
+| Ops/Resilience cluster release gate | `tests/kpi/results/gates/agent-run-release-ops-resilience-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` | Refresh cluster gate after WS12/WS13/WS14 feature slices |
+
+---
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
 **Scope:** WS5 security gate rerun + DX/API cluster release gate posture check
