@@ -3350,6 +3350,20 @@ struct RowsRightJoinCountResponse {
     right_join_count: usize,
 }
 
+// S3-WS1-71: wal/full_outer/join/count + rows/full_outer/join/count structs
+
+#[derive(Debug, Serialize)]
+struct WalFullOuterJoinCountResponse {
+    status: &'static str,
+    full_outer_join_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowsFullOuterJoinCountResponse {
+    status: &'static str,
+    full_outer_join_count: usize,
+}
+
 // ─── S7-WS6-04: Chaos fire-drill structs ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -4850,6 +4864,8 @@ async fn main() {
         .route("/api/v1/store/rows/left/join/count", get(rows_left_join_count))
         .route("/api/v1/store/wal/right/join/count", get(wal_right_join_count))
         .route("/api/v1/store/rows/right/join/count", get(rows_right_join_count))
+        .route("/api/v1/store/wal/full_outer/join/count", get(wal_full_outer_join_count))
+        .route("/api/v1/store/rows/full_outer/join/count", get(rows_full_outer_join_count))
         // S11-WS1-19: Scan all rows visible at current snapshot
         .route("/api/v1/store/rows/scan/visible", get(rows_scan_visible))
         // S11-WS1-12: Row store page-level stats
@@ -11572,6 +11588,56 @@ async fn rows_right_join_count(
     Ok((StatusCode::OK, Json(RowsRightJoinCountResponse {
         status: "ok",
         right_join_count,
+    })))
+}
+
+// S3-WS1-71: wal/full_outer/join/count endpoint
+async fn wal_full_outer_join_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalFullOuterJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let wal = state
+        .wal_engine
+        .lock()
+        .expect("wal_engine lock wal_full_outer_join_count");
+    let mut full_outer_join_count = 0;
+    for rec in wal.wal_records() {
+        let value_up = rec.value.to_ascii_uppercase();
+        if value_up.contains(" FULL JOIN ") || value_up.contains(" FULL OUTER JOIN ") {
+            full_outer_join_count += 1;
+        }
+    }
+    drop(wal);
+    Ok((StatusCode::OK, Json(WalFullOuterJoinCountResponse {
+        status: "ok",
+        full_outer_join_count,
+    })))
+}
+
+// S3-WS1-71: rows/full_outer/join/count endpoint
+async fn rows_full_outer_join_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RowsFullOuterJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let rs = state
+        .row_store
+        .lock()
+        .expect("row_store lock rows_full_outer_join_count");
+    let mut full_outer_join_count = 0;
+    for (_, row) in rs.export_rows_snapshot() {
+        for value in row.into_values() {
+            let value_up = value.to_ascii_uppercase();
+            if value_up.contains(" FULL JOIN ") || value_up.contains(" FULL OUTER JOIN ") {
+                full_outer_join_count += 1;
+            }
+        }
+    }
+    drop(rs);
+    Ok((StatusCode::OK, Json(RowsFullOuterJoinCountResponse {
+        status: "ok",
+        full_outer_join_count,
     })))
 }
 
@@ -26993,6 +27059,56 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         let hdrs = HeaderMap::new();
         let res = rows_right_join_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-71: wal_full_outer_join_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_71_wal_full_outer_join_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_full_outer_join_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.full_outer_join_count,
+            0,
+            "fresh WAL must have zero FULL-OUTER-JOIN counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_71_wal_full_outer_join_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = wal_full_outer_join_count(State(state), hdrs).await;
+        assert!(res.is_err(), "missing auth should be rejected");
+        assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    // S3-WS1-71: rows_full_outer_join_count tests
+
+    #[tokio::test]
+    async fn s11_ws1_71_rows_full_outer_join_count_ok() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = operator_headers("test-key", "admin");
+        let (status, Json(body)) = rows_full_outer_join_count(State(state), hdrs).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(
+            body.full_outer_join_count,
+            0,
+            "fresh rows must have zero FULL-OUTER-JOIN counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn s11_ws1_71_rows_full_outer_join_count_missing_auth() {
+        let state = state_with_key(Some("test-key"));
+        let hdrs = HeaderMap::new();
+        let res = rows_full_outer_join_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
     }

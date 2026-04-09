@@ -539,6 +539,12 @@ A tracker row moves to **Done** only when:
 - **Exec (`voltnuerongrid-exec`)**: Added `GroupByCube { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.15 cost), and `plan_select()` (`has_group_by_cube` outermost wrap after group-by-rollup). Tests: `planner_group_by_cube_select_produces_group_by_cube_node`, `cost_group_by_cube_routes_to_olap_with_small_overhead`. Total: **156 passed**.
 - **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/group_by/cube/count` and `GET /api/v1/store/rows/group_by/cube/count` (operator-auth, GROUP-BY-CUBE usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_66_*`). Total: **593 passed**.
 
+### 9.2bk Session 95 Implementation Update (S3-WS1-71 + service endpoints)
+
+- **SQL (`voltnuerongrid-sql`)**: Added `has_full_outer_join: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `FULL JOIN` or `FULL OUTER JOIN` clauses (S3-WS1-71). Tests: `full_outer_join_tests` module (3 tests). Total: **315 passed**.
+- **Exec (`voltnuerongrid-exec`)**: Added `FullOuterJoin { input }` variant to `LogicalPlan` enum (planner.rs). Updated `primary_table()`, `has_aggregation()`, `estimate_cost()` (OLAP path, +0.18 cost), and `plan_select()` (`has_full_outer_join` outermost wrap after right-join handling). Tests: `planner_full_outer_join_produces_full_outer_join_node`, `cost_full_outer_join_routes_to_olap_with_overhead`. Total: **166 passed**.
+- **Service (`voltnuerongridd`)**: Added `GET /api/v1/store/wal/full_outer/join/count` and `GET /api/v1/store/rows/full_outer/join/count` (operator-auth, FULL-OUTER-JOIN usage counts across WAL and row snapshots). Tests: 4 new tests (`s11_ws1_71_*`). Total: **613 passed**.
+
 ### 9.2bj Session 94 Implementation Update (S3-WS1-70 + service endpoints)
 
 - **SQL (`voltnuerongrid-sql`)**: Added `has_right_join: bool` field to `SelectStatement` (ast.rs). Detects SELECT/WITH queries that use `RIGHT JOIN` or `RIGHT OUTER JOIN` clauses (S3-WS1-70). Tests: `right_join_tests` module (3 tests). Total: **312 passed**.

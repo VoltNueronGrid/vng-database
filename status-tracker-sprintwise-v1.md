@@ -896,6 +896,20 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
+## Session 95 Implementation Log
+
+**Date:** 2026-04-09 (Sprint 9 continuation)
+**Test Baseline → New:** sql 312→315, exec 164→166, service 609→613 (+9 total)
+
+| Item | Crate | Change | Tests Added |
+|---|---|---|---|
+| `has_full_outer_join: bool` field + detection | `voltnuerongrid-sql` | Detects FULL JOIN / FULL OUTER JOIN usage (`S3-WS1-71`) | 3 (`full_outer_join_tests` module) |
+| `FullOuterJoin { input }` plan node | `voltnuerongrid-exec` | OLAP node; +0.18 cost overhead | 2 |
+| `GET /api/v1/store/wal/full_outer/join/count` | `voltnuerongridd` | Count FULL-OUTER-JOIN usage in WAL (operator-auth) | 2 |
+| `GET /api/v1/store/rows/full_outer/join/count` | `voltnuerongridd` | Count FULL-OUTER-JOIN usage in rows (operator-auth) | 2 |
+
+---
+
 ## Session 94 Implementation Log
 
 **Date:** 2026-04-09 (Sprint 9 continuation)
