@@ -10,9 +10,9 @@
     "WS14",
     "REQ-17"
   ],
-  "started_at_utc": "2026-04-10T08:17:47.3719882Z",
-  "finished_at_utc": "2026-04-10T08:19:39.5653836Z",
-  "duration_ms": 112193,
+  "started_at_utc": "2026-04-10T10:17:48.8825283Z",
+  "finished_at_utc": "2026-04-10T10:20:28.7861591Z",
+  "duration_ms": 159904,
   "packs": [
     {
       "pack": "ws6-closure-gate",

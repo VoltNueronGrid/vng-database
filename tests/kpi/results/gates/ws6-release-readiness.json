@@ -10,7 +10,7 @@
                   "REQ-17",
                   "H-03"
               ],
-    "generated_at_utc":  "2026-04-10T08:19:31.5807209Z",
+    "generated_at_utc":  "2026-04-10T10:20:12.2526485Z",
     "sources":  {
                     "summary":  "tests/kpi/results/ws6/ws6-gate-summary.json",
                     "chaos_fault_matrix":  "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json",

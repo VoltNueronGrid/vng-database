@@ -35,7 +35,7 @@
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation (R1 release gate refreshed 2026-04-10) |
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster rerun green in session 131 on 2026-04-10) |
-| Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience + R2 failover rerun green in session 132 on 2026-04-10) |
+| Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience + R2 failover rerun green in session 136 on 2026-04-10, `started_at_utc: 2026-04-10T10:17:48Z`) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🟡 Mixed (H-02/H-04 ready_for_validation; H-01/H-03 evidence gates in progress) |
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-05 evidence refreshed 2026-04-10; H-06..H-08 ready_for_validation; WS3 release readiness promoted and R3 blocker cleared) |
 | Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 + R4 aggregate rerun refreshed 2026-04-10; R4 remains blocked by P2 release-readiness + sign-off requirements) |
@@ -458,7 +458,7 @@
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | 🟡 Ready for Validation | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`) — refreshed in session 132 (`started_at_utc: 2026-04-10T08:17:47Z`, `status: passed`, `release_readiness: ready_for_validation`) |
+| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | 🟡 Ready for Validation | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`) — refreshed in session 136 (`started_at_utc: 2026-04-10T10:17:48Z`, `status: passed`, `release_readiness: ready_for_validation`) |
 
 ---
 
@@ -572,7 +572,7 @@
 | Release | Scope Snapshot | Sprint Target | Status | Gate Criteria |
 |---|---|---|---|---|
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off (24–36 hours); all technical criteria met. |
-| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (session 132 rerun at `started_at_utc: 2026-04-10T08:17:47Z`, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review (24–48 hours); all packs ✅ passed. |
+| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (session 136 rerun at `started_at_utc: 2026-04-10T10:17:48Z`, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review (24–48 hours); all packs ✅ passed. |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | R3 governance package is backed by passing release gates for UDF runtime (`release-r3-udf-runtime-readiness.json`), plugin (`release-r3-plugin-readiness.json`), autonomous (`release-r3-autonomous-readiness.json`), and agent authoring (`release-r3-agent-authoring-readiness.json`), with WS3 and DX/API release summaries also green. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | 🔴 Blocked | `release-r4-saas-maturity-readiness.json` now exists and reports `status: passed`, `release_readiness: blocked`. Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke are green, but H-09 / H-10 release summaries remain `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off are still required. |
 
