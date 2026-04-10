@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 130)
+**Last updated:** 2026-04-10 (session 131)
 
 ---
 
@@ -34,8 +34,8 @@
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Ready for Validation (WS4A + WS5 gate artifacts refreshed 2026-04-10) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation (R1 release gate refreshed 2026-04-10) |
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
-| Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-10) |
-| Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
+| Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster rerun green in session 131 on 2026-04-10) |
+| Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience rerun green in session 131 on 2026-04-10) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🟡 Mixed (H-02/H-04 ready_for_validation; H-01/H-03 evidence gates in progress) |
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-05 evidence refreshed 2026-04-10; H-06..H-08 ready_for_validation; WS3 release readiness promoted and R3 blocker cleared) |
 | Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 + R4 aggregate rerun refreshed 2026-04-10; R4 remains blocked by P2 release-readiness + sign-off requirements) |
@@ -48,10 +48,10 @@
 |---|---|---|---|---|
 | REQ-01 | ANSI SQL + AI chat/extract/ingest/export | Sprint 1, Sprint 6 | Epic 1, Epic 8 | 🔵 In Progress |
 | REQ-02 | DB/table/view/materialized view/function lifecycle | Sprint 1 | Epic 1 | 🔵 In Progress |
-| REQ-03 | Rust/JS/Python function support | Sprint 1 | Epic 1 | � In Progress |
+| REQ-03 | Rust/JS/Python function support | Sprint 1 | Epic 1 | 🔵 In Progress |
 | REQ-04 | HA/FT/elasticity/i18n/UTF-8 | Sprint 5, Sprint 7 | Epic 6, Epic 11, Epic 12 | 🔵 In Progress |
 | REQ-05 | Separate compute and data files | Sprint 1, Sprint 5 | Epic 2, Epic 6 | 🔵 In Progress |
-| REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Sprint 3, Sprint 6 | Epic 4, Epic 4A, Epic 7 | 🔵 In Progress |
+| REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Sprint 3, Sprint 6 | Epic 4, Epic 4A, Epic 7 | 🟡 Ready for Validation |
 | REQ-07 | Multithreaded high-speed import | Sprint 3 | Epic 4 | 🔵 In Progress |
 | REQ-08 | Local + cloud SaaS operation | Sprint 8 | Epic 13 | 🔵 In Progress |
 | REQ-09 | Extensible plugin ecosystem | Sprint 6 | Epic 7 | 🟡 Ready for Validation |
@@ -112,13 +112,13 @@
 
 **Goal:** Foundation CI/governance, SQL parser/analyzer/DDL-DML/function registry, durability/storage baseline.
 **Dependencies:** Sprint 0 (PR-001..PR-006 complete)
-**Status:** 🔵 In Progress (WS3 gate green after 2026-04-09 refresh)
+**Status:** 🟡 Ready for Validation (WS0/WS1/WS2 base+closure gates remain green in 2026-04-10 refresh cycle)
 
 ### Workstreams
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | 🔵 In Progress | PR-003 (CI now runs runtime check + SQL tests + gate scripts + SQL analyze runtime smoke) | CI pipeline green with gate scripts |
+| WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | 🟡 Ready for Validation | PR-003 (CI now runs runtime check + SQL tests + gate scripts + SQL analyze runtime smoke) | CI pipeline green with gate scripts |
 | WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | 🔵 In Progress | WS0 | Runtime integration underway; `/api/v1/sql/analyze`, `/api/v1/sql/route`, `/api/v1/sql/execute`, and `/api/v1/sql/transaction` now enforce tenant-scoped user RBAC via `x-vng-tenant-id` + `x-vng-user-id` while preserving operator/admin access; `/api/v1/sql/execute` includes UDF runtime scaffold with explicit function catalog contract, per-language guard policies, and statement-level execution-plan routing evidence for Rust/JS/Python; gate orchestrator `run-ws1-gate.ps1` -> `tests/kpi/results/ws1/ws1-gate-summary.json`; UDF contract pack -> `tests/kpi/results/ws1/ws1-udf-contract-smoke.json`; runtime analyze/UDF smokes -> `tests/kpi/results/20260305-ws1/sql-analyze-smoke.json`, `tests/kpi/results/ws1/sql-execute-udf-smoke.json`; focused tenant SQL route/transaction tests in `voltnuerongridd`; workflow wiring in `.github/workflows/ci.yml` |
 | WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | 🔵 In Progress | WS0 | Durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged; store index/constraint runtime handlers now enforce operator auth + resource-scoped RBAC, validated by `tests/kpi/results/ws2/ws2-index-constraint-smoke.json`; gate orchestrator `run-ws2-gate.ps1` -> `tests/kpi/results/ws2/ws2-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
 
@@ -131,7 +131,7 @@
 - REQ-23 (ACID transactions) — Transaction endpoint classifies and validates statements before commit path
 
 ### Sprint 1 Deliverables
-- [ ] WS0: CI pipeline fully green with all gate scripts wired
+- [x] WS0: CI pipeline fully green with all gate scripts wired
 - [ ] WS1: SQL parser + analyzer + DDL-DML statement classifier complete
 - [x] WS1: `/api/v1/sql/analyze` endpoint online
 - [x] WS1: `/api/v1/sql/execute` UDF runtime scaffold with function catalog

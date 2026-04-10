@@ -1,9 +1,9 @@
 {
   "gate": "ws5",
   "status": "passed",
-  "started_at_utc": "2026-04-09T18:26:16.2543382Z",
-  "finished_at_utc": "2026-04-09T18:26:21.7087739Z",
-  "duration_ms": 5454,
+  "started_at_utc": "2026-04-10T08:11:57.4025991Z",
+  "finished_at_utc": "2026-04-10T08:12:05.0021865Z",
+  "duration_ms": 7600,
   "packs": [
     {
       "pack": "ws5-security-smoke",

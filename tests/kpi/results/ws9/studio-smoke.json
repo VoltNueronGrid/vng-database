@@ -2,9 +2,9 @@
   "smoke": "ws9-studio-api-contract",
   "status": "passed",
   "command": "node ui/voltnuerongrid-studio/scripts/check-contracts.mjs + static Studio API contract checks",
-  "started_at_utc": "2026-04-10T02:46:33.8160333Z",
-  "finished_at_utc": "2026-04-10T02:46:34.7718851Z",
-  "duration_ms": 956,
+  "started_at_utc": "2026-04-10T08:12:05.0717800Z",
+  "finished_at_utc": "2026-04-10T08:12:06.5474197Z",
+  "duration_ms": 1476,
   "output_excerpt": "studio contract check passed",
   "checks": [
     {
