@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 132)
+**Last updated:** 2026-04-10 (session 133)
 
 ---
 
@@ -244,18 +244,18 @@
 
 **Goal:** Streaming in/out + event streams, auth/RBAC/TLS/TDE/KMS.
 **Dependencies:** Sprint 3 (WS4 ingest baseline), Sprint 1 (WS0 for security)
-**Status:** 🔵 In Progress / ✅ WS5 Validated (2026-04-09)
+**Status:** ✅ WS5 Validated (2026-04-10)
 
 ### Workstreams
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | 🔵 In Progress | WS4 | Source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + gate orchestrator `run-ws4a-gate.ps1` -> `tests/kpi/results/ws4a/ws4a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | ✅ Validated | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous plus mixed operator-or-tenant ingest handlers and tenant-scoped SQL runtime access + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json` (**passed live 2026-04-09 18:26 UTC, 5454ms**); release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | ✅ Validated | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous plus mixed operator-or-tenant ingest handlers and tenant-scoped SQL runtime access + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json` (**passed live 2026-04-10 08:11 UTC, 7600ms**); release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-13 (Multi-user roles and privileges) — 🔵 In Progress: Shared RBAC privilege matrix + resource-scoped operator and tenant-user grants enforced in runtime across control-plane, storage, mixed ingest, and tenant-scoped SQL surfaces; broader user/tenant hierarchy still pending
-- REQ-16 (SSL + encryption/decryption) — ✅ Validated: Security contract enforces TLS/mTLS + encryption-at-rest + KMS constraints; live WS5 gate execution confirmed in `tests/kpi/results/ws5/ws5-gate-summary.json` (`status:"passed"`, 2026-04-09 18:26 UTC, 5454ms)
+- REQ-16 (SSL + encryption/decryption) — ✅ Validated: Security contract enforces TLS/mTLS + encryption-at-rest + KMS constraints; live WS5 gate execution confirmed in `tests/kpi/results/ws5/ws5-gate-summary.json` (`status:"passed"`, 2026-04-10 08:11 UTC, 7600ms)
 - REQ-18 (Stream in/out + events for debug/audit) — WS4A streaming + replay cursor scaffolds with gate summary
 - REQ-26 (Plugin model for streaming sources/sinks) — WS4A + WS7 linkage in progress
 
