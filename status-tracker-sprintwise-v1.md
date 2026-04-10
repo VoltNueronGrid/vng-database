@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 123)
+**Last updated:** 2026-04-10 (session 124)
 
 ---
 
@@ -38,7 +38,7 @@
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🔵 Mixed |
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-05 evidence refreshed 2026-04-10; H-06..H-08 ready_for_validation; WS3 release readiness promoted and R3 blocker cleared) |
-| Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09 release evidence refreshed 2026-04-10 but remains in_progress_with_evidence; H-10 gate-linked) |
+| Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 refreshed 2026-04-10; R4 baseline gate scaffolded and currently blocked by P2 release-readiness + sign-off requirements) |
 
 ---
 
@@ -53,7 +53,7 @@
 | REQ-05 | Separate compute and data files | Sprint 1, Sprint 5 | Epic 2, Epic 6 | 🔵 In Progress |
 | REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Sprint 3, Sprint 6 | Epic 4, Epic 4A, Epic 7 | 🔵 In Progress |
 | REQ-07 | Multithreaded high-speed import | Sprint 3 | Epic 4 | 🔵 In Progress |
-| REQ-08 | Local + cloud SaaS operation | Sprint 8 | Epic 13 | ⬜ Not Started |
+| REQ-08 | Local + cloud SaaS operation | Sprint 8 | Epic 13 | 🔵 In Progress |
 | REQ-09 | Extensible plugin ecosystem | Sprint 6 | Epic 7 | 🟡 Ready for Validation |
 | REQ-10 | Trillion-row scale + high-speed retrieval | Sprint 2, Sprint 5 | Epic 2, Epic 3, Epic 6 | 🔵 In Progress |
 | REQ-11 | Indexes + constraints | Sprint 1 | Epic 2, Epic 15 | 🔵 In Progress |
@@ -504,16 +504,16 @@
 
 **Goal:** P1 architecture hardening items (H-05..H-08), close R3 release gate.
 **Dependencies:** Sprint 9 (P0 hardening), Sprint 6 (WS7, WS8, WS8A), Sprint 7 (WS9A, WS10)
-**Status:** ⬜ Not Started
+**Status:** 🟡 Ready for Validation (R3 release gate bundle refreshed 2026-04-10; H-05 deferred, H-06..H-08 ready for validation)
 
 ### Architecture Hardening Backlog — P1 (Release Target: R3)
 
 | ID | Hardening Item | Owner | Priority | Status | Completion | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|
-| H-05 | KMS multi-region failover hardening | Security | P1 | ⬜ Not Started | 0% | KMS integration code pending | KMS outage simulation checklist |
-| H-06 | Distributed cache hardening | Query + SRE | P1 | ⬜ Not Started | 0% | Cache engine baseline not implemented | Cache resilience benchmark plan |
-| H-07 | Driver/pooling storm hardening | Integrations | P1 | ⬜ Not Started | 0% | Driver implementations pending | Driver failover load test design |
-| H-08 | Autonomous plugin supply-chain hardening | Security + AI Platform | P1 | ⬜ Not Started | 0% | Plugin builder pipeline pending | Supply-chain validation policy draft |
+| H-05 | KMS multi-region failover hardening | Security | P1 | 🔵 Deferred | 60% | Awaiting user-supplied Azure Key Vault key IDs and credential handoff | Azure provider-backed drill pending credentials |
+| H-06 | Distributed cache hardening | Query + SRE | P1 | 🟡 Ready for Validation | 70% | None | Multi-node cache synchronization/failover validation |
+| H-07 | Driver/pooling storm hardening | Integrations | P1 | 🟡 Ready for Validation | 85% | None | Multi-node surge/failover harness validation |
+| H-08 | Autonomous plugin supply-chain hardening | Security + AI Platform | P1 | 🟡 Ready for Validation | 92% | None | Production multi-signer workflows + CA-chain rollout |
 
 ### Requirements Covered (Not Started — pending in this sprint)
 - REQ-27 (Native cache engine, Redis-like compat) — 🔵 In Progress: Runtime endpoint `/api/v1/cache/redis/command` now supports core Redis-like commands with 13 passing `ws27_*` tests; next steps are RESP3 wire protocol, persistence, and cluster fan-out
@@ -529,7 +529,7 @@
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | 🔵 In Progress | Autonomous governance + audit evidence + plugin cert + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS3 performance evidence (`tests/kpi/results/gates/ws3-release-readiness.json`) + WS7 release summary (`tests/kpi/results/gates/ws7-release-readiness.json`) + WS8 release summary (`tests/kpi/results/gates/ws8-release-readiness.json`) + WS8A release summary (`tests/kpi/results/gates/ws8a-release-readiness.json`) + release R3 plugin gate (`tests/kpi/results/gates/release-r3-plugin-readiness.json`) + release R3 autonomous gate (`tests/kpi/results/gates/release-r3-autonomous-readiness.json`) + release R3 agent authoring gate (`tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`) + release R3 UDF runtime gate (`tests/kpi/results/gates/release-r3-udf-runtime-readiness.json`) |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | 🟡 Ready for Validation | Autonomous governance + audit evidence + plugin cert + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS3 performance evidence (`tests/kpi/results/gates/ws3-release-readiness.json`) + WS7 release summary (`tests/kpi/results/gates/ws7-release-readiness.json`) + WS8 release summary (`tests/kpi/results/gates/ws8-release-readiness.json`) + WS8A release summary (`tests/kpi/results/gates/ws8a-release-readiness.json`) + release R3 plugin gate (`tests/kpi/results/gates/release-r3-plugin-readiness.json`) + release R3 autonomous gate (`tests/kpi/results/gates/release-r3-autonomous-readiness.json`) + release R3 agent authoring gate (`tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`) + release R3 UDF runtime gate (`tests/kpi/results/gates/release-r3-udf-runtime-readiness.json`) — all refreshed/passing on 2026-04-10. |
 
 ---
 
@@ -537,7 +537,7 @@
 
 **Goal:** P2 architecture hardening, SaaS maturity, ecosystem/multi-cloud hardening, close R4 release gate.
 **Dependencies:** Sprint 10 (P1 hardening complete), all prior sprints
-**Status:** 🔵 In Progress (H-09 release evidence refreshed 2026-04-10 and H-10 gate-linked; R4 release gate itself not started)
+**Status:** 🔵 In Progress (H-09/H-10 refreshed 2026-04-10 and R4 baseline gate now exists, but R4 remains blocked by P2 release-readiness and sign-off requirements)
 
 ### Architecture Hardening Backlog — P2 (Release Target: R4)
 
@@ -546,8 +546,8 @@
 | H-09 | IDE extension parity/safety hardening | DX Team | P2 | 🔵 In Progress | 65% | Live runtime parity and permission-boundary negative scenarios still pending | Cross-IDE parity + permission-boundary negative scenarios |
 | H-10 | Long-run maintainability hardening | Chief Architect + Release Eng | P2 | 🔵 In Progress | 70% | ARB ratification pending | ARB sign-off + deprecation registry v1 |
 
-### Requirements Covered (Not Started — pending in this sprint)
-- REQ-08 (Local + cloud SaaS operation) — ⬜ Not Started: Full local/cloud SaaS smoke tests
+### Requirements Covered
+- REQ-08 (Local + cloud SaaS operation) — 🔵 In Progress: `run-req08-cloud-saas-smoke.ps1` reran 2026-04-10 and `tests/kpi/results/req08/cloud-saas-smoke.json` remains green; live cloud endpoint smoke still depends on credential handoff
 - REQ-10 (Trillion-row scale retrieval) — 🔵 In Progress: Benchmark scaffold is implemented and now needs large-scale and distributed validation runs
 - REQ-11 (Indexes + constraints) — 🔵 In Progress: B-tree index engine (IndexManager, BTreeIndex with create/drop/lookup/range_scan + unique enforcement) and constraint validator (ConstraintManager with PK/Unique/NotNull) in voltnuerongrid-store crate + runtime endpoints + smoke/gate evidence
 - REQ-21 (Any-number-user concurrency) — 🔵 In Progress: 9 `ws21_*` concurrency tests are passing; pending HTTP-level harness and multi-tenant sustained-load evidence
@@ -561,7 +561,7 @@
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | ⬜ Not Started | RTO/RPO game-day success + global ops sign-off |
+| R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | 🔴 Blocked | `release-r4-saas-maturity-readiness.json` now exists and reports `status: passed`, `release_readiness: blocked`. Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke are green, but H-09 / H-10 release summaries remain `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off are still required. |
 
 ---
 
@@ -572,7 +572,7 @@
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off (24–36 hours); all technical criteria met. |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (refreshed 2026-04-10, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review (24–48 hours); all packs ✅ passed. |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | WS3 gate rerun 2026-04-10 remains green (score 100, stable 2/2) and `ws3-release-readiness.json` now reports `ready_for_validation` after release-summary logic alignment. Other R3 sub-gates (WS7, WS8, WS8A) and DX/API cluster remain `ready_for_validation`. **Follow-up refresh 2026-04-10:** reran release gates `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all release artifacts report `status: passed` with fresh timestamps. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
-| R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | ⬜ Not Started | RTO/RPO game-day success + global ops sign-off |
+| R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | 🔴 Blocked | `release-r4-saas-maturity-readiness.json` now exists and reports `status: passed`, `release_readiness: blocked`. Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke are green, but H-09 / H-10 release summaries remain `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off are still required. |
 
 ---
 
@@ -627,6 +627,7 @@
 - WS3 release-readiness unblock completed (2026-04-10): updated `tests/kpi/scripts/run-ws3-release-summary.ps1` so passed WS3 evidence promotes to `ready_for_validation`, then reran `run-ws3-gate.ps1`; `tests/kpi/results/gates/ws3-release-readiness.json` now reports `status: passed`, `release_readiness: ready_for_validation`, clearing the prior R3 blocker.
 - R3 release-gate bundle refresh completed (2026-04-10): reran `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all four release artifacts regenerated with `status: passed` and current timestamps for governance package readiness.
 - H-09 / H-10 synchronized P2 refresh completed (2026-04-10): updated `tests/kpi/scripts/run-h09-gate.ps1` so gate runs now regenerate `tests/kpi/results/gates/h09-release-readiness.json`, then reran both `run-h09-gate.ps1` and `run-h10-gate.ps1`; gate and release-summary artifacts for H-09/H-10 now share synchronized timestamps and remain `status: passed` with H-09 still `in_progress_with_evidence` and H-10 still gate-linked pending ARB ratification.
+- R4 baseline release gate scaffold completed (2026-04-10): added `tests/kpi/scripts/run-release-r4-saas-maturity-gate.ps1` and ran it to generate `tests/kpi/results/gates/release-r4-saas-maturity-readiness.json`; baseline evidence passed for Ops/Resilience, REQ-08 cloud SaaS smoke, REQ-10 benchmark smoke, H-09, and H-10, but R4 remains blocked until H-09 / H-10 advance beyond `in_progress_with_evidence` and release sign-off conditions are met.
 
 ---
 

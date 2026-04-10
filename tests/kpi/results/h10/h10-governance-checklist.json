@@ -1,9 +1,9 @@
 {
   "smoke": "h10-governance-checklist",
   "status": "passed",
-  "started_at_utc": "2026-04-10T04:04:01.6816655Z",
-  "finished_at_utc": "2026-04-10T04:04:01.7112596Z",
-  "duration_ms": 30,
+  "started_at_utc": "2026-04-10T04:14:03.1779168Z",
+  "finished_at_utc": "2026-04-10T04:14:03.1822075Z",
+  "duration_ms": 4,
   "checks": [
     {
       "check": "arb_charter_exists",
