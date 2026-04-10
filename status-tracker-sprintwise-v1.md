@@ -204,7 +204,7 @@
 ### Requirements Covered
 - REQ-06 (CSV/Parquet/JSON/Excel + enterprise ingest) — WS4 ingest scaffold + CSV/JSON parser connectors with runtime endpoints now protected by mixed operator-or-tenant RBAC and backed by updated smoke evidence
 - REQ-07 (Multithreaded high-speed import) — 🔵 In Progress: Chunked loader + HTTP endpoint `/api/v1/ingest/chunked` + async Tokio fan-out dispatch are implemented in runtime with integration coverage; next milestone is benchmarking against real storage backends
-- REQ-19 (Blazing ingest/update/read at scale) — 🔵 In Progress: Benchmark scaffold is live via `/api/v1/benchmark/ingest` and `/api/v1/benchmark/query`; smoke script `tests/kpi/scripts/run-req10-benchmark-smoke.ps1` writes `tests/kpi/results/req10/benchmark-smoke.json` (8/8 checks)
+- REQ-19 (Blazing ingest/update/read at scale) — 🔵 In Progress: Benchmark scaffold is live via `/api/v1/benchmark/ingest` and `/api/v1/benchmark/query`; smoke script `tests/kpi/scripts/run-req10-benchmark-smoke.ps1` writes `tests/kpi/results/req10/benchmark-smoke.json` (12/12 checks passed 2026-04-10)
 - REQ-22 (Pessimistic locking) — WS22 runtime scaffold with conflict/ownership enforcement + contention metrics endpoint for trend analysis
 
 ### Sprint 3 Deliverables
