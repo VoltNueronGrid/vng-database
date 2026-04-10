@@ -30,15 +30,15 @@
 | Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 88%) |
 | Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0+WS1+WS2 base+closure gates all refreshed 2026-04-10) |
 | Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🟡 Ready for Validation (WS3 closure gate refreshed 2026-04-10; WS2A+WS1A all green) |
-| Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | � Ready for Validation (WS4 + WS4A gates refreshed 2026-04-10) |
+| Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | 🟡 Ready for Validation (WS4 + WS22 evidence current 2026-04-10) |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Mixed (WS4A gate refreshed 2026-04-10, WS5 validated 2026-04-09) |
-| Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Mixed (WS6 validated 2026-04-09, R1 in progress) |
-| Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation |
-| Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-09) |
+| Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation (R1 release gate refreshed 2026-04-10) |
+| Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS8A closure refreshed 2026-04-10) |
+| Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-10) |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🔵 Mixed |
-| Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-06, H-07, H-08 gates all passed 2026-04-10; R3 plugin/autonomous/agent-authoring/UDF all ready_for_validation) |
-| Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🟡 Ready for Validation (H-09 + H-10 gates refreshed 2026-04-10; baseline parity + governance artifacts in place) |
+| Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🔵 Mixed (H-05 evidence refreshed 2026-04-10; H-06..H-08 ready_for_validation; R3 still blocked by WS3 release readiness) |
+| Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09 release evidence refreshed 2026-04-10 but remains in_progress_with_evidence; H-10 gate-linked) |
 
 ---
 
@@ -308,7 +308,7 @@
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | 🔵 In Progress | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) + WS1 UDF closure posture (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`) + release R1 SQL/UDF gate (`tests/kpi/results/gates/release-r1-sql-udf-readiness.json`) |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10) |
 
 ### Gate Evidence — WS6 Release + Closure
 
@@ -569,9 +569,9 @@
 
 | Release | Scope Snapshot | Sprint Target | Status | Gate Criteria |
 |---|---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🔵 In Progress | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10) |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (refreshed 2026-04-10) |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🔵 In Progress | Autonomous governance + audit evidence + plugin cert + all R3 sub-gates |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🔵 In Progress | All R3 sub-gates and DX/API cluster gate are current, but WS3 release readiness remains `in_progress_with_evidence` and blocks promotion |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | ⬜ Not Started | RTO/RPO game-day success + global ops sign-off |
 
 ---
@@ -597,15 +597,15 @@
 | WS9A IDE extension contract | DX Team | Integrations Team, UX Team | Sprint 7 | 🟡 Ready for Validation |
 | WS10 driver and pooling contract | Integrations Team | Platform Team, Security Team | Sprint 7 | 🟡 Ready for Validation |
 | WS11 internationalization and UTF-8 | Platform + UX Team | Runtime Team | Sprint 7 | 🟡 Ready for Validation |
-| Release DX/API contract cluster gate (WS5/WS9/WS9A/WS10) | Platform + Program Governance | Security, UX, DX, Integrations | Sprint 7 | 🔵 In Progress |
+| Release DX/API contract cluster gate (WS5/WS9/WS9A/WS10) | Platform + Program Governance | Security, UX, DX, Integrations | Sprint 7 | 🟡 Ready for Validation |
 | WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Sprint 8 | 🟡 Ready for Validation |
 | WS13 multi-cloud deployment profiles | Platform/SRE | SRE Team, Security Team | Sprint 8 | 🟡 Ready for Validation |
 | WS14 config contracts + tuning playbooks | Platform + SRE + Security | Integrations Team, Security Team | Sprint 8 | 🟡 Ready for Validation |
 | Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | Sprint 8 | 🔵 In Progress |
 | WS15 competitive feature adoption track | Architecture + Query Team | AI Platform Team, Integrations Team | Sprint 9 | 🟡 Ready for Validation |
 | H-01..H-04 P0 hardening | Various (see hardening backlog) | Cross-functional | Sprint 9 | 🔵 In Progress |
-| H-05..H-08 P1 hardening | Various (see hardening backlog) | Cross-functional | Sprint 10 | ⬜ Not Started |
-| H-09..H-10 P2 hardening | Various (see hardening backlog) | Cross-functional | Sprint 11 | ⬜ Not Started / 🔵 In Progress (H-10 at 10%) |
+| H-05..H-08 P1 hardening | Various (see hardening backlog) | Cross-functional | Sprint 10 | 🔵 Mixed (H-05 deferred; H-06..H-08 ready for validation) |
+| H-09..H-10 P2 hardening | Various (see hardening backlog) | Cross-functional | Sprint 11 | 🔵 In Progress (H-09 release evidence refreshed; H-10 gate-linked) |
 
 ---
 
@@ -616,12 +616,13 @@
 - Start scaffold implementation branch for workspace + deploy manifests.
 - Once cloud handoff arrives, populate real AWS/Azure/GCP endpoint + token environment variables and execute PR-007 true remote smoke packs to close the deferred gate.
 - Hardening review template for H-01..H-04 published at `reference/hardening-review-h01-h04-template.md`; schedule and assign attendees.
-- H-09 parity baseline now includes release-facing evidence via `tests/kpi/results/gates/h09-release-readiness.json`; next step is live runtime parity and permission-boundary negative scenario coverage.
+- H-09 parity baseline now includes release-facing evidence via `tests/kpi/results/gates/h09-release-readiness.json`; refreshed 2026-04-10 and still `in_progress_with_evidence`, so the next step remains live runtime parity and permission-boundary negative scenario coverage.
 - H-10 governance baseline is now gate-linked with passing artifacts (`tests/kpi/results/h10/h10-governance-checklist.json`, `tests/kpi/results/h10/h10-gate-summary.json`, `tests/kpi/results/gates/h10-release-readiness.json`); next step is ARB ratification evidence injection.
 - Add a tooling hardening follow-up to stabilize Windows PowerShell gate/evidence summary artifact regeneration so release-facing JSON does not require manual synchronization after validated smoke runs.
 - Repair the default WSL/Codacy installer path, or explicitly document the fallback path when automated Codacy analysis cannot run during file edits.
 - Tracker-evidence hygiene pass for WS3 + Ops/Resilience completed (2026-04-10): reran `run-ws3-gate.ps1` and `run-release-ops-resilience-gate.ps1`; primary artifacts refreshed and synchronized.
 - Batch evidence hygiene pass completed (2026-04-10): refreshed stale gates WS1A, WS2 (live server), WS4, WS4A, WS11, WS15, H04, release-r3-plugin, release-r3-udf-runtime — all passing with current 2026-04-10 timestamps.
+- DX/API + H-05 follow-up refresh completed (2026-04-10): reran `run-h05-kms-region-failover-evidence.ps1`, `run-ws8a-closure-gate.ps1`, `run-release-dx-api-gate.ps1`, and `run-h09-release-summary.ps1`; H-05 evidence, WS8A closure, DX/API release readiness, and H-09 release evidence are current. R3 remains blocked by WS3 `release_readiness: in_progress_with_evidence`.
 
 ---
 
@@ -642,7 +643,7 @@ Completion: <0-100%>
 Risk Trend: <improving|stable|worsening>
 
 This Week Completed:
-- Closure gate + hardening gate refresh pass completed (2026-04-10): WS0, WS1 (base+closure), WS1A closure, WS2 closure, WS2A (base+closure), WS3 closure, WS4 closure, WS4A closure, WS22 (base+closure), H06, H07, H08, H09, H10, R1 release gate — all artifacts refreshed; Sprint 1/2/10/11 promoted to Ready for Validation in sprint overview.
+- Closure gate + hardening gate refresh pass completed (2026-04-10): WS0, WS1 (base+closure), WS1A closure, WS2 closure, WS2A (base+closure), WS3 closure, WS4 closure, WS4A closure, WS22 (base+closure), H06, H07, H08, H09, H10, R1 release gate — all artifacts refreshed; Sprint 1 and Sprint 2 are now Ready for Validation, while Sprint 10 and Sprint 11 remain in progress pending WS3 and H-09 follow-through.
 
 - 
 - 
@@ -1865,4 +1866,5 @@ A tracker row moves to **Done** only when:
 - Evidence artifacts are attached.
 - Dependencies in prerequisite gate are satisfied.
 - Risk register impact is updated.
+
 

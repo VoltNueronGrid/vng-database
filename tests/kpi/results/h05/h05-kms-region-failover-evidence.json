@@ -2,7 +2,7 @@
   "pack": "h05-kms-region-failover-evidence",
   "status": "passed",
   "hardening_item": "H-05",
-  "timestamp_utc": "2026-03-10T06:31:45.9122217Z",
+  "timestamp_utc": "2026-04-10T02:46:14.4370773Z",
   "implementation": {
     "kms_resolution_mode": "provider_backed",
     "outage_simulation_contract": "preserved",
@@ -31,38 +31,38 @@
   "steps": [
     {
       "step": "runtime_region_outage_failover",
-      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/kpi/scripts/run-h05-kms-region-failover-runtime-smoke.ps1 -OutputPath tests/kpi/results/h05/h05-kms-region-failover-runtime-smoke.json",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File D:\\by\\polap-db\\tests\\kpi\\scripts\\run-h05-kms-region-failover-runtime-smoke.ps1 -OutputPath D:\\by\\polap-db\\tests\\kpi\\results\\h05\\h05-kms-region-failover-runtime-smoke.json",
       "status": "passed",
-      "duration_ms": 17414,
-      "output_excerpt": "artifact=tests/kpi/results/h05/h05-kms-region-failover-runtime-smoke.json; exit_code=0; status=passed"
+      "duration_ms": 7312,
+      "output_excerpt": "artifact=D:\\by\\polap-db\\tests\\kpi\\results\\h05\\h05-kms-region-failover-runtime-smoke.json; exit_code=0; status=passed"
     },
     {
       "step": "primary_region_resolution",
       "command": "cargo test -p voltnuerongrid-auth h05_resolves_primary_kms_region_when_available -- --nocapture",
       "status": "passed",
-      "duration_ms": 4402,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-060fb2b15e8f54f7.exe)\n\nrunning 1 test\ntest tests::h05_resolves_primary_kms_region_when_available ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+      "duration_ms": 2208,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_auth-ee08a0893842f922.exe)\n\nrunning 1 test\ntest tests::h05_resolves_primary_kms_region_when_available ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s\n"
     },
     {
       "step": "secondary_region_failover_resolution",
       "command": "cargo test -p voltnuerongrid-auth h05_falls_back_to_secondary_kms_region_when_primary_missing -- --nocapture",
       "status": "passed",
-      "duration_ms": 3448,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-060fb2b15e8f54f7.exe)\n\nrunning 1 test\ntest tests::h05_falls_back_to_secondary_kms_region_when_primary_missing ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+      "duration_ms": 2192,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_auth-ee08a0893842f922.exe)\n\nrunning 1 test\ntest tests::h05_falls_back_to_secondary_kms_region_when_primary_missing ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s\n"
     },
     {
       "step": "duplicate_failover_region_rejected",
       "command": "cargo test -p voltnuerongrid-auth h05_rejects_duplicate_kms_failover_env_names -- --nocapture",
       "status": "passed",
-      "duration_ms": 3346,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-060fb2b15e8f54f7.exe)\n\nrunning 1 test\ntest tests::h05_rejects_duplicate_kms_failover_env_names ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+      "duration_ms": 2197,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_auth-ee08a0893842f922.exe)\n\nrunning 1 test\ntest tests::h05_rejects_duplicate_kms_failover_env_names ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s\n"
     },
     {
       "step": "all_regions_unavailable_rejected",
       "command": "cargo test -p voltnuerongrid-auth h05_fails_when_all_kms_regions_are_unavailable -- --nocapture",
       "status": "passed",
-      "duration_ms": 3311,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_auth-060fb2b15e8f54f7.exe)\n\nrunning 1 test\ntest tests::h05_fails_when_all_kms_regions_are_unavailable ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s\n"
+      "duration_ms": 2182,
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_auth-ee08a0893842f922.exe)\n\nrunning 1 test\ntest tests::h05_fails_when_all_kms_regions_are_unavailable ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s\n"
     }
   ]
 }

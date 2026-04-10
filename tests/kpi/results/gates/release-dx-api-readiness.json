@@ -8,14 +8,14 @@
     "WS9A",
     "WS10"
   ],
-  "started_at_utc": "2026-04-09T16:12:03.0101428Z",
-  "finished_at_utc": "2026-04-09T16:27:14.2374590Z",
-  "duration_ms": 911227,
+  "started_at_utc": "2026-04-10T02:46:33.7422153Z",
+  "finished_at_utc": "2026-04-10T02:46:37.1594502Z",
+  "duration_ms": 3417,
   "packs": [
     {
       "pack": "ws5-security-gate",
       "status": "passed",
-      "detail": "ok",
+      "detail": "reused_existing_summary",
       "artifact": "tests/kpi/results/ws5/ws5-gate-summary.json"
     },
     {

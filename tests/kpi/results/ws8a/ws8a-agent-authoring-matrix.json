@@ -1,7 +1,7 @@
 {
   "report": "ws8a-agent-authoring-matrix",
   "status": "passed",
-  "generated_at_utc": "2026-04-09T16:06:53.4677888Z",
+  "generated_at_utc": "2026-04-10T02:46:31.9275297Z",
   "source_summary": "tests/kpi/results/ws8a/ws8a-gate-summary.json",
   "total_controls": 3,
   "passed_controls": 3,
