@@ -10,7 +10,7 @@
     "REQ-18",
     "REQ-26"
   ],
-  "generated_at_utc": "2026-04-05T04:03:57.2533523Z",
+  "generated_at_utc": "2026-04-10T06:50:21.6174839Z",
   "sources": {
     "summary": "tests/kpi/results/ws4a/ws4a-gate-summary.json",
     "streaming_path": "tests/kpi/results/ws4a/streaming-event-path-smoke.json",

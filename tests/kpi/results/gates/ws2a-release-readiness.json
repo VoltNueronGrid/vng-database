@@ -9,7 +9,7 @@
     "WS2A",
     "REQ-02"
   ],
-  "generated_at_utc": "2026-04-05T03:50:07.9441947Z",
+  "generated_at_utc": "2026-04-10T06:50:21.4539750Z",
   "sources": {
     "summary": "tests/kpi/results/ws2a/ws2a-gate-summary.json",
     "row_sync_origin": "tests/kpi/results/ws2a/row-sync-origin-smoke.json"

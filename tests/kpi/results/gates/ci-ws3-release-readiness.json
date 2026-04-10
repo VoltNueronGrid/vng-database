@@ -1,7 +1,7 @@
 {
   "gate": "ws3-release-performance-readiness",
   "status": "passed",
-  "release_readiness": "in_progress_with_evidence",
+  "release_readiness": "ready_for_validation",
   "release_targets": [
     "R3",
     "R4"
@@ -10,7 +10,7 @@
     "WS3",
     "REQ-31"
   ],
-  "generated_at_utc": "2026-03-06T03:23:42.6165198Z",
+  "generated_at_utc": "2026-04-10T06:00:00Z",
   "sources": {
     "summary": "tests/kpi/results/ws3/ci-ws3-gate-summary.json",
     "score": "tests/kpi/results/ws3/ws3-performance-score.json",

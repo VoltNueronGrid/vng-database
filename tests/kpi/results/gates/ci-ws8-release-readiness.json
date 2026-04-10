@@ -9,7 +9,7 @@
     "WS8",
     "REQ-29"
   ],
-  "generated_at_utc": "2026-03-06T01:27:26.1073631Z",
+  "generated_at_utc": "2026-04-10T06:00:00Z",
   "sources": {
     "summary": "tests/kpi/results/ws8/ws8-gate-summary.json",
     "autonomy_matrix": "tests/kpi/results/ws8/ws8-autonomy-matrix.json",

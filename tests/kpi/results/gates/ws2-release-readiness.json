@@ -9,7 +9,7 @@
     "WS2",
     "REQ-02"
   ],
-  "generated_at_utc": "2026-04-05T03:49:42.2572078Z",
+  "generated_at_utc": "2026-04-10T06:50:21.3924016Z",
   "sources": {
     "summary": "tests/kpi/results/ws2/ws2-gate-summary.json",
     "store_durability": "tests/kpi/results/ws2/store-durability-smoke.json",

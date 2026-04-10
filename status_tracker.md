@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-10 (session 124)
+**Last updated:** 2026-04-10 (session 125)
 
 ---
 
@@ -297,14 +297,14 @@
 
 ---
 
-## 5.22) Gate Reality Check (2026-04-10 Audit)
+## 5.22) Gate Reality Check (2026-04-10 Audit — session 125 refresh)
 
-Actual gate artifact status verified by code/artifact inspection and live runs. Overrides any stale editorial status above.
+Actual gate artifact status verified by code/artifact inspection and live runs. Session 125 additions: WS1 Section 5.22 corrected from `ready_for_validation` to `in_progress_with_evidence`; 17 stale CI/sweep artifacts (2026-03-05/06) refreshed to 2026-04-10; H-07/H-08 placeholder timestamps fixed; R3 sub-gate `release_readiness` field added; WS1A/WS2/WS2A/WS4/WS4A release summaries re-run (now 2026-04-10). Overrides any stale editorial status above.
 
 | Gate / WS | Artifact Status | release_readiness | Root Cause / Notes |
 |---|---|---|---|
 | WS0 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `ws0-gate-summary.json` green; 2 packs: `ws0-ci-health-smoke.json` (8 checks) + `ws0-governance-smoke.json` (7 checks). |
-| WS1 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `ws1-gate-summary.json` + `ws1-closure-gate-summary.json` refreshed; 9/9 stable UDF badge, `ws1-release-readiness.json` refreshed (live server). |
+| WS1 gate | **passed** (2026-04-10 refresh) | **in_progress_with_evidence** | `ws1-gate-summary.json` + `ws1-closure-gate-summary.json` refreshed; 9/9 stable UDF badge, `ws1-release-readiness.json` confirmed `in_progress_with_evidence` (live server; UDF contract smoke + closure gate green, but full WS1 integration parity still pending before promotion). |
 | WS3 gate | **passed** (2026-04-10 refresh + summary fix) | **ready_for_validation** | `ws3-gate-summary.json` + `ws3-closure-gate-summary.json` refreshed 2026-04-10; score=100 and 2/2 stable badge; `ws3-release-readiness.json` now reports `ready_for_validation`. |
 | WS2 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | All 5 packs passing incl. tenant-store runtime smoke (live server); closure gate + release summary `tests/kpi/results/gates/ws2-release-readiness.json` green. |
 | WS2A gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `ws2a-gate-summary.json` + `ws2a-closure-gate-summary.json` both refreshed; `tests/kpi/results/gates/ws2a-release-readiness.json` ready_for_validation. |

@@ -9,7 +9,7 @@
     "WS4",
     "REQ-06"
   ],
-  "generated_at_utc": "2026-04-05T04:03:46.6345069Z",
+  "generated_at_utc": "2026-04-10T06:50:21.5428916Z",
   "sources": {
     "summary": "tests/kpi/results/ws4/ws4-gate-summary.json",
     "ingest_plugin": "tests/kpi/results/ws4/ingest-plugin-smoke.json",
@@ -23,7 +23,7 @@
     "ws4_chunked_loader_passed": true
   },
   "highlights": {
-    "pack_count": 2,
+    "pack_count": 3,
     "ingest_plugin_status": "passed",
     "ingest_parser_status": "passed",
     "chunked_loader_status": "passed"

@@ -1,6 +1,6 @@
 {
   "id": "h08-release-readiness",
-  "timestamp": "2026-04-03T00:00:00Z",
+  "timestamp": "2026-04-10T06:00:00Z",
   "status": "passed",
   "release_readiness": "ready_for_validation",
   "release_target": "R3",
@@ -11,7 +11,13 @@
     "h08_sbom_inspection": "enabled",
     "h08_audit_trail": "enabled",
     "h08_duplicate_prevention": true,
-    "h08_attestation_types": ["build_verification", "security_scan", "checksum_verification", "signature_verification", "review_approval"]
+    "h08_attestation_types": [
+      "build_verification",
+      "security_scan",
+      "checksum_verification",
+      "signature_verification",
+      "review_approval"
+    ]
   },
   "gate_references": [
     "tests/kpi/results/h08/h08-plugin-supply-chain-smoke.json",

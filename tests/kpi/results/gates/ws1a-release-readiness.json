@@ -9,7 +9,7 @@
     "WS1A",
     "REQ-12"
   ],
-  "generated_at_utc": "2026-04-05T04:04:12.6615235Z",
+  "generated_at_utc": "2026-04-10T06:50:21.2823387Z",
   "sources": {
     "summary": "tests/kpi/results/ws1a/ws1a-gate-summary.json",
     "udf_bridge": "tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json",
@@ -25,7 +25,7 @@
     "ws1a_gap_report_passed": true
   },
   "highlights": {
-    "pack_count": 3,
+    "pack_count": 4,
     "udf_bridge_status": "passed",
     "legacy_eval_status": "passed",
     "parity_status": "passed",

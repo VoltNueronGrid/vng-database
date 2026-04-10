@@ -1,6 +1,7 @@
 {
   "gate": "release-r3-udf-runtime-readiness",
   "status": "passed",
+  "release_readiness": "ready_for_validation",
   "release": "R3",
   "generated_at_utc": "2026-04-10T03:18:18.5725842Z",
   "checks": {
