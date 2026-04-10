@@ -1,9 +1,9 @@
 {
   "smoke": "ws13-multicloud-deployment-profile-baseline",
   "status": "passed",
-  "started_at_utc": "2026-04-10T01:44:50.8618905Z",
-  "finished_at_utc": "2026-04-10T01:44:50.9117955Z",
-  "duration_ms": 50,
+  "started_at_utc": "2026-04-10T02:09:04.3647994Z",
+  "finished_at_utc": "2026-04-10T02:09:04.4048195Z",
+  "duration_ms": 40,
   "checks": [
     {
       "check": "profile_contract_exists",

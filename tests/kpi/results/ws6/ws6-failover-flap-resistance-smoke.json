@@ -1,47 +1,47 @@
 ﻿{
     "smoke":  "ws6-failover-flap-resistance",
     "status":  "passed",
-    "timestamp_utc":  "2026-04-09T18:27:16.8379502Z",
+    "timestamp_utc":  "2026-04-10T02:08:17.6148096Z",
     "command":  "cargo test -p voltnuerongridd failover_rotate_leader_ -- --nocapture",
     "cycles":  5,
     "cycle_max_ms":  6000,
     "latency_envelope":  {
-                             "p95_cycle_ms":  1214,
-                             "max_cycle_ms_observed":  1287
+                             "p95_cycle_ms":  2117,
+                             "max_cycle_ms_observed":  2273
                          },
     "cycle_results":  [
                           {
                               "cycle":  1,
                               "status":  "passed",
-                              "duration_ms":  1198,
+                              "duration_ms":  2117,
                               "max_cycle_ms":  6000,
                               "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           },
                           {
                               "cycle":  2,
                               "status":  "passed",
-                              "duration_ms":  1287,
+                              "duration_ms":  2273,
                               "max_cycle_ms":  6000,
                               "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           },
                           {
                               "cycle":  3,
                               "status":  "passed",
-                              "duration_ms":  1214,
+                              "duration_ms":  2101,
                               "max_cycle_ms":  6000,
                               "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           },
                           {
                               "cycle":  4,
                               "status":  "passed",
-                              "duration_ms":  1204,
+                              "duration_ms":  2103,
                               "max_cycle_ms":  6000,
                               "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           },
                           {
                               "cycle":  5,
                               "status":  "passed",
-                              "duration_ms":  1145,
+                              "duration_ms":  1996,
                               "max_cycle_ms":  6000,
                               "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                           }

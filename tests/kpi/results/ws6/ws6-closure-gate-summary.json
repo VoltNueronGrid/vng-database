@@ -1,31 +1,31 @@
 {
-    "gate":  "ws6-closure-gate",
-    "status":  "passed",
-    "validation_posture":  "ready_for_validation",
-    "started_at_utc":  "2026-03-09T08:40:35.1796519Z",
-    "finished_at_utc":  "2026-03-09T08:42:18.6720215Z",
-    "duration_ms":  103492,
-    "artifacts":  {
-                      "ws6_gate":  "tests/kpi/results/ws6/ws6-gate-summary.json",
-                      "ws6_release":  "tests/kpi/results/gates/ws6-release-readiness.json",
-                      "ws6_chaos_matrix":  "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json",
-                      "ws6_trend":  "tests/kpi/results/ws6/ws6-gate-trend-comparison.json",
-                      "ws6_badge":  "tests/kpi/results/ws6/ws6-failover-stability-badge.json"
-                  },
-    "checks":  {
-                   "ws6_gate_passed":  true,
-                   "ws6_release_summary_passed":  true,
-                   "ws6_all_packs_passed":  true,
-                   "ws6_chaos_fault_modes_all_passed":  true,
-                   "ws6_trend_allowed":  true,
-                   "ws6_stability_badge_green":  true
-               },
-    "runs":  [
-                 {
-                     "pack":  "ws6-gate",
-                     "status":  "passed",
-                     "detail":  "ok",
-                     "artifact":  "tests/kpi/results/ws6/ws6-gate-summary.json"
-                 }
-             ]
+  "gate": "ws6-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-04-10T02:07:37.4077672Z",
+  "finished_at_utc": "2026-04-10T02:09:01.6236185Z",
+  "duration_ms": 84216,
+  "artifacts": {
+    "ws6_gate": "tests/kpi/results/ws6/ws6-gate-summary.json",
+    "ws6_release": "tests/kpi/results/gates/ws6-release-readiness.json",
+    "ws6_chaos_matrix": "tests/kpi/results/ws6/ws6-chaos-fault-matrix.json",
+    "ws6_trend": "tests/kpi/results/ws6/ws6-gate-trend-comparison.json",
+    "ws6_badge": "tests/kpi/results/ws6/ws6-failover-stability-badge.json"
+  },
+  "checks": {
+    "ws6_gate_passed": true,
+    "ws6_release_summary_passed": true,
+    "ws6_all_packs_passed": true,
+    "ws6_chaos_fault_modes_all_passed": true,
+    "ws6_trend_allowed": true,
+    "ws6_stability_badge_green": true
+  },
+  "runs": [
+    {
+      "pack": "ws6-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws6/ws6-gate-summary.json"
+    }
+  ]
 }

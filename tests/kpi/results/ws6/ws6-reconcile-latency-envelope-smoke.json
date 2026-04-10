@@ -1,11 +1,11 @@
 ﻿{
     "smoke":  "ws6-reconcile-latency-envelope",
     "status":  "passed",
-    "timestamp_utc":  "2026-04-09T18:27:21.9842668Z",
+    "timestamp_utc":  "2026-04-10T02:08:24.9289986Z",
     "command":  "cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture",
     "iterations":  3,
     "latency_envelope":  {
-                             "p95_ms":  1245,
+                             "p95_ms":  1950,
                              "p95_max_ms":  6000,
                              "pass":  true
                          },
@@ -13,19 +13,19 @@
                         {
                             "iteration":  1,
                             "status":  "passed",
-                            "duration_ms":  1245,
+                            "duration_ms":  2231,
                             "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                         },
                         {
                             "iteration":  2,
                             "status":  "passed",
-                            "duration_ms":  1502,
+                            "duration_ms":  1950,
                             "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                         },
                         {
                             "iteration":  3,
                             "status":  "passed",
-                            "duration_ms":  1214,
+                            "duration_ms":  1675,
                             "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |"
                         }
                     ]

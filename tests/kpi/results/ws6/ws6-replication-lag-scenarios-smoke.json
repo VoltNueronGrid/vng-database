@@ -1,7 +1,7 @@
 ﻿{
     "smoke":  "ws6-replication-lag-failure-scenarios",
     "status":  "passed",
-    "timestamp_utc":  "2026-04-09T18:27:03.1289657Z",
+    "timestamp_utc":  "2026-04-10T02:07:57.5130621Z",
     "runtime_path":  "services/voltnuerongridd/src/main.rs",
     "commands":  [
                      "cargo test -p voltnuerongridd ws12_failure_signal_ -- --nocapture",

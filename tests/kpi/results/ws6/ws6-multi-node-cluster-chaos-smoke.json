@@ -2,7 +2,7 @@
     "smoke":  "ws6-multi-node-cluster-runtime-chaos",
     "status":  "passed",
     "hardening_item":  "H-03",
-    "timestamp_utc":  "2026-04-09T18:27:39.4856371Z",
+    "timestamp_utc":  "2026-04-10T02:08:45.8930446Z",
     "certification_scope":  [
                                 "multi_node_targeted_transport_filtering",
                                 "multi_node_replay_respects_last_applied_sequence",
@@ -15,7 +15,7 @@
                       "crate":  "voltnuerongridd",
                       "command":  "cargo test -p voltnuerongridd h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotations -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2129,
+                      "duration_ms":  2176,
                       "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\n"
                   },
                   {
@@ -23,24 +23,24 @@
                       "crate":  "voltnuerongrid-store",
                       "command":  "cargo test -p voltnuerongrid-store multi_node_replication_transport_exports_only_targeted_events -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2099,
-                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_replication_transport_exports_only_targeted_events ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
+                      "duration_ms":  1132,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_replication_transport_exports_only_targeted_events ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
                   },
                   {
                       "step":  "targeted_transport_respects_last_applied_sequence",
                       "crate":  "voltnuerongrid-store",
                       "command":  "cargo test -p voltnuerongrid-store multi_node_replication_transport_respects_last_applied_sequence -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  1075,
-                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_replication_transport_respects_last_applied_sequence ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
+                      "duration_ms":  2126,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_replication_transport_respects_last_applied_sequence ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
                   },
                   {
                       "step":  "multi_node_handoff_replays_only_unapplied_mutations",
                       "crate":  "voltnuerongrid-store",
                       "command":  "cargo test -p voltnuerongrid-store multi_node_failover_handoff_replays_only_unapplied_mutations -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  1087,
-                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_replays_only_unapplied_mutations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
+                      "duration_ms":  2123,
+                      "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_replays_only_unapplied_mutations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
                   }
               ]
 }

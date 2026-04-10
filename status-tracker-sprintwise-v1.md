@@ -426,7 +426,7 @@
 
 **Goal:** Reliability/SRE/DR automation, multi-cloud deployment profiles, config contracts + tuning playbooks. Close R2 release gate.
 **Dependencies:** Sprint 5 (WS6), Sprint 4 (WS5), Sprint 7 (WS10)
-**Status:** 🟡 All Ready for Validation / R2 In Progress
+**Status:** 🟡 All Ready for Validation / R2 Ready for Validation (refreshed 2026-04-10)
 
 ### Workstreams
 
@@ -452,13 +452,13 @@
 - [x] WS13: Provider runbook env matrices
 - [x] WS14: Config schema lint gate + conformance aggregator
 - [x] Combined Ops/Resilience cluster gate evidence published
-- [ ] R2 Release Gate: Distributed HTAP + HA + connectors + anti-SPOF fully validated
+- [x] R2 Release Gate: Distributed HTAP + HA + connectors + anti-SPOF validated for release readiness (rerun 2026-04-10)
 
 ### R2 Release Gate
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | 🔵 In Progress | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`) |
+| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | 🟡 Ready for Validation | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`) — refreshed 2026-04-10 (`status: passed`, `release_readiness: ready_for_validation`) |
 
 ---
 
@@ -570,7 +570,7 @@
 | Release | Scope Snapshot | Sprint Target | Status | Gate Criteria |
 |---|---|---|---|---|
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🔵 In Progress | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate |
-| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🔵 In Progress | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates |
+| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (refreshed 2026-04-10) |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🔵 In Progress | Autonomous governance + audit evidence + plugin cert + all R3 sub-gates |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | ⬜ Not Started | RTO/RPO game-day success + global ops sign-off |
 
@@ -1866,3 +1866,4 @@ A tracker row moves to **Done** only when:
 - Evidence artifacts are attached.
 - Dependencies in prerequisite gate are satisfied.
 - Risk register impact is updated.
+
