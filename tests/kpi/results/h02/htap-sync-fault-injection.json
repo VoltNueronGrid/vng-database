@@ -1,6 +1,6 @@
 ﻿{
-    "timestamp_utc":  "2026-03-05T05:44:22.4282187Z",
+    "timestamp_utc":  "2026-04-10T06:59:55.6705585Z",
     "status":  "passed",
     "command":  "cargo test -p voltnuerongrid-store detects_sequence_gap_after_fault_injection -- --nocapture",
-    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::detects_sequence_gap_after_fault_injection ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s\n"
+    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::detects_sequence_gap_after_fault_injection ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
 }

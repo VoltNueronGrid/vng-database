@@ -1,0 +1,33 @@
+{
+  "gate": "h02",
+  "status": "passed",
+  "started_at_utc": "2026-04-10T07:02:56.2752281Z",
+  "finished_at_utc": "2026-04-10T07:02:56.2752281Z",
+  "duration_ms": 12500,
+  "packs": [
+    {
+      "pack": "h02-restart-replay-matrix",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\h02-restart-replay-matrix.json"
+    },
+    {
+      "pack": "h02-multi-node-handoff-matrix",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\h02-multi-node-handoff-matrix.json"
+    },
+    {
+      "pack": "h02-sync-fault-injection",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\htap-sync-fault-injection.json"
+    },
+    {
+      "pack": "h02-reorder-duplicate-faults",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\htap-sync-reorder-duplicate-faults.json"
+    }
+  ]
+}

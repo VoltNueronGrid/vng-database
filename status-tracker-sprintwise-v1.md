@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 125)
+**Last updated:** 2026-04-10 (session 126)
 
 ---
 
@@ -36,7 +36,7 @@
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-10) |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
-| Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🔵 Mixed |
+| Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🟡 Mixed (H-02 promoted to Ready for Validation 2026-04-10) |
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-05 evidence refreshed 2026-04-10; H-06..H-08 ready_for_validation; WS3 release readiness promoted and R3 blocker cleared) |
 | Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 refreshed 2026-04-10; R4 baseline gate scaffolded and currently blocked by P2 release-readiness + sign-off requirements) |
 
@@ -479,7 +479,7 @@
 | ID | Hardening Item | Owner | Priority | Status | Completion | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|---|
 | H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 96% | Added operator auth gate (`VNG_ADMIN_API_KEY` + `x-vng-admin-key`) for autonomous control endpoints, then layered registered operator identity + role binding enforcement via `x-vng-operator-id` plus a shared resource-scoped RBAC privilege matrix now enforced across control-plane, storage, mixed ingest, tenant-scoped SQL runtime handlers, and tenant-aware driver headers; retained versioned/checksummed DR policy-state persistence envelope with corruption fallback to `.bak` and legacy snapshot compatibility tests (`ws12_`) | Full RBAC integration pending | Extend operator-scoped RBAC into broader user/tenant privilege hierarchies |
-| H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | 🔵 In Progress | 95% | Added restart/replay integrity tests + matrix harness artifact `tests/kpi/results/h02/h02-restart-replay-matrix.json`; matrix now includes persisted WAL recovery signal plus multi-node replay/failover handoff matrix artifact `tests/kpi/results/h02/h02-multi-node-handoff-matrix.json`, and WS6 runtime now consumes explicit multi-node replication transport events for handoff replay | Full distributed transport runtime and leader-election integration not yet implemented | Replace in-memory transport with real network transport while preserving replay contract |
+| H-02 | Epic 6 | HTAP sync correctness under failures | Storage + Distributed Systems | 🟡 Ready for Validation | WS2, WS6 | Gate orchestrator + release-readiness artifact: 4/4 packs passed (2026-04-10, session 126): restart-replay-matrix (7 checks), multi-node-handoff-matrix (3 checks), sync-fault-injection, reorder-duplicate-faults; `tests/kpi/results/h02/h02-gate-summary.json`; `tests/kpi/results/gates/h02-release-readiness.json` (`ready_for_validation`) |
 | H-03 | Control-plane resilience hardening | Distributed Systems | P0 | 🔵 In Progress | 15% | Control-plane clustering requirement and SPOF closure criteria documented | Cluster runtime implementation pending | Control-plane chaos test plan v1 |
 | H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | 🔵 In Progress | 20% | Outbox and replay durability controls defined in architecture | Event bus/outbox services pending | Exactly-once replay test harness draft |
 

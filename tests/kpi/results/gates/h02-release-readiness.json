@@ -1,0 +1,40 @@
+{
+  "gate": "h02-release-htap-sync-correctness-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release_targets": [
+    "R2"
+  ],
+  "scope": [
+    "WS2",
+    "WS2A",
+    "WS6",
+    "REQ-05",
+    "REQ-17",
+    "H-02"
+  ],
+  "generated_at_utc": "2026-04-10T07:02:56.2752281Z",
+  "sources": {
+    "gate_summary": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\h02-gate-summary.json",
+    "restart_replay_matrix": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\h02-restart-replay-matrix.json",
+    "multi_node_handoff_matrix": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\h02-multi-node-handoff-matrix.json",
+    "sync_fault_injection": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\htap-sync-fault-injection.json",
+    "reorder_duplicate_faults": "D:\\by\\polap-db\\tests\\kpi\\results\\h02\\htap-sync-reorder-duplicate-faults.json"
+  },
+  "checks": {
+    "h02_gate_passed": true,
+    "h02_all_packs_passed": true
+  },
+  "highlights": {
+    "pack_count": 4,
+    "ordered_transport_covered": true,
+    "unapplied_only_replay_covered": true,
+    "dropped_sequence_detection_covered": true,
+    "duplicate_sequence_detection": true,
+    "out_of_order_sequence_detection": true,
+    "htap_sync_fault_injection_status": "passed",
+    "restart_replay_matrix_status": "passed",
+    "multi_node_handoff_matrix_status": "passed",
+    "reorder_duplicate_faults_status": "passed"
+  }
+}

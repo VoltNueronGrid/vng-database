@@ -1,27 +1,27 @@
 {
   "harness": "h02-multi-node-handoff-matrix",
-  "started_at_utc": "2026-03-07T02:12:49.9724532Z",
-  "finished_at_utc": "2026-03-07T02:12:54.3365899Z",
-  "duration_ms": 4364,
+  "started_at_utc": "2026-04-10T07:01:57.1360393Z",
+  "finished_at_utc": "2026-04-10T07:02:00.8018708Z",
+  "duration_ms": 3666,
   "status": "passed",
   "matrix": [
     {
       "test_filter": "multi_node_replica_replay_applies_contiguous_transport_batch",
       "status": "passed",
       "exit_code": 0,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_replica_replay_applies_contiguous_transport_batch ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s\n"
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_replica_replay_applies_contiguous_transport_batch ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
     },
     {
       "test_filter": "multi_node_failover_handoff_replays_only_unapplied_mutations",
       "status": "passed",
       "exit_code": 0,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_replays_only_unapplied_mutations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s\n"
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_replays_only_unapplied_mutations ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
     },
     {
       "test_filter": "multi_node_failover_handoff_reports_gap_when_transport_drops_sequence",
       "status": "passed",
       "exit_code": 0,
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_store-3828d44b067f2168.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_reports_gap_when_transport_drops_sequence ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s\n"
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::multi_node_failover_handoff_reports_gap_when_transport_drops_sequence ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n"
     }
   ]
 }
