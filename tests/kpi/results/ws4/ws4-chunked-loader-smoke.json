@@ -1,9 +1,9 @@
 {
   "smoke": "ws4-chunked-loader",
   "status": "passed",
-  "started_at_utc": "2026-04-10T02:16:42.1804386Z",
-  "finished_at_utc": "2026-04-10T02:16:42.1968263Z",
-  "duration_ms": 16,
+  "started_at_utc": "2026-04-10T05:32:51.5416374Z",
+  "finished_at_utc": "2026-04-10T05:32:51.5551469Z",
+  "duration_ms": 14,
   "total_checks": 20,
   "passed_checks": 20,
   "checks": [

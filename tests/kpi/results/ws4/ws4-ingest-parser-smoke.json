@@ -1,9 +1,9 @@
 {
   "smoke": "ws4-ingest-parser-scaffold",
   "status": "passed",
-  "started_at_utc": "2026-04-10T02:16:42.0474229Z",
-  "finished_at_utc": "2026-04-10T02:16:42.0823680Z",
-  "duration_ms": 35,
+  "started_at_utc": "2026-04-10T05:32:51.4952733Z",
+  "finished_at_utc": "2026-04-10T05:32:51.5084661Z",
+  "duration_ms": 13,
   "total_checks": 24,
   "passed_checks": 24,
   "checks": [

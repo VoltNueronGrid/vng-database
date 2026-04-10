@@ -1,9 +1,9 @@
 {
   "smoke": "ws2-index-constraint-scaffold",
   "status": "passed",
-  "started_at_utc": "2026-04-10T02:16:04.3329323Z",
-  "finished_at_utc": "2026-04-10T02:16:04.3878539Z",
-  "duration_ms": 55,
+  "started_at_utc": "2026-04-10T05:32:30.0773175Z",
+  "finished_at_utc": "2026-04-10T05:32:30.1191140Z",
+  "duration_ms": 42,
   "total_checks": 22,
   "passed_checks": 22,
   "checks": [

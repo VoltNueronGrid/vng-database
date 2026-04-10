@@ -1,9 +1,9 @@
 {
   "gate": "ws2a",
   "status": "passed",
-  "started_at_utc": "2026-04-10T02:25:27.2466834Z",
-  "finished_at_utc": "2026-04-10T02:25:28.1419761Z",
-  "duration_ms": 895,
+  "started_at_utc": "2026-04-10T05:32:55.8806382Z",
+  "finished_at_utc": "2026-04-10T05:32:56.8149769Z",
+  "duration_ms": 934,
   "packs": [
     {
       "pack": "ws2a-row-sync-origin",

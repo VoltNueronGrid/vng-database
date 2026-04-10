@@ -3,7 +3,7 @@
   "status": "passed",
   "checks_passed": 12,
   "checks_total": 12,
-  "generated_at_utc": "2026-04-10T09:44:03.0293296+05:30",
+  "generated_at_utc": "2026-04-10T11:04:41.5692860+05:30",
   "checks": [
     {
       "check": "benchmark-ingest-route-exists",
@@ -48,22 +48,22 @@
     {
       "check": "live-benchmark-ingest-responds",
       "ok": true,
-      "detail": "benchmark/ingest status=ok rps=500000"
+      "detail": "benchmark/ingest status=ok rps=1000000"
     },
     {
       "check": "live-benchmark-ingest-rps-positive",
       "ok": true,
-      "detail": "records_per_second=500000"
+      "detail": "records_per_second=1000000"
     },
     {
       "check": "live-benchmark-query-responds",
       "ok": true,
-      "detail": "benchmark/query status=ok ops=156250"
+      "detail": "benchmark/query status=ok ops=125000"
     },
     {
       "check": "live-benchmark-query-ops-positive",
       "ok": true,
-      "detail": "ops_per_second=156250"
+      "detail": "ops_per_second=125000"
     }
   ]
 }

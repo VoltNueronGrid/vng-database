@@ -3,8 +3,8 @@
   "status": "passed",
   "command": "cmd.exe /c cargo test -p voltnuerongrid-store wal_adapter -- --nocapture",
   "exit_code": 0,
-  "started_at_utc": "2026-04-10T02:16:00.6633298Z",
-  "finished_at_utc": "2026-04-10T02:16:02.8251101Z",
-  "duration_ms": 2162,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 3 tests\ntest wal_adapter::tests::truncates_wal_file ... ok\ntest tests::recovers_state_from_wal_adapter_records ... ok\ntest wal_adapter::tests::appends_and_reads_records_from_disk ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 0.01s\n"
+  "started_at_utc": "2026-04-10T05:32:26.7200878Z",
+  "finished_at_utc": "2026-04-10T05:32:28.8934643Z",
+  "duration_ms": 2173,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 3 tests\ntest wal_adapter::tests::truncates_wal_file ... ok\ntest tests::recovers_state_from_wal_adapter_records ... ok\ntest wal_adapter::tests::appends_and_reads_records_from_disk ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 0.01s\n"
 }

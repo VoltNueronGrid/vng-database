@@ -9,7 +9,7 @@
     "H-09",
     "REQ-28"
   ],
-  "generated_at_utc": "2026-04-10T04:14:03.1195340Z",
+  "generated_at_utc": "2026-04-10T05:34:41.7368657Z",
   "sources": {
     "summary": "tests/kpi/results/h09/h09-gate-summary.json",
     "parity": "tests/kpi/results/h09/h09-ide-parity-matrix.json"

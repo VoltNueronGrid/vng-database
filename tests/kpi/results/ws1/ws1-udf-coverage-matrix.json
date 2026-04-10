@@ -1,7 +1,7 @@
 {
   "report": "ws1-udf-coverage-matrix",
   "status": "passed",
-  "generated_at_utc": "2026-04-10T02:27:03.2931235Z",
+  "generated_at_utc": "2026-04-10T05:36:18.9343338Z",
   "source_summary": "tests/kpi/results/ws1/ws1-gate-summary.json",
   "total_controls": 4,
   "passed_controls": 4,

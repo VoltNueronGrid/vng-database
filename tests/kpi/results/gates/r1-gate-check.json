@@ -1,28 +1,4 @@
 {
-  "baseline_artifacts": [
-    {
-      "path": "tests/kpi/results/20260304-pr007/single-node-local/oltp-latency-result.json",
-      "exists": true
-    },
-    {
-      "path": "tests/kpi/results/20260304-pr007/single-node-local/olap-latency-result.json",
-      "exists": true
-    },
-    {
-      "path": "tests/kpi/results/20260304-pr007/multi-node-local/oltp-latency-result.json",
-      "exists": true
-    },
-    {
-      "path": "tests/kpi/results/20260304-pr007/multi-node-local/failover-rto-rpo-result.json",
-      "exists": true
-    }
-  ],
-  "criteria": [
-    "PR-002 deploy scaffolds present",
-    "PR-004 KPI harness present",
-    "PR-005 workspace/runtime scaffolds present",
-    "KPI smoke baseline artifacts present"
-  ],
   "required_artifacts": [
     {
       "path": "deploy/local/single-node.yml",
@@ -65,7 +41,31 @@
       "exists": true
     }
   ],
+  "status": "passed",
+  "baseline_artifacts": [
+    {
+      "path": "tests/kpi/results/20260304-pr007/single-node-local/oltp-latency-result.json",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/results/20260304-pr007/single-node-local/olap-latency-result.json",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/results/20260304-pr007/multi-node-local/oltp-latency-result.json",
+      "exists": true
+    },
+    {
+      "path": "tests/kpi/results/20260304-pr007/multi-node-local/failover-rto-rpo-result.json",
+      "exists": true
+    }
+  ],
+  "criteria": [
+    "PR-002 deploy scaffolds present",
+    "PR-004 KPI harness present",
+    "PR-005 workspace/runtime scaffolds present",
+    "KPI smoke baseline artifacts present"
+  ],
   "gate": "R1",
-  "timestamp_utc": "2026-04-10T02:26:53.0075803Z",
-  "status": "passed"
+  "timestamp_utc": "2026-04-10T05:36:07.4721701Z"
 }
