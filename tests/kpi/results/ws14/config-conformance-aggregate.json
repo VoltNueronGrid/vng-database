@@ -4,9 +4,9 @@
   "conformance_percent": 100.0,
   "passed_checks": 15,
   "total_checks": 15,
-  "started_at_utc": "2026-04-10T08:11:52.3836389Z",
-  "finished_at_utc": "2026-04-10T08:11:52.4448996Z",
-  "duration_ms": 61,
+  "started_at_utc": "2026-04-10T08:19:39.3894377Z",
+  "finished_at_utc": "2026-04-10T08:19:39.5141611Z",
+  "duration_ms": 125,
   "checks": [
     {
       "check": "driver_baseurl_json_vs_props",

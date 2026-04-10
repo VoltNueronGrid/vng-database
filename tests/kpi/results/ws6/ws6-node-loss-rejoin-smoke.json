@@ -1,7 +1,7 @@
 ﻿{
     "smoke":  "ws6-node-loss-rejoin-sequence",
     "status":  "passed",
-    "timestamp_utc":  "2026-04-10T02:59:54.7601069Z",
+    "timestamp_utc":  "2026-04-10T08:18:22.9759615Z",
     "runtime_path":  "services/voltnuerongridd/src/main.rs",
     "sequence":  [
                      "node_loss_signal_critical",
@@ -19,21 +19,21 @@
                       "step":  "node_loss_signal_critical",
                       "command":  "cargo test -p voltnuerongridd ws12_failure_signal_queues_auto_remediation -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2157,
+                      "duration_ms":  2214,
                       "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException"
                   },
                   {
                       "step":  "failover_drill_execution",
                       "command":  "cargo test -p voltnuerongridd ws12_dr_hook_executes_failover_when_not_dry_run -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2172,
+                      "duration_ms":  2397,
                       "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException"
                   },
                   {
                       "step":  "node_rejoin_reconcile",
                       "command":  "cargo test -p voltnuerongridd ws12_reconcile_marks_critical_resolved -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2201,
+                      "duration_ms":  2543,
                       "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException"
                   }
               ]

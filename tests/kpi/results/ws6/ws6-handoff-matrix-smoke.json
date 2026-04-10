@@ -1,7 +1,7 @@
 ﻿{
     "smoke":  "ws6-multi-node-handoff-matrix",
     "status":  "passed",
-    "timestamp_utc":  "2026-04-10T02:59:39.7562946Z",
+    "timestamp_utc":  "2026-04-10T08:18:05.4740817Z",
     "command":  "cargo test -p voltnuerongridd failover_ -- --nocapture",
     "matrix":  [
                    {
