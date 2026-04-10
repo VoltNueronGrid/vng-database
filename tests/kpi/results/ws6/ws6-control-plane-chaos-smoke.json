@@ -2,7 +2,7 @@
     "smoke":  "ws6-control-plane-chaos-certification",
     "status":  "passed",
     "hardening_item":  "H-03",
-    "timestamp_utc":  "2026-04-10T02:32:46.2460752Z",
+    "timestamp_utc":  "2026-04-10T03:00:30.5047656Z",
     "runtime_path":  "services/voltnuerongridd/src/main.rs",
     "certification_scope":  [
                                 "degraded_failover_status_under_unresolved_critical_signals",
@@ -22,28 +22,28 @@
                       "step":  "failover_status_baseline_health",
                       "command":  "cargo test -p voltnuerongridd failover_status_reports_healthy_without_critical_signals -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  3176,
+                      "duration_ms":  3249,
                       "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\n"
                   },
                   {
                       "step":  "failover_status_degrades_on_critical_signal",
                       "command":  "cargo test -p voltnuerongridd failover_status_reports_degraded_with_unresolved_critical_signal -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  3264,
+                      "duration_ms":  3151,
                       "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\n"
                   },
                   {
                       "step":  "control_plane_chaos_cycle_recovers_after_reconcile",
                       "command":  "cargo test -p voltnuerongridd h03_control_plane_chaos_cycle_recovers_after_failover_and_reconcile -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  3239,
+                      "duration_ms":  3142,
                       "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\n"
                   },
                   {
                       "step":  "critical_signal_auto_remediation_queue",
                       "command":  "cargo test -p voltnuerongridd ws12_failure_signal_queues_auto_remediation -- --nocapture",
                       "status":  "passed",
-                      "duration_ms":  2124,
+                      "duration_ms":  3142,
                       "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\n"
                   }
               ]

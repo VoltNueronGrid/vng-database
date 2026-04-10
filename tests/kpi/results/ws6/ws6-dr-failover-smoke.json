@@ -1,7 +1,7 @@
 ﻿{
     "smoke":  "ws6-dr-failover-path",
     "status":  "passed",
-    "timestamp_utc":  "2026-04-10T02:31:52.0217487Z",
+    "timestamp_utc":  "2026-04-10T02:59:36.5466750Z",
     "command":  "cargo test -p voltnuerongridd ws12_dr_hook_executes_failover_when_not_dry_run -- --nocapture",
     "output_excerpt":  "warning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --\u003e services\\voltnuerongridd\\src\\main.rs:22632:35\n      |\n22632 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n  --\u003e services\\voltnuerongridd\\src\\main.rs:97:5\n   |\n93 | enum AcidTxState {\n   |      ----------- variant in this enum\n..."
 }
