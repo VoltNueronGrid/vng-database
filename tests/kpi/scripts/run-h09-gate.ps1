@@ -1,5 +1,6 @@
 param(
-  [string]$OutputPath = "tests/kpi/results/h09/h09-gate-summary.json"
+  [string]$OutputPath = "tests/kpi/results/h09/h09-gate-summary.json",
+  [string]$ReleaseSummaryOutputPath = "tests/kpi/results/gates/h09-release-readiness.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,7 @@ function Ensure-OutputDir {
 }
 
 Ensure-OutputDir -PathValue $OutputPath
+Ensure-OutputDir -PathValue $ReleaseSummaryOutputPath
 
 $start = Get-Date
 $runs = @()
@@ -69,6 +71,21 @@ $summary = [ordered]@{
   packs = $runs
 }
 
+$summary | ConvertTo-Json -Depth 8 | Set-Content -Path $OutputPath
+
+try {
+  $global:LASTEXITCODE = 0
+  & "tests/kpi/scripts/run-h09-release-summary.ps1" -SummaryPath $OutputPath -ParityPath "tests/kpi/results/h09/h09-ide-parity-matrix.json" -OutputPath $ReleaseSummaryOutputPath 2>&1 | Out-Null
+  if (-not $?) {
+    $status = "failed"
+  } elseif ($global:LASTEXITCODE -ne 0) {
+    $status = "failed"
+  }
+} catch {
+  $status = "failed"
+}
+
+$summary.status = $status
 $summary | ConvertTo-Json -Depth 8 | Set-Content -Path $OutputPath
 Write-Host "H-09 gate summary: $OutputPath ($status)"
 if ($status -ne "passed") {

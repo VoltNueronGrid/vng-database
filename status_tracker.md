@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-10 (session 122)
+**Last updated:** 2026-04-10 (session 123)
 
 ---
 
@@ -931,6 +931,7 @@ A tracker row moves to **Done** only when:
 - DX/API + H-05 follow-up refresh completed (2026-04-10): reran `run-h05-kms-region-failover-evidence.ps1`, `run-ws8a-closure-gate.ps1`, `run-release-dx-api-gate.ps1`, and `run-h09-release-summary.ps1`; H-05 evidence, WS8A closure, DX/API release readiness, and H-09 release evidence are current.
 - WS3 release-readiness unblock completed (2026-04-10): updated `tests/kpi/scripts/run-ws3-release-summary.ps1` so passed WS3 evidence promotes to `ready_for_validation`, then reran `run-ws3-gate.ps1`; `tests/kpi/results/gates/ws3-release-readiness.json` now reports `status: passed`, `release_readiness: ready_for_validation`, which clears the prior R3 blocker.
 - R3 release-gate bundle refresh completed (2026-04-10): reran `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all four release artifacts regenerated with `status: passed` and current timestamps for governance package readiness.
+- H-09 / H-10 synchronized P2 refresh completed (2026-04-10): updated `tests/kpi/scripts/run-h09-gate.ps1` so gate runs now regenerate `tests/kpi/results/gates/h09-release-readiness.json`, then reran both `run-h09-gate.ps1` and `run-h10-gate.ps1`; gate and release-summary artifacts for H-09/H-10 now share synchronized timestamps and remain `status: passed` with H-09 still `in_progress_with_evidence` and H-10 still gate-linked pending ARB ratification.
 
 ### 9.4 Owner Assignment Matrix (Published)
 | Scope | DRI Team | Supporting Teams | Current State |

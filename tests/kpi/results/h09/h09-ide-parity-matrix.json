@@ -1,9 +1,9 @@
 {
   "smoke": "h09-ide-parity-matrix",
   "status": "passed",
-  "started_at_utc": "2026-04-10T02:27:54.9359248Z",
-  "finished_at_utc": "2026-04-10T02:27:54.9553683Z",
-  "duration_ms": 19,
+  "started_at_utc": "2026-04-10T04:03:57.0052304Z",
+  "finished_at_utc": "2026-04-10T04:03:57.0305281Z",
+  "duration_ms": 25,
   "checks": [
     {
       "check": "h09_matrix_doc_exists",

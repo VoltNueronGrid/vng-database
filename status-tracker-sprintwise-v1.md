@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 122)
+**Last updated:** 2026-04-10 (session 123)
 
 ---
 
@@ -537,14 +537,14 @@
 
 **Goal:** P2 architecture hardening, SaaS maturity, ecosystem/multi-cloud hardening, close R4 release gate.
 **Dependencies:** Sprint 10 (P1 hardening complete), all prior sprints
-**Status:** ⬜ Not Started
+**Status:** 🔵 In Progress (H-09 release evidence refreshed 2026-04-10 and H-10 gate-linked; R4 release gate itself not started)
 
 ### Architecture Hardening Backlog — P2 (Release Target: R4)
 
 | ID | Hardening Item | Owner | Priority | Status | Completion | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|
-| H-09 | IDE extension parity/safety hardening | DX Team | P2 | ⬜ Not Started | 0% | SDK + IDE adapters pending | Cross-IDE parity test matrix draft |
-| H-10 | Long-run maintainability hardening | Chief Architect + Release Eng | P2 | 🔵 In Progress | 10% | Governance process artifacts pending | ARB cadence + deprecation policy draft |
+| H-09 | IDE extension parity/safety hardening | DX Team | P2 | 🔵 In Progress | 65% | Live runtime parity and permission-boundary negative scenarios still pending | Cross-IDE parity + permission-boundary negative scenarios |
+| H-10 | Long-run maintainability hardening | Chief Architect + Release Eng | P2 | 🔵 In Progress | 70% | ARB ratification pending | ARB sign-off + deprecation registry v1 |
 
 ### Requirements Covered (Not Started — pending in this sprint)
 - REQ-08 (Local + cloud SaaS operation) — ⬜ Not Started: Full local/cloud SaaS smoke tests
@@ -617,6 +617,7 @@
 - Once cloud handoff arrives, populate real AWS/Azure/GCP endpoint + token environment variables and execute PR-007 true remote smoke packs to close the deferred gate.
 - Hardening review template for H-01..H-04 published at `reference/hardening-review-h01-h04-template.md`; schedule and assign attendees.
 - H-09 parity baseline now includes release-facing evidence via `tests/kpi/results/gates/h09-release-readiness.json`; refreshed 2026-04-10 and still `in_progress_with_evidence`, so the next step remains live runtime parity and permission-boundary negative scenario coverage.
+- H-09 gate orchestration sync fix completed (2026-04-10): updated `tests/kpi/scripts/run-h09-gate.ps1` so gate runs now also regenerate `tests/kpi/results/gates/h09-release-readiness.json`, matching the H-10 gate pattern and preventing future gate/release timestamp drift.
 - H-10 governance baseline is now gate-linked with passing artifacts (`tests/kpi/results/h10/h10-governance-checklist.json`, `tests/kpi/results/h10/h10-gate-summary.json`, `tests/kpi/results/gates/h10-release-readiness.json`); next step is ARB ratification evidence injection.
 - Add a tooling hardening follow-up to stabilize Windows PowerShell gate/evidence summary artifact regeneration so release-facing JSON does not require manual synchronization after validated smoke runs.
 - Repair the default WSL/Codacy installer path, or explicitly document the fallback path when automated Codacy analysis cannot run during file edits.
@@ -625,6 +626,7 @@
 - DX/API + H-05 follow-up refresh completed (2026-04-10): reran `run-h05-kms-region-failover-evidence.ps1`, `run-ws8a-closure-gate.ps1`, `run-release-dx-api-gate.ps1`, and `run-h09-release-summary.ps1`; H-05 evidence, WS8A closure, DX/API release readiness, and H-09 release evidence are current.
 - WS3 release-readiness unblock completed (2026-04-10): updated `tests/kpi/scripts/run-ws3-release-summary.ps1` so passed WS3 evidence promotes to `ready_for_validation`, then reran `run-ws3-gate.ps1`; `tests/kpi/results/gates/ws3-release-readiness.json` now reports `status: passed`, `release_readiness: ready_for_validation`, clearing the prior R3 blocker.
 - R3 release-gate bundle refresh completed (2026-04-10): reran `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all four release artifacts regenerated with `status: passed` and current timestamps for governance package readiness.
+- H-09 / H-10 synchronized P2 refresh completed (2026-04-10): updated `tests/kpi/scripts/run-h09-gate.ps1` so gate runs now regenerate `tests/kpi/results/gates/h09-release-readiness.json`, then reran both `run-h09-gate.ps1` and `run-h10-gate.ps1`; gate and release-summary artifacts for H-09/H-10 now share synchronized timestamps and remain `status: passed` with H-09 still `in_progress_with_evidence` and H-10 still gate-linked pending ARB ratification.
 
 ---
 
