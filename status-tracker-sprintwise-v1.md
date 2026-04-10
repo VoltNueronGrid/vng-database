@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 129)
+**Last updated:** 2026-04-10 (session 130)
 
 ---
 
@@ -38,7 +38,7 @@
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🟡 Mixed (H-02/H-04 ready_for_validation; H-01/H-03 evidence gates in progress) |
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-05 evidence refreshed 2026-04-10; H-06..H-08 ready_for_validation; WS3 release readiness promoted and R3 blocker cleared) |
-| Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 refreshed 2026-04-10; R4 baseline gate scaffolded and currently blocked by P2 release-readiness + sign-off requirements) |
+| Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 + R4 aggregate rerun refreshed 2026-04-10; R4 remains blocked by P2 release-readiness + sign-off requirements) |
 
 ---
 
@@ -539,7 +539,7 @@
 
 **Goal:** P2 architecture hardening, SaaS maturity, ecosystem/multi-cloud hardening, close R4 release gate.
 **Dependencies:** Sprint 10 (P1 hardening complete), all prior sprints
-**Status:** 🔵 In Progress (H-09/H-10 refreshed 2026-04-10 and R4 baseline gate now exists, but R4 remains blocked by P2 release-readiness and sign-off requirements)
+**Status:** 🔵 In Progress (H-09/H-10 and R4 aggregate evidence reran on 2026-04-10; R4 remains blocked by P2 release-readiness and sign-off requirements)
 
 ### Architecture Hardening Backlog — P2 (Release Target: R4)
 

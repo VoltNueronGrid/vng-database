@@ -11,9 +11,9 @@
     "WS13",
     "WS14"
   ],
-  "started_at_utc": "2026-04-10T05:34:34.5876908Z",
-  "finished_at_utc": "2026-04-10T05:34:41.0166890Z",
-  "duration_ms": 6429,
+  "started_at_utc": "2026-04-10T08:06:16.1674358Z",
+  "finished_at_utc": "2026-04-10T08:06:28.0988565Z",
+  "duration_ms": 11931,
   "packs": [
     {
       "pack": "ws12-reliability-smoke",

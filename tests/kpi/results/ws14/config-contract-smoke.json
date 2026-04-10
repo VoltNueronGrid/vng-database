@@ -3,8 +3,8 @@
   "status": "passed",
   "command": "cargo test -p voltnuerongrid-driver-rust validates_driver_contract; cargo test -p voltnuerongrid-auth validates_security_config; json schema parse checks",
   "schema_ok": true,
-  "started_at_utc": "2026-04-10T05:34:38.2083365Z",
-  "finished_at_utc": "2026-04-10T05:34:40.8005546Z",
-  "duration_ms": 2592,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_driver_rust-495547a918e3c7c1.exe)\n\nrunning 3 tests\ntest tests::validates_driver_contract_from_json ... ok\ntest tests::validates_driver_contract_from_properties ... ok\ntest tests::validates_driver_contract_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_auth-ee08a0893842f922.exe)\n\nrunning 3 tests\ntest tests::validates_security_config_from_json ... ok\ntest tests::validates_security_config_from_properties ... ok\ntest tests::ws5_validates_security_config_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-04-10T08:06:23.7478672Z",
+  "finished_at_utc": "2026-04-10T08:06:27.8139046Z",
+  "duration_ms": 4066,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_driver_rust-495547a918e3c7c1.exe)\n\nrunning 3 tests\ntest tests::validates_driver_contract_from_json ... ok\ntest tests::validates_driver_contract_from_properties ... ok\ntest tests::validates_driver_contract_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_auth-ee08a0893842f922.exe)\n\nrunning 3 tests\ntest tests::validates_security_config_from_json ... ok\ntest tests::validates_security_config_from_properties ... ok\ntest tests::ws5_validates_security_config_from_yaml ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s\n"
 }

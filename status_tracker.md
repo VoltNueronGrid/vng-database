@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-10 (session 129)
+**Last updated:** 2026-04-10 (session 130)
 
 ---
 
@@ -296,9 +296,9 @@
 | H-10 Release Readiness | H-10 (release-facing governance readiness summary) | `tests/kpi/results/gates/h10-release-readiness.json` |
 
 ---
-## 5.22) Gate Reality Check (2026-04-10 Audit — session 129 refresh)
+## 5.22) Gate Reality Check (2026-04-10 Audit — session 130 refresh)
 
-Actual gate artifact status verified by code/artifact inspection and live runs. Session 129 additions: H-04 event durability status synchronized to `ready_for_validation` in tracker tables and release criteria; sessions 128/127/126 hardening gate additions (H-01/H-03/H-02) retained. Overrides any stale editorial status above.
+Actual gate artifact status verified by code/artifact inspection and live runs. Session 130 refresh reran H-09, H-10, and R4 aggregate release evidence; session 129 H-04 synchronization and sessions 128/127/126 hardening gate additions (H-01/H-03/H-02) are retained. Overrides any stale editorial status above.
 
 | Gate / WS | Artifact Status | release_readiness | Root Cause / Notes |
 |---|---|---|---|
@@ -327,7 +327,7 @@ Actual gate artifact status verified by code/artifact inspection and live runs. 
 | R3 autonomous gate | **passed** (2026-04-10 refresh) | ready_for_validation | `release-r3-autonomous-readiness.json` + CI mirror refreshed; linkage checks are populated and passing (`ws8_closure`, `ws7_closure`, `ws8_release_summary`). |
 | R3 agent-authoring gate | **passed** (2026-04-10 refresh) | ready_for_validation | `release-r3-agent-authoring-readiness.json` + CI mirror refreshed; linkage checks are populated and passing (`ws8a_closure`, `ws8a_release_summary`, `ws8_closure`, `ws7_closure`). |
 | R3 plugin gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `release-r3-plugin-readiness.json` + `ci-release-r3-plugin-readiness.json` both show `ready_for_validation` after WS7 + WS9A rerun. |
-| R4 SaaS maturity gate | **passed** (2026-04-10 scaffold refresh) | **blocked** | `release-r4-saas-maturity-readiness.json` + CI mirror generated; packs for Ops/Resilience, REQ-08 cloud SaaS smoke, REQ-10 benchmark smoke, H-09 gate, and H-10 gate all passed, but `h09-release-readiness.json` and `h10-release-readiness.json` still report `in_progress_with_evidence`, so R4 remains blocked. |
+| R4 SaaS maturity gate | **passed** (2026-04-10 session 130 refresh) | **blocked** | `release-r4-saas-maturity-readiness.json` + CI mirror refreshed; packs for Ops/Resilience, REQ-08 cloud SaaS smoke, REQ-10 benchmark smoke, H-09 gate, and H-10 gate all passed, but `h09-release-readiness.json` and `h10-release-readiness.json` still report `in_progress_with_evidence`, so R4 remains blocked. |
 
 **Crate stub inventory (as of 2026-04-04):**
 - `voltnuerongrid-core` — 3-line stub (crate name constant only; logic absorbed into `voltnuerongridd/main.rs`)
