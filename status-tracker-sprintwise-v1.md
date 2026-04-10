@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 135)
+**Last updated:** 2026-04-10 (session 137)
 
 ---
 
@@ -29,8 +29,8 @@
 |---|---|---|---|
 | Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 88%) |
 | Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0+WS1+WS2 base+closure gates all refreshed 2026-04-10) |
-| Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🟡 Ready for Validation (WS3 + closure + release gates all green 2026-04-10; WS2A+WS1A all green) |
-| Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | 🟡 Ready for Validation (WS4 + WS22 evidence current 2026-04-10) |
+| Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | Ready for Validation | 🟡 Ready for Validation (WS3 + closure + release gates all green 2026-04-10; WS2A+WS1A all green) |
+| Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | Ready for Validation | 🟡 Ready for Validation (WS4 + WS22 evidence current 2026-04-10) |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Ready for Validation (WS4A + WS5 gate artifacts refreshed 2026-04-10) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation (R1 release gate refreshed 2026-04-10) |
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
@@ -57,13 +57,13 @@
 | REQ-09 | Extensible plugin ecosystem | Sprint 6 | Epic 7 | 🟡 Ready for Validation |
 | REQ-10 | Trillion-row scale + high-speed retrieval | Sprint 2, Sprint 5 | Epic 2, Epic 3, Epic 6 | 🔵 In Progress |
 | REQ-11 | Indexes + constraints | Sprint 1 | Epic 2, Epic 15 | 🔵 In Progress |
-| REQ-12 | Seeded functions + plan-plat parity | Sprint 1, Sprint 2 | Epic 1, Epic 1A | 🔵 In Progress |
+| REQ-12 | Seeded functions + plan-plat parity | Sprint 1, Sprint 2 | Epic 1, Epic 1A | 🟡 Ready for Validation |
 | REQ-13 | Multi-user roles and privileges | Sprint 4 | Epic 5 | 🔵 In Progress |
 | REQ-14 | UI + engine separation | Sprint 7 | Epic 9 | 🔵 In Progress |
 | REQ-15 | Driver support (multi-language) | Sprint 7 | Epic 10 | 🔵 In Progress |
 | REQ-16 | SSL + encryption/decryption | Sprint 4 | Epic 5 | ✅ Done |
 | REQ-17 | Distributed failover + zero data loss | Sprint 5, Sprint 8 | Epic 6, Epic 12 | ✅ Done |
-| REQ-18 | Stream in/out + events for debug/audit | Sprint 4 | Epic 4A, Epic 8A | 🔵 In Progress |
+| REQ-18 | Stream in/out + events for debug/audit | Sprint 4 | Epic 4A, Epic 8A | 🟡 Ready for Validation |
 | REQ-19 | Blazing ingest/update/read at scale | Sprint 2, Sprint 3, Sprint 5 | Epic 3, Epic 4, Epic 6 | 🔵 In Progress |
 | REQ-20 | Azure/AWS/GCP/OCI + Docker + Kubernetes | Sprint 8 | Epic 13 | 🔵 In Progress |
 | REQ-21 | Any-number-user concurrency | Sprint 2, Sprint 5, Sprint 7 | Epic 3, Epic 10, Epic 12 | 🔵 In Progress |
@@ -74,7 +74,7 @@
 | REQ-26 | Plugin model for streaming sources/sinks | Sprint 4, Sprint 6 | Epic 4A, Epic 7 | 🔵 In Progress |
 | REQ-27 | Native cache engine (Redis-like compat) | Sprint 2, Sprint 8 | Epic 3, Epic 14 | 🔵 In Progress |
 | REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Sprint 7 | Epic 9A | 🔵 In Progress |
-| REQ-29 | Fully autonomous operations | Sprint 6, Sprint 8 | Epic 8, Epic 14 | 🔵 In Progress |
+| REQ-29 | Fully autonomous operations | Sprint 6, Sprint 8 | Epic 8, Epic 14 | 🟡 Ready for Validation |
 | REQ-30 | AI agent authoring for objects/plugins | Sprint 6 | Epic 8, Epic 7 | 🟡 Ready for Validation |
 | REQ-31 | HTAP (OLTP + OLAP) extreme performance | Sprint 2 | Epic 2, Epic 3 | 🟡 Ready for Validation |
 
@@ -164,8 +164,8 @@
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | 🔵 In Progress | WS1 | Bucketed manifests + P2 stub implementations + gap report outputs in place; gate orchestrator `run-ws1a-gate.ps1` -> `tests/kpi/results/ws1a/ws1a-gate-summary.json`; UDF bridge pack `run-ws1a-udf-contract-bridge-smoke.ps1` -> `tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | 🔵 In Progress | WS2 | Row-sync origin scaffold + smoke evidence captured; gate orchestrator `run-ws2a-gate.ps1` -> `tests/kpi/results/ws2a/ws2a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | 🟡 Ready for Validation | WS1 | Bucketed manifests + P2 stub implementations + gap report outputs in place; gate orchestrator `run-ws1a-gate.ps1` -> `tests/kpi/results/ws1a/ws1a-gate-summary.json`; UDF bridge pack `run-ws1a-udf-contract-bridge-smoke.ps1` -> `tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | 🟡 Ready for Validation | WS2 | Row-sync origin scaffold + smoke evidence captured; gate orchestrator `run-ws2a-gate.ps1` -> `tests/kpi/results/ws2a/ws2a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | 🔵 In Progress | WS2 | Route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + gate orchestrator `run-ws3-gate.ps1` -> `tests/kpi/results/ws3/ws3-gate-summary.json`; performance target-contract/score/trend/badge/release artifacts; latest committed `ws3-gate-summary.json` remains `status:"passed"` with refreshed 2026-04-10 timestamps; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
@@ -198,8 +198,8 @@
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | 🔵 In Progress | WS2 | Ingestion connector/registry scaffold + runtime ingest handlers now enforce mixed operator-or-tenant RBAC with tenant-scoped connector visibility, validated by `tests/kpi/results/ws4/ws4-ingest-parser-smoke.json`; gate orchestrator `run-ws4-gate.ps1` -> `tests/kpi/results/ws4/ws4-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS22 | (Epic 1 sub) | Pessimistic locking baseline | SQL Engine Team | 🔵 In Progress | WS1 | Runtime pessimistic-lock scaffold endpoints (`/api/v1/sql/locks/pessimistic/acquire`, `/api/v1/sql/locks/pessimistic/release`) with conflict/ownership enforcement + lock contention metrics endpoint (`/api/v1/sql/locks/pessimistic/metrics`) exposing deadlock-detection vs cap-hit-timeout counts + contention ratio for trend artifacts + WS22 smoke/gate posture evidence (`tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json`, `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json`, `tests/kpi/results/ws22/ws22-gate-summary.json`) and unit evidence (`cargo test -p voltnuerongridd ws22_`) |
+| WS4 | Epic 4 | High-speed ingestion pipeline | Ingestion Team | 🟡 Ready for Validation | WS2 | Ingestion connector/registry scaffold + runtime ingest handlers now enforce mixed operator-or-tenant RBAC with tenant-scoped connector visibility, validated by `tests/kpi/results/ws4/ws4-ingest-parser-smoke.json`; gate orchestrator `run-ws4-gate.ps1` -> `tests/kpi/results/ws4/ws4-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS22 | (Epic 1 sub) | Pessimistic locking baseline | SQL Engine Team | 🟡 Ready for Validation | WS1 | Runtime pessimistic-lock scaffold endpoints (`/api/v1/sql/locks/pessimistic/acquire`, `/api/v1/sql/locks/pessimistic/release`) with conflict/ownership enforcement + lock contention metrics endpoint (`/api/v1/sql/locks/pessimistic/metrics`) exposing deadlock-detection vs cap-hit-timeout counts + contention ratio for trend artifacts + WS22 smoke/gate posture evidence (`tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json`, `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json`, `tests/kpi/results/ws22/ws22-gate-summary.json`) and unit evidence (`cargo test -p voltnuerongridd ws22_`) |
 
 ### Requirements Covered
 - REQ-06 (CSV/Parquet/JSON/Excel + enterprise ingest) — WS4 ingest scaffold + CSV/JSON parser connectors with runtime endpoints now protected by mixed operator-or-tenant RBAC and backed by updated smoke evidence
@@ -250,7 +250,7 @@
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | 🔵 In Progress | WS4 | Source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + gate orchestrator `run-ws4a-gate.ps1` -> `tests/kpi/results/ws4a/ws4a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | 🟡 Ready for Validation | WS4 | Source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + gate orchestrator `run-ws4a-gate.ps1` -> `tests/kpi/results/ws4a/ws4a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | ✅ Validated | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous plus mixed operator-or-tenant ingest handlers and tenant-scoped SQL runtime access + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json` (**passed live 2026-04-10 08:11 UTC, 7600ms**); release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
@@ -334,8 +334,8 @@
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
 | WS7 | Epic 7 | Plugin framework + connector plugin pack | Extensibility Team | 🟡 Ready for Validation | WS1, WS4A | Signed manifest schema + checksum + keyring trust/revocation policy hooks + WS7 extended gate with compliance matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws7/ws7-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-plugin-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | 🟡 Ready for Validation | WS1, WS6 | Typed autonomous action execution records + guardrail decision trace IDs + mode-governance/blast-radius policy-deny evidence; post-gate autonomy matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws8/ws8-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-autonomous-readiness.json` (refreshed 2026-04-09 after WS8 rerun); **2026-04-09 remediation rerun:** `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` passed after WS8A fixture chain-hash fix; workflow wiring in `.github/workflows/ci.yml` |
-| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | 🟡 Ready for Validation | WS4A, WS5 | Audit event contract + append-only sink + runtime emission + companion query/export filters + AI agent authoring/object-plugin workflow evidence; WS8A gate -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`; closure gate -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json` (refreshed 2026-04-09 after WS8A rerun); **2026-04-09 remediation rerun:** `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` passed after fixing `tests/kpi/fixtures/ws8a/audit-events-sample.json` to include required `chain_hash`; workflow wiring in `.github/workflows/ci.yml` |
+| WS8 | Epic 8 | AI-native + autonomous control plane | AI Platform Team | 🟡 Ready for Validation | WS1, WS6 | Typed autonomous action execution records + guardrail decision trace IDs + mode-governance/blast-radius policy-deny evidence; post-gate autonomy matrix/trend/badge/release summary; closure gate -> `tests/kpi/results/ws8/ws8-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-autonomous-readiness.json` (refreshed 2026-04-10 after WS8 rerun); **2026-04-09 remediation rerun:** `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` passed after WS8A fixture chain-hash fix; workflow wiring in `.github/workflows/ci.yml` |
+| WS8A | Epic 8A | Data audit engine + companion | Audit/Compliance Team | 🟡 Ready for Validation | WS4A, WS5 | Audit event contract + append-only sink + runtime emission + companion query/export filters + AI agent authoring/object-plugin workflow evidence; WS8A gate -> `tests/kpi/results/ws8a/ws8a-gate-summary.json`; closure gate -> `tests/kpi/results/ws8a/ws8a-closure-gate-summary.json`; R3 linkage gate -> `tests/kpi/results/gates/release-r3-agent-authoring-readiness.json` (refreshed 2026-04-10 after WS8A rerun); **2026-04-09 remediation rerun:** `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` passed after fixing `tests/kpi/fixtures/ws8a/audit-events-sample.json` to include required `chain_hash`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-01 (ANSI SQL + AI chat/extract) — WS8 AI-native control plane
@@ -586,10 +586,10 @@
 | WS0 governance and CI | Platform + Program Governance | SRE | Sprint 1 | 🔵 In Progress |
 | WS1 SQL core | SQL Engine Team | Query/Runtime Team | Sprint 1 | 🔵 In Progress |
 | WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Sprint 1–2 | 🔵 In Progress |
-| WS1A legacy aggregation parity | Compute + Migration Team | SQL Engine Team | Sprint 2 | 🔵 In Progress |
+| WS1A legacy aggregation parity | Compute + Migration Team | SQL Engine Team | Sprint 2 | 🟡 Ready for Validation |
 | WS3 query routing and execution | Query/Runtime Team | Storage Team | Sprint 2 | 🔵 In Progress |
-| WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Sprint 3–4 | 🔵 In Progress |
-| WS22 pessimistic locking | SQL Engine Team | Query/Runtime Team | Sprint 3 | 🔵 In Progress |
+| WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Sprint 3–4 | 🟡 Ready for Validation |
+| WS22 pessimistic locking | SQL Engine Team | Query/Runtime Team | Sprint 3 | 🟡 Ready for Validation |
 | WS5 security and crypto | Security Team | Platform Team | Sprint 4 | 🟡 Ready for Validation |
 | WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Sprint 5 | 🟡 Ready for Validation |
 | WS7 plugin framework + connector pack | Extensibility Team | Ingestion Team, Security Team | Sprint 6 | 🟡 Ready for Validation |
