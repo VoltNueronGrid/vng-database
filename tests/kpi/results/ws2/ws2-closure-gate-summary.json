@@ -2,9 +2,9 @@
   "gate": "ws2-closure-gate",
   "status": "passed",
   "validation_posture": "ready_for_validation",
-  "started_at_utc": "2026-04-05T03:49:31.4377140Z",
-  "finished_at_utc": "2026-04-05T03:49:31.4797754Z",
-  "duration_ms": 42,
+  "started_at_utc": "2026-04-10T02:26:21.7336115Z",
+  "finished_at_utc": "2026-04-10T02:26:21.7569682Z",
+  "duration_ms": 23,
   "artifacts": {
     "ws2_gate": "tests/kpi/results/ws2/ws2-gate-summary.json",
     "store_durability": "tests/kpi/results/ws2/store-durability-smoke.json",

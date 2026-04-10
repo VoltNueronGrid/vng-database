@@ -1,0 +1,2 @@
+1	1775787472310	replay_cursor::consumer/projection-a/ingest.outbox.tenant.acme.orders	2
+2	1775787472348	replay_cursor::consumer/projection-b/ingest.outbox.tenant.acme.orders	2

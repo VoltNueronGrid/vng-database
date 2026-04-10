@@ -28,8 +28,8 @@
 | Sprint | Focus | Time Frame | Overall Status |
 |---|---|---|---|
 | Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 88%) |
-| Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🔵 In Progress |
-| Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🔵 In Progress (WS3 latest committed gate artifact green, 2026-04-10) |
+| Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0+WS1+WS2 base+closure gates all refreshed 2026-04-10) |
+| Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🟡 Ready for Validation (WS3 closure gate refreshed 2026-04-10; WS2A+WS1A all green) |
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | � Ready for Validation (WS4 + WS4A gates refreshed 2026-04-10) |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Mixed (WS4A gate refreshed 2026-04-10, WS5 validated 2026-04-09) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Mixed (WS6 validated 2026-04-09, R1 in progress) |
@@ -37,8 +37,8 @@
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-09) |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🔵 Mixed |
-| Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | Not Started | ⬜ Not Started |
-| Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | Not Started | ⬜ Not Started |
+| Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-06, H-07, H-08 gates all passed 2026-04-10; R3 plugin/autonomous/agent-authoring/UDF all ready_for_validation) |
+| Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🟡 Ready for Validation (H-09 + H-10 gates refreshed 2026-04-10; baseline parity + governance artifacts in place) |
 
 ---
 
@@ -642,10 +642,8 @@ Completion: <0-100%>
 Risk Trend: <improving|stable|worsening>
 
 This Week Completed:
-- 
-- 
+- Closure gate + hardening gate refresh pass completed (2026-04-10): WS0, WS1 (base+closure), WS1A closure, WS2 closure, WS2A (base+closure), WS3 closure, WS4 closure, WS4A closure, WS22 (base+closure), H06, H07, H08, H09, H10, R1 release gate — all artifacts refreshed; Sprint 1/2/10/11 promoted to Ready for Validation in sprint overview.
 
-Evidence Produced:
 - 
 - 
 

@@ -4,7 +4,7 @@
   "base_url": "http://127.0.0.1:8080",
   "tenant_id": "acme",
   "user_id": "analyst-acme",
-  "timestamp_utc": "2026-04-04T03:49:37.1281595Z",
+  "timestamp_utc": "2026-04-10T02:27:03.1401695Z",
   "checks": {
     "route_requires_user_headers": true,
     "route_status_ok": true,
@@ -21,12 +21,20 @@
     "statements": [
       {
         "statement": "BEGIN",
-        "path": "oltp"
+        "path": "oltp",
+        "planner_path": "oltp",
+        "estimated_rows": 0,
+        "relative_cost": 0.05
       },
       {
         "statement": "SELECT region, SUM(amount) FROM orders GROUP BY region",
-        "path": "olap"
+        "path": "olap",
+        "planner_path": "olap",
+        "estimated_rows": 500,
+        "relative_cost": 45.0
       }
-    ]
+    ],
+    "batch_estimated_rows": 500,
+    "batch_relative_cost": 45.05
   }
 }

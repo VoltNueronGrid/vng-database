@@ -1,14 +1,19 @@
 {
   "gate": "ws1",
   "status": "passed",
-  "started_at_utc": "2026-04-04T03:49:24.9674555Z",
-  "finished_at_utc": "2026-04-04T03:49:37.3326972Z",
-  "duration_ms": 12365,
+  "started_at_utc": "2026-04-10T02:26:53.1150282Z",
+  "finished_at_utc": "2026-04-10T02:27:03.2485754Z",
+  "duration_ms": 10134,
   "packs": [
     {
       "pack": "ws1-sql-core-tests",
       "status": "passed",
       "detail": "cargo test -p voltnuerongrid-sql"
+    },
+    {
+      "pack": "ws1-ansi-conformance",
+      "status": "passed",
+      "detail": "cargo test -p voltnuerongrid-sql ansi_conformance (S3-WS1-06)"
     },
     {
       "pack": "ws1-udf-contract-smoke",

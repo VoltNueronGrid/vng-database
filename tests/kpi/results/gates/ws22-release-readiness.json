@@ -9,7 +9,7 @@
     "WS22",
     "REQ-22"
   ],
-  "generated_at_utc": "2026-04-04T03:49:41.5561255Z",
+  "generated_at_utc": "2026-04-10T02:27:07.7925948Z",
   "sources": {
     "summary": "tests/kpi/results/ws22/ws22-gate-summary.json",
     "smoke": "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json",

@@ -16,8 +16,8 @@
     "contention_ratio_field_present": true,
     "contention_metrics_unit_test_present": true
   },
-  "started_at_utc": "2026-04-04T03:49:39.1689243Z",
-  "finished_at_utc": "2026-04-04T03:49:41.3102033Z",
-  "duration_ms": 2141,
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s\n     Running unittests src\\main.rs (D:\\by\\target\\debug\\deps\\voltnuerongridd-702463741a1979cf.exe)\n\nrunning 1 test\ntest tests::ws22_pessimistic_lock_contention_metrics_counts_outcomes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 105 filtered out; finished in 0.00s\n"
+  "started_at_utc": "2026-04-10T02:27:05.8601824Z",
+  "finished_at_utc": "2026-04-10T02:27:07.6879451Z",
+  "duration_ms": 1828,
+  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22632:35\n      |\n22632 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n  --> services\\voltnuerongridd\\src\\main.rs:97:5\n   |\n93 | enum AcidTxState {\n   |      ----------- variant in this enum\n..."
 }

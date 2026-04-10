@@ -2,9 +2,9 @@
   "gate": "ws1a-closure-gate",
   "status": "passed",
   "validation_posture": "ready_for_validation",
-  "started_at_utc": "2026-04-05T04:04:07.9682632Z",
-  "finished_at_utc": "2026-04-05T04:04:08.1200244Z",
-  "duration_ms": 152,
+  "started_at_utc": "2026-04-10T02:26:16.7801052Z",
+  "finished_at_utc": "2026-04-10T02:26:16.8160683Z",
+  "duration_ms": 36,
   "artifacts": {
     "ws1a_gate": "tests/kpi/results/ws1a/ws1a-gate-summary.json",
     "udf_bridge": "tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json",

@@ -1,7 +1,7 @@
 ﻿{
     "smoke":  "ws6-rto-rpo-threshold-score",
     "status":  "passed",
-    "timestamp_utc":  "2026-04-10T02:07:58.5495910Z",
+    "timestamp_utc":  "2026-04-10T02:32:02.7062181Z",
     "targets_path":  "tests/kpi/config/targets.yaml",
     "runtime_path":  "services/voltnuerongridd/src/main.rs",
     "thresholds":  {

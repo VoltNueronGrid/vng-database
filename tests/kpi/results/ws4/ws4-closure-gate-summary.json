@@ -2,9 +2,9 @@
   "gate": "ws4-closure-gate",
   "status": "passed",
   "validation_posture": "ready_for_validation",
-  "started_at_utc": "2026-04-05T04:03:38.1961369Z",
-  "finished_at_utc": "2026-04-05T04:03:38.3291577Z",
-  "duration_ms": 133,
+  "started_at_utc": "2026-04-10T02:26:26.9285715Z",
+  "finished_at_utc": "2026-04-10T02:26:26.9603039Z",
+  "duration_ms": 32,
   "artifacts": {
     "ws4_gate": "tests/kpi/results/ws4/ws4-gate-summary.json",
     "ingest_plugin": "tests/kpi/results/ws4/ingest-plugin-smoke.json",

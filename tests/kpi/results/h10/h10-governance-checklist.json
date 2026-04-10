@@ -1,34 +1,34 @@
 {
-    "smoke":  "h10-governance-checklist",
-    "status":  "passed",
-    "started_at_utc":  "2026-04-03T16:34:15.5165428Z",
-    "finished_at_utc":  "2026-04-03T16:34:15.5600892Z",
-    "duration_ms":  44,
-    "checks":  [
-                   {
-                       "check":  "arb_charter_exists",
-                       "ok":  true,
-                       "detail":  "reference/h10-arb-charter.md"
-                   },
-                   {
-                       "check":  "deprecation_policy_exists",
-                       "ok":  true,
-                       "detail":  "reference/h10-deprecation-policy.md"
-                   },
-                   {
-                       "check":  "deprecation_registry_exists",
-                       "ok":  true,
-                       "detail":  "reference/h10-deprecation-registry.md"
-                   },
-                   {
-                       "check":  "governance_checklist_exists",
-                       "ok":  true,
-                       "detail":  "reference/h10-governance-checklist.md"
-                   },
-                   {
-                       "check":  "deprecation_registry_seeded",
-                       "ok":  true,
-                       "detail":  "Contains initial D-001 entry"
-                   }
-               ]
+  "smoke": "h10-governance-checklist",
+  "status": "passed",
+  "started_at_utc": "2026-04-10T02:28:12.4778725Z",
+  "finished_at_utc": "2026-04-10T02:28:12.5030870Z",
+  "duration_ms": 25,
+  "checks": [
+    {
+      "check": "arb_charter_exists",
+      "ok": true,
+      "detail": "reference/h10-arb-charter.md"
+    },
+    {
+      "check": "deprecation_policy_exists",
+      "ok": true,
+      "detail": "reference/h10-deprecation-policy.md"
+    },
+    {
+      "check": "deprecation_registry_exists",
+      "ok": true,
+      "detail": "reference/h10-deprecation-registry.md"
+    },
+    {
+      "check": "governance_checklist_exists",
+      "ok": true,
+      "detail": "reference/h10-governance-checklist.md"
+    },
+    {
+      "check": "deprecation_registry_seeded",
+      "ok": true,
+      "detail": "Contains initial D-001 entry"
+    }
+  ]
 }

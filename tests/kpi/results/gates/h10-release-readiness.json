@@ -1,24 +1,24 @@
 {
-    "gate":  "h10-governance-readiness",
-    "status":  "passed",
-    "release_readiness":  "in_progress_with_evidence",
-    "release_targets":  [
-                            "R4"
-                        ],
-    "scope":  [
-                  "H-10"
-              ],
-    "generated_at_utc":  "2026-04-03T16:34:15.8355521Z",
-    "sources":  {
-                    "summary":  "tests/kpi/results/h10/h10-gate-summary.json",
-                    "checklist":  "tests/kpi/results/h10/h10-governance-checklist.json"
-                },
-    "checks":  {
-                   "h10_gate_passed":  true,
-                   "h10_checklist_passed":  true
-               },
-    "highlights":  {
-                       "checklist_total":  5,
-                       "checklist_passed":  5
-                   }
+  "gate": "h10-governance-readiness",
+  "status": "passed",
+  "release_readiness": "in_progress_with_evidence",
+  "release_targets": [
+    "R4"
+  ],
+  "scope": [
+    "H-10"
+  ],
+  "generated_at_utc": "2026-04-10T02:28:12.6006518Z",
+  "sources": {
+    "summary": "tests/kpi/results/h10/h10-gate-summary.json",
+    "checklist": "tests/kpi/results/h10/h10-governance-checklist.json"
+  },
+  "checks": {
+    "h10_gate_passed": true,
+    "h10_checklist_passed": true
+  },
+  "highlights": {
+    "checklist_total": 5,
+    "checklist_passed": 5
+  }
 }

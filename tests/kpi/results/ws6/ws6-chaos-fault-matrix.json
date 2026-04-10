@@ -1,7 +1,7 @@
 {
     "report":  "ws6-chaos-fault-injection-matrix",
     "status":  "passed",
-    "generated_at_utc":  "2026-04-10T02:08:56.0487292Z",
+    "generated_at_utc":  "2026-04-10T02:33:08.2506458Z",
     "source_summary":  "tests/kpi/results/ws6/ws6-gate-summary.json",
     "total_fault_modes":  8,
     "passed_modes":  8,

@@ -1,39 +1,39 @@
 {
-    "smoke":  "h09-ide-parity-matrix",
-    "status":  "passed",
-    "started_at_utc":  "2026-04-03T16:30:43.0952198Z",
-    "finished_at_utc":  "2026-04-03T16:30:43.2605387Z",
-    "duration_ms":  165,
-    "checks":  [
-                   {
-                       "check":  "h09_matrix_doc_exists",
-                       "ok":  true,
-                       "detail":  "reference/h09-cross-ide-parity-test-matrix.md"
-                   },
-                   {
-                       "check":  "ws9a_contract_artifact_exists",
-                       "ok":  true,
-                       "detail":  "tests/kpi/results/ws9a/ide-contract-smoke.json"
-                   },
-                   {
-                       "check":  "ws9a_gate_artifact_exists",
-                       "ok":  true,
-                       "detail":  "tests/kpi/results/ws9a/ws9a-gate-summary.json"
-                   },
-                   {
-                       "check":  "ws9a_contract_status_passed",
-                       "ok":  true,
-                       "detail":  "status=passed"
-                   },
-                   {
-                       "check":  "ws9a_gate_status_passed",
-                       "ok":  true,
-                       "detail":  "status=passed"
-                   }
-               ],
-    "matrix_path":  "reference/h09-cross-ide-parity-test-matrix.md",
-    "baseline_artifacts":  [
-                               "tests/kpi/results/ws9a/ide-contract-smoke.json",
-                               "tests/kpi/results/ws9a/ws9a-gate-summary.json"
-                           ]
+  "smoke": "h09-ide-parity-matrix",
+  "status": "passed",
+  "started_at_utc": "2026-04-10T02:27:54.9359248Z",
+  "finished_at_utc": "2026-04-10T02:27:54.9553683Z",
+  "duration_ms": 19,
+  "checks": [
+    {
+      "check": "h09_matrix_doc_exists",
+      "ok": true,
+      "detail": "reference/h09-cross-ide-parity-test-matrix.md"
+    },
+    {
+      "check": "ws9a_contract_artifact_exists",
+      "ok": true,
+      "detail": "tests/kpi/results/ws9a/ide-contract-smoke.json"
+    },
+    {
+      "check": "ws9a_gate_artifact_exists",
+      "ok": true,
+      "detail": "tests/kpi/results/ws9a/ws9a-gate-summary.json"
+    },
+    {
+      "check": "ws9a_contract_status_passed",
+      "ok": true,
+      "detail": "status=passed"
+    },
+    {
+      "check": "ws9a_gate_status_passed",
+      "ok": true,
+      "detail": "status=passed"
+    }
+  ],
+  "matrix_path": "reference/h09-cross-ide-parity-test-matrix.md",
+  "baseline_artifacts": [
+    "tests/kpi/results/ws9a/ide-contract-smoke.json",
+    "tests/kpi/results/ws9a/ws9a-gate-summary.json"
+  ]
 }

@@ -1,7 +1,7 @@
 {
   "report": "ws3-performance-score",
   "status": "passed",
-  "generated_at_utc": "2026-04-10T01:44:46.9760225Z",
+  "generated_at_utc": "2026-04-10T02:26:39.0366306Z",
   "source_summary": "tests/kpi/results/ws3/ws3-gate-summary.json",
   "score": 100,
   "max_score": 100,
