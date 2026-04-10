@@ -29,13 +29,13 @@
 |---|---|---|---|
 | Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 88%) |
 | Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🔵 In Progress |
-| Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🔵 In Progress (WS3 latest committed gate artifact green, 2026-04-04) |
+| Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🔵 In Progress (WS3 latest committed gate artifact green, 2026-04-10) |
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | 🔵 In Progress |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Mixed (WS4A ready, WS5 validated 2026-04-09) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Mixed (WS6 validated 2026-04-09, R1 in progress) |
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-09) |
-| Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via 2026-04-09 CI/agent artifacts) |
+| Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🔵 Mixed |
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | Not Started | ⬜ Not Started |
 | Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | Not Started | ⬜ Not Started |
@@ -166,7 +166,7 @@
 |---|---|---|---|---|---|---|
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | 🔵 In Progress | WS1 | Bucketed manifests + P2 stub implementations + gap report outputs in place; gate orchestrator `run-ws1a-gate.ps1` -> `tests/kpi/results/ws1a/ws1a-gate-summary.json`; UDF bridge pack `run-ws1a-udf-contract-bridge-smoke.ps1` -> `tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | 🔵 In Progress | WS2 | Row-sync origin scaffold + smoke evidence captured; gate orchestrator `run-ws2a-gate.ps1` -> `tests/kpi/results/ws2a/ws2a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | 🔵 In Progress | WS2 | Route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + gate orchestrator `run-ws3-gate.ps1` -> `tests/kpi/results/ws3/ws3-gate-summary.json`; performance target-contract/score/trend/badge/release artifacts; session 121 retained green posture, and latest committed `ws3-gate-summary.json` remains `status:"passed"` with 2026-04-04 timestamps; workflow wiring in `.github/workflows/ci.yml` |
+| WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | 🔵 In Progress | WS2 | Route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + gate orchestrator `run-ws3-gate.ps1` -> `tests/kpi/results/ws3/ws3-gate-summary.json`; performance target-contract/score/trend/badge/release artifacts; latest committed `ws3-gate-summary.json` remains `status:"passed"` with refreshed 2026-04-10 timestamps; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-12 (Seeded functions + parity) — P0/P1/P2 parity gap report with P2 stub closures (`tests/kpi/results/parity/legacy-aggregation-gap-report.json`)
@@ -432,9 +432,9 @@
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | 🟡 Ready for Validation | WS6 | Runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion; combined Ops/Resilience cluster gate -> `tests/kpi/results/gates/release-ops-resilience-readiness.json` (latest 2026-04-09 refresh evidenced by `ci-release-ops-resilience-readiness.json` and `agent-run-release-ops-resilience-readiness.json`) |
-| WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | 🟡 Ready for Validation | WS0, WS12 | Deploy cloud profile contracts + provider runtime overrides `single-node`/`multi-node` + provider Helm values + provider runbook env matrices for AWS/Azure/GCP; WS13 smoke harnesses + CI gate orchestrator `run-ws13-gate.ps1` -> `tests/kpi/results/ws13/ws13-gate-summary.json`; combined Ops/Resilience cluster gate -> `tests/kpi/results/gates/release-ops-resilience-readiness.json` (latest 2026-04-09 refresh evidenced by `ci-release-ops-resilience-readiness.json` and `agent-run-release-ops-resilience-readiness.json`); workflow wiring in `.github/workflows/ci.yml` |
-| WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | 🟡 Ready for Validation | WS5, WS10 | Driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness + schema lint gate `run-ws14-schema-lint-gate.ps1` + config conformance aggregator + gate orchestrator `run-ws14-gate.ps1` -> `tests/kpi/results/ws14/ws14-gate-summary.json`; combined Ops/Resilience cluster gate -> `tests/kpi/results/gates/release-ops-resilience-readiness.json` (latest 2026-04-09 refresh evidenced by `ci-release-ops-resilience-readiness.json` and `agent-run-release-ops-resilience-readiness.json`); workflow wiring in `.github/workflows/ci.yml` |
+| WS12 | Epic 12 | Reliability/SRE/DR automation | SRE Team | 🟡 Ready for Validation | WS6 | Runtime SRE hardening contracts: `/api/v1/sre/reliability/status`, `/api/v1/sre/rate-limit/check`, `/api/v1/sre/failure-budget/alerts`, `/api/v1/sre/dr/hooks/{policy,retry-plan,schedule,trigger,status}`, `/api/v1/sre/failure/{signal,reconcile}`, `/api/v1/sre/gate/{evaluate,export}`; includes file-backed DR policy/runtime persistence, scheduler queue scaffold, critical-signal reconciliation, gate-fail artifact exporter, multi-node failure signal ingestion; combined Ops/Resilience cluster gate -> `tests/kpi/results/gates/release-ops-resilience-readiness.json` (latest 2026-04-10 primary-artifact refresh, `status: passed`, `release_readiness: ready_for_validation`) |
+| WS13 | Epic 13 | Multi-cloud deployment profiles | Platform/SRE | 🟡 Ready for Validation | WS0, WS12 | Deploy cloud profile contracts + provider runtime overrides `single-node`/`multi-node` + provider Helm values + provider runbook env matrices for AWS/Azure/GCP; WS13 smoke harnesses + CI gate orchestrator `run-ws13-gate.ps1` -> `tests/kpi/results/ws13/ws13-gate-summary.json`; combined Ops/Resilience cluster gate -> `tests/kpi/results/gates/release-ops-resilience-readiness.json` (latest 2026-04-10 primary-artifact refresh, `status: passed`, `release_readiness: ready_for_validation`); workflow wiring in `.github/workflows/ci.yml` |
+| WS14 | Epic 14 | Config contracts + tuning playbooks | Platform + SRE + Security | 🟡 Ready for Validation | WS5, WS10 | Driver/security config schemas YAML/JSON/properties + validation helpers + WS14 smoke harness + schema lint gate `run-ws14-schema-lint-gate.ps1` + config conformance aggregator + gate orchestrator `run-ws14-gate.ps1` -> `tests/kpi/results/ws14/ws14-gate-summary.json`; combined Ops/Resilience cluster gate -> `tests/kpi/results/gates/release-ops-resilience-readiness.json` (latest 2026-04-10 primary-artifact refresh, `status: passed`, `release_readiness: ready_for_validation`); workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-04 (HA/FT/elasticity) — WS12 reliability contracts + DR hooks
@@ -620,7 +620,7 @@
 - H-10 governance baseline is now gate-linked with passing artifacts (`tests/kpi/results/h10/h10-governance-checklist.json`, `tests/kpi/results/h10/h10-gate-summary.json`, `tests/kpi/results/gates/h10-release-readiness.json`); next step is ARB ratification evidence injection.
 - Add a tooling hardening follow-up to stabilize Windows PowerShell gate/evidence summary artifact regeneration so release-facing JSON does not require manual synchronization after validated smoke runs.
 - Repair the default WSL/Codacy installer path, or explicitly document the fallback path when automated Codacy analysis cannot run during file edits.
-- Execute tracker-evidence hygiene pass for WS3 + Ops/Resilience: rerun `run-ws3-gate.ps1` and `run-release-ops-resilience-gate.ps1`, then ensure primary artifacts are refreshed (or explicitly annotated when CI/agent artifacts are the newest evidence).
+- Tracker-evidence hygiene pass for WS3 + Ops/Resilience completed (2026-04-10): reran `run-ws3-gate.ps1` and `run-release-ops-resilience-gate.ps1`; primary artifacts refreshed and synchronized.
 
 ---
 

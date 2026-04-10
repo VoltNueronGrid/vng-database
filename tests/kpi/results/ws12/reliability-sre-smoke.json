@@ -2,8 +2,8 @@
   "smoke": "ws12-reliability-sre-baseline",
   "status": "passed",
   "command": "cargo test -p voltnuerongridd ws12_",
-  "started_at_utc": "2026-04-09T16:18:13.1588702Z",
-  "finished_at_utc": "2026-04-09T16:18:14.6035309Z",
-  "duration_ms": 1445,
-  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22617:35\n      |\n22617 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22633:35\n      |\n22633 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n  --> services\\voltnuerongridd\\src\\main.rs:97:5\n   |\n93 | enum AcidTxState {\n   |      ----------- variant in this enum\n..."
+  "started_at_utc": "2026-04-10T01:44:48.8227546Z",
+  "finished_at_utc": "2026-04-10T01:44:50.7359687Z",
+  "duration_ms": 1913,
+  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22632:35\n      |\n22632 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n  --> services\\voltnuerongridd\\src\\main.rs:97:5\n   |\n93 | enum AcidTxState {\n   |      ----------- variant in this enum\n..."
 }

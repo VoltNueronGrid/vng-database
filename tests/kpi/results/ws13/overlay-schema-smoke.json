@@ -1,9 +1,9 @@
 {
   "smoke": "ws13-overlay-schema-validation",
   "status": "passed",
-  "started_at_utc": "2026-04-09T16:18:14.7411490Z",
-  "finished_at_utc": "2026-04-09T16:18:14.7774855Z",
-  "duration_ms": 36,
+  "started_at_utc": "2026-04-10T01:44:50.9453902Z",
+  "finished_at_utc": "2026-04-10T01:44:50.9886710Z",
+  "duration_ms": 43,
   "checks": [
     {
       "check": "single_overlay_exists_aws",
