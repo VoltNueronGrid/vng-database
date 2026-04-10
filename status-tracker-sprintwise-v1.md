@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 134)
+**Last updated:** 2026-04-10 (session 135)
 
 ---
 
@@ -573,7 +573,7 @@
 |---|---|---|---|---|
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off (24–36 hours); all technical criteria met. |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (session 132 rerun at `started_at_utc: 2026-04-10T08:17:47Z`, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review (24–48 hours); all packs ✅ passed. |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | WS3 gate rerun 2026-04-10 remains green (score 100, stable 2/2) and `ws3-release-readiness.json` now reports `ready_for_validation` after release-summary logic alignment. Other R3 sub-gates (WS7, WS8, WS8A) and DX/API cluster remain `ready_for_validation`. **Follow-up refresh 2026-04-10:** reran release gates `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all release artifacts report `status: passed` with fresh timestamps. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | R3 governance package is backed by passing release gates for UDF runtime (`release-r3-udf-runtime-readiness.json`), plugin (`release-r3-plugin-readiness.json`), autonomous (`release-r3-autonomous-readiness.json`), and agent authoring (`release-r3-agent-authoring-readiness.json`), with WS3 and DX/API release summaries also green. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | 🔴 Blocked | `release-r4-saas-maturity-readiness.json` now exists and reports `status: passed`, `release_readiness: blocked`. Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke are green, but H-09 / H-10 release summaries remain `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off are still required. |
 
 ---

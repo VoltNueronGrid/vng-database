@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-10 (session 134)
+**Last updated:** 2026-04-10 (session 135)
 
 ---
 
@@ -110,7 +110,7 @@
 |---|---|---|---|
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) + WS1 UDF closure (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`, CI mirror `tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json`) + WS22 locking closure (`tests/kpi/results/ws22/ws22-closure-gate-summary.json`, CI mirror `tests/kpi/results/ws22/ci-ws22-closure-gate-summary.json`) + release R1 SQL/UDF/locking gate (`tests/kpi/results/gates/release-r1-sql-udf-readiness.json`, CI mirror `tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json`). **Latest validation run 2026-04-10:** `run-ws1-closure-gate.ps1` + `run-release-r1-sql-udf-gate.ps1` passed end-to-end with live `voltnuerongridd`; all packs ✅ passed, `release_readiness: ready_for_validation`. **NEXT STEP:** Awaits Release DRI signature + governance sign-off within 24–36 hours; all technical criteria met; CI pipeline merge-ready after approval. |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`, CI mirror `ci-release-ops-resilience-readiness.json` on passed local runs) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`, mirror `ci-release-r2-failover-readiness.json`) — refreshed in session 132 (`started_at_utc: 2026-04-10T08:17:47Z`, `status: passed`, `release_readiness: ready_for_validation`). **Hardening Evidence (2026-04-10):** H-01 blast-radius controls (`tests/kpi/results/gates/h01-release-readiness.json`, `in_progress_with_evidence`), H-02 HTAP sync correctness (`tests/kpi/results/gates/h02-release-readiness.json`, `ready_for_validation`), H-03 control-plane resilience (`tests/kpi/results/gates/h03-release-readiness.json`, `in_progress_with_evidence`), H-04 event durability (`tests/kpi/results/gates/h04-release-readiness.json`, `ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + ops final review within 24–48 hours; RTO/RPO 100/100 validated; all packs ✅ passed. |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | 🟡 Ready for Validation (Governance Path) | `tests/kpi/results/gates/ws3-release-readiness.json` now reports `release_readiness: ready_for_validation` after WS3 release-summary logic fix and gate rerun on 2026-04-10. WS3 gate remains score 100 with stable 2/2 badge; all R3 sub-gates (WS7, WS8, WS8A) and DX/API cluster are also `ready_for_validation`. **Session 131 refresh (2026-04-10):** reran `run-release-dx-api-gate.ps1`; `release-dx-api-readiness.json` reports `started_at_utc: 2026-04-10T08:11:57Z`, `status: passed`, `release_readiness: ready_for_validation`. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | 🟡 Ready for Validation (Governance Path) | R3 governance package is backed by passing release gates for UDF runtime (`tests/kpi/results/gates/release-r3-udf-runtime-readiness.json`), plugin (`tests/kpi/results/gates/release-r3-plugin-readiness.json`), autonomous (`tests/kpi/results/gates/release-r3-autonomous-readiness.json`), and agent authoring (`tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`), with WS3 performance readiness (`tests/kpi/results/gates/ws3-release-readiness.json`) and DX/API cluster readiness (`tests/kpi/results/gates/release-dx-api-readiness.json`) also green. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Blocked | Baseline release gate now exists at `tests/kpi/results/gates/release-r4-saas-maturity-readiness.json` (2026-04-10) and reports `status: passed`, `release_readiness: blocked`. Current evidence is green for Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke, but H-09 / H-10 release summaries still report `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off also remain outstanding. |
 
 ---
@@ -119,7 +119,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
-| WS5 Security Gate | Epic 5 (Auth/RBAC/TLS/TDE/KMS), live validated 2026-04-09 18:26 UTC (`status:"passed"`, 5454ms) | `tests/kpi/results/ws5/ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-badge.json` |
+| WS5 Security Gate | Epic 5 (Auth/RBAC/TLS/TDE/KMS), live validated 2026-04-10T08:11:57Z UTC (`status:"passed"`, 7600ms) | `tests/kpi/results/ws5/ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-badge.json` |
 
 ---
 
@@ -127,7 +127,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
-| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss), live validated 2026-04-09 across all 13 failover + chaos packs (`status:"passed"`, 57183ms, RTO/RPO 100/100) | `tests/kpi/results/ws6/ws6-gate-summary.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
+| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss), live validated 2026-04-10 across all 13 failover + chaos packs (`status:"passed"`, 95475ms, RTO/RPO 100/100) | `tests/kpi/results/ws6/ws6-gate-summary.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
 
 ---
 
@@ -138,7 +138,7 @@
 | WS6 Closure Gate | WS6 validation posture check | `tests/kpi/results/ws6/ws6-closure-gate-summary.json` | `tests/kpi/results/ws6/ci-ws6-closure-gate-summary.json` |
 | Release R2 Failover Gate | R2 failover release-readiness linkage (`WS6` + Ops/Resilience cluster) | `tests/kpi/results/gates/release-r2-failover-readiness.json` | `tests/kpi/results/gates/ci-release-r2-failover-readiness.json` |
 
-**2026-04-09 live validation refresh:** WS6 pack artifacts were executed live and passed for failover routing, handoff replay, DR hook execution, replication-lag scenarios, RTO/RPO thresholds (100/100), node-loss/rejoin, flap-resistance, reconcile-latency envelopes, control-plane chaos, multi-node cluster chaos, process-isolated chaos, and chaos fault matrix coverage.
+**2026-04-10 live validation refresh:** WS6 pack artifacts were executed live and passed for failover routing, handoff replay, DR hook execution, replication-lag scenarios, RTO/RPO thresholds (100/100), node-loss/rejoin, flap-resistance, reconcile-latency envelopes, control-plane chaos, multi-node cluster chaos, process-isolated chaos, and chaos fault matrix coverage.
 
 ---
 
@@ -296,9 +296,9 @@
 | H-10 Release Readiness | H-10 (release-facing governance readiness summary) | `tests/kpi/results/gates/h10-release-readiness.json` |
 
 ---
-## 5.22) Gate Reality Check (2026-04-10 Audit — session 132 refresh)
+## 5.22) Gate Reality Check (2026-04-10 Audit — session 135 refresh)
 
-Actual gate artifact status verified by code/artifact inspection and live runs. Session 132 refresh reran the R2 failover gate chain (WS6 closure + Ops/Resilience cluster), while retaining session 130 H-09/H-10/R4 aggregate refresh and session 129 H-04 synchronization (plus sessions 128/127/126 hardening additions H-01/H-03/H-02). Overrides any stale editorial status above.
+Actual gate artifact status verified by code/artifact inspection and live runs. Session 135 refresh synchronized release-facing evidence wording for WS5/WS6 and the R3 aggregate gate package while retaining session 132 R2 failover rerun evidence, session 130 H-09/H-10/R4 aggregate refresh, and session 129 H-04 synchronization (plus sessions 128/127/126 hardening additions H-01/H-03/H-02). Overrides any stale editorial status above.
 
 | Gate / WS | Artifact Status | release_readiness | Root Cause / Notes |
 |---|---|---|---|
