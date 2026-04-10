@@ -1,44 +1,44 @@
 {
-  "global_missing": [],
-  "timestamp_utc": "2026-03-06T05:00:56.3533331Z",
-  "supported_count": 10,
+  "timestamp_utc": "2026-04-10T02:14:37.5802111Z",
   "status": "passed",
-  "p2_stubbed": [
-    "APPROX_COUNT_DISTINCT",
-    "TOP_N",
-    "BOTTOM_N"
-  ],
   "buckets": [
     {
-      "required_count": 6,
-      "stubbed_count": 0,
-      "stubbed": [],
-      "bucket": "P0",
       "present_count": 6,
-      "missing_count": 0,
-      "missing": []
-    },
-    {
-      "required_count": 4,
       "stubbed_count": 0,
       "stubbed": [],
-      "bucket": "P1",
-      "present_count": 4,
+      "required_count": 6,
+      "missing": [],
       "missing_count": 0,
-      "missing": []
+      "bucket": "P0"
     },
     {
-      "required_count": 3,
+      "present_count": 4,
+      "stubbed_count": 0,
+      "stubbed": [],
+      "required_count": 4,
+      "missing": [],
+      "missing_count": 0,
+      "bucket": "P1"
+    },
+    {
+      "present_count": 0,
       "stubbed_count": 3,
       "stubbed": [
         "APPROX_COUNT_DISTINCT",
         "TOP_N",
         "BOTTOM_N"
       ],
-      "bucket": "P2",
-      "present_count": 0,
+      "required_count": 3,
+      "missing": [],
       "missing_count": 0,
-      "missing": []
+      "bucket": "P2"
     }
-  ]
+  ],
+  "p2_stubbed": [
+    "APPROX_COUNT_DISTINCT",
+    "TOP_N",
+    "BOTTOM_N"
+  ],
+  "supported_count": 10,
+  "global_missing": []
 }

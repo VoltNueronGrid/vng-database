@@ -2,7 +2,7 @@
   "gate": "release-r3-autonomous-readiness",
   "status": "passed",
   "release": "R3",
-  "generated_at_utc": "2026-04-09T16:06:31.1943381Z",
+  "generated_at_utc": "2026-04-10T02:17:43.1813145Z",
   "checks": {
     "ws8_closure": {
       "exit_code": 0,

@@ -1,9 +1,9 @@
 {
   "gate": "ws15",
   "status": "passed",
-  "started_at_utc": "2026-03-05T16:21:23.4514099Z",
-  "finished_at_utc": "2026-03-05T16:21:23.7451594Z",
-  "duration_ms": 294,
+  "started_at_utc": "2026-04-10T02:17:13.5046632Z",
+  "finished_at_utc": "2026-04-10T02:17:13.6764661Z",
+  "duration_ms": 172,
   "packs": [
     {
       "pack": "ws15-competitive-parity",

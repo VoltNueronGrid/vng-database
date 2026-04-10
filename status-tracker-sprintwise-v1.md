@@ -30,8 +30,8 @@
 | Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 88%) |
 | Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🔵 In Progress |
 | Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🔵 In Progress (WS3 latest committed gate artifact green, 2026-04-10) |
-| Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | 🔵 In Progress |
-| Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Mixed (WS4A ready, WS5 validated 2026-04-09) |
+| Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | � Ready for Validation (WS4 + WS4A gates refreshed 2026-04-10) |
+| Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Mixed (WS4A gate refreshed 2026-04-10, WS5 validated 2026-04-09) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Mixed (WS6 validated 2026-04-09, R1 in progress) |
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-09) |
@@ -621,6 +621,7 @@
 - Add a tooling hardening follow-up to stabilize Windows PowerShell gate/evidence summary artifact regeneration so release-facing JSON does not require manual synchronization after validated smoke runs.
 - Repair the default WSL/Codacy installer path, or explicitly document the fallback path when automated Codacy analysis cannot run during file edits.
 - Tracker-evidence hygiene pass for WS3 + Ops/Resilience completed (2026-04-10): reran `run-ws3-gate.ps1` and `run-release-ops-resilience-gate.ps1`; primary artifacts refreshed and synchronized.
+- Batch evidence hygiene pass completed (2026-04-10): refreshed stale gates WS1A, WS2 (live server), WS4, WS4A, WS11, WS15, H04, release-r3-plugin, release-r3-udf-runtime — all passing with current 2026-04-10 timestamps.
 
 ---
 

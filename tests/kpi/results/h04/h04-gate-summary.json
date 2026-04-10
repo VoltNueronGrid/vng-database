@@ -1,21 +1,21 @@
 {
-    "gate":  "h04",
-    "status":  "passed",
-    "started_at_utc":  "2026-03-10T03:27:31.9191218Z",
-    "finished_at_utc":  "2026-03-10T03:30:20.9086172Z",
-    "duration_ms":  168989,
-    "packs":  [
-                  {
-                      "pack":  "h04-service-integrated-outbox-runtime",
-                      "status":  "passed",
-                      "detail":  "ok",
-                      "artifact":  "tests/kpi/results/h04/h04-service-integrated-outbox-runtime.json"
-                  },
-                  {
-                      "pack":  "h04-outbox-replay-evidence",
-                      "status":  "passed",
-                      "detail":  "ok",
-                      "artifact":  "tests/kpi/results/h04/h04-outbox-replay-evidence.json"
-                  }
-              ]
+  "gate": "h04",
+  "status": "passed",
+  "started_at_utc": "2026-04-10T02:17:49.2040663Z",
+  "finished_at_utc": "2026-04-10T02:18:00.4181124Z",
+  "duration_ms": 11214,
+  "packs": [
+    {
+      "pack": "h04-service-integrated-outbox-runtime",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "D:\\by\\polap-db\\tests\\kpi\\results\\h04\\h04-service-integrated-outbox-runtime.json"
+    },
+    {
+      "pack": "h04-outbox-replay-evidence",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "D:\\by\\polap-db\\tests\\kpi\\results\\h04\\h04-outbox-replay-evidence.json"
+    }
+  ]
 }

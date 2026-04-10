@@ -306,11 +306,11 @@ Actual gate artifact status verified by code/artifact inspection and live runs. 
 | WS0 gate | **passed** (2026-04-06) | **ready_for_validation** | `ws0-gate-summary.json` green; 2 packs: `ws0-ci-health-smoke.json` (8 checks) + `ws0-governance-smoke.json` (7 checks). |
 | WS1 gate | **passed** (live run) | n/a | `ws1-gate-summary.json` green when `run-ws1-gate.ps1` executes against live `voltnuerongridd`; runtime smokes use `kpi-http-helpers.ps1` (PS7-safe error bodies). |
 | WS3 gate | **passed** (latest artifact 2026-04-10) | **in_progress_with_evidence** | Query-routing + HTAP contract packs remain green in `tests/kpi/results/ws3/ws3-gate-summary.json`; `ws3-closure-gate-summary.json` passes when nested `run-ws3-gate.ps1` uses repo `WorkingDirectory` (fixed 2026-04-05). Session 121 evidence hygiene rerun refreshed committed WS3 gate timestamps to 2026-04-10. |
-| WS2 gate | **passed** (2026-03-08) | **ready_for_validation** | All 5 packs passing; closure gate + release summary `tests/kpi/results/gates/ws2-release-readiness.json` added 2026-04-06. |
+| WS2 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | All 5 packs passing incl. tenant-store runtime smoke (live server); closure gate + release summary `tests/kpi/results/gates/ws2-release-readiness.json` green. |
 | WS2A gate | **passed** (2026-04-06) | **ready_for_validation** | `ws2a-gate-summary.json` + closure gate `ws2a-closure-gate-summary.json` both green; `tests/kpi/results/gates/ws2a-release-readiness.json` ready_for_validation. |
-| WS4 gate | **passed** (2026-04-05) | **ready_for_validation** | Closure gate + release readiness added; 4 packs: `ingest-plugin-smoke`, `ws4-ingest-parser-smoke`, `ws4-chunked-loader-smoke`. `tests/kpi/results/gates/ws4-release-readiness.json` green. |
-| WS4A gate | **passed** (2026-04-05) | **ready_for_validation** | Closure gate + release readiness added; 2 packs: `streaming-event-path-smoke`, `replay-cursor-smoke`. `tests/kpi/results/gates/ws4a-release-readiness.json` green. |
-| WS1A gate | **passed** (2026-04-05) | **ready_for_validation** | Closure gate + release readiness added; 4 packs: `ws1a-gate-summary`, `udf-bridge-smoke`, `legacy-numeric-eval-smoke`, parity gap-report. `tests/kpi/results/gates/ws1a-release-readiness.json` green. |
+| WS4 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | Closure gate + release readiness refreshed; 4 packs: `ingest-plugin-smoke`, `ws4-ingest-parser-smoke`, `ws4-chunked-loader-smoke`. `tests/kpi/results/gates/ws4-release-readiness.json` green. |
+| WS4A gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | Closure gate + release readiness refreshed; 2 packs: `streaming-event-path-smoke`, `replay-cursor-smoke`. `tests/kpi/results/gates/ws4a-release-readiness.json` green. |
+| WS1A gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | Closure gate + release readiness refreshed; 4 packs: `ws1a-gate-summary`, `udf-bridge-smoke`, `legacy-numeric-eval-smoke`, parity gap-report. `tests/kpi/results/gates/ws1a-release-readiness.json` green. |
 | WS22 gate | **passed** | **ready_for_validation** | `tests/kpi/results/ws22/ws22-closure-gate-summary.json` + `tests/kpi/results/gates/ws22-release-readiness.json` linked from R1 SQL/UDF release gate. |
 | WS5 gate | passed | ready_for_validation | All packs passing. |
 | WS6 gate | passed | ready_for_validation | All packs passing. |
@@ -318,12 +318,12 @@ Actual gate artifact status verified by code/artifact inspection and live runs. 
 | WS8 gate | **passed** (2026-04-09 remediation rerun) | **ready_for_validation** | `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` now passes after fixing WS8A audit fixture chain hash fields and re-running gate packs. |
 | WS8A gate | **passed** (2026-04-09 remediation rerun) | **ready_for_validation** | `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` now passes; prior `ws8a-audit-companion` failure was resolved by adding required `chain_hash` in `tests/kpi/fixtures/ws8a/audit-events-sample.json`. |
 | WS9/WS9A/WS10 | — | ready_for_validation | DX/API cluster gate: ready_for_validation. |
-| WS11–WS15 | — | ready_for_validation | Ops/Resilience cluster gate: ready_for_validation. |
+| WS11, WS15 | **passed** (2026-04-10 refresh) | **ready_for_validation** | WS11 i18n smoke + WS15 competitive-parity/backlog-score smokes both passed; gate summaries refreshed. |
 | R1 release gate | **passed** | **ready_for_validation** | `release-r1-sql-udf-readiness.json` green after full `run-release-r1-sql-udf-gate.ps1` (2026-04-06); packs include `r1-baseline-checklist`, `ws1-closure-gate`, `ws22-closure-gate`. Local default-path runs mirror `ci-release-r1-sql-udf-readiness.json` for parity with `.github/workflows/ci.yml`. |
 | R2 failover gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `release-r2-failover-readiness.json` and `ci-release-r2-failover-readiness.json` both show ready after rerun. |
 | R3 autonomous gate | fresh | ready_for_validation | `release-r3-autonomous-readiness.json` refreshed 2026-04-09 after WS8 rerun; linkage checks are populated and passing (`ws8_closure`, `ws7_closure`, `ws8_release_summary`). |
 | R3 agent-authoring gate | fresh | ready_for_validation | `release-r3-agent-authoring-readiness.json` refreshed 2026-04-09 after WS8A rerun; linkage checks are populated and passing (`ws8a_closure`, `ws8a_release_summary`, `ws8_closure`, `ws7_closure`). |
-| R3 plugin gate | — | ready_for_validation | `release-r3-plugin-readiness.json` shows ready. |
+| R3 plugin gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `release-r3-plugin-readiness.json` + `ci-release-r3-plugin-readiness.json` both show `ready_for_validation` after WS7 + WS9A rerun. |
 
 **Crate stub inventory (as of 2026-04-04):**
 - `voltnuerongrid-core` — 3-line stub (crate name constant only; logic absorbed into `voltnuerongridd/main.rs`)
@@ -926,6 +926,7 @@ A tracker row moves to **Done** only when:
 - Repair the default WSL/Codacy installer path, or explicitly document the fallback path when automated Codacy analysis cannot run during file edits.
 - Tracker-evidence hygiene pass for WS3 + Ops/Resilience completed (2026-04-10): reran `run-ws3-gate.ps1` and `run-release-ops-resilience-gate.ps1`; primary artifacts refreshed and synchronized.
 - Release R2 failover gate refresh completed (2026-04-10): reran `run-release-r2-failover-gate.ps1`; `release-r2-failover-readiness.json` and CI mirror now show `status: passed`, `release_readiness: ready_for_validation`.
+- Batch evidence hygiene pass completed (2026-04-10): refreshed stale gates WS1A, WS2 (with live server), WS4, WS4A, WS11, WS15, H04, release-r3-plugin, release-r3-udf-runtime — all now showing current 2026-04-10 timestamps and status: passed.
 
 ### 9.4 Owner Assignment Matrix (Published)
 

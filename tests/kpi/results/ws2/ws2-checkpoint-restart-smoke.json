@@ -1,6 +1,6 @@
 {
+  "timestamp_utc": "2026-04-10T02:16:04.2489748Z",
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::preserves_continuity_after_checkpoint_and_restore ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s\n",
   "command": "cargo test -p voltnuerongrid-store preserves_continuity_after_checkpoint_and_restore -- --nocapture",
-  "status": "passed",
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_store-f0705c97917c246a.exe)\n\nrunning 1 test\ntest htap_sync::tests::preserves_continuity_after_checkpoint_and_restore ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.00s\n",
-  "timestamp_utc": "2026-04-05T03:46:31.6668489Z"
+  "status": "passed"
 }

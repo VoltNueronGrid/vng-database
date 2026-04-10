@@ -1,9 +1,9 @@
 {
   "gate": "ws7",
   "status": "passed",
-  "started_at_utc": "2026-04-09T16:22:45.8144251Z",
-  "finished_at_utc": "2026-04-09T16:22:58.1844133Z",
-  "duration_ms": 12370,
+  "started_at_utc": "2026-04-10T02:17:25.0172326Z",
+  "finished_at_utc": "2026-04-10T02:17:37.4643854Z",
+  "duration_ms": 12447,
   "packs": [
     {
       "pack": "ws7-plugin-boundary",

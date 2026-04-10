@@ -1,9 +1,9 @@
 {
   "smoke": "ws1a-legacy-numeric-eval",
   "status": "passed",
-  "started_at_utc": "2026-04-04T04:20:51.5350074Z",
-  "finished_at_utc": "2026-04-04T04:20:53.0889194Z",
-  "duration_ms": 1554,
+  "started_at_utc": "2026-04-10T02:14:41.3002133Z",
+  "finished_at_utc": "2026-04-10T02:14:42.5585402Z",
+  "duration_ms": 1258,
   "total_checks": 2,
   "passed_checks": 2,
   "checks": [

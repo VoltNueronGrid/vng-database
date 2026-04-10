@@ -1,55 +1,53 @@
-﻿{
-    "smoke":  "ws2-tenant-store-runtime",
-    "status":  "passed",
-    "base_url":  "http://127.0.0.1:18080",
-    "tenant_id":  "acme",
-    "admin_user_id":  "admin-acme",
-    "analyst_user_id":  "analyst-acme",
-    "timestamp_utc":  "2026-03-08T04:53:03.8464928Z",
-    "table_name":  "tenant/acme/orders",
-    "index_name":  "idx_acme_orders_1772945583",
-    "constraint_name":  "pk_acme_orders_1772945583",
-    "checks":  {
-                   "create_requires_auth_headers":  true,
-                   "analyst_cannot_create_index":  true,
-                   "tenant_admin_cannot_create_cross_tenant_index":  true,
-                   "tenant_admin_create_index_created":  true,
-                   "analyst_list_indexes_ok":  true,
-                   "analyst_list_contains_tenant_index":  true,
-                   "analyst_lookup_ok":  true,
-                   "analyst_lookup_targets_created_index":  true,
-                   "tenant_admin_add_constraint_created":  true,
-                   "analyst_validate_constraint_ok":  true,
-                   "analyst_validate_constraint_valid":  true,
-                   "tenant_admin_drop_index_ok":  true
-               },
-    "list_response":  {
-                          "status":  "ok",
-                          "indexes":  [
-                                          {
-                                              "name":  "idx_acme_orders_1772945583",
-                                              "table":  "tenant/acme/orders",
-                                              "column":  "customer_id",
-                                              "kind":  "BTree",
-                                              "unique":  false
-                                          }
-                                      ]
-                      },
-    "lookup_response":  {
-                            "index_name":  "idx_acme_orders_1772945583",
-                            "row_keys":  [
-
-                                         ],
-                            "status":  "ok",
-                            "value":  "C100"
-                        },
-    "validate_response":  {
-                              "status":  "ok",
-                              "valid":  true,
-                              "violation":  null
-                          },
-    "drop_response":  {
-                          "dropped":  "idx_acme_orders_1772945583",
-                          "status":  "dropped"
-                      }
+{
+  "smoke": "ws2-tenant-store-runtime",
+  "status": "passed",
+  "base_url": "http://127.0.0.1:8080",
+  "tenant_id": "acme",
+  "admin_user_id": "admin-acme",
+  "analyst_user_id": "analyst-acme",
+  "timestamp_utc": "2026-04-10T02:16:04.9475994Z",
+  "table_name": "tenant/acme/orders",
+  "index_name": "idx_acme_orders_1775787364",
+  "constraint_name": "pk_acme_orders_1775787364",
+  "checks": {
+    "create_requires_auth_headers": true,
+    "analyst_cannot_create_index": true,
+    "tenant_admin_cannot_create_cross_tenant_index": true,
+    "tenant_admin_create_index_created": true,
+    "analyst_list_indexes_ok": true,
+    "analyst_list_contains_tenant_index": true,
+    "analyst_lookup_ok": true,
+    "analyst_lookup_targets_created_index": true,
+    "tenant_admin_add_constraint_created": true,
+    "analyst_validate_constraint_ok": true,
+    "analyst_validate_constraint_valid": true,
+    "tenant_admin_drop_index_ok": true
+  },
+  "list_response": {
+    "status": "ok",
+    "indexes": [
+      {
+        "name": "idx_acme_orders_1775787364",
+        "table": "tenant/acme/orders",
+        "column": "customer_id",
+        "kind": "BTree",
+        "unique": false
+      }
+    ]
+  },
+  "lookup_response": {
+    "index_name": "idx_acme_orders_1775787364",
+    "row_keys": [],
+    "status": "ok",
+    "value": "C100"
+  },
+  "validate_response": {
+    "status": "ok",
+    "valid": true,
+    "violation": null
+  },
+  "drop_response": {
+    "dropped": "idx_acme_orders_1775787364",
+    "status": "dropped"
+  }
 }

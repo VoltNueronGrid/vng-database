@@ -9,9 +9,9 @@
     "REQ-26",
     "WS9A"
   ],
-  "started_at_utc": "2026-04-09T16:22:45.7053982Z",
-  "finished_at_utc": "2026-04-09T16:22:58.4983373Z",
-  "duration_ms": 12793,
+  "started_at_utc": "2026-04-10T02:17:24.9324877Z",
+  "finished_at_utc": "2026-04-10T02:17:37.7341111Z",
+  "duration_ms": 12802,
   "packs": [
     {
       "pack": "ws7-closure-gate",

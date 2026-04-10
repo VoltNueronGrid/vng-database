@@ -1,9 +1,9 @@
 {
-    "smoke":  "ws4a-replay-cursor-bridge",
-    "status":  "passed",
-    "command":  "cargo test -p voltnuerongrid-ingest replays_from_persisted_cursor_checkpoint -- --nocapture",
-    "started_at_utc":  "2026-03-09T05:34:18.4874160Z",
-    "finished_at_utc":  "2026-03-09T05:34:19.6616884Z",
-    "duration_ms":  1174,
-    "output_excerpt":  "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src\\lib.rs (target\\debug\\deps\\voltnuerongrid_ingest-6c4559b058af068f.exe)\n\nrunning 1 test\ntest tests::replays_from_persisted_cursor_checkpoint ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s\n\n"
+  "smoke": "ws4a-replay-cursor-bridge",
+  "status": "passed",
+  "command": "cargo test -p voltnuerongrid-ingest replays_from_persisted_cursor_checkpoint -- --nocapture",
+  "started_at_utc": "2026-04-10T02:16:50.0291960Z",
+  "finished_at_utc": "2026-04-10T02:16:52.1432023Z",
+  "duration_ms": 2114,
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_ingest-0aa64961a6120d4b.exe)\n\nrunning 1 test\ntest tests::replays_from_persisted_cursor_checkpoint ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s\n\n"
 }

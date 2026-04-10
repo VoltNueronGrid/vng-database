@@ -11,9 +11,9 @@
                   "REQ-18",
                   "H-04"
               ],
-    "generated_at_utc":  "2026-03-10T09:28:58.2134303Z",
+    "generated_at_utc":  "2026-04-10T02:18:01.2834663Z",
     "sources":  {
-                    "summary":  "tests/kpi/results/h04/h04-gate-summary.json"
+                    "summary":  "D:\\by\\polap-db\\tests\\kpi\\results\\h04\\h04-gate-summary.json"
                 },
     "checks":  {
                    "h04_gate_passed":  true,

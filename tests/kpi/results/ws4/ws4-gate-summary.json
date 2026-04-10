@@ -1,9 +1,9 @@
 {
   "gate": "ws4",
   "status": "passed",
-  "started_at_utc": "2026-03-06T15:34:11.3227956Z",
-  "finished_at_utc": "2026-03-06T15:34:12.8175246Z",
-  "duration_ms": 1495,
+  "started_at_utc": "2026-04-10T02:16:27.7513636Z",
+  "finished_at_utc": "2026-04-10T02:16:42.2073212Z",
+  "duration_ms": 14456,
   "packs": [
     {
       "pack": "ws4-ingest-plugin",
@@ -16,6 +16,12 @@
       "status": "passed",
       "detail": "ok",
       "artifact": "tests/kpi/results/ws4/ws4-ingest-parser-smoke.json"
+    },
+    {
+      "pack": "ws4-chunked-loader",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws4/ws4-chunked-loader-smoke.json"
     }
   ]
 }

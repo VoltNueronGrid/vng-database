@@ -1,9 +1,9 @@
 {
   "smoke": "ws15-competitive-parity-baseline",
   "status": "passed",
-  "started_at_utc": "2026-03-05T17:35:20.3239274Z",
-  "finished_at_utc": "2026-03-05T17:35:20.3673065Z",
-  "duration_ms": 43,
+  "started_at_utc": "2026-04-10T02:17:13.5446844Z",
+  "finished_at_utc": "2026-04-10T02:17:13.5767352Z",
+  "duration_ms": 32,
   "checks": [
     {
       "check": "matrix_exists",
