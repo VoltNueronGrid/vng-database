@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-09 (session 121)
+**Last updated:** 2026-04-10 (session 122)
 
 ---
 
@@ -33,7 +33,7 @@
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | 🟡 Ready for Validation (WS4 + WS22 evidence current 2026-04-10) |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Mixed (WS4A gate refreshed 2026-04-10, WS5 validated 2026-04-09) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation (R1 release gate refreshed 2026-04-10) |
-| Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS8A closure refreshed 2026-04-10) |
+| Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-10) |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🔵 Mixed |
@@ -571,7 +571,7 @@
 |---|---|---|---|---|
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off (24–36 hours); all technical criteria met. |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (refreshed 2026-04-10, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review (24–48 hours); all packs ✅ passed. |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation | WS3 gate rerun 2026-04-10 remains green (score 100, stable 2/2) and `ws3-release-readiness.json` now reports `ready_for_validation` after release-summary logic alignment. Other R3 sub-gates (WS7, WS8, WS8A) and DX/API cluster remain `ready_for_validation`. **NEXT STEP:** governance approval and coordinated promotion window. |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | WS3 gate rerun 2026-04-10 remains green (score 100, stable 2/2) and `ws3-release-readiness.json` now reports `ready_for_validation` after release-summary logic alignment. Other R3 sub-gates (WS7, WS8, WS8A) and DX/API cluster remain `ready_for_validation`. **Follow-up refresh 2026-04-10:** reran release gates `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all release artifacts report `status: passed` with fresh timestamps. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | ⬜ Not Started | RTO/RPO game-day success + global ops sign-off |
 
 ---
@@ -624,6 +624,7 @@
 - Batch evidence hygiene pass completed (2026-04-10): refreshed stale gates WS1A, WS2 (live server), WS4, WS4A, WS11, WS15, H04, release-r3-plugin, release-r3-udf-runtime — all passing with current 2026-04-10 timestamps.
 - DX/API + H-05 follow-up refresh completed (2026-04-10): reran `run-h05-kms-region-failover-evidence.ps1`, `run-ws8a-closure-gate.ps1`, `run-release-dx-api-gate.ps1`, and `run-h09-release-summary.ps1`; H-05 evidence, WS8A closure, DX/API release readiness, and H-09 release evidence are current.
 - WS3 release-readiness unblock completed (2026-04-10): updated `tests/kpi/scripts/run-ws3-release-summary.ps1` so passed WS3 evidence promotes to `ready_for_validation`, then reran `run-ws3-gate.ps1`; `tests/kpi/results/gates/ws3-release-readiness.json` now reports `status: passed`, `release_readiness: ready_for_validation`, clearing the prior R3 blocker.
+- R3 release-gate bundle refresh completed (2026-04-10): reran `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all four release artifacts regenerated with `status: passed` and current timestamps for governance package readiness.
 
 ---
 

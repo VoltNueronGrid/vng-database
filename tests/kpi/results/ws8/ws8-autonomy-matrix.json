@@ -1,7 +1,7 @@
 {
   "report": "ws8-autonomous-control-plane-matrix",
   "status": "passed",
-  "generated_at_utc": "2026-04-09T16:07:08.8245695Z",
+  "generated_at_utc": "2026-04-10T03:18:01.6844746Z",
   "source_summary": "tests/kpi/results/ws8/ws8-gate-summary.json",
   "runtime_pack_included": false,
   "total_controls": 5,

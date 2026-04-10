@@ -2,9 +2,9 @@
   "gate": "ws8a-closure-gate",
   "status": "passed",
   "validation_posture": "ready_for_validation",
-  "started_at_utc": "2026-04-10T02:46:17.9911849Z",
-  "finished_at_utc": "2026-04-10T02:46:32.0988575Z",
-  "duration_ms": 14108,
+  "started_at_utc": "2026-04-10T03:17:37.3947027Z",
+  "finished_at_utc": "2026-04-10T03:17:47.4066695Z",
+  "duration_ms": 10012,
   "artifacts": {
     "ws8a_gate": "tests/kpi/results/ws8a/ws8a-gate-summary.json",
     "ws8a_release": "tests/kpi/results/gates/ws8a-release-readiness.json",

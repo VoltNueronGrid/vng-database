@@ -2,29 +2,29 @@
   "smoke": "ws7-manifest-integrity",
   "status": "passed",
   "command": "cargo test -p voltnuerongrid-plugins <manifest_integrity_tests> -- --nocapture",
-  "started_at_utc": "2026-04-10T02:17:27.7210188Z",
-  "finished_at_utc": "2026-04-10T02:17:32.6257428Z",
-  "duration_ms": 4905,
+  "started_at_utc": "2026-04-10T03:18:04.1286041Z",
+  "finished_at_utc": "2026-04-10T03:18:09.1357612Z",
+  "duration_ms": 5007,
   "tests": [
     {
       "test": "rejects_package_when_manifest_checksum_is_tampered",
       "status": "passed",
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_plugins-ebb12a2a6961d635.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_checksum_is_tampered ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s\n"
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_plugins-ebb12a2a6961d635.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_checksum_is_tampered ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s\n"
     },
     {
       "test": "rejects_package_when_manifest_key_is_unknown",
       "status": "passed",
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_plugins-ebb12a2a6961d635.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_key_is_unknown ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s\n"
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_plugins-ebb12a2a6961d635.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_key_is_unknown ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s\n"
     },
     {
       "test": "rejects_package_when_manifest_key_is_revoked",
       "status": "passed",
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_plugins-ebb12a2a6961d635.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_key_is_revoked ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s\n"
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_plugins-ebb12a2a6961d635.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_key_is_revoked ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s\n"
     },
     {
       "test": "rejects_package_when_manifest_key_trust_too_low",
       "status": "passed",
-      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_plugins-ebb12a2a6961d635.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_key_trust_too_low ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s\n"
+      "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_plugins-ebb12a2a6961d635.exe)\n\nrunning 1 test\ntest tests::rejects_package_when_manifest_key_trust_too_low ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s\n"
     }
   ]
 }

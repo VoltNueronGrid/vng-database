@@ -2,7 +2,7 @@
   "gate": "ws8-closure",
   "status": "passed",
   "validation_posture": "ready_for_validation",
-  "generated_at_utc": "2026-04-09T16:07:08.9189096Z",
+  "generated_at_utc": "2026-04-10T03:18:01.7675877Z",
   "gate_exit_code": 0,
   "artifacts": [
     {

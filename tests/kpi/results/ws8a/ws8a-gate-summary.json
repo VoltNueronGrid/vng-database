@@ -1,9 +1,9 @@
 {
   "gate": "ws8a",
   "status": "passed",
-  "started_at_utc": "2026-04-10T02:46:18.0849054Z",
-  "finished_at_utc": "2026-04-10T02:46:31.8758278Z",
-  "duration_ms": 13791,
+  "started_at_utc": "2026-04-10T03:17:37.4528771Z",
+  "finished_at_utc": "2026-04-10T03:17:46.8112593Z",
+  "duration_ms": 9358,
   "packs": [
     {
       "pack": "ws8a-audit-trail",

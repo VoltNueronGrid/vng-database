@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-09 (session 121)
+**Last updated:** 2026-04-10 (session 122)
 
 ---
 
@@ -110,7 +110,7 @@
 |---|---|---|---|
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) + WS1 UDF closure (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`, CI mirror `tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json`) + WS22 locking closure (`tests/kpi/results/ws22/ws22-closure-gate-summary.json`, CI mirror `tests/kpi/results/ws22/ci-ws22-closure-gate-summary.json`) + release R1 SQL/UDF/locking gate (`tests/kpi/results/gates/release-r1-sql-udf-readiness.json`, CI mirror `tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json`). **Latest validation run 2026-04-10:** `run-ws1-closure-gate.ps1` + `run-release-r1-sql-udf-gate.ps1` passed end-to-end with live `voltnuerongridd`; all packs ✅ passed, `release_readiness: ready_for_validation`. **NEXT STEP:** Awaits Release DRI signature + governance sign-off within 24–36 hours; all technical criteria met. CI merge ready. |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`, CI mirror `ci-release-ops-resilience-readiness.json` on passed local runs) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`, mirror `ci-release-r2-failover-readiness.json`) — refreshed 2026-04-10 (`status: passed`, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + ops final review within 24–48 hours; RTO/RPO 100/100 validated; all packs ✅ passed. |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | 🟡 Ready for Validation | `tests/kpi/results/gates/ws3-release-readiness.json` now reports `release_readiness: ready_for_validation` after WS3 release-summary logic fix and gate rerun on 2026-04-10. WS3 gate remains score 100 with stable 2/2 badge; all R3 sub-gates (WS7, WS8, WS8A) and DX/API cluster are also `ready_for_validation`; R3 plugin/autonomous/agent-authoring/UDF runtime gates (`release-r3-*.json`) all passed. **NEXT STEP:** governance approval and coordinated promotion window. |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | 🟡 Ready for Validation (Governance Path) | `tests/kpi/results/gates/ws3-release-readiness.json` now reports `release_readiness: ready_for_validation` after WS3 release-summary logic fix and gate rerun on 2026-04-10. WS3 gate remains score 100 with stable 2/2 badge; all R3 sub-gates (WS7, WS8, WS8A) and DX/API cluster are also `ready_for_validation`. **Follow-up refresh 2026-04-10:** reran `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all release artifacts report `status: passed` with fresh timestamps. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Not Started | RTO/RPO game-day success + global ops sign-off |
 
 ---
@@ -315,14 +315,14 @@ Actual gate artifact status verified by code/artifact inspection and live runs. 
 | WS5 gate | passed | ready_for_validation | All packs passing. |
 | WS6 gate | passed | ready_for_validation | All packs passing. |
 | WS7 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `ws7-gate-summary.json` + `ws7-closure-gate-summary.json` refreshed; linked from R3 plugin release gate. |
-| WS8 gate | **passed** (2026-04-09 remediation rerun) | **ready_for_validation** | `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` now passes after fixing WS8A audit fixture chain hash fields and re-running gate packs. |
+| WS8 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `ws8-gate-summary.json` + `ws8-closure-gate-summary.json` refreshed in the R3 gate-bundle rerun; autonomy matrix/trend/badge and `ws8-release-readiness.json` all current and passing. |
 | WS8A gate | **passed** (2026-04-10 closure refresh) | **ready_for_validation** | Primary artifacts `ws8a-gate-summary.json`, `ws8a-closure-gate-summary.json`, and `ws8a-release-readiness.json` are current after the 2026-04-10 rerun; prior `ws8a-audit-companion` failure was resolved by adding required `chain_hash` in `tests/kpi/fixtures/ws8a/audit-events-sample.json`. |
 | WS9/WS9A/WS10 | **passed** (2026-04-10 DX/API refresh) | **ready_for_validation** | `ws9-gate-summary.json` and `ws10-gate-summary.json` refreshed 2026-04-10 via `run-release-dx-api-gate.ps1`; `ws9a` contract smoke and `release-dx-api-readiness.json` both green. |
 | WS11, WS15 | **passed** (2026-04-10 refresh) | **ready_for_validation** | WS11 i18n smoke + WS15 competitive-parity/backlog-score smokes both passed; gate summaries refreshed. |
 | R1 release gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `release-r1-sql-udf-readiness.json` + CI mirror refreshed via `run-release-r1-sql-udf-gate.ps1`; packs: `r1-baseline-checklist` (2026-04-10), `ws1-closure-gate` (2026-04-10), `ws22-closure-gate` (2026-04-10). |
 | R2 failover gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `release-r2-failover-readiness.json` and `ci-release-r2-failover-readiness.json` both show ready after rerun. |
-| R3 autonomous gate | fresh | ready_for_validation | `release-r3-autonomous-readiness.json` refreshed 2026-04-09 after WS8 rerun; linkage checks are populated and passing (`ws8_closure`, `ws7_closure`, `ws8_release_summary`). |
-| R3 agent-authoring gate | fresh | ready_for_validation | `release-r3-agent-authoring-readiness.json` refreshed 2026-04-09 after WS8A rerun; linkage checks are populated and passing (`ws8a_closure`, `ws8a_release_summary`, `ws8_closure`, `ws7_closure`). |
+| R3 autonomous gate | **passed** (2026-04-10 refresh) | ready_for_validation | `release-r3-autonomous-readiness.json` + CI mirror refreshed; linkage checks are populated and passing (`ws8_closure`, `ws7_closure`, `ws8_release_summary`). |
+| R3 agent-authoring gate | **passed** (2026-04-10 refresh) | ready_for_validation | `release-r3-agent-authoring-readiness.json` + CI mirror refreshed; linkage checks are populated and passing (`ws8a_closure`, `ws8a_release_summary`, `ws8_closure`, `ws7_closure`). |
 | R3 plugin gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `release-r3-plugin-readiness.json` + `ci-release-r3-plugin-readiness.json` both show `ready_for_validation` after WS7 + WS9A rerun. |
 
 **Crate stub inventory (as of 2026-04-04):**
@@ -930,6 +930,7 @@ A tracker row moves to **Done** only when:
 - Closure gate + hardening gate refresh pass completed (2026-04-10): refreshed WS0, WS1 (base+closure), WS1A closure, WS2 closure, WS2A (base+closure), WS3 closure, WS4 closure, WS4A closure, WS22 (base+closure), H06, H07, H08, H09, H10, R1 release gate — all artifacts updated; Gate Reality Check section promoted all outstanding "—" rows to ready_for_validation.
 - DX/API + H-05 follow-up refresh completed (2026-04-10): reran `run-h05-kms-region-failover-evidence.ps1`, `run-ws8a-closure-gate.ps1`, `run-release-dx-api-gate.ps1`, and `run-h09-release-summary.ps1`; H-05 evidence, WS8A closure, DX/API release readiness, and H-09 release evidence are current.
 - WS3 release-readiness unblock completed (2026-04-10): updated `tests/kpi/scripts/run-ws3-release-summary.ps1` so passed WS3 evidence promotes to `ready_for_validation`, then reran `run-ws3-gate.ps1`; `tests/kpi/results/gates/ws3-release-readiness.json` now reports `status: passed`, `release_readiness: ready_for_validation`, which clears the prior R3 blocker.
+- R3 release-gate bundle refresh completed (2026-04-10): reran `run-release-r3-plugin-gate.ps1`, `run-release-r3-autonomous-gate.ps1`, `run-release-r3-agent-authoring-gate.ps1`, and `run-release-r3-udf-runtime-gate.ps1`; all four release artifacts regenerated with `status: passed` and current timestamps for governance package readiness.
 
 ### 9.4 Owner Assignment Matrix (Published)
 | Scope | DRI Team | Supporting Teams | Current State |
