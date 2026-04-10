@@ -48,7 +48,7 @@
 |---|---|---|---|---|
 | REQ-01 | ANSI SQL + AI chat/extract/ingest/export | Sprint 1, Sprint 6 | Epic 1, Epic 8 | 🔵 In Progress |
 | REQ-02 | DB/table/view/materialized view/function lifecycle | Sprint 1 | Epic 1 | 🔵 In Progress |
-| REQ-03 | Rust/JS/Python function support | Sprint 1 | Epic 1 | 🟡 Ready for Validation |
+| REQ-03 | Rust/JS/Python function support | Sprint 1 | Epic 1 | � In Progress |
 | REQ-04 | HA/FT/elasticity/i18n/UTF-8 | Sprint 5, Sprint 7 | Epic 6, Epic 11, Epic 12 | 🔵 In Progress |
 | REQ-05 | Separate compute and data files | Sprint 1, Sprint 5 | Epic 2, Epic 6 | 🔵 In Progress |
 | REQ-06 | CSV/Parquet/JSON/Excel + enterprise source ingest | Sprint 3, Sprint 6 | Epic 4, Epic 4A, Epic 7 | 🔵 In Progress |
@@ -125,7 +125,7 @@
 ### Requirements Covered
 - REQ-01 (ANSI SQL + AI extract) — SQL analyzer baseline in `crates/voltnuerongrid-sql` + runtime analyze/execute smokes plus tenant SQL route/transaction tests validating tenant-scoped user RBAC on SQL endpoints
 - REQ-02 (DB/table/view lifecycle) — Statement classifier includes create/alter/drop/view/function lifecycle categories
-- REQ-03 (Rust/JS/Python function support) — 🟡 Ready for Validation: WS1 runtime UDF scaffold with function-catalog contract, per-language guard-policy contract, and statement-level execution-plan routing evidence; closure/release linkage includes WS1 closure gate + R1 SQL/UDF gate + R3 UDF runtime gate
+- REQ-03 (Rust/JS/Python function support) — � In Progress: WS1 runtime UDF scaffold with function-catalog contract, per-language guard-policy contract, and statement-level execution-plan routing evidence; `ws1-release-readiness.json` artifact reports `in_progress_with_evidence` (2026-04-10). Closure/release linkage includes WS1 closure gate + R1 SQL/UDF gate + R3 UDF runtime gate.
 - REQ-05 (Separate compute/data files) — WS2 durability contract scaffold + validation smoke
 - REQ-12 (Seeded functions + plan-plat parity) — P0/P1/P2 parity gap report with P2 stub closures
 - REQ-23 (ACID transactions) — Transaction endpoint classifies and validates statements before commit path
