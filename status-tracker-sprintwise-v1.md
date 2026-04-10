@@ -29,7 +29,7 @@
 |---|---|---|---|
 | Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 88%) |
 | Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0+WS1+WS2 base+closure gates all refreshed 2026-04-10) |
-| Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🟡 Ready for Validation (WS3 closure gate refreshed 2026-04-10; WS2A+WS1A all green) |
+| Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | In Flight | 🟡 Ready for Validation (WS3 + closure + release gates all green 2026-04-10; WS2A+WS1A all green) |
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | In Flight | 🟡 Ready for Validation (WS4 + WS22 evidence current 2026-04-10) |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Ready for Validation (WS4A + WS5 gate artifacts refreshed 2026-04-10) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation (R1 release gate refreshed 2026-04-10) |
@@ -76,7 +76,7 @@
 | REQ-28 | IDE extensions (VS/Cursor/Antigravity/JetBrains/Eclipse) | Sprint 7 | Epic 9A | 🔵 In Progress |
 | REQ-29 | Fully autonomous operations | Sprint 6, Sprint 8 | Epic 8, Epic 14 | 🔵 In Progress |
 | REQ-30 | AI agent authoring for objects/plugins | Sprint 6 | Epic 8, Epic 7 | 🟡 Ready for Validation |
-| REQ-31 | HTAP (OLTP + OLAP) extreme performance | Sprint 2 | Epic 2, Epic 3 | 🔵 In Progress |
+| REQ-31 | HTAP (OLTP + OLAP) extreme performance | Sprint 2 | Epic 2, Epic 3 | 🟡 Ready for Validation |
 
 ---
 
