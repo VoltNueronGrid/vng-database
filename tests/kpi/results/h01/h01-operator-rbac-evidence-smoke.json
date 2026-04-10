@@ -1,0 +1,24 @@
+{
+  "smoke": "h01-operator-rbac-evidence",
+  "status": "passed",
+  "checks_passed": 3,
+  "checks_total": 3,
+  "generated_at_utc": "2026-04-10T07:55:22.4152210Z",
+  "checks": [
+    {
+      "name": "ws5_operator_auth_smoke_present",
+      "passed": true,
+      "detail": "tests/kpi/results/ws5/operator-auth-smoke.json"
+    },
+    {
+      "name": "ws5_operator_auth_smoke_status_passed",
+      "passed": true,
+      "detail": "status=passed"
+    },
+    {
+      "name": "ws5_operator_auth_smoke_evidence_present",
+      "passed": true,
+      "detail": "checks_total=0;contract_evidence=True"
+    }
+  ]
+}

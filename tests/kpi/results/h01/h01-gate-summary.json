@@ -1,0 +1,27 @@
+{
+  "gate": "h01",
+  "status": "passed",
+  "started_at_utc": "2026-04-10T07:55:22.3384736Z",
+  "finished_at_utc": "2026-04-10T07:55:22.5814224Z",
+  "duration_ms": 243,
+  "packs": [
+    {
+      "pack": "h01-operator-rbac-evidence",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/h01/h01-operator-rbac-evidence-smoke.json"
+    },
+    {
+      "pack": "h01-autonomy-policy-evidence",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/h01/h01-autonomy-policy-evidence-smoke.json"
+    },
+    {
+      "pack": "h01-emergency-stop-evidence",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/h01/h01-emergency-stop-evidence-smoke.json"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "gate": "h01-release-autonomous-blast-radius-readiness",
+  "status": "passed",
+  "release_readiness": "in_progress_with_evidence",
+  "release_targets": [
+    "R2"
+  ],
+  "scope": [
+    "WS5",
+    "WS8",
+    "WS12",
+    "REQ-13",
+    "REQ-29",
+    "H-01"
+  ],
+  "generated_at_utc": "2026-04-10T07:55:22.6533480Z",
+  "sources": {
+    "summary": "tests/kpi/results/h01/h01-gate-summary.json",
+    "ws5_operator_auth": "tests/kpi/results/ws5/operator-auth-smoke.json",
+    "ws8_mode_governance": "tests/kpi/results/ws8/ws8-mode-governance-smoke.json",
+    "ws8_guardrail_policy": "tests/kpi/results/ws8/ws8-guardrail-policy-smoke.json",
+    "legacy_h01_guardrail": "tests/kpi/results/20260305-h01/autonomous-guardrail-smoke.json"
+  },
+  "checks": {
+    "h01_gate_passed": true,
+    "h01_all_packs_passed": true,
+    "h01_full_cross_channel_rbac_complete": false
+  },
+  "highlights": {
+    "pack_count": 3,
+    "h01_operator_rbac_pack_status": "passed",
+    "h01_autonomy_policy_pack_status": "passed",
+    "h01_emergency_stop_pack_status": "passed",
+    "blocker": "full_resource_scoped_rbac_and_cross_channel_blast_radius_certification_pending"
+  }
+}

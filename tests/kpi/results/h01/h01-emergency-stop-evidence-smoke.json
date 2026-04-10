@@ -1,0 +1,24 @@
+{
+  "smoke": "h01-emergency-stop-evidence",
+  "status": "passed",
+  "checks_passed": 3,
+  "checks_total": 3,
+  "generated_at_utc": "2026-04-10T07:55:22.5710335Z",
+  "checks": [
+    {
+      "name": "legacy_h01_guardrail_smoke_status_passed",
+      "passed": true,
+      "detail": "status=passed"
+    },
+    {
+      "name": "legacy_h01_guardrail_checks_nonzero",
+      "passed": true,
+      "detail": "checks_total=3"
+    },
+    {
+      "name": "ws8_guardrail_policy_smoke_status_passed",
+      "passed": true,
+      "detail": "status=passed"
+    }
+  ]
+}
