@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 137)
+**Last updated:** 2026-04-10 (session 138)
 
 ---
 
@@ -166,7 +166,7 @@
 |---|---|---|---|---|---|---|
 | WS1A | Epic 1A | Legacy aggregation parity (P0/P1/P2) | Compute + Migration Team | 🟡 Ready for Validation | WS1 | Bucketed manifests + P2 stub implementations + gap report outputs in place; gate orchestrator `run-ws1a-gate.ps1` -> `tests/kpi/results/ws1a/ws1a-gate-summary.json`; UDF bridge pack `run-ws1a-udf-contract-bridge-smoke.ps1` -> `tests/kpi/results/ws1a/ws1a-udf-contract-bridge-smoke.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS2A | Epic 2 (E2.1a) | Transactional row store and HTAP sync origin | Storage Team | 🟡 Ready for Validation | WS2 | Row-sync origin scaffold + smoke evidence captured; gate orchestrator `run-ws2a-gate.ps1` -> `tests/kpi/results/ws2a/ws2a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
-| WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | 🔵 In Progress | WS2 | Route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + gate orchestrator `run-ws3-gate.ps1` -> `tests/kpi/results/ws3/ws3-gate-summary.json`; performance target-contract/score/trend/badge/release artifacts; latest committed `ws3-gate-summary.json` remains `status:"passed"` with refreshed 2026-04-10 timestamps; workflow wiring in `.github/workflows/ci.yml` |
+| WS3 | Epic 3 | HTAP query execution and routing | Query/Runtime Team | 🟡 Ready for Validation | WS2 | Route-decision scaffold + runtime SQL dispatch endpoint `/api/v1/sql/execute` + gate orchestrator `run-ws3-gate.ps1` -> `tests/kpi/results/ws3/ws3-gate-summary.json`; performance target-contract/score/trend/badge/release artifacts; latest committed `ws3-gate-summary.json` remains `status:"passed"` with refreshed 2026-04-10 timestamps and `ws3-release-readiness.json` set to `ready_for_validation`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-12 (Seeded functions + parity) — P0/P1/P2 parity gap report with P2 stub closures (`tests/kpi/results/parity/legacy-aggregation-gap-report.json`)
@@ -272,7 +272,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
-| WS5 Security Gate | Epic 5 (Auth/RBAC/TLS/TDE/KMS), live validated 2026-04-09 18:26 UTC | `tests/kpi/results/ws5/ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-badge.json` |
+| WS5 Security Gate | Epic 5 (Auth/RBAC/TLS/TDE/KMS), live validated 2026-04-10T08:11:57Z UTC (`status:"passed"`, 7600ms) | `tests/kpi/results/ws5/ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-summary.json` | `tests/kpi/results/gates/ci-ws5-gate-badge.json` |
 
 ---
 
@@ -280,7 +280,7 @@
 
 **Goal:** Distributed HA/FT/autoscaling/anti-SPOF, close R1 release gate.
 **Dependencies:** Sprint 1 (WS2), Sprint 2 (WS3)
-**Status:** ✅ WS6 Validated (2026-04-09) / R1 In Progress
+**Status:** ✅ WS6 Validated (2026-04-10) / R1 Ready for Validation
 
 ### Workstreams
 
@@ -291,7 +291,7 @@
 ### Requirements Covered
 - REQ-04 (HA/FT/elasticity) — WS6 failover + anti-SPOF + chaos hardening packs
 - REQ-05 (Separate compute/data) — Distributed storage separation in WS6 cluster topology
-- REQ-17 (Distributed failover + zero data loss) — ✅ Validated: WS6 closure + R2 failover release gate evidence validated by live gate execution in `tests/kpi/results/ws6/ws6-gate-summary.json` (`status:"passed"`, 2026-04-09 18:26-18:27 UTC, 57183ms, 13 packs, RTO/RPO 100/100)
+- REQ-17 (Distributed failover + zero data loss) — ✅ Validated: WS6 closure + R2 failover release gate evidence validated by live gate execution in `tests/kpi/results/ws6/ws6-gate-summary.json` (`status:"passed"`, 2026-04-10 10:17-10:20 UTC, 132807ms, expanded pack set, RTO/RPO 100/100)
 - REQ-10 (Trillion-row scale + high-speed retrieval) — 🔵 In Progress: Benchmark endpoints are implemented (`POST /api/v1/benchmark/ingest`, `POST /api/v1/benchmark/query`) and return throughput indicators (`records_per_second`, `ops_per_second`)
 - REQ-19 (Blazing ingest/update/read at scale) — 🔵 In Progress: Benchmark smoke is green at `tests/kpi/results/req10/benchmark-smoke.json`; next step is sustained-load and storage-layer throughput baselining
 - REQ-21 (Any-number-user concurrency) — 🔵 In Progress: Concurrency matrix has 9 `ws21_*` tests covering SQL, ingest, cache, ACID, lock, mixed-ops, and sustained-load paths
@@ -314,7 +314,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
-| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss), live validated 2026-04-09 across all 13 packs | `tests/kpi/results/gates/ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
+| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss), live validated 2026-04-10 across expanded pack set | `tests/kpi/results/gates/ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
 
 | Gate | Scope | Status Source | CI Summary Artifact |
 |---|---|---|---|
@@ -571,8 +571,8 @@
 
 | Release | Scope Snapshot | Sprint Target | Status | Gate Criteria |
 |---|---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off (24–36 hours); all technical criteria met. |
-| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (session 136 rerun at `started_at_utc: 2026-04-10T10:17:48Z`, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review (24–48 hours); all packs ✅ passed. |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off; all technical criteria met. |
+| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (session 136 rerun at `started_at_utc: 2026-04-10T10:17:48Z`, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review; all packs ✅ passed. |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | R3 governance package is backed by passing release gates for UDF runtime (`release-r3-udf-runtime-readiness.json`), plugin (`release-r3-plugin-readiness.json`), autonomous (`release-r3-autonomous-readiness.json`), and agent authoring (`release-r3-agent-authoring-readiness.json`), with WS3 and DX/API release summaries also green. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | 🔴 Blocked | `release-r4-saas-maturity-readiness.json` now exists and reports `status: passed`, `release_readiness: blocked`. Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke are green, but H-09 / H-10 release summaries remain `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off are still required. |
 
@@ -587,7 +587,7 @@
 | WS1 SQL core | SQL Engine Team | Query/Runtime Team | Sprint 1 | 🔵 In Progress |
 | WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Sprint 1–2 | 🔵 In Progress |
 | WS1A legacy aggregation parity | Compute + Migration Team | SQL Engine Team | Sprint 2 | 🟡 Ready for Validation |
-| WS3 query routing and execution | Query/Runtime Team | Storage Team | Sprint 2 | 🔵 In Progress |
+| WS3 query routing and execution | Query/Runtime Team | Storage Team | Sprint 2 | 🟡 Ready for Validation |
 | WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Sprint 3–4 | 🟡 Ready for Validation |
 | WS22 pessimistic locking | SQL Engine Team | Query/Runtime Team | Sprint 3 | 🟡 Ready for Validation |
 | WS5 security and crypto | Security Team | Platform Team | Sprint 4 | 🟡 Ready for Validation |
