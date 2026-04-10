@@ -569,9 +569,9 @@
 
 | Release | Scope Snapshot | Sprint Target | Status | Gate Criteria |
 |---|---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10) |
-| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (refreshed 2026-04-10) |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🔵 In Progress | All R3 sub-gates and DX/API cluster gate are current, but WS3 release readiness remains `in_progress_with_evidence` and blocks promotion |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off (24–36 hours); all technical criteria met. |
+| R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (refreshed 2026-04-10, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review (24–48 hours); all packs ✅ passed. |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🔴 **BLOCKED by WS3 `release_readiness: in_progress_with_evidence`** | **BLOCKER:** WS3 gate refreshed 2026-04-10 (score 100, stable 2/2) but `release_readiness` remains stuck on `in_progress_with_evidence`. All other R3 sub-gates (WS7, WS8, WS8A) and DX/API cluster are `ready_for_validation`. **UNBLOCK:** Policy clarification or evidence acceptance needed. **TIMELINE:** 4–7 days once decision made. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | ⬜ Not Started | RTO/RPO game-day success + global ops sign-off |
 
 ---
