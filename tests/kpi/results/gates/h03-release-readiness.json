@@ -1,0 +1,29 @@
+{
+  "gate": "h03-release-control-plane-resilience-readiness",
+  "status": "passed",
+  "release_readiness": "in_progress_with_evidence",
+  "release_targets": [
+    "R2"
+  ],
+  "scope": [
+    "WS6",
+    "REQ-17",
+    "H-03"
+  ],
+  "generated_at_utc": "2026-04-10T07:14:56.8221574Z",
+  "sources": {
+    "summary": "tests/kpi/results/h03/h03-gate-summary.json"
+  },
+  "checks": {
+    "h03_gate_passed": true,
+    "h03_all_packs_passed": true,
+    "h03_cluster_runtime_cert_complete": false
+  },
+  "highlights": {
+    "pack_count": 3,
+    "control_plane_chaos_pack_status": "passed",
+    "runtime_linkage_pack_status": "passed",
+    "degraded_failover_pack_status": "passed",
+    "release_blocker": "full_inter_process_transport_backed_cluster_runtime_certification_pending"
+  }
+}

@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 126)
+**Last updated:** 2026-04-10 (session 127)
 
 ---
 
@@ -36,7 +36,7 @@
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster green 2026-04-10) |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience green via primary release artifact refresh, 2026-04-10) |
-| Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🟡 Mixed (H-02 promoted to Ready for Validation 2026-04-10) |
+| Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🟡 Mixed (H-02 ready_for_validation; H-03 evidence gate added 2026-04-10) |
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-05 evidence refreshed 2026-04-10; H-06..H-08 ready_for_validation; WS3 release readiness promoted and R3 blocker cleared) |
 | Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 refreshed 2026-04-10; R4 baseline gate scaffolded and currently blocked by P2 release-readiness + sign-off requirements) |
 
@@ -466,7 +466,7 @@
 
 **Goal:** Competitive feature adoption track, P0 architecture hardening items (H-01..H-04).
 **Dependencies:** Sprint 2 (WS3), Sprint 5 (WS6), Sprint 4 (WS5)
-**Status:** 🔵 Mixed (WS15 Ready for Validation, H-01/H-02 In Progress, H-03/H-04 early)
+**Status:** 🔵 Mixed (WS15 and H-02 Ready for Validation; H-03 now has in-progress evidence gate artifacts; H-01/H-04 still in progress)
 
 ### Workstreams
 
@@ -479,8 +479,8 @@
 | ID | Hardening Item | Owner | Priority | Status | Completion | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|---|
 | H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 96% | Added operator auth gate (`VNG_ADMIN_API_KEY` + `x-vng-admin-key`) for autonomous control endpoints, then layered registered operator identity + role binding enforcement via `x-vng-operator-id` plus a shared resource-scoped RBAC privilege matrix now enforced across control-plane, storage, mixed ingest, tenant-scoped SQL runtime handlers, and tenant-aware driver headers; retained versioned/checksummed DR policy-state persistence envelope with corruption fallback to `.bak` and legacy snapshot compatibility tests (`ws12_`) | Full RBAC integration pending | Extend operator-scoped RBAC into broader user/tenant privilege hierarchies |
-| H-02 | Epic 6 | HTAP sync correctness under failures | Storage + Distributed Systems | 🟡 Ready for Validation | WS2, WS6 | Gate orchestrator + release-readiness artifact: 4/4 packs passed (2026-04-10, session 126): restart-replay-matrix (7 checks), multi-node-handoff-matrix (3 checks), sync-fault-injection, reorder-duplicate-faults; `tests/kpi/results/h02/h02-gate-summary.json`; `tests/kpi/results/gates/h02-release-readiness.json` (`ready_for_validation`) |
-| H-03 | Control-plane resilience hardening | Distributed Systems | P0 | 🔵 In Progress | 15% | Control-plane clustering requirement and SPOF closure criteria documented | Cluster runtime implementation pending | Control-plane chaos test plan v1 |
+| H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | 🟡 Ready for Validation | 100% | Gate orchestrator + release-readiness artifact: 4/4 packs passed (2026-04-10, session 126): restart-replay-matrix (7 checks), multi-node-handoff-matrix (3 checks), sync-fault-injection, reorder-duplicate-faults; `tests/kpi/results/h02/h02-gate-summary.json`; `tests/kpi/results/gates/h02-release-readiness.json` (`ready_for_validation`) | None | Maintain regression checks in R2 release cadence |
+| H-03 | Control-plane resilience hardening | Distributed Systems | P0 | 🔵 In Progress | 35% | H-03 gate evidence added (2026-04-10, session 127): `tests/kpi/results/h03/h03-gate-summary.json` (3/3 packs passed) + `tests/kpi/results/gates/h03-release-readiness.json` (`in_progress_with_evidence`) with control-plane chaos, runtime linkage, and degraded failover evidence packs | Full inter-process transport-backed clustered runtime certification pending | Promote H-03 release_readiness from `in_progress_with_evidence` after inter-process transport cert completes |
 | H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | 🔵 In Progress | 20% | Outbox and replay durability controls defined in architecture | Event bus/outbox services pending | Exactly-once replay test harness draft |
 
 ### Sprint 9 Deliverables
@@ -495,7 +495,8 @@
 - [x] H-02: Multi-node transport replay + failover handoff matrix
 - [x] H-02: WS6 live transport-fed handoff runtime wiring
 - [x] H-02: Explicit multi-node replication transport abstraction
-- [ ] H-03: Control-plane chaos test plan v1 (15%)
+- [x] H-03: Control-plane evidence gate + release summary generated (session 127)
+- [ ] H-03: Full inter-process transport-backed clustered runtime certification
 - [ ] H-04: Exactly-once replay test harness draft (20%)
 
 ---

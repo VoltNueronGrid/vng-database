@@ -1,0 +1,24 @@
+{
+  "smoke": "h03-degraded-failover-evidence",
+  "status": "passed",
+  "checks_passed": 3,
+  "checks_total": 3,
+  "generated_at_utc": "2026-04-10T07:13:10.6333431Z",
+  "checks": [
+    {
+      "name": "ws6_failover_contract_smoke_passed",
+      "passed": true,
+      "detail": "passed :: tests/kpi/results/ws6/failover-contract-smoke.json"
+    },
+    {
+      "name": "ws6_dr_failover_smoke_passed",
+      "passed": true,
+      "detail": "passed :: tests/kpi/results/ws6/ws6-dr-failover-smoke.json"
+    },
+    {
+      "name": "ws6_reconcile_latency_smoke_passed",
+      "passed": true,
+      "detail": "passed :: tests/kpi/results/ws6/ws6-reconcile-latency-envelope-smoke.json"
+    }
+  ]
+}

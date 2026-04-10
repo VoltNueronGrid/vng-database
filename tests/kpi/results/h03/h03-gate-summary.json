@@ -1,0 +1,27 @@
+{
+  "gate": "h03",
+  "status": "passed",
+  "started_at_utc": "2026-04-10T07:13:10.2946438Z",
+  "finished_at_utc": "2026-04-10T07:13:10.6448520Z",
+  "duration_ms": 350,
+  "packs": [
+    {
+      "pack": "h03-control-plane-chaos-evidence",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/h03/h03-control-plane-chaos-evidence-smoke.json"
+    },
+    {
+      "pack": "h03-cluster-runtime-linkage",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/h03/h03-cluster-runtime-linkage-smoke.json"
+    },
+    {
+      "pack": "h03-degraded-failover-evidence",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/h03/h03-degraded-failover-evidence-smoke.json"
+    }
+  ]
+}
