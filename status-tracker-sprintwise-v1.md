@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-11 (session 150)
+**Last updated:** 2026-04-11 (session 151)
 
 ---
 
@@ -221,7 +221,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact |
 |---|---|---|---|
-| WS22 Pessimistic Locking Gate | Epic 1 + REQ-22 (pessimistic lock acquire/release contracts + conflict/ownership + contention metrics posture) | `tests/kpi/results/ws22/ws22-gate-summary.json` | `tests/kpi/results/ws22/ci-ws22-gate-summary.json` |
+| WS22 Pessimistic Locking Gate | Epic 1 + REQ-22 (pessimistic lock acquire/release contracts + conflict/ownership + contention metrics posture) | `tests/kpi/results/ws22/ws22-gate-summary.json` | `tests/kpi/results/ws22/ws22-gate-summary.json` |
 | WS22 Lock Contention Metrics | Epic 1 + REQ-22 (deadlock-detection vs cap-hit-timeout vs wait-timeout vs grant vs conflict vs release counts + contention ratio) | `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json` | (included in ws22-gate-summary) |
 
 ### Gate Evidence — WS2 Index + Constraint Engine (REQ-11)

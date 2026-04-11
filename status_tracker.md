@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-11 (session 150)
+**Last updated:** 2026-04-11 (session 151)
 
 ---
 
@@ -223,7 +223,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact |
 |---|---|---|---|
-| WS22 Pessimistic Locking Gate | Epic 1 + REQ-22 (pessimistic lock acquire/release contracts + conflict/ownership + timeout/bounded multi-hop deadlock-risk + cap-hit diagnostics + stale wait-edge cleanup + lock contention metrics posture) | `tests/kpi/results/ws22/ws22-gate-summary.json` | `tests/kpi/results/ws22/ci-ws22-gate-summary.json` |
+| WS22 Pessimistic Locking Gate | Epic 1 + REQ-22 (pessimistic lock acquire/release contracts + conflict/ownership + timeout/bounded multi-hop deadlock-risk + cap-hit diagnostics + stale wait-edge cleanup + lock contention metrics posture) | `tests/kpi/results/ws22/ws22-gate-summary.json` | `tests/kpi/results/ws22/ws22-gate-summary.json` |
 | WS22 Lock Contention Metrics | Epic 1 + REQ-22 (deadlock-detection vs cap-hit-timeout vs wait-timeout vs grant vs conflict vs release counts + contention ratio for trend analysis) | `tests/kpi/results/ws22/ws22-lock-contention-metrics-smoke.json` | (included in ws22-gate-summary) |
 
 ---
@@ -241,7 +241,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
-| WS22 Pessimistic Lock Resilience Gate | Epic 1 + REQ-22 (pessimistic lock contracts + conflict/ownership + timeout/bounded multi-hop deadlock-risk + cap-hit diagnostics + stale wait-edge cleanup + trend stability) | `tests/kpi/results/gates/ws22-release-readiness.json` | `tests/kpi/results/gates/ci-ws22-release-readiness.json` | `tests/kpi/results/gates/ci-ws22-pessimistic-lock-stability-badge.json` |
+| WS22 Pessimistic Lock Resilience Gate | Epic 1 + REQ-22 (pessimistic lock contracts + conflict/ownership + timeout/bounded multi-hop deadlock-risk + cap-hit diagnostics + stale wait-edge cleanup + trend stability) | `tests/kpi/results/gates/ws22-release-readiness.json` | `tests/kpi/results/gates/ws22-release-readiness.json` | `tests/kpi/results/ws22/ws22-pessimistic-lock-stability-badge.json` |
 
 ## 5.16) WS2 Index + Constraint Gate Evidence
 
@@ -296,9 +296,9 @@
 | H-10 Release Readiness | H-10 (release-facing governance readiness summary) | `tests/kpi/results/gates/h10-release-readiness.json` |
 
 ---
-## 5.22) Gate Reality Check (2026-04-11 Audit — session 150)
+## 5.22) Gate Reality Check (2026-04-11 Audit — session 151)
 
-Actual gate artifact status verified by artifact inspection. No newer gate summaries were produced on 2026-04-11; latest canonical evidence remains the 2026-04-10 runs (WS5 @08:11:57Z, WS6 @10:17:50Z, release-ops-resilience @10:20:14Z, release-dx-api @08:11:57Z). Session 150 confirms all 30+ gate artifacts remain stable with no evidence deltas requiring tracker corrections. This section carries forward session 149 artifact references with session 150 attribution.
+Actual gate artifact status verified by artifact inspection. No newer gate summaries were produced on 2026-04-11; latest canonical evidence remains the 2026-04-10 runs (WS5 @08:11:57Z, WS6 @10:17:50Z, release-ops-resilience @10:20:14Z, release-dx-api @08:11:57Z). Session 151 confirms all 30+ gate artifacts remain stable with no evidence deltas requiring tracker corrections. This section carries forward session 150 artifact references with session 151 attribution.
 
 | Gate / WS | Artifact Status | release_readiness | Root Cause / Notes |
 |---|---|---|---|
