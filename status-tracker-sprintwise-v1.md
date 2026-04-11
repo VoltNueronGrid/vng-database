@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-11 (session 147)
+**Last updated:** 2026-04-11 (session 148)
 
 ---
 
@@ -120,7 +120,7 @@
 |---|---|---|---|---|---|---|
 | WS0 | Epic 0 | Workspace/CI/governance foundation | Platform + Program Governance | 🟡 Ready for Validation | PR-003 (CI now runs runtime check + SQL tests + gate scripts + SQL analyze runtime smoke) | CI pipeline green with gate scripts |
 | WS1 | Epic 1 | SQL parser/analyzer/DDL-DML/function registry | SQL Engine Team | 🔵 In Progress | WS0 | Runtime integration underway; `/api/v1/sql/analyze`, `/api/v1/sql/route`, `/api/v1/sql/execute`, and `/api/v1/sql/transaction` now enforce tenant-scoped user RBAC via `x-vng-tenant-id` + `x-vng-user-id` while preserving operator/admin access; `/api/v1/sql/execute` includes UDF runtime scaffold with explicit function catalog contract, per-language guard policies, and statement-level execution-plan routing evidence for Rust/JS/Python; gate orchestrator `run-ws1-gate.ps1` -> `tests/kpi/results/ws1/ws1-gate-summary.json`; UDF contract pack -> `tests/kpi/results/ws1/ws1-udf-contract-smoke.json`; runtime analyze/UDF smokes -> `tests/kpi/results/ws1/sql-analyze-smoke.json`, `tests/kpi/results/ws1/sql-execute-udf-smoke.json`; focused tenant SQL route/transaction tests in `voltnuerongridd`; workflow wiring in `.github/workflows/ci.yml` |
-| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | 🔵 In Progress | WS0 | Durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged; store index/constraint runtime handlers now enforce operator auth + resource-scoped RBAC, validated by `tests/kpi/results/ws2/ws2-index-constraint-smoke.json`; gate orchestrator `run-ws2-gate.ps1` -> `tests/kpi/results/ws2/ws2-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
+| WS2 | Epic 2 | Durability/storage/index/constraints | Storage Team | 🟡 Ready for Validation | WS0 | Durability bootstrap + checkpoint/restart + disk-backed WAL adapter + WAL recovery wiring merged; store index/constraint runtime handlers now enforce operator auth + resource-scoped RBAC, validated by `tests/kpi/results/ws2/ws2-index-constraint-smoke.json`; gate orchestrator `run-ws2-gate.ps1` -> `tests/kpi/results/ws2/ws2-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-01 (ANSI SQL + AI extract) — SQL analyzer baseline in `crates/voltnuerongrid-sql` + runtime analyze/execute smokes plus tenant SQL route/transaction tests validating tenant-scoped user RBAC on SQL endpoints
@@ -158,7 +158,7 @@
 
 **Goal:** Legacy aggregation parity, transactional row store with HTAP sync origin, HTAP query execution and routing.
 **Dependencies:** Sprint 1 (WS1, WS2 foundations)
-**Status:** 🔵 In Progress
+**Status:** 🟡 Ready for Validation
 
 ### Workstreams
 
