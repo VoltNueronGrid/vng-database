@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-11 (session 139)
+**Last updated:** 2026-04-11 (session 140)
 
 ---
 
@@ -296,9 +296,9 @@
 | H-10 Release Readiness | H-10 (release-facing governance readiness summary) | `tests/kpi/results/gates/h10-release-readiness.json` |
 
 ---
-## 5.22) Gate Reality Check (2026-04-10 Audit — session 138 refresh)
+## 5.22) Gate Reality Check (2026-04-11 Audit — session 140 carry-forward)
 
-Actual gate artifact status verified by code/artifact inspection and live runs. Session 136 refresh reran the R2 failover chain (including Ops/Resilience cluster) and synchronized timestamps, while preserving session 135 release-facing wording updates for WS5/WS6 and the R3 aggregate gate package, session 130 H-09/H-10/R4 aggregate refresh, and session 129 H-04 synchronization (plus sessions 128/127/126 hardening additions H-01/H-03/H-02). Overrides any stale editorial status above.
+Actual gate artifact status verified by artifact inspection. No newer gate summaries were produced on 2026-04-11; latest canonical evidence remains the 2026-04-10 runs (WS5, WS6, release-r2-failover, release-ops-resilience, release-dx-api). This section is a synchronized carry-forward from session 138/139 with unchanged status semantics and refreshed session attribution.
 
 | Gate / WS | Artifact Status | release_readiness | Root Cause / Notes |
 |---|---|---|---|
@@ -307,9 +307,9 @@ Actual gate artifact status verified by code/artifact inspection and live runs. 
 | WS3 gate | **passed** (2026-04-10 refresh + summary fix) | **ready_for_validation** | `ws3-gate-summary.json` + `ws3-closure-gate-summary.json` refreshed 2026-04-10; score=100 and 2/2 stable badge; `ws3-release-readiness.json` now reports `ready_for_validation`. |
 | WS2 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | All 5 packs passing incl. tenant-store runtime smoke (live server); closure gate + release summary `tests/kpi/results/gates/ws2-release-readiness.json` green. |
 | WS2A gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `ws2a-gate-summary.json` + `ws2a-closure-gate-summary.json` both refreshed; `tests/kpi/results/gates/ws2a-release-readiness.json` ready_for_validation. |
-| WS4 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | Closure gate + release readiness refreshed; 4 packs: `ingest-plugin-smoke`, `ws4-ingest-parser-smoke`, `ws4-chunked-loader-smoke`. `tests/kpi/results/gates/ws4-release-readiness.json` green. |
+| WS4 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | Closure gate + release readiness refreshed; 3 packs: `ws4-ingest-plugin`, `ws4-ingest-parser`, `ws4-chunked-loader`. `tests/kpi/results/gates/ws4-release-readiness.json` green. |
 | WS4A gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | Closure gate + release readiness refreshed; 2 packs: `streaming-event-path-smoke`, `replay-cursor-smoke`. `tests/kpi/results/gates/ws4a-release-readiness.json` green. |
-| WS1A gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | Closure gate + release readiness refreshed; 4 packs: `ws1a-gate-summary`, `udf-bridge-smoke`, `legacy-numeric-eval-smoke`, parity gap-report. `tests/kpi/results/gates/ws1a-release-readiness.json` green. |
+| WS1A gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | Closure gate + release readiness refreshed; 4 packs: `ws1a-legacy-parity`, `ws1a-legacy-gap-report`, `ws1a-udf-contract-bridge`, `ws1a-legacy-numeric-eval`. `tests/kpi/results/gates/ws1a-release-readiness.json` green. |
 | WS22 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `ws22-gate-summary.json` + `ws22-closure-gate-summary.json` + `ws22-release-readiness.json` all refreshed; 2/2 lock-stability badge; CI mirror written. |
 | H-01 gate | **passed** (2026-04-10 session 128) | **in_progress_with_evidence** | `h01-gate-summary.json` (3/3 packs passed: operator-rbac-evidence, autonomy-policy-evidence, emergency-stop-evidence); release summary `tests/kpi/results/gates/h01-release-readiness.json` generated with blocker `full_resource_scoped_rbac_and_cross_channel_blast_radius_certification_pending`. |
 | H-02 gate | **passed** (2026-04-10 session 126) | **ready_for_validation** | `h02-gate-summary.json` (4/4 packs: restart-replay-matrix, multi-node-handoff-matrix, sync-fault-injection, reorder-duplicate-faults); all store crate matrix tests pass; `tests/kpi/results/gates/h02-release-readiness.json` generated. |

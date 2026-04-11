@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-11 (session 139)
+**Last updated:** 2026-04-11 (session 140)
 
 ---
 
@@ -603,7 +603,7 @@
 | WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Sprint 8 | 🟡 Ready for Validation |
 | WS13 multi-cloud deployment profiles | Platform/SRE | SRE Team, Security Team | Sprint 8 | 🟡 Ready for Validation |
 | WS14 config contracts + tuning playbooks | Platform + SRE + Security | Integrations Team, Security Team | Sprint 8 | 🟡 Ready for Validation |
-| Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | Sprint 8 | 🔵 In Progress |
+| Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | Sprint 8 | Ready for Validation |
 | WS15 competitive feature adoption track | Architecture + Query Team | AI Platform Team, Integrations Team | Sprint 9 | 🟡 Ready for Validation |
 | H-01..H-04 P0 hardening | Various (see hardening backlog) | Cross-functional | Sprint 9 | 🔵 In Progress |
 | H-05..H-08 P1 hardening | Various (see hardening backlog) | Cross-functional | Sprint 10 | 🔵 Mixed (H-05 deferred; H-06..H-08 ready for validation) |
@@ -1873,5 +1873,4 @@ A tracker row moves to **Done** only when:
 - Evidence artifacts are attached.
 - Dependencies in prerequisite gate are satisfied.
 - Risk register impact is updated.
-
 
