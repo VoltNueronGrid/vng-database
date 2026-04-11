@@ -1,4 +1,4 @@
-# VoltNueronGrid DB — Sprint-Wise Status Tracker v1
+﻿# VoltNueronGrid DB — Sprint-Wise Status Tracker v1
 
 **Source of truth:**
 - `reference/voltnuerongrid-db-design.md`
@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-11 (session 166)
+**Last updated:** 2026-04-11 (session 167)
 
 ---
 
@@ -192,9 +192,10 @@
 
 **Goal:** High-speed ingestion pipeline, pessimistic locking scaffold.
 **Dependencies:** Sprint 1 (WS2 storage foundation)
-**Status:** 🔵 In Progress
+**Status:** 🟡 Ready for Validation (WS4 + WS22 closure gates passed 2026-04-10)
 
 ### Workstreams
+
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
