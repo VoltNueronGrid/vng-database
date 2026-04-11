@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-11 (session 142)
+**Last updated:** 2026-04-11 (session 143)
 
 ---
 
@@ -1761,7 +1761,7 @@ Release Gate Impact: <none|medium|high>
 
 | Item | Artifact | Result | Next Step |
 |---|---|---|---|
-| WS8A audit-companion failure analysis | `tests/kpi/results/ws8a/audit-companion-smoke.json` | **failed** parse: `missing field chain_hash` in fixture `tests/kpi/fixtures/ws8a/audit-events-sample.json` | Update fixture events to include required `chain_hash`, then re-run `run-ws8a-gate.ps1`, `run-ws8-gate.ps1`, and R3 autonomous/agent-authoring release gates |
+| WS8A audit-companion validation | `tests/kpi/results/ws8a/audit-companion-smoke.json` | **passed** (`validation_ok=true`; chain_hash fixture issue resolved) | Keep fixture schema aligned with `AuditEvent` contract and re-run WS8/WS8A gates after audit schema changes |
 
 ---
 
@@ -1770,8 +1770,8 @@ Release Gate Impact: <none|medium|high>
 
 | Item | Artifact | Result | Next Step |
 |---|---|---|---|
-| WS8 gate rerun | `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` | **failed** (`ws8a-audit-companion`) | Fix failing `ws8a-audit-companion` pack and re-run WS8 gate + R3 autonomous release gate |
-| WS8A gate rerun | `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` | **failed** (`ws8a-audit-companion`) | Fix failing `ws8a-audit-companion` pack and re-run WS8A gate + R3 agent-authoring release gate |
+| WS8 gate rerun | `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` | **passed** (all packs, including `ws8a-audit-companion`) | Keep WS8 gate evidence fresh after autonomous or audit-companion changes |
+| WS8A gate rerun | `tests/kpi/results/ws8a/agent-run-ws8a-gate-summary.json` | **passed** (all packs, including `ws8a-audit-companion`) | Keep WS8A gate evidence fresh after audit fixture or companion changes |
 
 ---
 
@@ -1780,7 +1780,7 @@ Release Gate Impact: <none|medium|high>
 
 | Item | Artifact | Result | Next Step |
 |---|---|---|---|
-| WS8 gate rerun | `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` | **failed** (`ws8a-audit-companion`) | Fix failing `ws8a-audit-companion` pack and re-run WS8 gate + R3 autonomous release gate to restore ready-for-validation posture |
+| WS8 gate rerun | `tests/kpi/results/ws8/agent-run-ws8-gate-summary.json` | **passed** (all packs, including `ws8a-audit-companion`) | Re-run R3 autonomous release gate only when new WS8/WS8A changes land to maintain fresh linkage evidence |
 
 ---
 
