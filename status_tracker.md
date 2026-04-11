@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-10 (session 138)
+**Last updated:** 2026-04-11 (session 139)
 
 ---
 
@@ -127,7 +127,7 @@
 
 | Gate | Scope | Status Source | CI Summary Artifact | CI Badge Artifact |
 |---|---|---|---|---|
-| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss), live validated 2026-04-10 across all 13 failover + chaos packs (`status:"passed"`, 95475ms, RTO/RPO 100/100) | `tests/kpi/results/ws6/ws6-gate-summary.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
+| WS6 Failover Resilience Gate | Epic 6 + REQ-17 (Distributed HA/FT, failover, zero data loss), live validated 2026-04-10 across all 16 failover + chaos packs (`status:"passed"`, 132807ms, RTO/RPO 100/100) | `tests/kpi/results/ws6/ws6-gate-summary.json` | `tests/kpi/results/gates/ci-ws6-release-readiness.json` | `tests/kpi/results/gates/ci-ws6-failover-stability-badge.json` |
 
 ---
 
@@ -421,7 +421,7 @@ A tracker row moves to **Done** only when:
 | PR-004 | Done | 100% | improving | Created `tests/kpi` scaffold with KPI targets, scenario definitions, and executable runner scripts | — | Closed |
 | PR-005 | Done | 100% | improving | Created workspace `Cargo.toml` and module skeletons under `crates/`, `services/`, `drivers/`, `tools/`, plus UI placeholder | — | Closed |
 | PR-006 | Done | 100% | improving | Published owner assignment matrix and workstream execution order | — | Closed |
-| PR-007 | Deferred | 88% | stable | Added deferred phase-3 flow: `run-cloud-smoke.ps1 -AllowMissingEnv` produces `cloud-readiness-report.json` + `pending_config` rollup; generated gate report in `tests/kpi/results/20260304-pr007/reports-real` with explicit missing variable checklist per cloud | External dependency: cloud credentials, cloud endpoints, and token handoff are still pending | Resume once cloud handoff arrives, then populate env vars and execute the true remote smoke/gate run |
+| PR-007 | Deferred | 60% | stable | Added deferred phase-3 flow: `run-cloud-smoke.ps1 -AllowMissingEnv` produces `cloud-readiness-report.json` + `pending_config` rollup; generated gate report in `tests/kpi/results/20260304-pr007/reports-real` with explicit missing variable checklist per cloud | External dependency: cloud credentials, cloud endpoints, and token handoff are still pending | Resume once cloud handoff arrives, then populate env vars and execute the true remote smoke/gate run |
 
 ### 9.2 Architecture Hardening Weekly Status (H-01..H-10)
 

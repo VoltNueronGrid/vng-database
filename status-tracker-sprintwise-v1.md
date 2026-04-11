@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-10 (session 138)
+**Last updated:** 2026-04-11 (session 139)
 
 ---
 
@@ -27,7 +27,7 @@
 
 | Sprint | Focus | Time Frame | Overall Status |
 |---|---|---|---|
-| Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 88%) |
+| Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 deferred; pending cloud credential handoff) |
 | Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0+WS1+WS2 base+closure gates all refreshed 2026-04-10) |
 | Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | Ready for Validation | 🟡 Ready for Validation (WS3 + closure + release gates all green 2026-04-10; WS2A+WS1A all green) |
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | Ready for Validation | 🟡 Ready for Validation (WS4 + WS22 evidence current 2026-04-10) |
@@ -83,7 +83,7 @@
 ## Sprint 0 — Foundation & Prerequisites
 
 **Goal:** Lock naming, scaffolding, scope, CI, and KPI harness.
-**Status:** ✅ Done (PR-007 at 88%)
+**Status:** ✅ Done (PR-007 deferred pending cloud credential handoff)
 
 ### Prerequisite Gate
 
@@ -95,7 +95,7 @@
 | PR-004 | Acceptance harness skeleton aligned to KPI table | QA/Performance | ✅ Done | 100% | KPI harness scaffold created under `tests/kpi` with scenarios, targets, and runner entry points |
 | PR-005 | Repo skeleton for modules/crates from architecture | Platform Engineering | ✅ Done | 100% | Rust workspace and core module skeletons created (`crates/`, `services/`, `drivers/`, `tools/`, UI placeholder) |
 | PR-006 | Define immediate start order and ownership assignment | Program Governance | ✅ Done | 100% | Owner assignment matrix and execution order published in tracker sections |
-| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | 🔵 In Progress | 88% | Phase 1+2 complete; phase 3 now supports deferred execution (`-AllowMissingEnv`) with readiness tracking; env-driven real-cloud profiles and gate report tooling in place pending endpoint/auth handoff |
+| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | 🔴 Blocked | 60% | Phase 1+2 complete; phase 3 now supports deferred execution (`-AllowMissingEnv`) with readiness tracking; env-driven real-cloud profiles and gate report tooling remain pending cloud endpoint/auth credential handoff (`overall_status: pending_config`) |
 
 ### Sprint 0 Deliverables
 - [x] Naming and folder conventions locked
@@ -286,7 +286,7 @@
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
 |---|---|---|---|---|---|---|
-| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | ✅ Validated | WS2, WS3 | Failover leader-state scaffold + authenticated failover simulation now emits runtime handoff-report evidence (replay batch size, applied count, gap detection) from explicit multi-node replication transport events consumed by failover/DR/SRE runtime paths instead of seeded scaffold data + deep hardening packs (multi-node handoff matrix, replication-lag failure/reconcile, RTO/RPO threshold score, chaos node-loss/rejoin, flap-resistance, reconcile latency envelopes); post-gate exports for chaos fault-injection matrix, gate trend comparator, failover stability badge, release summary; closure gate `run-ws6-closure-gate.ps1` -> `tests/kpi/results/ws6/ws6-closure-gate-summary.json`; R2 release gate `run-release-r2-failover-gate.ps1` -> `tests/kpi/results/gates/release-r2-failover-readiness.json`; live gate `tests/kpi/results/ws6/ws6-gate-summary.json` **passed 2026-04-09 18:26-18:27 UTC, 13/13 packs, RTO/RPO 100/100**; workflow wiring in `.github/workflows/ci.yml` |
+| WS6 | Epic 6 | Distributed HA/FT/autoscaling/anti-SPOF | Distributed Systems Team | ✅ Validated | WS2, WS3 | Failover leader-state scaffold + authenticated failover simulation now emits runtime handoff-report evidence (replay batch size, applied count, gap detection) from explicit multi-node replication transport events consumed by failover/DR/SRE runtime paths instead of seeded scaffold data + deep hardening packs (multi-node handoff matrix, replication-lag failure/reconcile, RTO/RPO threshold score, chaos node-loss/rejoin, flap-resistance, reconcile latency envelopes); post-gate exports for chaos fault-injection matrix, gate trend comparator, failover stability badge, release summary; closure gate `run-ws6-closure-gate.ps1` -> `tests/kpi/results/ws6/ws6-closure-gate-summary.json`; R2 release gate `run-release-r2-failover-gate.ps1` -> `tests/kpi/results/gates/release-r2-failover-readiness.json`; live gate `tests/kpi/results/ws6/ws6-gate-summary.json` **passed 2026-04-10 10:17-10:20 UTC, 16/16 packs, 132807ms, RTO/RPO 100/100**; workflow wiring in `.github/workflows/ci.yml` |
 
 ### Requirements Covered
 - REQ-04 (HA/FT/elasticity) — WS6 failover + anti-SPOF + chaos hardening packs
@@ -582,7 +582,7 @@
 
 | Scope | DRI Team | Supporting Teams | Sprint | Current State |
 |---|---|---|---|---|
-| PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | Sprint 0 | 🔵 In Progress |
+| PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | Sprint 0 | 🔴 Blocked |
 | WS0 governance and CI | Platform + Program Governance | SRE | Sprint 1 | 🔵 In Progress |
 | WS1 SQL core | SQL Engine Team | Query/Runtime Team | Sprint 1 | 🔵 In Progress |
 | WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Sprint 1–2 | 🔵 In Progress |
