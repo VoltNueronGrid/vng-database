@@ -310,7 +310,7 @@
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R2 | Distributed HTAP baseline + failover/Ops resilience linkage | Sprint 5 | 🟡 Ready for Validation | WS6 closure + release-ops-resilience cluster + release-r2-failover gate (latest refresh 2026-04-10) |
+| R2 | Distributed HTAP baseline + failover/Ops resilience linkage | 🟡 Ready for Validation | WS6 closure + release-ops-resilience cluster + release-r2-failover gate (latest refresh 2026-04-10) |
 
 ### Gate Evidence — WS6 Release + Closure
 

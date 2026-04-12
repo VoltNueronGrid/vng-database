@@ -321,7 +321,7 @@ Actual gate artifact status verified by artifact inspection. WS22 has refreshed 
 
 | Gate / WS | Artifact Status | release_readiness | Root Cause / Notes |
 |---|---|---|---|
-| WS0 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `ws0-gate-summary.json` green; 2 packs: `ws0-ci-health-smoke.json` (8 checks) + `ws0-governance-smoke.json` (7 checks). |
+| WS0 gate | **passed** (2026-04-10 refresh) | n/a (no WS0 release-readiness artifact) | `ws0-gate-summary.json` green; 2 packs: `ws0-ci-health-smoke.json` (8 checks) + `ws0-governance-smoke.json` (7 checks). |
 | WS1 gate | **passed** (2026-04-10 refresh) | **in_progress_with_evidence** | `ws1-gate-summary.json` + `ws1-closure-gate-summary.json` refreshed; 9/9 stable UDF badge, `ws1-release-readiness.json` confirmed `in_progress_with_evidence` (live server; UDF contract smoke + closure gate green, but full WS1 integration parity still pending before promotion). |
 | WS3 gate | **passed** (2026-04-10 refresh + summary fix) | **ready_for_validation** | `ws3-gate-summary.json` + `ws3-closure-gate-summary.json` refreshed 2026-04-10; score=100 and 2/2 stable badge; `ws3-release-readiness.json` now reports `ready_for_validation`. |
 | WS2 gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | All 5 packs passing incl. tenant-store runtime smoke (live server); closure gate + release summary `tests/kpi/results/gates/ws2-release-readiness.json` green. |
