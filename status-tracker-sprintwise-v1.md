@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (WS22 gate/closure/release refresh + auth/failover evidence reality-check sync)
+**Last updated:** 2026-04-12 (WS22 gate/closure/release refresh + auth/failover evidence reality-check sync + Sprint 4/5 section status normalization)
 
 ---
 
@@ -246,7 +246,7 @@
 
 **Goal:** Streaming in/out + event streams, auth/RBAC/TLS/TDE/KMS.
 **Dependencies:** Sprint 3 (WS4 ingest baseline), Sprint 1 (WS0 for security)
-**Status:** ✅ WS5 Validated (2026-04-10)
+**Status:** 🟡 Ready for Validation (WS5 gate validated on 2026-04-10; WS4A ready_for_validation; governance cadence pending)
 
 ### Workstreams
 
@@ -282,7 +282,7 @@
 
 **Goal:** Distributed HA/FT/autoscaling/anti-SPOF, close R2 failover release gate.
 **Dependencies:** Sprint 1 (WS2), Sprint 2 (WS3)
-**Status:** ✅ WS6 Validated (2026-04-10) / R2 Ready for Validation
+**Status:** 🟡 Ready for Validation (WS6 gate validated on 2026-04-10; R2 failover release_readiness ready_for_validation; governance sign-off pending)
 
 Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `tests/kpi/results/ws6/ws6-gate-summary.json`, and `tests/kpi/results/gates/release-r2-failover-readiness.json` as canonical release evidence (2026-04-10 timestamps); treat `VALIDATION_EXECUTION_REPORT_2026-04-09.md` as historical run context.
 
