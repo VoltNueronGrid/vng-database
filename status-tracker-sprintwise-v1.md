@@ -575,7 +575,7 @@
 |---|---|---|---|---|
 | R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + WS22 closure + R1 SQL/UDF/locking gate. Latest R1 release-gate run remains 2026-04-10 (`release_readiness: ready_for_validation`); dependent WS22 artifacts were refreshed 2026-04-12 and remain passed (gate 05:15:44Z, closure 05:15:44Z, release summary 05:15:48Z). **NEXT STEP:** Awaits Release DRI signature + governance sign-off; all technical criteria met. |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (session 136 rerun at `started_at_utc: 2026-04-10T10:17:48Z`, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review; all packs ✅ passed. |
-| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | R3 governance package is backed by passing release gates for UDF runtime (`release-r3-udf-runtime-readiness.json`), plugin (`release-r3-plugin-readiness.json`), autonomous (`release-r3-autonomous-readiness.json`), and agent authoring (`release-r3-agent-authoring-readiness.json`), with WS3 and DX/API release summaries also green. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
+| R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | R3 governance package is backed by passing release gates for UDF runtime (`release-r3-udf-runtime-readiness.json`), plugin (`release-r3-plugin-readiness.json`), autonomous (`release-r3-autonomous-readiness.json`), and agent authoring (`release-r3-agent-authoring-readiness.json`), with WS3 and DX/API release summaries also green. Current R3 bundle evidence still carries WS8 runtime pack status `not_included` in autonomous release highlights. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | 🔴 Blocked | `release-r4-saas-maturity-readiness.json` now exists and reports `status: passed`, `release_readiness: blocked`. Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke are green, but H-09 / H-10 release summaries remain `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off are still required. |
 
 ---
@@ -587,7 +587,7 @@
 | PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | Sprint 0 | 🟠 Deferred |
 | WS0 governance and CI | Platform + Program Governance | SRE | Sprint 1 | 🔵 In Progress |
 | WS1 SQL core | SQL Engine Team | Query/Runtime Team | Sprint 1 | 🔵 In Progress |
-| WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Sprint 1–2 | 🔵 In Progress |
+| WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Sprint 1–2 | 🟡 Ready for Validation |
 | WS1A legacy aggregation parity | Compute + Migration Team | SQL Engine Team | Sprint 2 | 🟡 Ready for Validation |
 | WS3 query routing and execution | Query/Runtime Team | Storage Team | Sprint 2 | 🟡 Ready for Validation |
 | WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Sprint 3–4 | 🟡 Ready for Validation |
