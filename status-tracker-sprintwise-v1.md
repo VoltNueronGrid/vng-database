@@ -18,6 +18,7 @@
 | ✅ Done | Merged + validated + evidence attached |
 | 🟡 Ready for Validation | Implemented, pending verification |
 | 🔵 In Progress | Active implementation |
+| 🟠 Deferred | Intentionally paused pending external dependency/handoff |
 | ⬜ Not Started | Not yet started |
 | 🔴 Blocked | Waiting dependency/decision |
 
@@ -95,7 +96,7 @@
 | PR-004 | Acceptance harness skeleton aligned to KPI table | QA/Performance | ✅ Done | 100% | KPI harness scaffold created under `tests/kpi` with scenarios, targets, and runner entry points |
 | PR-005 | Repo skeleton for modules/crates from architecture | Platform Engineering | ✅ Done | 100% | Rust workspace and core module skeletons created (`crates/`, `services/`, `drivers/`, `tools/`, UI placeholder) |
 | PR-006 | Define immediate start order and ownership assignment | Program Governance | ✅ Done | 100% | Owner assignment matrix and execution order published in tracker sections |
-| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | 🔴 Blocked | 60% | Phase 1+2 complete; phase 3 now supports deferred execution (`-AllowMissingEnv`) with readiness tracking; env-driven real-cloud profiles and gate report tooling remain pending cloud endpoint/auth credential handoff (`overall_status: pending_config`) |
+| PR-007 | Validate single-node and multi-node local/cloud smoke pathways | Platform/SRE + QA | 🟠 Deferred | 60% | Phase 1+2 complete; phase 3 now supports deferred execution (`-AllowMissingEnv`) with readiness tracking; env-driven real-cloud profiles and gate report tooling remain pending cloud endpoint/auth credential handoff (`overall_status: pending_config`) |
 
 ### Sprint 0 Deliverables
 - [x] Naming and folder conventions locked
@@ -583,7 +584,7 @@
 
 | Scope | DRI Team | Supporting Teams | Sprint | Current State |
 |---|---|---|---|---|
-| PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | Sprint 0 | 🔴 Blocked |
+| PR-007 closeout and KPI gate | Platform/SRE + QA | Runtime Team, Security | Sprint 0 | 🟠 Deferred |
 | WS0 governance and CI | Platform + Program Governance | SRE | Sprint 1 | 🔵 In Progress |
 | WS1 SQL core | SQL Engine Team | Query/Runtime Team | Sprint 1 | 🔵 In Progress |
 | WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | Sprint 1–2 | 🔵 In Progress |
