@@ -32,8 +32,8 @@
 | Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0+WS1+WS2 base+closure gates all refreshed 2026-04-10) |
 | Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | Ready for Validation | 🟡 Ready for Validation (WS3 + closure + release gates all green 2026-04-10; WS2A+WS1A all green) |
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | Ready for Validation | 🟡 Ready for Validation (WS4 evidence 2026-04-10; WS22 evidence refreshed 2026-04-12) |
-| Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Ready for Validation (WS5 validated on 2026-04-10; WS4A ready_for_validation; governance cadence pending) |
-| Sprint 5 | Distributed HA/FT + Release R2 Gate (WS6) | In Flight | 🟡 Ready for Validation (WS6 validated on 2026-04-10; R2 failover release_readiness ready_for_validation; governance sign-off pending) |
+| Sprint 4 | Streaming + Security (WS4A, WS5) | Ready for Validation | 🟡 Ready for Validation (WS5 validated on 2026-04-10; WS4A ready_for_validation; governance cadence pending) |
+| Sprint 5 | Distributed HA/FT + Release R2 Gate (WS6) | Ready for Validation | 🟡 Ready for Validation (WS6 validated on 2026-04-10; R2 failover release_readiness ready_for_validation; governance sign-off pending) |
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster rerun green in session 131 on 2026-04-10) |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience rerun green in session 136 on 2026-04-10, `started_at_utc: 2026-04-10T10:20:14Z`; R2 failover rerun green, `started_at_utc: 2026-04-10T10:17:48Z`) |
