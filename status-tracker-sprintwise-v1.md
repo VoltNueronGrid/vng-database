@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (WS22 gate/closure/release refresh + auth/failover evidence reality-check sync + Sprint 4/5 section status normalization)
+**Last updated:** 2026-04-12 (WS22 gate/closure/release refresh + auth/failover evidence reality-check sync + sprint/hardening consistency refinements)
 
 ---
 
@@ -482,9 +482,9 @@ Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `te
 
 | ID | Hardening Item | Owner | Priority | Status | Completion | This Week Completed | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|---|
-| H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 98% | H-01 evidence gate added (2026-04-10 session 128): `tests/kpi/results/h01/h01-gate-summary.json` (3/3 packs passed) + `tests/kpi/results/gates/h01-release-readiness.json` (`in_progress_with_evidence`) using operator RBAC, autonomy policy, and emergency-stop evidence packs | Full cross-channel resource-scoped RBAC + blast-radius certification pending | Promote H-01 release_readiness after cross-channel certification and persistence hardening closes |
+| H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 65% | H-01 evidence gate added (2026-04-10 session 128): `tests/kpi/results/h01/h01-gate-summary.json` (3/3 packs passed) + `tests/kpi/results/gates/h01-release-readiness.json` (`in_progress_with_evidence`) using operator RBAC, autonomy policy, and emergency-stop evidence packs | Full cross-channel resource-scoped RBAC + blast-radius certification pending | Promote H-01 release_readiness after cross-channel certification and persistence hardening closes |
 | H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | 🟡 Ready for Validation | 100% | Gate orchestrator + release-readiness artifact: 4/4 packs passed (2026-04-10, session 126): restart-replay-matrix (7 checks), multi-node-handoff-matrix (3 checks), sync-fault-injection, reorder-duplicate-faults; `tests/kpi/results/h02/h02-gate-summary.json`; `tests/kpi/results/gates/h02-release-readiness.json` (`ready_for_validation`) | None | Maintain regression checks in R2 release cadence |
-| H-03 | Control-plane resilience hardening | Distributed Systems | P0 | 🔵 In Progress | 35% | H-03 gate evidence added (2026-04-10, session 127): `tests/kpi/results/h03/h03-gate-summary.json` (3/3 packs passed) + `tests/kpi/results/gates/h03-release-readiness.json` (`in_progress_with_evidence`) with control-plane chaos, runtime linkage, and degraded failover evidence packs | Full inter-process transport-backed clustered runtime certification pending | Promote H-03 release_readiness from `in_progress_with_evidence` after inter-process transport cert completes |
+| H-03 | Control-plane resilience hardening | Distributed Systems | P0 | 🔵 In Progress | 65% | H-03 gate evidence added (2026-04-10, session 127): `tests/kpi/results/h03/h03-gate-summary.json` (3/3 packs passed) + `tests/kpi/results/gates/h03-release-readiness.json` (`in_progress_with_evidence`) with control-plane chaos, runtime linkage, and degraded failover evidence packs | Full inter-process transport-backed clustered runtime certification pending | Promote H-03 release_readiness from `in_progress_with_evidence` after inter-process transport cert completes |
 | H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | 🟡 Ready for Validation | 100% | Gate orchestrator + release-readiness artifact: 2/2 packs passed (2026-04-10): service-integrated-outbox-runtime + outbox-replay-evidence; `tests/kpi/results/h04/h04-gate-summary.json`; `tests/kpi/results/gates/h04-release-readiness.json` (`ready_for_validation`) with WAL-backed exactly-once replay evidence | None | Maintain external broker client integration and fan-out semantics in follow-on scope |
 
 ### Sprint 9 Deliverables
@@ -517,9 +517,9 @@ Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `te
 | ID | Hardening Item | Owner | Priority | Status | Completion | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|
 | H-05 | KMS multi-region failover hardening | Security | P1 | 🔵 Deferred | 60% | Awaiting user-supplied Azure Key Vault key IDs and credential handoff | Azure provider-backed drill pending credentials |
-| H-06 | Distributed cache hardening | Query + SRE | P1 | 🟡 Ready for Validation | 70% | None | Multi-node cache synchronization/failover validation |
-| H-07 | Driver/pooling storm hardening | Integrations | P1 | 🟡 Ready for Validation | 85% | None | Multi-node surge/failover harness validation |
-| H-08 | Autonomous plugin supply-chain hardening | Security + AI Platform | P1 | 🟡 Ready for Validation | 92% | None | Production multi-signer workflows + CA-chain rollout |
+| H-06 | Distributed cache hardening | Query + SRE | P1 | 🟡 Ready for Validation | 90% | None | Multi-node cache synchronization/failover validation |
+| H-07 | Driver/pooling storm hardening | Integrations | P1 | 🟡 Ready for Validation | 90% | None | Multi-node surge/failover harness validation |
+| H-08 | Autonomous plugin supply-chain hardening | Security + AI Platform | P1 | 🟡 Ready for Validation | 90% | None | Production multi-signer workflows + CA-chain rollout |
 
 ### Requirements Covered
 - REQ-27 (Native cache engine, Redis-like compat) — 🔵 In Progress: Runtime endpoint `/api/v1/cache/redis/command` now supports core Redis-like commands with 13 passing `ws27_*` tests; next steps are RESP3 wire protocol, persistence, and cluster fan-out
@@ -550,7 +550,7 @@ Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `te
 | ID | Hardening Item | Owner | Priority | Status | Completion | Blocked By | Next Evidence Milestone |
 |---|---|---|---|---|---|---|---|
 | H-09 | IDE extension parity/safety hardening | DX Team | P2 | 🔵 In Progress | 65% | Live runtime parity and permission-boundary negative scenarios still pending | Cross-IDE parity + permission-boundary negative scenarios |
-| H-10 | Long-run maintainability hardening | Chief Architect + Release Eng | P2 | 🔵 In Progress | 70% | ARB ratification pending | ARB sign-off + deprecation registry v1 |
+| H-10 | Long-run maintainability hardening | Chief Architect + Release Eng | P2 | 🔵 In Progress | 65% | ARB ratification pending | ARB sign-off + deprecation registry v1 |
 
 ### Requirements Covered
 - REQ-08 (Local + cloud SaaS operation) — 🔵 In Progress: `run-req08-cloud-saas-smoke.ps1` reran 2026-04-10 and `tests/kpi/results/req08/cloud-saas-smoke.json` remains green; live cloud endpoint smoke still depends on credential handoff
