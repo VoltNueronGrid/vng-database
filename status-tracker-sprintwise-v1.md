@@ -284,6 +284,8 @@
 **Dependencies:** Sprint 1 (WS2), Sprint 2 (WS3)
 **Status:** ✅ WS6 Validated (2026-04-10) / R2 Ready for Validation
 
+Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `tests/kpi/results/ws6/ws6-gate-summary.json`, and `tests/kpi/results/gates/release-r2-failover-readiness.json` as canonical release evidence (2026-04-10 timestamps); treat `VALIDATION_EXECUTION_REPORT_2026-04-09.md` as historical run context.
+
 ### Workstreams
 
 | WS ID | Epic | Scope Summary | Owner | Status | Dependencies | Validation Evidence |
@@ -570,6 +572,8 @@
 ---
 
 ## Full Release Tracker
+
+Canonical audit reference: release and auth/failover chronology assertions are anchored in `status_tracker.md` section 5.22 (Gate Reality Check).
 
 | Release | Scope Snapshot | Sprint Target | Status | Gate Criteria |
 |---|---|---|---|---|
