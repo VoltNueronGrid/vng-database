@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (auth hardening continuation: WAL/chaos fail-closed enforcement + failover simulate negative coverage + full-suite refresh)
+**Last updated:** 2026-04-12 (auth hardening continuation + tracker status/completion sync refresh)
 
 ---
 
@@ -40,6 +40,8 @@
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🟡 Mixed (H-02/H-04 ready_for_validation; H-01/H-03 gates passed but release_readiness remains in_progress_with_evidence) |
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🔵 Mixed (H-05 deferred with evidence refresh 2026-04-10; H-06..H-08 ready_for_validation; R3 release-gate bundle passing) |
 | Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 + R4 aggregate rerun refreshed 2026-04-10; R4 remains blocked by P2 release-readiness + sign-off requirements) |
+
+**Completion posture refresh (2026-04-12):** requirements average **74%** (REQ-01..REQ-31), workstreams average **90%** (WS0..WS15 family), releases average **78%** (R1..R4). R1-R3 remain governance-path ready_for_validation; R4 remains blocked at 40%.
 
 ---
 
@@ -487,7 +489,7 @@ Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `te
 | H-01 | Autonomous action blast-radius controls | AI Platform + Security | P0 | 🔵 In Progress | 65% | H-01 evidence gate added (2026-04-10 session 128): `tests/kpi/results/h01/h01-gate-summary.json` (3/3 packs passed) + `tests/kpi/results/gates/h01-release-readiness.json` (`in_progress_with_evidence`) using operator RBAC, autonomy policy, and emergency-stop evidence packs | Full cross-channel resource-scoped RBAC + blast-radius certification pending | Promote H-01 release_readiness after cross-channel certification and persistence hardening closes |
 | H-02 | HTAP sync correctness under failures | Storage + Distributed Systems | P0 | 🟡 Ready for Validation | 100% | Gate orchestrator + release-readiness artifact: 4/4 packs passed (2026-04-10, session 126): restart-replay-matrix (7 checks), multi-node-handoff-matrix (3 checks), sync-fault-injection, reorder-duplicate-faults; `tests/kpi/results/h02/h02-gate-summary.json`; `tests/kpi/results/gates/h02-release-readiness.json` (`ready_for_validation`) | None | Maintain regression checks in R2 release cadence |
 | H-03 | Control-plane resilience hardening | Distributed Systems | P0 | 🔵 In Progress | 65% | H-03 gate evidence added (2026-04-10, session 127): `tests/kpi/results/h03/h03-gate-summary.json` (3/3 packs passed) + `tests/kpi/results/gates/h03-release-readiness.json` (`in_progress_with_evidence`) with control-plane chaos, runtime linkage, and degraded failover evidence packs | Full inter-process transport-backed clustered runtime certification pending | Promote H-03 release_readiness from `in_progress_with_evidence` after inter-process transport cert completes |
-| H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | 🟡 Ready for Validation | 100% | Gate orchestrator + release-readiness artifact: 2/2 packs passed (2026-04-10): service-integrated-outbox-runtime + outbox-replay-evidence; `tests/kpi/results/h04/h04-gate-summary.json`; `tests/kpi/results/gates/h04-release-readiness.json` (`ready_for_validation`) with WAL-backed exactly-once replay evidence | None | Maintain external broker client integration and fan-out semantics in follow-on scope |
+| H-04 | Event durability hardening (outbox/replay) | Distributed Systems + SRE | P0 | 🟡 Ready for Validation | 90% | Gate orchestrator + release-readiness artifact: 2/2 packs passed (2026-04-10): service-integrated-outbox-runtime + outbox-replay-evidence; `tests/kpi/results/h04/h04-gate-summary.json`; `tests/kpi/results/gates/h04-release-readiness.json` (`ready_for_validation`) with WAL-backed exactly-once replay evidence | None | Maintain external broker client integration and fan-out semantics in follow-on scope |
 
 ### Sprint 9 Deliverables
 - [x] WS15: Competitive adoption matrix + scored implementation backlog
