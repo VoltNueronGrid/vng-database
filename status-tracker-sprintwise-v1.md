@@ -29,7 +29,7 @@
 | Sprint | Focus | Time Frame | Overall Status |
 |---|---|---|---|
 | Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 deferred; pending cloud credential handoff) |
-| Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0+WS1+WS2 base+closure gates all refreshed 2026-04-10) |
+| Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0 base gate and WS1+WS2 base+closure gates all refreshed 2026-04-10) |
 | Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | Ready for Validation | 🟡 Ready for Validation (WS3 + closure + release gates all green 2026-04-10; WS2A+WS1A all green) |
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | Ready for Validation | 🟡 Ready for Validation (WS4 evidence 2026-04-10; WS22 evidence refreshed 2026-04-12) |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | Ready for Validation | 🟡 Ready for Validation (WS5 validated on 2026-04-10; WS4A ready_for_validation; governance cadence pending) |
@@ -113,7 +113,7 @@
 
 **Goal:** Foundation CI/governance, SQL parser/analyzer/DDL-DML/function registry, durability/storage baseline.
 **Dependencies:** Sprint 0 (PR-001..PR-006 complete)
-**Status:** 🟡 Ready for Validation (WS0/WS1/WS2 base+closure gates remain green in 2026-04-10 refresh cycle)
+**Status:** 🟡 Ready for Validation (WS0 base gate and WS1/WS2 base+closure gates remain green in 2026-04-10 refresh cycle)
 
 ### Workstreams
 
@@ -510,7 +510,7 @@ Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `te
 
 **Goal:** P1 architecture hardening items (H-05..H-08), close R3 release gate.
 **Dependencies:** Sprint 9 (P0 hardening), Sprint 6 (WS7, WS8, WS8A), Sprint 7 (WS9A, WS10)
-**Status:** 🟡 Ready for Validation (R3 release gate bundle refreshed 2026-04-10; H-05 deferred, H-06..H-08 ready for validation)
+**Status:** 🔵 Mixed (R3 release gate bundle refreshed 2026-04-10; H-05 deferred, H-06..H-08 ready_for_validation)
 
 ### Architecture Hardening Backlog — P1 (Release Target: R3)
 
@@ -521,7 +521,7 @@ Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `te
 | H-07 | Driver/pooling storm hardening | Integrations | P1 | 🟡 Ready for Validation | 85% | None | Multi-node surge/failover harness validation |
 | H-08 | Autonomous plugin supply-chain hardening | Security + AI Platform | P1 | 🟡 Ready for Validation | 92% | None | Production multi-signer workflows + CA-chain rollout |
 
-### Requirements Covered (Not Started — pending in this sprint)
+### Requirements Covered
 - REQ-27 (Native cache engine, Redis-like compat) — 🔵 In Progress: Runtime endpoint `/api/v1/cache/redis/command` now supports core Redis-like commands with 13 passing `ws27_*` tests; next steps are RESP3 wire protocol, persistence, and cluster fan-out
 
 ### Sprint 10 Deliverables
@@ -542,7 +542,7 @@ Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `te
 ## Sprint 11 — P2 Hardening + Ecosystem Polish + Release R4 Gate
 
 **Goal:** P2 architecture hardening, SaaS maturity, ecosystem/multi-cloud hardening, close R4 release gate.
-**Dependencies:** Sprint 10 (P1 hardening complete), all prior sprints
+**Dependencies:** Sprint 10 (P1 hardening in progress; H-05 deferred), all prior sprints
 **Status:** 🔵 In Progress (H-09/H-10 and R4 aggregate evidence reran on 2026-04-10; R4 remains blocked by P2 release-readiness and sign-off requirements)
 
 ### Architecture Hardening Backlog — P2 (Release Target: R4)
