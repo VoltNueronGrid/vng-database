@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-12 (WS22 + WS4 parser + Sprint 5 release-label sync)
+**Last updated:** 2026-04-12 (WS22 gate/closure/release refresh + auth/failover evidence reality-check sync)
 
 ---
 
@@ -127,7 +127,7 @@ Gate JSON artifacts under `tests/kpi/results/` include a **WS22 refresh on 2026-
 
 | Release | Scope Snapshot | Status | Completion % | Gate Criteria |
 |---|---|---|---:|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | 🟡 Ready for Validation (Governance Path) | 90% | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) + WS1 UDF closure (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`, CI mirror `tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json`) + WS22 locking closure (`tests/kpi/results/ws22/ws22-closure-gate-summary.json`, CI mirror `tests/kpi/results/ws22/ci-ws22-closure-gate-summary.json`) + release R1 SQL/UDF/locking gate (`tests/kpi/results/gates/release-r1-sql-udf-readiness.json`, CI mirror `tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json`). **Latest validation run 2026-04-10:** `run-ws1-closure-gate.ps1` + `run-release-r1-sql-udf-gate.ps1` passed end-to-end with live `voltnuerongridd`; all packs ✅ passed, `release_readiness: ready_for_validation`. **NEXT STEP:** Awaits Release DRI signature + governance sign-off; all technical criteria met; CI pipeline merge-ready after approval. |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | 🟡 Ready for Validation (Governance Path) | 90% | PR-002..PR-005 complete + KPI smoke baseline (`tests/kpi/results/gates/r1-gate-check.json`) + WS1 UDF closure (`tests/kpi/results/ws1/ws1-closure-gate-summary.json`, CI mirror `tests/kpi/results/ws1/ci-ws1-closure-gate-summary.json`) + WS22 locking closure (`tests/kpi/results/ws22/ws22-closure-gate-summary.json`, CI mirror `tests/kpi/results/ws22/ci-ws22-closure-gate-summary.json`) + release R1 SQL/UDF/locking gate (`tests/kpi/results/gates/release-r1-sql-udf-readiness.json`, CI mirror `tests/kpi/results/gates/ci-release-r1-sql-udf-readiness.json`). **Latest R1 release-gate run remains 2026-04-10:** `run-ws1-closure-gate.ps1` + `run-release-r1-sql-udf-gate.ps1` passed end-to-end with live `voltnuerongridd`; all packs ✅ passed, `release_readiness: ready_for_validation`. Dependent WS22 artifacts were refreshed 2026-04-12 and remain passed (`ws22-gate-summary`, `ws22-closure-gate-summary`, `ws22-release-readiness`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off; all technical criteria met; CI pipeline merge-ready after approval. |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | 🟡 Ready for Validation (Governance Path) | 90% | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness summary (`tests/kpi/results/gates/release-ops-resilience-readiness.json`, CI mirror `ci-release-ops-resilience-readiness.json` on passed local runs) + WS6 release readiness summary (`tests/kpi/results/gates/ws6-release-readiness.json`) + release R2 failover gate (`tests/kpi/results/gates/release-r2-failover-readiness.json`, mirror `ci-release-r2-failover-readiness.json`) — refreshed in session 136 (`started_at_utc: 2026-04-10T10:17:48Z`, `status: passed`, `release_readiness: ready_for_validation`). **Hardening Evidence (2026-04-10):** H-01 blast-radius controls (`tests/kpi/results/gates/h01-release-readiness.json`, `in_progress_with_evidence`), H-02 HTAP sync correctness (`tests/kpi/results/gates/h02-release-readiness.json`, `ready_for_validation`), H-03 control-plane resilience (`tests/kpi/results/gates/h03-release-readiness.json`, `in_progress_with_evidence`), H-04 event durability (`tests/kpi/results/gates/h04-release-readiness.json`, `ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + ops final review; RTO/RPO 100/100 validated; all packs ✅ passed. |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | 🟡 Ready for Validation (Governance Path) | 90% | R3 governance package is backed by passing release gates for UDF runtime (`tests/kpi/results/gates/release-r3-udf-runtime-readiness.json`), plugin (`tests/kpi/results/gates/release-r3-plugin-readiness.json`), autonomous (`tests/kpi/results/gates/release-r3-autonomous-readiness.json`), and agent authoring (`tests/kpi/results/gates/release-r3-agent-authoring-readiness.json`), with WS3 performance readiness (`tests/kpi/results/gates/ws3-release-readiness.json`) and DX/API cluster readiness (`tests/kpi/results/gates/release-dx-api-readiness.json`) also green. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Blocked | 40% | Baseline release gate now exists at `tests/kpi/results/gates/release-r4-saas-maturity-readiness.json` (2026-04-10) and reports `status: passed`, `release_readiness: blocked`. Current evidence is green for Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke, but H-09 / H-10 release summaries still report `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off also remain outstanding. |
@@ -967,8 +967,8 @@ A tracker row moves to **Done** only when:
 | WS2/WS2A storage + HTAP row path | Storage Team | Distributed Systems Team | In Progress |
 | WS3 query routing and execution | Query/Runtime Team | Storage Team | In Progress |
 | WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Ready for Validation |
-| WS5 security and crypto | Security Team | Platform Team | Ready for Validation |
-| WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Ready for Validation |
+| WS5 security and crypto | Security Team | Platform Team | Validated |
+| WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Validated |
 | WS9 Studio UI API contract | UX Team | Runtime Team, Platform Team | Ready for Validation |
 | WS9A IDE extension contract | DX Team | Integrations Team, UX Team | Ready for Validation |
 | WS10 driver and pooling contract | Integrations Team | Platform Team, Security Team | Ready for Validation |
@@ -979,7 +979,7 @@ A tracker row moves to **Done** only when:
 | WS12 reliability and DR automation | SRE Team | Distributed Systems Team | Ready for Validation |
 | WS13 multi-cloud deployment profiles | Platform/SRE | SRE Team, Security Team | Ready for Validation |
 | WS14 config contracts + tuning playbooks | Platform + SRE + Security | Integrations Team, Security Team | Ready for Validation |
-| Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | In Progress |
+| Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | Ready for Validation |
 | WS7 plugin framework + connector pack | Extensibility Team | Ingestion Team, Security Team | Ready for Validation |
 | WS15 competitive feature adoption track | Architecture + Query Team | AI Platform Team, Integrations Team | Ready for Validation |
 

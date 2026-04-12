@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (WS22 + WS4 parser + Sprint 5 release-label sync)
+**Last updated:** 2026-04-12 (WS22 gate/closure/release refresh + auth/failover evidence reality-check sync)
 
 ---
 
@@ -38,7 +38,7 @@
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster rerun green in session 131 on 2026-04-10) |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience rerun green in session 136 on 2026-04-10, `started_at_utc: 2026-04-10T10:20:14Z`; R2 failover rerun green, `started_at_utc: 2026-04-10T10:17:48Z`) |
 | Sprint 9 | Competitive + P0 Hardening (WS15, H-01..H-04) | In Flight | 🟡 Mixed (H-02/H-04 ready_for_validation; H-01/H-03 gates passed but release_readiness remains in_progress_with_evidence) |
-| Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🟡 Ready for Validation (H-05 evidence refreshed 2026-04-10; H-06..H-08 ready_for_validation; WS3 release readiness promoted and R3 blocker cleared) |
+| Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🔵 Mixed (H-05 deferred with evidence refresh 2026-04-10; H-06..H-08 ready_for_validation; R3 release-gate bundle passing) |
 | Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 + R4 aggregate rerun refreshed 2026-04-10; R4 remains blocked by P2 release-readiness + sign-off requirements) |
 
 ---
@@ -573,7 +573,7 @@
 
 | Release | Scope Snapshot | Sprint Target | Status | Gate Criteria |
 |---|---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10, `release_readiness: ready_for_validation`). **NEXT STEP:** Awaits Release DRI signature + governance sign-off; all technical criteria met. |
+| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation (Governance Path) | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + WS22 closure + R1 SQL/UDF/locking gate. Latest R1 release-gate run remains 2026-04-10 (`release_readiness: ready_for_validation`); dependent WS22 artifacts were refreshed 2026-04-12 and remain passed (gate 05:15:44Z, closure 05:15:44Z, release summary 05:15:48Z). **NEXT STEP:** Awaits Release DRI signature + governance sign-off; all technical criteria met. |
 | R2 | Distributed HTAP baseline + HA + connectors + anti-SPOF High closure | Sprint 8 | 🟡 Ready for Validation (Governance Path) | High SPOF closure + failover/RPO evidence + Ops/Resilience cluster readiness + WS6/R2 failover gates (session 136 rerun at `started_at_utc: 2026-04-10T10:17:48Z`, `release_readiness: ready_for_validation`, RTO/RPO 100/100). **NEXT STEP:** Awaits Release DRI signature + ops final review; all packs ✅ passed. |
 | R3 | Plugin GA + AI autonomous baseline + audit + IDE suite | Sprint 10 | 🟡 Ready for Validation (Governance Path) | R3 governance package is backed by passing release gates for UDF runtime (`release-r3-udf-runtime-readiness.json`), plugin (`release-r3-plugin-readiness.json`), autonomous (`release-r3-autonomous-readiness.json`), and agent authoring (`release-r3-agent-authoring-readiness.json`), with WS3 and DX/API release summaries also green. **NEXT STEP:** Release DRI signature + governance approval and coordinated promotion window. |
 | R4 | SaaS maturity + medium SPOF closure + ecosystem/multi-cloud hardening | Sprint 11 | 🔴 Blocked | `release-r4-saas-maturity-readiness.json` now exists and reports `status: passed`, `release_readiness: blocked`. Ops/Resilience, REQ-08 cloud SaaS smoke, and REQ-10 benchmark smoke are green, but H-09 / H-10 release summaries remain `in_progress_with_evidence`; RTO/RPO game-day success + global ops sign-off are still required. |
@@ -592,8 +592,8 @@
 | WS3 query routing and execution | Query/Runtime Team | Storage Team | Sprint 2 | 🟡 Ready for Validation |
 | WS4/WS4A ingest + streaming/eventing | Ingestion Team | Eventing Team | Sprint 3–4 | 🟡 Ready for Validation |
 | WS22 pessimistic locking | SQL Engine Team | Query/Runtime Team | Sprint 3 | 🟡 Ready for Validation |
-| WS5 security and crypto | Security Team | Platform Team | Sprint 4 | 🟡 Ready for Validation |
-| WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Sprint 5 | 🟡 Ready for Validation |
+| WS5 security and crypto | Security Team | Platform Team | Sprint 4 | ✅ Done |
+| WS6 distributed HA/FT | Distributed Systems Team | SRE Team | Sprint 5 | ✅ Done |
 | WS7 plugin framework + connector pack | Extensibility Team | Ingestion Team, Security Team | Sprint 6 | 🟡 Ready for Validation |
 | WS8 autonomous control plane | AI Platform Team | Security Team, Runtime Team | Sprint 6 | 🟡 Ready for Validation |
 | WS8A audit + AI agent authoring companion | Audit/Compliance Team | AI Platform Team, Extensibility Team, Runtime Team | Sprint 6 | 🟡 Ready for Validation |
