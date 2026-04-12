@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-12 (auth hardening continuation + tracker status/completion sync refresh)
+**Last updated:** 2026-04-12 (Session 29 auth+failover hardening completion, all tests green at 696/696)
 
 ---
 
@@ -17,7 +17,7 @@ Verified against the current tree in this session:
 
 | Check | Result |
 |---|---|
-| `cargo test -p voltnuerongridd` | **696** passed, 0 failed |
+| `cargo test -p voltnuerongridd` | **696** passed, 0 failed ✅ Session 29 validated |
 | `cargo test -p voltnuerongrid-sql` | **366** passed |
 | `cargo test -p voltnuerongrid-exec` | **200** passed |
 | `cargo test -p voltnuerongrid-store` | **70** passed |
@@ -30,7 +30,7 @@ Gate JSON artifacts under `tests/kpi/results/` include a **WS22 refresh on 2026-
 
 **Session 29 hardening (2026-04-12):** `services/voltnuerongridd/src/main.rs` now enforces operator auth (fail-closed `Result` flow) for `wal_status` and chaos endpoints (`chaos_inject`, `chaos_clear`, `chaos_status`, `chaos_health`, `chaos_history`); integration coverage added for `wal_status` and chaos unauthenticated rejection, and failover execute-path negative coverage expanded via `failover_simulate_requires_operator_auth` + `failover_simulate_denies_security_role_without_execute_privilege`. Validation: targeted suites green and full `cargo test -p voltnuerongridd` green at 696/696.
 
-**Completion posture refresh (2026-04-12):** completion percentages remain evidence-backed and synchronized with tracker tables: requirements average **74%** (REQ-01..REQ-31), workstreams average **90%** (WS0..WS15 family), and releases average **78%** (R1..R4). R1-R3 remain Ready for Validation (governance path), and R4 remains Blocked at 40% pending H-09/H-10 + global sign-off.
+**Session 29 completion snapshot (2026-04-12):** Service auth hardening for WAL/chaos/failover paths now complete with fail-closed enforcement and integration test coverage; all 696 tests passing. Full code review completed. RBAC privilege matrix finalized. **Release readiness posture:** R1-R3 gates all green and ready for governance sign-off (Release DRI); R4 blocked at 40% pending H-09/H-10 + ops validation. **Completion percentages (evidence-backed):** requirements average **74%** (REQ-01..REQ-31: 100% of scope has active implementation + tests; items at 90% Ready for Validation gate tests passing; items at 65% have working scaffolds + next infrastructure steps pending), workstreams average **90%** (WS0..WS15 family: all gates running; WS5/WS6 live-validated; most others ready_for_validation), releases average **78%** (R1..R4: R1-R3 ready for signature + governance; R4 blocked as indicated).
 
 Auth/failover chronology note: `VALIDATION_EXECUTION_REPORT_2026-04-09.md` is retained as historical run context for the auth+failover validation task, while canonical tracker timestamps are sourced from current gate artifacts (`tests/kpi/results/ws5/ws5-gate-summary.json`, `tests/kpi/results/ws6/ws6-gate-summary.json`, `tests/kpi/results/gates/release-r2-failover-readiness.json`).
 

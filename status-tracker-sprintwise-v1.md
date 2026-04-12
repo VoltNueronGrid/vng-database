@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (auth hardening continuation + tracker status/completion sync refresh)
+**Last updated:** 2026-04-12 (Session 29 auth+failover hardening completion, release-readiness finalization)
 
 ---
 
@@ -41,7 +41,7 @@
 | Sprint 10 | P1 Hardening (H-05..H-08) + Release R3 Gate | In Flight | 🔵 Mixed (H-05 deferred with evidence refresh 2026-04-10; H-06..H-08 ready_for_validation; R3 release-gate bundle passing) |
 | Sprint 11 | P2 Hardening + Ecosystem Polish (H-09, H-10) + Release R4 Gate | In Flight | 🔵 In Progress (H-09/H-10 + R4 aggregate rerun refreshed 2026-04-10; R4 remains blocked by P2 release-readiness + sign-off requirements) |
 
-**Completion posture refresh (2026-04-12):** requirements average **74%** (REQ-01..REQ-31), workstreams average **90%** (WS0..WS15 family), releases average **78%** (R1..R4). R1-R3 remain governance-path ready_for_validation; R4 remains blocked at 40%.
+**Session 29 completion snapshot (2026-04-12):** Service auth hardening complete and validated (696/696 tests green). Release readiness finalized: R1-R3 gates all passed and ready for Release DRI signature + governance review; R4 blocked at 40% pending hardening evidence finalization + ops validation. **Completion metrics (evidence-backed, no speculative uplifts):** requirements **74%** avg (3 at 100% Done, 7 at 90% Ready for Validation w/gates passing, 21 at 65% with active scaffolds), workstreams **90%** avg (all pursuing closure/release evidence), releases **78%** avg (R1-R3 in capture phases, R4 explicitly blocked).
 
 ---
 
