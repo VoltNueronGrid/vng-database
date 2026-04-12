@@ -1733,6 +1733,7 @@ Release Gate Impact: <none|medium|high>
 | Item | Artifact | Result | Next Step |
 |---|---|---|---|
 | WS6 gate canonical baseline | `tests/kpi/results/ws6/ws6-gate-summary.json` | **passed** (`started_at_utc: 2026-04-10T10:17:50.3230043Z`, `duration_ms: 132807`, all packs passed) | Re-run WS6 gate only after new failover-runtime changes |
+| WS6 release-readiness canonical baseline | `tests/kpi/results/gates/ws6-release-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` (`generated_at_utc: 2026-04-10T10:20:12.2526485Z`) | Keep as canonical WS6 release posture unless a newer rerun is executed |
 | Ops/Resilience cluster release gate | `tests/kpi/results/gates/release-ops-resilience-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` (`started_at_utc: 2026-04-10T10:20:14.5158929Z`) | Refresh cluster gate after WS12/WS13/WS14 feature slices |
 | R2 failover release gate | `tests/kpi/results/gates/release-r2-failover-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` (`started_at_utc: 2026-04-10T10:17:48.8825283Z`) | Keep as canonical R2 failover evidence unless a newer rerun is executed |
 
