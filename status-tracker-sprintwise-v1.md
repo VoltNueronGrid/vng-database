@@ -1,4 +1,4 @@
-﻿# VoltNueronGrid DB — Sprint-Wise Status Tracker v1
+# VoltNueronGrid DB — Sprint-Wise Status Tracker v1
 
 **Source of truth:**
 - `reference/voltnuerongrid-db-design.md`
@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (WS22 artifact refresh; auth+failover baselines unchanged)
+**Last updated:** 2026-04-12 (WS22 refresh + closure-date consistency sync)
 
 ---
 
