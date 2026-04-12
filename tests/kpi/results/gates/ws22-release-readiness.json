@@ -9,7 +9,7 @@
     "WS22",
     "REQ-22"
   ],
-  "generated_at_utc": "2026-04-10T05:36:23.7062468Z",
+  "generated_at_utc": "2026-04-12T05:15:48.3747534Z",
   "sources": {
     "summary": "tests/kpi/results/ws22/ws22-gate-summary.json",
     "smoke": "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json",
@@ -25,7 +25,7 @@
   "highlights": {
     "pack_count": 2,
     "trend_state": "stable",
-    "badge_message": "2/2 stable",
+    "badge_message": "2/2 stable dl=3 cap=1",
     "contract_checks": {
       "acquire_route_present": true,
       "release_route_present": true,
@@ -43,7 +43,15 @@
       "scan_cap_timeout_reason_present": true,
       "scan_cap_unit_test_present": true,
       "wait_edge_release_cleanup_unit_test_present": true,
-      "wait_edge_expiry_cleanup_unit_test_present": true
+      "wait_edge_expiry_cleanup_unit_test_present": true,
+      "gate_metrics_emit_test_present": true,
+      "gate_metrics_json_line_present": true
+    },
+    "ws22_lock_contention_metrics": {
+      "deadlock_detections": 3,
+      "scan_cap_timeouts": 1,
+      "source": "zzz_ws22_gate_lock_contention_metrics_emit",
+      "note": "Cumulative counts from acquire_pessimistic_lock during ws22_ suite (--test-threads=1)."
     }
   }
 }

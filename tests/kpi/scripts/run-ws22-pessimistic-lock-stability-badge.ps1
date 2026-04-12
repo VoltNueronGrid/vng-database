@@ -25,6 +25,11 @@ $passed = @($summary.packs | Where-Object { $_.status -eq "passed" }).Count
 $trendState = [string]$trend.trend_state
 $color = if ([string]$summary.status -eq "passed" -and (@("stable","improved","baseline_established") -contains $trendState)) { "green" } elseif ($trendState -eq "regressed") { "red" } else { "yellow" }
 $message = "$passed/$total $trendState"
+if ($null -ne $summary.ws22_lock_contention_metrics) {
+  $dl = [int64]$summary.ws22_lock_contention_metrics.deadlock_detections
+  $cap = [int64]$summary.ws22_lock_contention_metrics.scan_cap_timeouts
+  $message = "$message dl=$dl cap=$cap"
+}
 
 $badge = [ordered]@{
   label = "ws22-lock-stability"

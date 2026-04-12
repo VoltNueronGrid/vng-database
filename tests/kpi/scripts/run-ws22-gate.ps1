@@ -63,6 +63,19 @@ foreach ($pack in $packs) {
   }
 }
 
+$smokePathForMetrics = "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json"
+$ws22LockContentionMetricsFromSmoke = $null
+if (Test-Path -Path $smokePathForMetrics) {
+  try {
+    $smokeDoc = Get-Content -Raw -Path $smokePathForMetrics | ConvertFrom-Json
+    if ($null -ne $smokeDoc.ws22_lock_contention_metrics) {
+      $ws22LockContentionMetricsFromSmoke = $smokeDoc.ws22_lock_contention_metrics
+    }
+  } catch {
+    $ws22LockContentionMetricsFromSmoke = $null
+  }
+}
+
 $finished = Get-Date
 $summary = [ordered]@{
   gate = "ws22"
@@ -71,6 +84,9 @@ $summary = [ordered]@{
   finished_at_utc = $finished.ToUniversalTime().ToString("o")
   duration_ms = [int](($finished - $start).TotalMilliseconds)
   packs = $runs
+}
+if ($null -ne $ws22LockContentionMetricsFromSmoke) {
+  $summary.ws22_lock_contention_metrics = $ws22LockContentionMetricsFromSmoke
 }
 
 $summary | ConvertTo-Json -Depth 8 | Set-Content -Path $OutputPath
@@ -108,6 +124,9 @@ foreach ($artifact in $postArtifacts) {
 
 $summary.status = $status
 $summary.packs = $runs
+if ($null -ne $ws22LockContentionMetricsFromSmoke) {
+  $summary.ws22_lock_contention_metrics = $ws22LockContentionMetricsFromSmoke
+}
 $summary | ConvertTo-Json -Depth 8 | Set-Content -Path $OutputPath
 
 Write-Host "WS22 gate summary: $OutputPath ($status)"

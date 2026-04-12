@@ -52,6 +52,9 @@ static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
 static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
+/// REQ-22 / WS22: Gate-export counters (incremented in `acquire_pessimistic_lock` for trend artifacts).
+static WS22_GATE_DEADLOCK_DETECTIONS: AtomicU64 = AtomicU64::new(0);
+static WS22_GATE_SCAN_CAP_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 /// S8-WS10-02: Counter for issuing deterministic driver session tokens.
 static DRIVER_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 const DEADLOCK_SCAN_MAX_HOPS: usize = 8;
@@ -1247,6 +1250,7 @@ struct DriverSession {
     driver_name: String,
     driver_version: String,
     connected_at_ms: u64,
+    pooled_connection_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -6234,7 +6238,11 @@ async fn olap_query(Json(req): Json<OlapQueryRequest>) -> Json<OlapQueryResponse
     Json(execute_olap_query(req.query, req.max_rows))
 }
 
-async fn failover_status(State(state): State<AppState>) -> Json<FailoverStatusResponse> {
+async fn failover_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<FailoverStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let leader = state
         .leader_node_id
         .lock()
@@ -6250,7 +6258,7 @@ async fn failover_status(State(state): State<AppState>) -> Json<FailoverStatusRe
                 .count()
         })
         .unwrap_or(usize::MAX);
-    Json(FailoverStatusResponse {
+    Ok(Json(FailoverStatusResponse {
         status: if unresolved_critical_count > 0 {
             "degraded"
         } else {
@@ -6261,7 +6269,7 @@ async fn failover_status(State(state): State<AppState>) -> Json<FailoverStatusRe
         unresolved_critical_count,
         rto_seconds_target: 30,
         rpo_data_loss_rows_target: 0,
-    })
+    }))
 }
 
 async fn failover_simulate(
@@ -6269,14 +6277,7 @@ async fn failover_simulate(
     headers: HeaderMap,
     Json(req): Json<FailoverSimulateRequest>,
 ) -> Result<Json<FailoverSimulateResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.failover",
-        "cluster",
-        PrivilegeAction::Execute,
-    )?;
+    let operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     let (previous_leader_node_id, new_leader_node_id) =
         rotate_leader(&state.leader_node_id, &req.new_leader_node_id, &state.node_id);
     record_transport_mutation(
@@ -8465,6 +8466,7 @@ fn acquire_pessimistic_lock(
                 scan_outcome =
                     evaluate_deadlock_scan_outcome(wait_graph, lock_table, tx, &holder_tx);
                 if scan_outcome == DeadlockScanOutcome::CycleDetected {
+                    WS22_GATE_DEADLOCK_DETECTIONS.fetch_add(1, Ordering::Relaxed);
                     return (
                         StatusCode::CONFLICT,
                         PessimisticLockResponse {
@@ -8478,6 +8480,7 @@ fn acquire_pessimistic_lock(
             }
             if wait_timeout_ms > 0 {
                 let timeout_reason = if scan_outcome == DeadlockScanOutcome::ScanCapReached {
+                    WS22_GATE_SCAN_CAP_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
                     "pessimistic_lock_wait_timeout_scan_cap_reached"
                 } else {
                     "pessimistic_lock_wait_timeout"
@@ -8631,19 +8634,23 @@ fn parse_where_predicates(
 // ─── S2-WS2-02: WAL durability + recovery handlers ────────────────────────────────────────────
 
 /// S2-WS2-02: return WAL engine stats.
-async fn wal_status(State(state): State<AppState>) -> (StatusCode, Json<WalStatusResponse>) {
+async fn wal_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<WalStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let wal = state.wal_engine.lock().expect("wal_engine lock");
     let records = wal.wal_records();
     let wal_len = records.len();
     let latest_seq = records.last().map(|r| r.sequence).unwrap_or(0);
     let checkpoint_count = wal.checkpoint_count();
     drop(wal);
-    (StatusCode::OK, Json(WalStatusResponse {
+    Ok((StatusCode::OK, Json(WalStatusResponse {
         status: "ok",
         wal_len,
         latest_sequence: latest_seq,
         checkpoint_count,
-    }))
+    })))
 }
 
 // ─── S2-WS2-02: WAL forced checkpoint ────────────────────────────────────────
@@ -8651,46 +8658,46 @@ async fn wal_status(State(state): State<AppState>) -> (StatusCode, Json<WalStatu
 async fn wal_force_checkpoint(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> (StatusCode, Json<WalForceCheckpointResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<WalForceCheckpointResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let mut wal = state.wal_engine.lock().expect("wal_engine lock");
     let wal_len_before = wal.wal_records().len();
     wal.force_checkpoint();
     let wal_len_after = wal.wal_records().len();
     let checkpoint_count = wal.checkpoint_count();
-    (StatusCode::OK, Json(WalForceCheckpointResponse {
+    Ok((StatusCode::OK, Json(WalForceCheckpointResponse {
         status: "ok",
         wal_len_before,
         wal_len_after,
         checkpoint_count,
-    }))
+    })))
 }
 
 /// S2-WS2-02: Return WAL statistics (record count, checkpoint count, mutation rate).
 async fn wal_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> (StatusCode, Json<WalStatsResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<WalStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let wal = state.wal_engine.lock().expect("wal_engine lock");
     let record_count = wal.wal_records().len();
     let checkpoint_count = wal.checkpoint_count();
     drop(wal);
     let mutation_rate_estimate = record_count as f64;
-    (StatusCode::OK, Json(WalStatsResponse {
+    Ok((StatusCode::OK, Json(WalStatsResponse {
         status: "ok",
         record_count,
         checkpoint_count,
         mutation_rate_estimate,
-    }))
+    })))
 }
 
 /// S2-WS2-02: Compact the WAL — force a checkpoint and return compaction stats.
 async fn wal_compact(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> (StatusCode, Json<WalCompactResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<WalCompactResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let records_before = {
         let wal = state.wal_engine.lock().expect("wal_engine wal_compact lock");
         wal.wal_records().len()
@@ -8704,13 +8711,13 @@ async fn wal_compact(
         (wal.wal_records().len(), wal.checkpoint_count())
     };
     let compacted = records_before > records_after;
-    (StatusCode::OK, Json(WalCompactResponse {
+    Ok((StatusCode::OK, Json(WalCompactResponse {
         status: "ok",
         records_before,
         records_after,
         checkpoint_count,
         compacted,
-    }))
+    })))
 }
 
 // ─── S2-WS2-02: WAL bounds — oldest and newest sequence numbers ───────────────
@@ -8719,8 +8726,8 @@ async fn wal_compact(
 async fn wal_bounds(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> (StatusCode, Json<WalBoundsResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<WalBoundsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let wal = state.wal_engine.lock().expect("wal_engine wal_bounds lock");
     let records = wal.wal_records();
     let record_count = records.len();
@@ -8728,13 +8735,13 @@ async fn wal_bounds(
     let oldest_sequence = records.first().map(|r| r.sequence);
     let newest_sequence = records.last().map(|r| r.sequence);
     drop(wal);
-    (StatusCode::OK, Json(WalBoundsResponse {
+    Ok((StatusCode::OK, Json(WalBoundsResponse {
         status: "ok",
         record_count,
         checkpoint_count,
         oldest_sequence,
         newest_sequence,
-    }))
+    })))
 }
 
 // ─── S
@@ -8746,8 +8753,8 @@ async fn wal_replay(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<WalReplayQuery>,
-) -> (StatusCode, Json<WalReplayResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<WalReplayResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let wal = state.wal_engine.lock().expect("wal_engine lock");
     let all_records = wal.wal_records().to_vec();
     drop(wal);
@@ -8767,12 +8774,12 @@ async fn wal_replay(
         .map(|r| WalReplayEntry { sequence: r.sequence, key: r.key, value: r.value })
         .collect();
     let matched_records = entries.len();
-    (StatusCode::OK, Json(WalReplayResponse {
+    Ok((StatusCode::OK, Json(WalReplayResponse {
         status: "ok",
         total_records,
         matched_records,
         entries,
-    }))
+    })))
 }
 
 /// S2-WS2-02: Return the last N WAL records (tail view).
@@ -8780,8 +8787,8 @@ async fn wal_tail(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<WalTailQuery>,
-) -> (StatusCode, Json<WalTailResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<WalTailResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let limit_applied = params.limit.unwrap_or(10).max(1).min(1_000);
     let wal = state.wal_engine.lock().expect("wal_engine lock");
     let all_records = wal.wal_records().to_vec();
@@ -8794,12 +8801,12 @@ async fn wal_tail(
         .map(|r| WalReplayEntry { sequence: r.sequence, key: r.key, value: r.value })
         .collect();
     let record_count = entries.len();
-    (StatusCode::OK, Json(WalTailResponse {
+    Ok((StatusCode::OK, Json(WalTailResponse {
         status: "ok",
         record_count,
         limit_applied,
         entries,
-    }))
+    })))
 }
 
 // ─── S2-WS2-03: WAL mutations handler ──────────────────────────────────────
@@ -8809,8 +8816,8 @@ async fn wal_mutations(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<WalMutationsQuery>,
-) -> (StatusCode, Json<WalMutationsResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<WalMutationsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let limit_applied = params.limit.unwrap_or(50).max(1).min(10_000);
     let wal = state.wal_engine.lock().expect("wal_engine lock");
     let all_records = wal.wal_records().to_vec();
@@ -8823,12 +8830,12 @@ async fn wal_mutations(
         .map(|r| WalMutationRecord { sequence: r.sequence, key: r.key, value: r.value })
         .collect();
     let mutation_count = mutations.len();
-    (StatusCode::OK, Json(WalMutationsResponse {
+    Ok((StatusCode::OK, Json(WalMutationsResponse {
         status: "ok",
         mutation_count,
         limit_applied,
         mutations,
-    }))
+    })))
 }
 
 // ─── S2-WS2-02: WAL checkpoint history handler ───────────────────────────────
@@ -8861,8 +8868,8 @@ async fn wal_checkpoint_history(
 async fn wal_segment_list(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> (StatusCode, Json<WalSegmentListResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<WalSegmentListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let wal = state.wal_engine.lock().expect("wal_engine lock");
     let completed = wal.checkpoint_count();
     let active_records = wal.wal_records().to_vec();
@@ -8885,13 +8892,13 @@ async fn wal_segment_list(
         end_sequence: active_records.last().map(|r| r.sequence),
     });
     let segment_count = segments.len();
-    (StatusCode::OK, Json(WalSegmentListResponse {
+    Ok((StatusCode::OK, Json(WalSegmentListResponse {
         status: "ok",
         segment_count,
         completed_segments: completed,
         active_record_count,
         segments,
-    }))
+    })))
 }
 
 // ─── S2-WS2-02: WAL replay count ──────────────────────────────────────────────
@@ -8972,8 +8979,10 @@ fn now_epoch_ms_chaos() -> u64 {
 /// S7-WS6-04: inject a chaos/game-day fault event.
 async fn chaos_inject(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Json(req): axum::extract::Json<ChaosInjectRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let event = ChaosEvent {
         fault_type: req.fault_type,
         target_node: req.target_node,
@@ -8985,11 +8994,15 @@ async fn chaos_inject(
     cs.active_faults.push(event);
     let count = cs.active_faults.len();
     drop(cs);
-    (StatusCode::OK, Json(serde_json::json!({ "status": "injected", "active_fault_count": count })))
+    Ok((StatusCode::OK, Json(serde_json::json!({ "status": "injected", "active_fault_count": count }))))
 }
 
 /// S7-WS6-04: clear all active faults; move them to history.
-async fn chaos_clear(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+async fn chaos_clear(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let cleared_at = now_epoch_ms_chaos();
     let mut cs = state.chaos_state.lock().expect("chaos_state lock");
     let mut cleared: Vec<ChaosEvent> = cs.active_faults.drain(..).map(|mut e| {
@@ -8999,50 +9012,62 @@ async fn chaos_clear(State(state): State<AppState>) -> (StatusCode, Json<serde_j
     cs.event_history.append(&mut cleared);
     let history_len = cs.event_history.len();
     drop(cs);
-    (StatusCode::OK, Json(serde_json::json!({ "status": "cleared", "history_len": history_len })))
+    Ok((StatusCode::OK, Json(serde_json::json!({ "status": "cleared", "history_len": history_len }))))
 }
 
 /// S7-WS6-04: return current chaos state summary.
-async fn chaos_status(State(state): State<AppState>) -> (StatusCode, Json<ChaosStatusResponse>) {
+async fn chaos_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ChaosStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let cs = state.chaos_state.lock().expect("chaos_state lock");
     let active_fault_count = cs.active_faults.len();
     let total_injected = cs.active_faults.len() + cs.event_history.len();
     let active_faults = cs.active_faults.clone();
     drop(cs);
-    (StatusCode::OK, Json(ChaosStatusResponse {
+    Ok((StatusCode::OK, Json(ChaosStatusResponse {
         status: "ok",
         active_fault_count,
         total_injected,
         active_faults,
-    }))
+    })))
 }
 
 /// S7-WS6-04: return cluster health based on active chaos faults.
-async fn chaos_health(State(state): State<AppState>) -> (StatusCode, Json<ChaosHealthResponse>) {
+async fn chaos_health(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ChaosHealthResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let cs = state.chaos_state.lock().expect("chaos_state lock");
     let active_fault_count = cs.active_faults.len();
     let history_len = cs.event_history.len();
     drop(cs);
     let cluster_healthy = active_fault_count == 0;
-    (StatusCode::OK, Json(ChaosHealthResponse {
+    Ok((StatusCode::OK, Json(ChaosHealthResponse {
         status: "ok",
         cluster_healthy,
         active_fault_count,
         history_len,
-    }))
+    })))
 }
 
 /// S7-WS6-04: Return the full fault event history (cleared faults).
-async fn chaos_history(State(state): State<AppState>) -> (StatusCode, Json<ChaosHistoryResponse>) {
+async fn chaos_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ChaosHistoryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let cs = state.chaos_state.lock().expect("chaos_state lock history");
     let events = cs.event_history.clone();
     let history_len = events.len();
     drop(cs);
-    (StatusCode::OK, Json(ChaosHistoryResponse {
+    Ok((StatusCode::OK, Json(ChaosHistoryResponse {
         status: "ok",
         history_len,
         events,
-    }))
+    })))
 }
 
 // ─── S7-WS6-04: Chaos fire-drill handler ────────────────────────────────────
@@ -9176,11 +9201,21 @@ async fn driver_connect(
 ) -> (StatusCode, Json<DriverConnectResponse>) {
     let sid = DRIVER_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
     let session_token = format!("drv-sess-{sid}");
+    let pooled_connection_id = {
+        let now_ms = now_unix_ms_u64();
+        state
+            .driver_pool
+            .lock()
+            .expect("driver pool lock")
+            .acquire(now_ms)
+            .ok()
+    };
     let mut sessions = state.driver_sessions.lock().expect("driver_sessions lock");
     sessions.insert(session_token.clone(), DriverSession {
         driver_name: req.driver_name,
         driver_version: req.driver_version,
         connected_at_ms: now_epoch_ms_chaos(),
+        pooled_connection_id,
     });
     let negotiated: Vec<String> = req.requested_capabilities
         .unwrap_or_default()
@@ -9200,18 +9235,20 @@ async fn driver_connect(
 
 async fn raft_log(
     State(state): State<AppState>,
-) -> (StatusCode, Json<RaftLogResponse>) {
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftLogResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let node = state.raft_state.lock().expect("raft_state lock");
     let log_length = node.log.len();
     let commit_index = node.commit_index;
     let entries = node.log.clone();
     drop(node);
-    (StatusCode::OK, Json(RaftLogResponse {
+    Ok((StatusCode::OK, Json(RaftLogResponse {
         status: "ok",
         log_length,
         commit_index,
         entries,
-    }))
+    })))
 }
 
 // ─── S7-WS6-02: Raft heartbeat endpoint ──────────────────────────────────────
@@ -9219,19 +9256,21 @@ async fn raft_log(
 /// S7-WS6-02: Accept a heartbeat — resets the tick counter and confirms leader comms.
 async fn raft_heartbeat(
     State(state): State<AppState>,
-) -> (StatusCode, Json<RaftHeartbeatResponse>) {
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftHeartbeatResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     let mut node = state.raft_state.lock().expect("raft_state lock");
     node.ticks_since_heartbeat = 0;
     let role = format!("{:?}", node.role);
     let term = node.current_term;
     drop(node);
-    (StatusCode::OK, Json(RaftHeartbeatResponse {
+    Ok((StatusCode::OK, Json(RaftHeartbeatResponse {
         status: "ok",
         role,
         term,
         ticks_reset_to: 0,
         heartbeat_accepted: true,
-    }))
+    })))
 }
 
 // ─── S7-WS6-02: Raft election status handler ─────────────────────────────────
@@ -9239,7 +9278,9 @@ async fn raft_heartbeat(
 /// S7-WS6-02: Return the current election timer status for this Raft node.
 async fn raft_election_status(
     State(state): State<AppState>,
-) -> (StatusCode, Json<RaftElectionStatusResponse>) {
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftElectionStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let node = state.raft_state.lock().expect("raft_state election_status lock");
     let role = node.role;
     let ticks = node.ticks_since_heartbeat;
@@ -9247,34 +9288,36 @@ async fn raft_election_status(
     let remaining = timeout.saturating_sub(ticks);
     let is_election_pending = matches!(node.role, RaftRole::Candidate);
     drop(node);
-    (StatusCode::OK, Json(RaftElectionStatusResponse {
+    Ok((StatusCode::OK, Json(RaftElectionStatusResponse {
         status: "ok",
         role,
         ticks_since_heartbeat: ticks,
         election_timeout_ticks: timeout,
         remaining_ticks: remaining,
         is_election_pending,
-    }))
+    })))
 }
 
 // ─── S7-WS6-02: Raft commit progress handler ────────────────────────────────
 
 async fn raft_commit_progress(
     State(state): State<AppState>,
-) -> (StatusCode, Json<RaftCommitProgressResponse>) {
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftCommitProgressResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let node = state.raft_state.lock().expect("raft_state lock");
     let commit_index = node.commit_index;
     let last_applied = node.last_applied;
     let log_length = node.log.len();
     let uncommitted = log_length.saturating_sub(commit_index as usize);
     drop(node);
-    (StatusCode::OK, Json(RaftCommitProgressResponse {
+    Ok((StatusCode::OK, Json(RaftCommitProgressResponse {
         status: "ok",
         commit_index,
         last_applied,
         log_length,
         uncommitted,
-    }))
+    })))
 }
 
 // ─── S7-WS6-02: Raft point-in-time snapshot handler ────────────────────────
@@ -9282,9 +9325,11 @@ async fn raft_commit_progress(
 /// S7-WS6-02: Return a point-in-time snapshot of the Raft node state.
 async fn raft_snapshot(
     State(state): State<AppState>,
-) -> (StatusCode, Json<RaftSnapshotResponse>) {
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftSnapshotResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let snap = state.raft_state.lock().expect("raft_state snapshot lock").status();
-    (StatusCode::OK, Json(RaftSnapshotResponse {
+    Ok((StatusCode::OK, Json(RaftSnapshotResponse {
         status: "ok",
         node_id: snap.node_id,
         term: snap.current_term,
@@ -9292,7 +9337,7 @@ async fn raft_snapshot(
         last_applied: snap.last_applied,
         log_length: snap.log_length,
         fencing_token: snap.fencing_token,
-    }))
+    })))
 }
 
 // ─── S7-WS6-03: Raft cluster member list endpoint ────────────────────────────
@@ -9300,7 +9345,9 @@ async fn raft_snapshot(
 /// S7-WS6-03: Return the list of known Raft cluster members (scaffold: local node only).
 async fn raft_member_list(
     State(state): State<AppState>,
-) -> (StatusCode, Json<RaftMemberListResponse>) {
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<RaftMemberListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let node = state.raft_state.lock().expect("raft_state lock");
     let member = RaftMemberEntry {
         node_id: node.node_id.clone(),
@@ -9309,11 +9356,11 @@ async fn raft_member_list(
         fencing_token: node.fencing_token,
     };
     drop(node);
-    (StatusCode::OK, Json(RaftMemberListResponse {
+    Ok((StatusCode::OK, Json(RaftMemberListResponse {
         status: "ok",
         member_count: 1,
         members: vec![member],
-    }))
+    })))
 }
 
 // ─── S7-WS6-03: Raft current leader endpoint ────────────────────────────────
@@ -9323,7 +9370,7 @@ async fn raft_leader(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftLeaderResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let node = state.raft_state.lock().expect("raft_state lock");
     let is_leader = matches!(node.role, RaftRole::Leader);
     let response = RaftLeaderResponse {
@@ -9344,15 +9391,24 @@ async fn driver_disconnect(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<DriverDisconnectRequest>,
-) -> (StatusCode, Json<DriverDisconnectResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<DriverDisconnectResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let mut sessions = state.driver_sessions.lock().expect("driver_sessions lock");
-    let disconnected = sessions.remove(&req.session_token).is_some();
-    (StatusCode::OK, Json(DriverDisconnectResponse {
+    let removed = sessions.remove(&req.session_token);
+    drop(sessions);
+
+    if let Some(session) = removed.as_ref() {
+        if let Some(connection_id) = session.pooled_connection_id.as_ref() {
+            release_sql_data_plane_connection(&state, connection_id);
+        }
+    }
+
+    let disconnected = removed.is_some();
+    Ok((StatusCode::OK, Json(DriverDisconnectResponse {
         status: "ok",
         session_token: req.session_token,
         disconnected,
-    }))
+    })))
 }
 
 // ─── S5-E4A-01: Connector SDK runtime load ───────────────────────────────────
@@ -9387,11 +9443,11 @@ async fn connector_register(
 async fn connector_list(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> (StatusCode, Json<ConnectorListResponse>) {
-    require_operator_auth(&headers, &state).ok();
+) -> Result<(StatusCode, Json<ConnectorListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let connectors = state.connector_registry.lock().expect("connector_registry lock").clone();
     let connector_count = connectors.len();
-    (StatusCode::OK, Json(ConnectorListResponse { status: "ok", connector_count, connectors }))
+    Ok((StatusCode::OK, Json(ConnectorListResponse { status: "ok", connector_count, connectors })))
 }
 
 /// S5-E4A-01: Deregister a connector plugin by ID.
@@ -12832,7 +12888,7 @@ async fn raft_vote_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftVoteStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let snap = state.raft_state.lock().expect("raft_state lock").status();
     // Scaffold: vote accumulation not yet tracked in RaftNode;
     // expose current_term only and return zeroed counters.
@@ -12851,7 +12907,7 @@ async fn raft_fence(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftFenceResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let snap = state.raft_state.lock().expect("raft_state lock").status();
     Ok((
         StatusCode::OK,
@@ -13065,8 +13121,8 @@ async fn cdc_cursor_list(
 async fn cdc_metrics(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> (StatusCode, Json<CdcMetricsResponse>) {
-    let _ = require_operator_auth(&headers, &state);
+) -> Result<(StatusCode, Json<CdcMetricsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
     let wal = state.wal_engine.lock().expect("wal_engine cdc_metrics lock");
     let records = wal.wal_records().to_vec();
     drop(wal);
@@ -13077,13 +13133,13 @@ async fn cdc_metrics(
         .filter_map(|r| r.key.split(':').next().map(|t| t.to_string()))
         .collect::<std::collections::HashSet<_>>()
         .len();
-    (StatusCode::OK, Json(CdcMetricsResponse {
+    Ok((StatusCode::OK, Json(CdcMetricsResponse {
         status: "ok",
         total_events,
         insert_count,
         delete_count,
         tables_seen,
-    }))
+    })))
 }
 
 // ─── S2-WS2-04: Row store point-in-time snapshot export ──────────────────────
@@ -14590,7 +14646,7 @@ fn require_operator_auth(
     state: &AppState,
 ) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
     let Some(required_key) = state.admin_api_key.as_ref() else {
-        return Ok(());
+        return Err(auth_error(headers, "missing_or_invalid_admin_key"));
     };
 
     let provided = headers
@@ -14612,6 +14668,15 @@ fn require_operator_auth(
     }
 
     Ok(())
+}
+
+fn require_cluster_failover_privilege(
+    headers: &HeaderMap,
+    state: &AppState,
+    action: PrivilegeAction,
+) -> Result<OperatorIdentity, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(headers, state)?;
+    require_operator_privilege(headers, state, "cluster.failover", "cluster", action)
 }
 
 fn require_operator_privilege(
@@ -16534,7 +16599,7 @@ async fn raft_status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<RaftStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let snap = state.raft_state.lock().expect("raft_state lock").status();
     Ok(Json(RaftStatusResponse { status: "ok", raft: snap }))
 }
@@ -16545,7 +16610,7 @@ async fn raft_vote(
     headers: HeaderMap,
     Json(req): Json<RaftVoteRequest>,
 ) -> Result<Json<RaftVoteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     let resp = state.raft_state.lock().expect("raft_state lock").handle_vote_request(&req);
     Ok(Json(resp))
 }
@@ -16556,7 +16621,7 @@ async fn raft_append(
     headers: HeaderMap,
     Json(req): Json<RaftAppendRequest>,
 ) -> Result<Json<RaftAppendResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     let resp = state.raft_state.lock().expect("raft_state lock").handle_append_entries(&req);
     Ok(Json(resp))
 }
@@ -16578,7 +16643,7 @@ async fn raft_tick(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<RaftTickResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
+    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     let mut node = state.raft_state.lock().expect("raft_state lock");
     let role_before = node.role;
     node.tick();
@@ -17677,10 +17742,12 @@ mod tests {
     }
 
     #[test]
-    fn operator_auth_allows_request_when_admin_key_not_configured() {
+    fn operator_auth_rejects_request_when_admin_key_not_configured() {
         let state = state_with_key(None);
-        let headers = HeaderMap::new();
-        assert!(require_operator_auth(&headers, &state).is_ok());
+        let headers = operator_headers("secret", "platform-admin");
+        let auth = require_operator_auth(&headers, &state).expect_err("missing configured admin key");
+        assert_eq!(auth.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(auth.1.reason, "missing_or_invalid_admin_key");
     }
 
     #[test]
@@ -18425,18 +18492,22 @@ mod tests {
 
     #[test]
     fn failover_status_reports_healthy_without_critical_signals() {
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
 
-        let response = runtime.block_on(failover_status(State(state)));
+        let response = runtime
+            .block_on(failover_status(State(state), headers))
+            .expect("authorized failover status response");
 
-        assert_eq!(response.0.status, "healthy");
-        assert_eq!(response.0.unresolved_critical_count, 0);
+        assert_eq!(response.status, "healthy");
+        assert_eq!(response.unresolved_critical_count, 0);
     }
 
     #[test]
     fn failover_status_reports_degraded_with_unresolved_critical_signal() {
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
         if let Ok(mut signals) = state.cluster_failure_signals.lock() {
             signals.push(ClusterFailureSignal {
                 signal_id: "sig-status-critical".to_string(),
@@ -18454,10 +18525,12 @@ mod tests {
         }
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
 
-        let response = runtime.block_on(failover_status(State(state)));
+        let response = runtime
+            .block_on(failover_status(State(state), headers))
+            .expect("authorized failover status response");
 
-        assert_eq!(response.0.status, "degraded");
-        assert_eq!(response.0.unresolved_critical_count, 1);
+        assert_eq!(response.status, "degraded");
+        assert_eq!(response.unresolved_critical_count, 1);
     }
 
     #[test]
@@ -18481,9 +18554,11 @@ mod tests {
         let headers = operator_headers("secret", "platform-admin");
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
 
-        let degraded = runtime.block_on(failover_status(State(state.clone())));
-        assert_eq!(degraded.0.status, "degraded");
-        assert_eq!(degraded.0.unresolved_critical_count, 1);
+        let degraded = runtime
+            .block_on(failover_status(State(state.clone()), headers.clone()))
+            .expect("authorized degraded status response");
+        assert_eq!(degraded.status, "degraded");
+        assert_eq!(degraded.unresolved_critical_count, 1);
 
         let failover_response = runtime
             .block_on(failover_simulate(
@@ -18515,10 +18590,89 @@ mod tests {
         assert_eq!(reconcile_response.0.resolved_count, 1);
         assert_eq!(reconcile_response.0.unresolved_critical_count, 0);
 
-        let recovered = runtime.block_on(failover_status(State(state)));
-        assert_eq!(recovered.0.status, "healthy");
-        assert_eq!(recovered.0.leader_node_id, "node-2");
-        assert_eq!(recovered.0.unresolved_critical_count, 0);
+        let recovered = runtime
+            .block_on(failover_status(State(state), operator_headers("secret", "platform-admin")))
+            .expect("authorized recovered status response");
+        assert_eq!(recovered.status, "healthy");
+        assert_eq!(recovered.leader_node_id, "node-2");
+        assert_eq!(recovered.unresolved_critical_count, 0);
+    }
+
+    #[test]
+    fn failover_status_requires_operator_auth() {
+        let state = state_with_key(Some("secret"));
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let result = runtime.block_on(failover_status(State(state), HeaderMap::new()));
+        let err = match result {
+            Ok(_) => panic!("unauthenticated failover status must be rejected"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn failover_status_denies_security_role_without_failover_privilege() {
+        let state = state_with_key(Some("secret"));
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let result = runtime.block_on(failover_status(
+            State(state),
+            operator_headers("secret", "security-bot"),
+        ));
+        let err = match result {
+            Ok(_) => panic!("security role must not read failover status"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(err.1.reason, "insufficient_privilege");
+    }
+
+    #[test]
+    fn failover_simulate_requires_operator_auth() {
+        let state = state_with_key(Some("secret"));
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let result = runtime.block_on(failover_simulate(
+            State(state),
+            HeaderMap::new(),
+            Json(FailoverSimulateRequest {
+                new_leader_node_id: "node-2".to_string(),
+                reason: Some("auth-negative".to_string()),
+                requested_by: None,
+            }),
+        ));
+        let err = match result {
+            Ok(_) => panic!("unauthenticated failover_simulate must be rejected"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn failover_simulate_denies_security_role_without_execute_privilege() {
+        let state = state_with_key(Some("secret"));
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let result = runtime.block_on(failover_simulate(
+            State(state),
+            operator_headers("secret", "security-bot"),
+            Json(FailoverSimulateRequest {
+                new_leader_node_id: "node-2".to_string(),
+                reason: Some("auth-negative".to_string()),
+                requested_by: None,
+            }),
+        ));
+        let err = match result {
+            Ok(_) => panic!("security role must not execute failover_simulate"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(err.1.reason, "insufficient_privilege");
     }
 
     #[test]
@@ -19329,6 +19483,21 @@ mod tests {
             if total > 0 { (d + sc + wt + c) as f64 / total as f64 } else { 0.0 }
         };
         assert!((actual_ratio - expected_ratio).abs() < 0.001);
+    }
+
+    /// Runs last among `ws22_*` tests when the harness uses `--test-threads=1` (alphabetically after `ws22_…`).
+    /// Emits one stderr line consumed by `run-ws22-pessimistic-lock-smoke.ps1` for gate / trend summaries.
+    #[test]
+    fn zzz_ws22_gate_lock_contention_metrics_emit() {
+        let d = WS22_GATE_DEADLOCK_DETECTIONS.load(Ordering::Relaxed);
+        let s = WS22_GATE_SCAN_CAP_TIMEOUTS.load(Ordering::Relaxed);
+        eprintln!(
+            "WS22_GATE_LOCK_METRICS_JSON:{}",
+            json!({
+                "deadlock_detections": d,
+                "scan_cap_timeouts": s,
+            })
+        );
     }
 
     #[test]
@@ -21219,7 +21388,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_ping_returns_pong() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "automation");
         let req = RedisCacheCommandRequest {
             cmd: "PING".to_string(),
@@ -21243,7 +21412,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_set_get_del_lifecycle() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
 
         // SET
         let set_req = RedisCacheCommandRequest {
@@ -21391,7 +21560,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_flush_clears_partition() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
 
         // Populate 3 keys
         for i in 0..3u8 {
@@ -21443,7 +21612,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_unsupported_command_returns_error() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let req = RedisCacheCommandRequest {
             cmd: "ZADD".to_string(),
             partition_id: None,
@@ -21471,7 +21640,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_incr_decr_lifecycle() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "automation");
 
         // INCR on non-existent key: should start at 0 â†’ becomes 1
@@ -21533,7 +21702,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_expire_updates_ttl() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "automation");
 
         // SET a value with no TTL
@@ -21589,7 +21758,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_mget_mset_lifecycle() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "automation");
         let part = Some("kv".to_string());
 
@@ -21630,7 +21799,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_getset_returns_old_sets_new() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "automation");
         let part = Some("gs".to_string());
 
@@ -21667,7 +21836,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_list_lpush_rpush_lrange_llen() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "automation");
         let part = Some("lists".to_string());
         let key = Some("queue".to_string());
@@ -21851,7 +22020,7 @@ mod tests {
         // Three concurrent threads: sql_execute + ingest_chunked + cache SET/GET.
         // All run on the same AppState. No panics or data corruption expected.
         use std::sync::Arc;
-        let state = Arc::new(state_with_key(None));
+        let state = Arc::new(state_with_key(Some("secret")));
 
         // Thread 1: sql_execute
         let s1 = Arc::clone(&state);
@@ -21932,7 +22101,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_hash_hset_hget_hdel_hgetall() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "automation");
         let part = Some("ws27-hash".to_string());
         let key = Some("user:42".to_string());
@@ -21988,7 +22157,7 @@ mod tests {
     #[test]
     fn ws27_redis_compat_set_sadd_smembers_scard() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let headers = operator_headers("secret", "automation");
         let part = Some("ws27-sets".to_string());
         let key = Some("tags:post:1".to_string());
@@ -22159,6 +22328,71 @@ mod tests {
         assert!(elapsed_ms < 5_000, "50 sequential calls took {elapsed_ms}ms, expected < 5000ms");
     }
 
+    #[test]
+    fn ws21_benchmark_ingest_reports_positive_rps() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "automation");
+        let req = BenchmarkIngestRequest {
+            record_count: Some(200),
+            chunk_target_rows: Some(64),
+        };
+        let (status, Json(body)) = rt
+            .block_on(benchmark_ingest(State(state), headers, Json(req)))
+            .expect("benchmark ingest");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.record_count, 200);
+        assert!(body.chunk_count > 0, "chunk_count must be positive");
+        assert!(body.records_per_second.is_finite() && body.records_per_second > 0.0);
+    }
+
+    #[test]
+    fn ws21_benchmark_query_reports_positive_ops_per_sec() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(Some("secret"));
+        let headers = operator_headers("secret", "platform-admin");
+        let req = BenchmarkQueryRequest {
+            op_count: Some(800),
+        };
+        let (status, Json(body)) = rt
+            .block_on(benchmark_query(State(state), headers, Json(req)))
+            .expect("benchmark query");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.op_count, 800);
+        assert!(body.ops_per_second.is_finite() && body.ops_per_second > 0.0);
+    }
+
+    #[test]
+    fn ws21_benchmark_endpoints_require_operator_auth() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(Some("secret"));
+        let empty = HeaderMap::new();
+        let ingest_req = BenchmarkIngestRequest {
+            record_count: Some(10),
+            chunk_target_rows: Some(32),
+        };
+        let ingest_res = rt.block_on(benchmark_ingest(
+            State(state.clone()),
+            empty.clone(),
+            Json(ingest_req),
+        ));
+        let err = match ingest_res {
+            Err(e) => e,
+            Ok(_) => panic!("benchmark ingest must reject unauthenticated callers"),
+        };
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+
+        let query_req = BenchmarkQueryRequest { op_count: Some(10) };
+        let query_res = rt.block_on(benchmark_query(State(state), empty, Json(query_req)));
+        let err2 = match query_res {
+            Err(e) => e,
+            Ok(_) => panic!("benchmark query must reject unauthenticated callers"),
+        };
+        assert_eq!(err2.0, StatusCode::UNAUTHORIZED);
+    }
+
     // ── REQ-23: snapshot read path enforcement ────────────────────────────────
     #[test]
     fn ws23_acid_read_uncommitted_does_not_record_snapshot() {
@@ -22209,7 +22443,7 @@ mod tests {
     fn ws27_redis_compat_set_with_ttl_returns_ok() {
         // SET with a ttl_ms should succeed — key is stored with an expiry deadline
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let req = RedisCacheCommandRequest {
             cmd: "SET".to_string(),
             partition_id: Some("ttl-part".to_string()),
@@ -22232,7 +22466,7 @@ mod tests {
     fn ws27_redis_compat_getset_on_missing_key_returns_null_old_value() {
         // GETSET on a non-existent key returns null for the old value, stores the new value
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let state = state_with_key(None);
+        let state = state_with_key(Some("secret"));
         let req = RedisCacheCommandRequest {
             cmd: "GETSET".to_string(),
             partition_id: Some("gs-new".to_string()),
@@ -23125,10 +23359,21 @@ mod tests {
     #[tokio::test]
     async fn s2_ws2_02_wal_status_returns_zero_on_fresh_state() {
         let state = state_with_key(Some("test-key"));
-        let (status, Json(body)) = wal_status(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = wal_status(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.wal_len, 0);
         assert_eq!(body.latest_sequence, 0);
+    }
+
+    #[tokio::test]
+    async fn s2_ws2_02_wal_status_requires_operator_auth() {
+        let state = state_with_key(Some("test-key"));
+        let err = match wal_status(State(state), HeaderMap::new()).await {
+            Ok(_) => panic!("wal_status should reject unauthenticated calls"),
+            Err(err) => err,
+        };
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -23145,7 +23390,12 @@ mod tests {
             isolation_level: None,
         };
         sql_transaction(State(state.clone()), headers, Json(tx_req)).await.ok();
-        let (status, Json(body)) = wal_status(State(state)).await;
+        let (status, Json(body)) = wal_status(
+            State(state),
+            operator_headers("test-key", "admin"),
+        )
+        .await
+        .unwrap();
         assert_eq!(status, StatusCode::OK);
         assert!(body.wal_len >= 2, "WAL should have at least 2 records after COMMIT");
     }
@@ -23180,22 +23430,36 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_04_chaos_status_returns_empty_initially() {
         let state = state_with_key(Some("test-key"));
-        let (_, Json(body)) = chaos_status(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (_, Json(body)) = chaos_status(State(state), headers).await.unwrap();
         assert_eq!(body.active_fault_count, 0);
         assert_eq!(body.total_injected, 0);
     }
 
     #[tokio::test]
+    async fn s7_ws6_04_chaos_status_requires_operator_auth() {
+        let state = state_with_key(Some("test-key"));
+        let err = match chaos_status(State(state), HeaderMap::new()).await {
+            Ok(_) => panic!("chaos status should reject unauthenticated calls"),
+            Err(err) => err,
+        };
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn s7_ws6_04_chaos_inject_records_active_fault() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         let body = ChaosInjectRequest {
             fault_type: "network_partition".to_string(),
             target_node: Some("node-2".to_string()),
             parameters: [("loss_pct".to_string(), "50".to_string())].into_iter().collect(),
         };
-        let (ok_status, _) = chaos_inject(State(state.clone()), axum::extract::Json(body)).await;
+        let (ok_status, _) = chaos_inject(State(state.clone()), headers.clone(), axum::extract::Json(body))
+            .await
+            .unwrap();
         assert_eq!(ok_status, StatusCode::OK);
-        let (_, Json(status)) = chaos_status(State(state)).await;
+        let (_, Json(status)) = chaos_status(State(state), headers).await.unwrap();
         assert_eq!(status.active_fault_count, 1);
         assert_eq!(status.total_injected, 1);
         assert_eq!(status.active_faults[0].fault_type, "network_partition");
@@ -23204,18 +23468,21 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_04_chaos_clear_removes_active_faults() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         for fault in ["node_crash", "packet_loss"] {
             let body = ChaosInjectRequest {
                 fault_type: fault.to_string(),
                 target_node: None,
                 parameters: HashMap::new(),
             };
-            chaos_inject(State(state.clone()), axum::extract::Json(body)).await;
+            let _ = chaos_inject(State(state.clone()), headers.clone(), axum::extract::Json(body))
+                .await
+                .unwrap();
         }
-        let (_, Json(before)) = chaos_status(State(state.clone())).await;
+        let (_, Json(before)) = chaos_status(State(state.clone()), headers.clone()).await.unwrap();
         assert_eq!(before.active_fault_count, 2);
-        chaos_clear(State(state.clone())).await;
-        let (_, Json(after)) = chaos_status(State(state)).await;
+        let _ = chaos_clear(State(state.clone()), headers.clone()).await.unwrap();
+        let (_, Json(after)) = chaos_status(State(state), headers).await.unwrap();
         assert_eq!(after.active_fault_count, 0, "active faults should be cleared");
         assert_eq!(after.total_injected, 2, "history should be preserved");
     }
@@ -23519,6 +23786,26 @@ mod tests {
         assert!(sessions.contains_key(&body.session_token));
     }
 
+    #[tokio::test]
+    async fn s8_ws10_02_driver_connect_acquires_pool_connection() {
+        let state = state_with_key(Some("test-key"));
+        let req = DriverConnectRequest {
+            driver_name: "pool-aware-driver".to_string(),
+            driver_version: "0.2.0".to_string(),
+            requested_capabilities: None,
+        };
+
+        let (_, Json(body)) = driver_connect(State(state.clone()), Json(req)).await;
+        let sessions = state.driver_sessions.lock().unwrap();
+        let session = sessions
+            .get(&body.session_token)
+            .expect("connected session must exist");
+        assert!(
+            session.pooled_connection_id.is_some(),
+            "driver session should own a pooled connection id"
+        );
+    }
+
     // ─── S10-WS15-02: CDC stream integration tests ───────────────────────────
 
     #[tokio::test]
@@ -23775,7 +24062,7 @@ mod tests {
             };
             connector_register(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
         }
-        let (status, Json(body)) = connector_list(State(state), headers).await;
+        let (status, Json(body)) = connector_list(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.connector_count, 2);
         let ids: Vec<&str> = body.connectors.iter().map(|c| c.connector_id.as_str()).collect();
@@ -23788,7 +24075,8 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_commit_progress_fresh_state() {
         let state = state_with_key(Some("test-key"));
-        let (status, Json(body)) = raft_commit_progress(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_commit_progress(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert_eq!(body.commit_index, 0);
@@ -23799,11 +24087,12 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_commit_progress_after_log_append() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         {
             let mut node = state.raft_state.lock().unwrap();
             node.log.push(raft::RaftLogEntry { index: 1, term: 1, command: "SET x=1".to_string() });
         }
-        let (status, Json(body)) = raft_commit_progress(State(state)).await;
+        let (status, Json(body)) = raft_commit_progress(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.log_length, 1);
         assert_eq!(body.uncommitted, 1, "log has 1 entry, commit_index=0 => uncommitted=1");
@@ -23814,7 +24103,8 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_snapshot_fresh_state() {
         let state = state_with_key(Some("test-key"));
-        let (status, Json(body)) = raft_snapshot(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_snapshot(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert_eq!(body.term, 0, "fresh node has term 0");
@@ -23826,12 +24116,13 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_snapshot_reflects_term_update() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         {
             let mut node = state.raft_state.lock().unwrap();
             node.current_term = 5;
             node.commit_index = 3;
         }
-        let (status, Json(body)) = raft_snapshot(State(state)).await;
+        let (status, Json(body)) = raft_snapshot(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.term, 5, "snapshot must reflect updated term");
         assert_eq!(body.commit_index, 3);
@@ -24130,7 +24421,7 @@ mod tests {
     async fn s10_ws15_02_cdc_metrics_empty_state_returns_zero_counts() {
         let state = state_with_key(Some("test-key"));
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = cdc_metrics(State(state), headers).await;
+        let (status, Json(body)) = cdc_metrics(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert_eq!(body.total_events, 0);
@@ -24149,7 +24440,7 @@ mod tests {
             wal.append_mutation("users:1", "val3");
         }
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = cdc_metrics(State(state), headers).await;
+        let (status, Json(body)) = cdc_metrics(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.total_events, 3);
         assert_eq!(body.insert_count, 3, "all are inserts (not __deleted__)");
@@ -24317,7 +24608,7 @@ mod tests {
             State(state.clone()),
             headers,
             Json(DriverDisconnectRequest { session_token: token.clone() }),
-        ).await;
+        ).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert!(body.disconnected);
         assert_eq!(body.session_token, token);
@@ -24332,9 +24623,57 @@ mod tests {
             State(state),
             headers,
             Json(DriverDisconnectRequest { session_token: "nonexistent-token".to_string() }),
-        ).await;
+        ).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert!(!body.disconnected);
+    }
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_disconnect_requires_operator_auth() {
+        let state = state_with_key(Some("test-key"));
+        let req = DriverDisconnectRequest {
+            session_token: "missing-auth".to_string(),
+        };
+        let result = driver_disconnect(State(state), HeaderMap::new(), Json(req)).await;
+        let err = match result {
+            Ok(_) => panic!("disconnect without operator auth must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn s8_ws10_02_driver_disconnect_releases_pool_connection() {
+        let state = state_with_key(Some("test-key"));
+        let connect_req = DriverConnectRequest {
+            driver_name: "pool-aware-driver".to_string(),
+            driver_version: "0.2.0".to_string(),
+            requested_capabilities: None,
+        };
+        let (_, Json(conn_body)) = driver_connect(State(state.clone()), Json(connect_req)).await;
+
+        let headers = operator_headers("test-key", "admin");
+        let (_, Json(disconnect_body)) = driver_disconnect(
+            State(state.clone()),
+            headers,
+            Json(DriverDisconnectRequest {
+                session_token: conn_body.session_token,
+            }),
+        )
+        .await
+        .expect("disconnect should succeed");
+
+        assert!(disconnect_body.disconnected);
+
+        let pool_stats = state
+            .driver_pool
+            .lock()
+            .unwrap()
+            .pool_stats(now_unix_ms_u64());
+        assert_eq!(
+            pool_stats.active_connections, 0,
+            "disconnect should release the pooled connection back to idle"
+        );
     }
 
     // ── S7-WS6-02: raft log entries endpoint ───────────────────────────────
@@ -24342,7 +24681,8 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_log_fresh_state_empty() {
         let state = state_with_key(Some("test-key"));
-        let (status, Json(body)) = raft_log(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_log(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.log_length, 0);
         assert_eq!(body.commit_index, 0);
@@ -24352,12 +24692,13 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_log_after_append_has_entries() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         {
             let mut node = state.raft_state.lock().unwrap();
             node.log.push(crate::raft::RaftLogEntry { index: 1, term: 1, command: "INSERT INTO t VALUES (1)".to_string() });
             node.commit_index = 1;
         }
-        let (status, Json(body)) = raft_log(State(state)).await;
+        let (status, Json(body)) = raft_log(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.log_length, 1);
         assert_eq!(body.commit_index, 1);
@@ -24376,7 +24717,7 @@ mod tests {
             wal.append_mutation("k2", "v2");
         }
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_force_checkpoint(State(state), headers).await;
+        let (status, Json(body)) = wal_force_checkpoint(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.wal_len_before, 2);
         assert_eq!(body.wal_len_after, 0);
@@ -24387,7 +24728,7 @@ mod tests {
     async fn s2_ws2_02_wal_force_checkpoint_on_empty_wal() {
         let state = state_with_key(Some("test-key"));
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_force_checkpoint(State(state), headers).await;
+        let (status, Json(body)) = wal_force_checkpoint(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.wal_len_before, 0);
         assert_eq!(body.wal_len_after, 0);
@@ -24399,7 +24740,7 @@ mod tests {
     async fn s2_ws2_02_wal_compact_empty_wal_returns_compacted_false() {
         let state = state_with_key(Some("test-key"));
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_compact(State(state), headers).await;
+        let (status, Json(body)) = wal_compact(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert_eq!(body.records_before, 0);
@@ -24416,7 +24757,7 @@ mod tests {
             wal.append_mutation("k2", "v2");
         }
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_compact(State(state), headers).await;
+        let (status, Json(body)) = wal_compact(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.records_before, 2, "2 mutations appended before compact");
         assert_eq!(body.records_after, 0, "compact clears WAL via checkpoint");
@@ -24428,7 +24769,7 @@ mod tests {
     async fn s2_ws2_02_wal_bounds_empty_state_shows_none_sequences() {
         let state = state_with_key(Some("test-key"));
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_bounds(State(state), headers).await;
+        let (status, Json(body)) = wal_bounds(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert_eq!(body.record_count, 0);
@@ -24445,7 +24786,7 @@ mod tests {
             wal.append_mutation("k2", "v2");
         }
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_bounds(State(state), headers).await;
+        let (status, Json(body)) = wal_bounds(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.record_count, 2);
         assert!(body.oldest_sequence.is_some(), "oldest sequence must be Some after mutations");
@@ -24461,7 +24802,7 @@ mod tests {
             State(state),
             headers,
             axum::extract::Query(WalTailQuery::default()),
-        ).await;
+        ).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.record_count, 0);
         assert!(body.entries.is_empty());
@@ -24484,7 +24825,7 @@ mod tests {
             State(state),
             headers,
             axum::extract::Query(WalTailQuery { limit: Some(3) }),
-        ).await;
+        ).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.record_count, 3, "limit=3 means only 3 newest entries");
         assert_eq!(body.limit_applied, 3);
@@ -24505,7 +24846,7 @@ mod tests {
             State(state),
             headers,
             axum::extract::Query(WalMutationsQuery { limit: Some(10) }),
-        ).await;
+        ).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.mutation_count, 2);
         assert_eq!(body.mutations[0].key, "user:101");
@@ -24528,7 +24869,7 @@ mod tests {
             State(state),
             headers,
             axum::extract::Query(WalMutationsQuery { limit: Some(25) }),
-        ).await;
+        ).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.mutation_count, 25, "limit=25 means only 25 newest mutations");
         assert_eq!(body.limit_applied, 25);
@@ -24539,7 +24880,7 @@ mod tests {
     async fn s2_ws2_02_wal_segment_list_empty_returns_one_active_segment() {
         let state = state_with_key(Some("test-key"));
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_segment_list(State(state), headers).await;
+        let (status, Json(body)) = wal_segment_list(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.segment_count, 1, "fresh state has exactly 1 active segment");
         assert_eq!(body.completed_segments, 0);
@@ -24556,7 +24897,7 @@ mod tests {
             wal.append_mutation("k2", "v2");
         }
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_segment_list(State(state), headers).await;
+        let (status, Json(body)) = wal_segment_list(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.active_record_count, 2, "2 mutations in active segment");
         let active = body.segments.iter().find(|s| s.is_active).unwrap();
@@ -24635,7 +24976,8 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_04_chaos_health_fresh_state_is_healthy() {
         let state = state_with_key(Some("test-key"));
-        let (status, Json(body)) = chaos_health(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = chaos_health(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert!(body.cluster_healthy, "fresh state should be healthy");
         assert_eq!(body.active_fault_count, 0);
@@ -24645,7 +24987,8 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_04_chaos_history_empty_on_fresh_state() {
         let state = state_with_key(Some("test-key"));
-        let (status, Json(body)) = chaos_history(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = chaos_history(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert_eq!(body.history_len, 0, "no history on fresh state");
@@ -24655,17 +24998,20 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_04_chaos_history_shows_cleared_events() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         // Inject a fault.
         let req = ChaosInjectRequest {
             fault_type: "node_crash".to_string(),
             target_node: None,
             parameters: HashMap::new(),
         };
-        chaos_inject(State(state.clone()), axum::extract::Json(req)).await;
+        let _ = chaos_inject(State(state.clone()), headers.clone(), axum::extract::Json(req))
+            .await
+            .unwrap();
         // Clear it (moves to history).
-        chaos_clear(State(state.clone())).await;
+        let _ = chaos_clear(State(state.clone()), headers.clone()).await.unwrap();
         // Now check history.
-        let (status, Json(body)) = chaos_history(State(state)).await;
+        let (status, Json(body)) = chaos_history(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.history_len, 1, "one cleared event in history");
         assert_eq!(body.events[0].fault_type, "node_crash");
@@ -24674,6 +25020,7 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_04_chaos_health_with_faults_is_unhealthy() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         {
             let mut cs = state.chaos_state.lock().unwrap();
             cs.active_faults.push(ChaosEvent {
@@ -24684,7 +25031,7 @@ mod tests {
                 cleared_at_ms: None,
             });
         }
-        let (status, Json(body)) = chaos_health(State(state)).await;
+        let (status, Json(body)) = chaos_health(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert!(!body.cluster_healthy, "active faults should mark unhealthy");
         assert_eq!(body.active_fault_count, 1);
@@ -24950,6 +25297,7 @@ mod tests {
                 driver_name: "test-driver".to_string(),
                 driver_version: "1.0".to_string(),
                 connected_at_ms: 12345,
+                pooled_connection_id: None,
             });
         }
         let headers = operator_headers("test-key", "admin");
@@ -24984,6 +25332,7 @@ mod tests {
                 driver_name: "rust-driver".to_string(),
                 driver_version: "1.0.0".to_string(),
                 connected_at_ms: 0,
+                pooled_connection_id: None,
             });
         }
         let headers = operator_headers("test-key", "admin");
@@ -25017,6 +25366,7 @@ mod tests {
                 driver_name: "test-drv".to_string(),
                 driver_version: "2.0.0".to_string(),
                 connected_at_ms: 0,
+                pooled_connection_id: None,
             });
         }
         let headers = operator_headers("test-key", "admin");
@@ -25052,6 +25402,7 @@ mod tests {
                 driver_name: "test-drv".to_string(),
                 driver_version: "1.0.0".to_string(),
                 connected_at_ms: 0,
+                pooled_connection_id: None,
             });
         }
         let headers = operator_headers("test-key", "admin");
@@ -25177,7 +25528,7 @@ mod tests {
     async fn s2_ws2_02_wal_stats_fresh_state_empty() {
         let state = state_with_key(Some("test-key"));
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_stats(State(state), headers).await;
+        let (status, Json(body)) = wal_stats(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.record_count, 0);
         assert_eq!(body.checkpoint_count, 0);
@@ -25193,7 +25544,7 @@ mod tests {
             wal.append_mutation("k3", "v3");
         }
         let headers = operator_headers("test-key", "admin");
-        let (status, Json(body)) = wal_stats(State(state), headers).await;
+        let (status, Json(body)) = wal_stats(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.record_count, 3);
         assert_eq!(body.checkpoint_count, 0, "no checkpoint performed yet");
@@ -25208,7 +25559,7 @@ mod tests {
             State(state),
             headers,
             axum::extract::Query(WalReplayQuery::default()),
-        ).await;
+        ).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.total_records, 0);
         assert_eq!(body.matched_records, 0);
@@ -25228,7 +25579,7 @@ mod tests {
             State(state),
             headers,
             axum::extract::Query(WalReplayQuery { table_filter: None, op_filter: Some("delete".to_string()) }),
-        ).await;
+        ).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.total_records, 2);
         assert_eq!(body.matched_records, 1, "only 1 delete record should match");
@@ -25239,11 +25590,12 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_heartbeat_resets_tick_counter() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         {
             let mut node = state.raft_state.lock().unwrap();
             node.ticks_since_heartbeat = 5;
         }
-        let (status, Json(body)) = raft_heartbeat(State(state)).await;
+        let (status, Json(body)) = raft_heartbeat(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.ticks_reset_to, 0);
         assert!(body.heartbeat_accepted);
@@ -25252,11 +25604,12 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_heartbeat_returns_current_term() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         {
             let mut node = state.raft_state.lock().unwrap();
             node.current_term = 3;
         }
-        let (status, Json(body)) = raft_heartbeat(State(state)).await;
+        let (status, Json(body)) = raft_heartbeat(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.term, 3);
     }
@@ -25265,7 +25618,8 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_election_status_fresh_state_is_follower() {
         let state = state_with_key(Some("test-key"));
-        let (status, Json(body)) = raft_election_status(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_election_status(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.status, "ok");
         assert!(matches!(body.role, RaftRole::Follower), "fresh state must be Follower");
@@ -25276,11 +25630,12 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_02_raft_election_status_remaining_ticks_decrements() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         {
             let mut node = state.raft_state.lock().unwrap();
             node.ticks_since_heartbeat = 3;
         }
-        let (status, Json(body)) = raft_election_status(State(state)).await;
+        let (status, Json(body)) = raft_election_status(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.ticks_since_heartbeat, 3);
         assert_eq!(
@@ -25437,7 +25792,8 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_03_raft_member_list_single_node() {
         let state = state_with_key(Some("test-key"));
-        let (status, Json(body)) = raft_member_list(State(state)).await;
+        let headers = operator_headers("test-key", "admin");
+        let (status, Json(body)) = raft_member_list(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.member_count, 1);
         assert_eq!(body.members.len(), 1);
@@ -25447,13 +25803,37 @@ mod tests {
     #[tokio::test]
     async fn s7_ws6_03_raft_member_list_reflects_term() {
         let state = state_with_key(Some("test-key"));
+        let headers = operator_headers("test-key", "admin");
         {
             let mut node = state.raft_state.lock().unwrap();
             node.current_term = 7;
         }
-        let (status, Json(body)) = raft_member_list(State(state)).await;
+        let (status, Json(body)) = raft_member_list(State(state), headers).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.members[0].term, 7);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_log_requires_operator_auth() {
+        let state = state_with_key(Some("test-key"));
+
+        let err = raft_log(State(state), HeaderMap::new())
+            .await
+            .expect_err("raft log must reject missing auth");
+
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn s7_ws6_02_raft_heartbeat_denies_security_role() {
+        let state = state_with_key(Some("test-key"));
+
+        let err = raft_heartbeat(State(state), operator_headers("test-key", "security-bot"))
+            .await
+            .expect_err("security role must not execute raft heartbeat");
+
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(err.1.reason, "insufficient_privilege");
     }
 
     // ── S4-WS3-02: Columnar project endpoint ─────────────────────────────────

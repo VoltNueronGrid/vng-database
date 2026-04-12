@@ -1,9 +1,9 @@
 {
   "gate": "ws22",
   "status": "passed",
-  "started_at_utc": "2026-04-10T02:27:03.4986097Z",
-  "finished_at_utc": "2026-04-10T02:27:07.6925885Z",
-  "duration_ms": 4194,
+  "started_at_utc": "2026-04-12T05:15:30.4452340Z",
+  "finished_at_utc": "2026-04-12T05:15:34.0035261Z",
+  "duration_ms": 3558,
   "packs": [
     {
       "pack": "ws22-pessimistic-lock-smoke",
@@ -35,5 +35,11 @@
       "detail": "tests/kpi/scripts/run-ws22-release-summary.ps1",
       "artifact": "tests/kpi/results/gates/ws22-release-readiness.json"
     }
-  ]
+  ],
+  "ws22_lock_contention_metrics": {
+    "deadlock_detections": 3,
+    "scan_cap_timeouts": 1,
+    "source": "zzz_ws22_gate_lock_contention_metrics_emit",
+    "note": "Cumulative counts from acquire_pessimistic_lock during ws22_ suite (--test-threads=1)."
+  }
 }

@@ -65,6 +65,7 @@ if ($status -eq "passed") {
     $smoke.contract_checks.acquire_logic_present -eq $true -and
     $smoke.contract_checks.release_logic_present -eq $true
   )
+  $checks.ws22_lock_contention_metrics_present = ($null -ne $smoke.ws22_lock_contention_metrics)
 
   if (($checks.Values | Where-Object { $_ -eq $false }).Count -gt 0) { $status = "failed" }
 }

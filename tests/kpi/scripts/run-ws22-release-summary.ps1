@@ -53,6 +53,7 @@ $artifact = [ordered]@{
     trend_state = [string]$trend.trend_state
     badge_message = [string]$badge.message
     contract_checks = $smoke.contract_checks
+    ws22_lock_contention_metrics = $summary.ws22_lock_contention_metrics
   }
 }
 

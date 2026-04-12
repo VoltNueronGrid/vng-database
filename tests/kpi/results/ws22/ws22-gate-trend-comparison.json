@@ -2,7 +2,7 @@
   "report": "ws22-gate-trend-comparison",
   "status": "passed",
   "trend_state": "stable",
-  "generated_at_utc": "2026-04-10T05:36:23.6388443Z",
+  "generated_at_utc": "2026-04-12T05:15:48.2880270Z",
   "current_summary": "tests/kpi/results/ws22/ws22-gate-summary.json",
   "prior_summary": "tests/kpi/results/ws22/ws22-gate-summary.previous.json",
   "gate_status": {
@@ -10,8 +10,21 @@
     "after": "passed"
   },
   "duration_ms": {
-    "before": 4194,
-    "after": 4439,
-    "delta": 245
+    "before": 3558,
+    "after": 3597,
+    "delta": 39
+  },
+  "lock_contention_metrics_trend": {
+    "deadlock_detections": {
+      "before": 3,
+      "after": 3,
+      "delta": 0
+    },
+    "scan_cap_timeouts": {
+      "before": 1,
+      "after": 1,
+      "delta": 0
+    },
+    "interpretation": "Higher deltas may indicate increased lock contention or richer ws22 test coverage; compare with gate status."
   }
 }

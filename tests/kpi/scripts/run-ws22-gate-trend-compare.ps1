@@ -50,6 +50,29 @@ $artifact = [ordered]@{
   duration_ms = [ordered]@{ before = [int]$prior.duration_ms; after = [int]$current.duration_ms; delta = $durationDelta }
 }
 
+$priorLock = $prior.ws22_lock_contention_metrics
+$currentLock = $current.ws22_lock_contention_metrics
+if ($currentLock) {
+  $curDl = [int64]($currentLock.deadlock_detections)
+  $curCap = [int64]($currentLock.scan_cap_timeouts)
+  if ($priorLock) {
+    $priorDl = [int64]($priorLock.deadlock_detections)
+    $priorCap = [int64]($priorLock.scan_cap_timeouts)
+    $artifact.lock_contention_metrics_trend = [ordered]@{
+      deadlock_detections = [ordered]@{ before = $priorDl; after = $curDl; delta = ($curDl - $priorDl) }
+      scan_cap_timeouts = [ordered]@{ before = $priorCap; after = $curCap; delta = ($curCap - $priorCap) }
+      interpretation = "Higher deltas may indicate increased lock contention or richer ws22 test coverage; compare with gate status."
+    }
+  } else {
+    $artifact.lock_contention_metrics_trend = [ordered]@{
+      trend_state = "baseline_established"
+      deadlock_detections = [ordered]@{ before = $null; after = $curDl; delta = $null }
+      scan_cap_timeouts = [ordered]@{ before = $null; after = $curCap; delta = $null }
+      interpretation = "Prior summary had no ws22_lock_contention_metrics; next run will compute deltas."
+    }
+  }
+}
+
 $artifact | ConvertTo-Json -Depth 10 | Set-Content -Path $OutputPath
 Write-Host "WS22 trend comparison artifact: $OutputPath ($trendState)"
 if ($status -ne "passed") { exit 1 }

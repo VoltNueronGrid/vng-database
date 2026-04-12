@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-12 (WS22 gate/closure/release refresh + auth/failover evidence reality-check sync + sprint/hardening consistency refinements)
+**Last updated:** 2026-04-12 (auth hardening continuation: WAL/chaos fail-closed enforcement + failover simulate negative coverage + full-suite refresh)
 
 ---
 
@@ -17,7 +17,7 @@ Verified against the current tree in this session:
 
 | Check | Result |
 |---|---|
-| `cargo test -p voltnuerongridd` | **681** passed, 0 failed |
+| `cargo test -p voltnuerongridd` | **696** passed, 0 failed |
 | `cargo test -p voltnuerongrid-sql` | **366** passed |
 | `cargo test -p voltnuerongrid-exec` | **200** passed |
 | `cargo test -p voltnuerongrid-store` | **70** passed |
@@ -27,6 +27,8 @@ Verified against the current tree in this session:
 **Still open vs full product architecture:** production TLS termination in the HTTP server, on-disk MVCC/storage at scale, real networked Raft/consensus, native binary wire protocol and multi-language drivers, trillion-row and sustained-load proof, live cloud validation for PR-007 (credentials/handoff).
 
 Gate JSON artifacts under `tests/kpi/results/` include a **WS22 refresh on 2026-04-12** (`ws22-gate-summary`, `ws22-closure-gate-summary`, `ws22-release-readiness`); other gate baselines remain anchored to the 2026-04-10 bulk audit.
+
+**Session 29 hardening (2026-04-12):** `services/voltnuerongridd/src/main.rs` now enforces operator auth (fail-closed `Result` flow) for `wal_status` and chaos endpoints (`chaos_inject`, `chaos_clear`, `chaos_status`, `chaos_health`, `chaos_history`); integration coverage added for `wal_status` and chaos unauthenticated rejection, and failover execute-path negative coverage expanded via `failover_simulate_requires_operator_auth` + `failover_simulate_denies_security_role_without_execute_privilege`. Validation: targeted suites green and full `cargo test -p voltnuerongridd` green at 696/696.
 
 Auth/failover chronology note: `VALIDATION_EXECUTION_REPORT_2026-04-09.md` is retained as historical run context for the auth+failover validation task, while canonical tracker timestamps are sourced from current gate artifacts (`tests/kpi/results/ws5/ws5-gate-summary.json`, `tests/kpi/results/ws6/ws6-gate-summary.json`, `tests/kpi/results/gates/release-r2-failover-readiness.json`).
 

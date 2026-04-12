@@ -1,7 +1,7 @@
 # VoltNueronGrid DB — Combined Status Tracker
 
 **Supersedes:** `status_tracker.md`, `status-tracker-v2.md`, `status-tracker-sprintwise-v1.md`  
-**Last updated:** 2026-04-14 (consolidated)  
+**Last updated:** 2026-04-12 (rollup; see `status_tracker.md` for full detail)  
 **Source docs:** `reference/voltnuerongrid-db-design.md`, `reference/voltnuerongrid-ws.md`
 
 ---
@@ -50,7 +50,7 @@ To remove drift across prior tracker files, this tracker uses one status model:
 | REQ-13 | IN_PROGRESS | RBAC matrix + runtime enforcement broad but not final |
 | REQ-14 | IN_PROGRESS | Studio contract-level progress; product completion pending |
 | REQ-15 | IN_PROGRESS | Rust driver scaffold; multi-language/wire protocol pending |
-| REQ-16 | IN_PROGRESS | TLS/TDE/KMS status/toggle scaffolds; production hardening pending |
+| REQ-16 | IN_PROGRESS | TLS cert/key preflight on status/rotate/cert-info (Session 28); production TLS termination + TDE page crypto still pending |
 | REQ-17 | READY_FOR_VALIDATION | Failover/WS6 gate posture strong at scaffold layer |
 | REQ-18 | READY_FOR_VALIDATION | Streaming/outbox/audit path scaffolds with evidence |
 | REQ-19 | IN_PROGRESS | Performance scaffolds and tests present; scale targets pending |

@@ -1,7 +1,7 @@
 {
   "smoke": "ws22-pessimistic-lock-baseline",
   "status": "passed",
-  "command": "cargo test -p voltnuerongridd ws22_; runtime contract checks for pessimistic lock APIs",
+  "command": "cargo test -p voltnuerongridd ws22_ -- --test-threads=1 --nocapture; runtime contract checks for pessimistic lock APIs",
   "contract_checks": {
     "acquire_route_present": true,
     "release_route_present": true,
@@ -19,10 +19,18 @@
     "scan_cap_timeout_reason_present": true,
     "scan_cap_unit_test_present": true,
     "wait_edge_release_cleanup_unit_test_present": true,
-    "wait_edge_expiry_cleanup_unit_test_present": true
+    "wait_edge_expiry_cleanup_unit_test_present": true,
+    "gate_metrics_emit_test_present": true,
+    "gate_metrics_json_line_present": true
   },
-  "started_at_utc": "2026-04-10T05:36:19.1927054Z",
-  "finished_at_utc": "2026-04-10T05:36:21.4631560Z",
-  "duration_ms": 2270,
-  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22632:35\n      |\n22632 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n  --> services\\voltnuerongridd\\src\\main.rs:97:5\n   |\n93 | enum AcidTxState {\n   |      ----------- variant in this enum\n..."
+  "ws22_lock_contention_metrics": {
+    "deadlock_detections": 3,
+    "scan_cap_timeouts": 1,
+    "source": "zzz_ws22_gate_lock_contention_metrics_emit",
+    "note": "Cumulative counts from acquire_pessimistic_lock during ws22_ suite (--test-threads=1)."
+  },
+  "started_at_utc": "2026-04-12T05:15:44.6722834Z",
+  "finished_at_utc": "2026-04-12T05:15:46.4047024Z",
+  "duration_ms": 1732,
+  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22701:35\n      |\n22701 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22717:35\n      |\n22717 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n   --> services\\voltnuerongridd\\src\\main.rs:100:5\n    |\n 96 | enum AcidTxState {\n    |      ----------- variant in this enum\n..."
 }

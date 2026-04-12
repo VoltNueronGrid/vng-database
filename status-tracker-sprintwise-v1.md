@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (WS22 gate/closure/release refresh + auth/failover evidence reality-check sync + sprint/hardening consistency refinements)
+**Last updated:** 2026-04-12 (auth hardening continuation: WAL/chaos fail-closed enforcement + failover simulate negative coverage + full-suite refresh)
 
 ---
 
@@ -254,6 +254,8 @@
 |---|---|---|---|---|---|---|
 | WS4A | Epic 4A | Streaming in/out + event streams | Ingestion + Eventing Team | 🟡 Ready for Validation | WS4 | Source/sink interfaces + replayable envelope/event-log + replay-cursor durability bridge scaffold + gate orchestrator `run-ws4a-gate.ps1` -> `tests/kpi/results/ws4a/ws4a-gate-summary.json`; workflow wiring in `.github/workflows/ci.yml` |
 | WS5 | Epic 5 | Auth, RBAC, TLS/TDE/KMS | Security Team | ✅ Validated | WS0 | Operator admin-key auth gate scaffolded for autonomous control endpoints, then extended into registered operator identity + resource-scoped RBAC privilege matrix enforcement for failover/SRE/audit/autonomous plus mixed operator-or-tenant ingest handlers and tenant-scoped SQL runtime access + TLS/mTLS/encryption-at-rest/KMS security contract checks across JSON/YAML/properties + WS5 smoke harness + gate orchestrator `run-ws5-gate.ps1` -> `tests/kpi/results/ws5/ws5-gate-summary.json` (**passed live 2026-04-10 08:11 UTC, 7600ms**); release-facing CI gate summary + badge `tests/kpi/results/gates/ci-ws5-gate-summary.json`, `tests/kpi/results/gates/ci-ws5-gate-badge.json`; combined DX/API cluster gate -> `tests/kpi/results/gates/release-dx-api-readiness.json`; workflow wiring in `.github/workflows/ci.yml` |
+
+**Session 29 continuation (2026-04-12):** service auth hardening advanced in `services/voltnuerongridd/src/main.rs` with fail-closed operator-auth enforcement for `wal_status` and chaos endpoints (`chaos_inject`, `chaos_clear`, `chaos_status`, `chaos_health`, `chaos_history`) plus new failover execute-path negative tests (`failover_simulate_requires_operator_auth`, `failover_simulate_denies_security_role_without_execute_privilege`). Validation rerun: `cargo test -p voltnuerongridd` now **696 passed, 0 failed**.
 
 ### Requirements Covered
 - REQ-13 (Multi-user roles and privileges) — 🔵 In Progress: Shared RBAC privilege matrix + resource-scoped operator and tenant-user grants enforced in runtime across control-plane, storage, mixed ingest, and tenant-scoped SQL surfaces; broader user/tenant hierarchy still pending

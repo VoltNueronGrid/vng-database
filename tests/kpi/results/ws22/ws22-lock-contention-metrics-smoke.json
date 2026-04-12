@@ -16,8 +16,8 @@
     "contention_ratio_field_present": true,
     "contention_metrics_unit_test_present": true
   },
-  "started_at_utc": "2026-04-10T05:36:21.4922039Z",
-  "finished_at_utc": "2026-04-10T05:36:23.6003976Z",
-  "duration_ms": 2108,
-  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22616:35\n      |\n22616 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22632:35\n      |\n22632 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n  --> services\\voltnuerongridd\\src\\main.rs:97:5\n   |\n93 | enum AcidTxState {\n   |      ----------- variant in this enum\n..."
+  "started_at_utc": "2026-04-12T05:15:46.4750749Z",
+  "finished_at_utc": "2026-04-12T05:15:48.2232343Z",
+  "duration_ms": 1748,
+  "output_excerpt": "warning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22701:35\n      |\n22701 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\n      |\n      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\nSystem.Management.Automation.RemoteException\nwarning: unused import: `LogicalPlan`\n     --> services\\voltnuerongridd\\src\\main.rs:22717:35\n      |\n22717 |         use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};\n      |                                   ^^^^^^^^^^^\nSystem.Management.Automation.RemoteException\nwarning: variant `Failed` is never constructed\n   --> services\\voltnuerongridd\\src\\main.rs:100:5\n    |\n 96 | enum AcidTxState {\n    |      ----------- variant in this enum\n..."
 }

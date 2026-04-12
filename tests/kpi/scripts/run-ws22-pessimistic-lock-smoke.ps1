@@ -15,9 +15,10 @@ function Ensure-OutputDir {
 Ensure-OutputDir -PathValue $OutputPath
 
 $start = Get-Date
-$command = "cargo test -p voltnuerongridd ws22_; runtime contract checks for pessimistic lock APIs"
+$command = "cargo test -p voltnuerongridd ws22_ -- --test-threads=1 --nocapture; runtime contract checks for pessimistic lock APIs"
 $outputLines = @()
 $exitCode = 1
+$ws22LockContentionMetrics = $null
 $contractChecks = [ordered]@{
   acquire_route_present = $false
   release_route_present = $false
@@ -36,10 +37,12 @@ $contractChecks = [ordered]@{
   scan_cap_unit_test_present = $false
   wait_edge_release_cleanup_unit_test_present = $false
   wait_edge_expiry_cleanup_unit_test_present = $false
+  gate_metrics_emit_test_present = $false
+  gate_metrics_json_line_present = $false
 }
 
 try {
-  $outputLines = & cargo test -p voltnuerongridd ws22_ -- --nocapture 2>&1
+  $outputLines = & cargo test -p voltnuerongridd ws22_ -- --test-threads=1 --nocapture 2>&1
   $testExit = $LASTEXITCODE
 
   $runtimeRaw = Get-Content -Raw -Path "services/voltnuerongridd/src/main.rs"
@@ -60,6 +63,17 @@ try {
   $contractChecks.scan_cap_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_scan_cap_returns_timeout_diagnostic')
   $contractChecks.wait_edge_release_cleanup_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_release_cleans_wait_edges_for_resource')
   $contractChecks.wait_edge_expiry_cleanup_unit_test_present = (($outputLines -join "`n") -match 'ws22_pessimistic_lock_expiry_cleans_wait_edges_for_resource')
+  $contractChecks.gate_metrics_emit_test_present = ($runtimeRaw -match 'fn zzz_ws22_gate_lock_contention_metrics_emit')
+  $outText = $outputLines -join "`n"
+  $contractChecks.gate_metrics_json_line_present = ($outText -match 'WS22_GATE_LOCK_METRICS_JSON:\{')
+  $metricsMatch = [regex]::Match($outText, 'WS22_GATE_LOCK_METRICS_JSON:(\{[^\n]+\})')
+  if ($metricsMatch.Success) {
+    try {
+      $ws22LockContentionMetrics = $metricsMatch.Groups[1].Value | ConvertFrom-Json
+    } catch {
+      $ws22LockContentionMetrics = $null
+    }
+  }
 
   $contractExit = if (
     $contractChecks.acquire_route_present -and
@@ -78,7 +92,9 @@ try {
     $contractChecks.scan_cap_timeout_reason_present -and
     $contractChecks.scan_cap_unit_test_present -and
     $contractChecks.wait_edge_release_cleanup_unit_test_present -and
-    $contractChecks.wait_edge_expiry_cleanup_unit_test_present
+    $contractChecks.wait_edge_expiry_cleanup_unit_test_present -and
+    $contractChecks.gate_metrics_emit_test_present -and
+    $contractChecks.gate_metrics_json_line_present
   ) { 0 } else { 1 }
   $exitCode = if ($testExit -eq 0 -and $contractExit -eq 0) { 0 } else { 1 }
 } catch {
@@ -94,6 +110,16 @@ $artifact = [ordered]@{
   status = $status
   command = $command
   contract_checks = $contractChecks
+  ws22_lock_contention_metrics = if ($null -ne $ws22LockContentionMetrics) {
+    [ordered]@{
+      deadlock_detections = [int64]$ws22LockContentionMetrics.deadlock_detections
+      scan_cap_timeouts = [int64]$ws22LockContentionMetrics.scan_cap_timeouts
+      source = "zzz_ws22_gate_lock_contention_metrics_emit"
+      note = "Cumulative counts from acquire_pessimistic_lock during ws22_ suite (--test-threads=1)."
+    }
+  } else {
+    $null
+  }
   started_at_utc = $start.ToUniversalTime().ToString("o")
   finished_at_utc = $finished.ToUniversalTime().ToString("o")
   duration_ms = [int](($finished - $start).TotalMilliseconds)

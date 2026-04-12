@@ -2,9 +2,9 @@
   "gate": "ws22-closure-gate",
   "status": "passed",
   "validation_posture": "ready_for_validation",
-  "started_at_utc": "2026-04-10T05:36:19.1354335Z",
-  "finished_at_utc": "2026-04-10T05:36:23.7279434Z",
-  "duration_ms": 4593,
+  "started_at_utc": "2026-04-12T05:15:44.5757879Z",
+  "finished_at_utc": "2026-04-12T05:15:48.3989005Z",
+  "duration_ms": 3823,
   "artifacts": {
     "ws22_gate": "tests/kpi/results/ws22/ws22-gate-summary.json",
     "ws22_smoke": "tests/kpi/results/ws22/ws22-pessimistic-lock-smoke.json"
@@ -12,7 +12,8 @@
   "checks": {
     "ws22_gate_passed": true,
     "ws22_smoke_passed": true,
-    "ws22_contract_checks_all_passed": true
+    "ws22_contract_checks_all_passed": true,
+    "ws22_lock_contention_metrics_present": true
   },
   "runs": [
     {
