@@ -1727,23 +1727,24 @@ Release Gate Impact: <none|medium|high>
 
 ---
 
-**Date:** 2026-04-09 (Sprint 9 continuation)
-**Scope:** WS6 failover gate rerun + Ops/Resilience cluster release gate refresh
+**Date:** 2026-04-10 (Sprint 9 continuation)
+**Scope:** WS6 live gate baseline + Ops/Resilience and R2 release linkage
 
 | Item | Artifact | Result | Next Step |
 |---|---|---|---|
-| WS6 gate rerun | `tests/kpi/results/ws6/agent-run-ws6-gate-summary.json` | **passed** (all WS6 failover/chaos/release packs green) | Re-run WS6 gate after next failover-runtime changes to keep closure evidence fresh |
-| Ops/Resilience cluster release gate | `tests/kpi/results/gates/agent-run-release-ops-resilience-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` | Refresh cluster gate after WS12/WS13/WS14 feature slices |
+| WS6 gate canonical baseline | `tests/kpi/results/ws6/ws6-gate-summary.json` | **passed** (`started_at_utc: 2026-04-10T10:17:50.3230043Z`, `duration_ms: 132807`, all packs passed) | Re-run WS6 gate only after new failover-runtime changes |
+| Ops/Resilience cluster release gate | `tests/kpi/results/gates/release-ops-resilience-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` (`started_at_utc: 2026-04-10T10:20:14.5158929Z`) | Refresh cluster gate after WS12/WS13/WS14 feature slices |
+| R2 failover release gate | `tests/kpi/results/gates/release-r2-failover-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` (`started_at_utc: 2026-04-10T10:17:48.8825283Z`) | Keep as canonical R2 failover evidence unless a newer rerun is executed |
 
 ---
 
-**Date:** 2026-04-09 (Sprint 9 continuation)
-**Scope:** WS5 security gate rerun + DX/API cluster release gate posture check
+**Date:** 2026-04-10 (Sprint 9 continuation)
+**Scope:** WS5 live gate baseline + DX/API cluster release posture check
 
 | Item | Artifact | Result | Next Step |
 |---|---|---|---|
-| WS5 security gate rerun | `tests/kpi/results/ws5/agent-run-ws5-gate-summary.json` | **passed** (pack: `ws5-security-smoke`) | Keep WS5 runtime/auth evidence current when RBAC or security contracts change |
-| DX/API cluster release gate | `tests/kpi/results/gates/release-dx-api-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` | Re-run full DX/API cluster gate after new WS9/WS9A/WS10 feature slices |
+| WS5 security gate canonical baseline | `tests/kpi/results/ws5/ws5-gate-summary.json` | **passed** (`started_at_utc: 2026-04-10T08:11:57.4025991Z`, `duration_ms: 7600`, pack `ws5-security-smoke` passed) | Re-run WS5 gate when RBAC or security contract changes land |
+| DX/API cluster release gate | `tests/kpi/results/gates/release-dx-api-readiness.json` | **passed**, `release_readiness:"ready_for_validation"` (`started_at_utc: 2026-04-10T08:11:57.3500900Z`) | Re-run full DX/API cluster gate after new WS9/WS9A/WS10 feature slices |
 
 ---
 

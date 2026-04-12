@@ -317,7 +317,7 @@ Gate JSON artifacts under `tests/kpi/results/` include a **WS22 refresh on 2026-
 ---
 ## 5.22) Gate Reality Check (2026-04-12 Audit — auth+failover evidence)
 
-Actual gate artifact status verified by artifact inspection. WS22 now has refreshed gate artifacts on 2026-04-12 (`ws22-gate-summary` @05:15:44Z, `ws22-closure-gate-summary` @05:15:44Z, `ws22-release-readiness` @05:15:48Z, `ws22-gate-trend-comparison` @05:15:48Z, `ws22-pessimistic-lock-stability-badge` @05:15:48Z), while major cross-workstream baselines remain at their 2026-04-10 refresh points (WS5 @08:11:57Z, WS6 @10:17:50Z, release-ops-resilience @10:20:14Z, release-dx-api @08:11:57Z).
+Actual gate artifact status verified by artifact inspection. WS22 has refreshed artifacts on 2026-04-12 (`ws22-gate-summary` @05:15:44Z, `ws22-closure-gate-summary` @05:15:44Z, `ws22-release-readiness` @05:15:48Z, `ws22-gate-trend-comparison` @05:15:48Z, `ws22-pessimistic-lock-stability-badge` @05:15:48Z). Auth and failover baselines remain the canonical 2026-04-10 live reruns: WS5 gate `started_at_utc: 2026-04-10T08:11:57.4025991Z` (`duration_ms: 7600`), WS6 gate `started_at_utc: 2026-04-10T10:17:50.3230043Z` (`duration_ms: 132807`), release-ops-resilience `started_at_utc: 2026-04-10T10:20:14.5158929Z`, release-dx-api `started_at_utc: 2026-04-10T08:11:57.3500900Z`, and release-r2-failover `started_at_utc: 2026-04-10T10:17:48.8825283Z`.
 
 | Gate / WS | Artifact Status | release_readiness | Root Cause / Notes |
 |---|---|---|---|
