@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-12 (auth+failover artifact sync)
+**Last updated:** 2026-04-12 (WS22 artifact refresh; auth+failover baselines unchanged)
 
 ---
 
@@ -289,7 +289,7 @@ Gate JSON artifacts under `tests/kpi/results/` include a **WS22 refresh on 2026-
 | Gate | Scope | Local Artifact |
 |---|---|---|
 | WS5 Tenant Audit Runtime Smoke | Epic 5 + REQ-13 (tenant-filtered audit reads plus tenant-tagged SQL, WS2 storage, and WS4 ingest events over live HTTP) | `tests/kpi/results/ws5/tenant-audit-runtime-smoke.json` |
-| WS5 Gate Summary (includes tenant audit runtime pack) | Epic 5 (Auth/RBAC/TLS/TDE/KMS + tenant audit visibility) | `tests/kpi/results/ws5/ws5-gate-summary.json` |
+| WS5 Gate Summary (gate pack: ws5-security-smoke; tenant audit runtime tracked separately) | Epic 5 (Auth/RBAC/TLS/TDE/KMS + tenant audit visibility) | `tests/kpi/results/ws5/ws5-gate-summary.json` |
 
 ## 5.19) WS8 Tenant Autonomous Runtime Evidence
 
