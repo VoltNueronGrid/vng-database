@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-11 (session 169)
+**Last updated:** 2026-04-12 (auth+failover artifact sync)
 
 ---
 
@@ -30,7 +30,7 @@
 | Sprint 0 | Foundation & Prerequisites | Completed | ✅ Done (PR-007 deferred; pending cloud credential handoff) |
 | Sprint 1 | Core Engine Bootstrap (WS0, WS1, WS2) | In Flight | 🟡 Ready for Validation (WS0+WS1+WS2 base+closure gates all refreshed 2026-04-10) |
 | Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | Ready for Validation | 🟡 Ready for Validation (WS3 + closure + release gates all green 2026-04-10; WS2A+WS1A all green) |
-| Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | Ready for Validation | 🟡 Ready for Validation (WS4 + WS22 evidence current 2026-04-10) |
+| Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | Ready for Validation | 🟡 Ready for Validation (WS4 evidence 2026-04-10; WS22 evidence refreshed 2026-04-12) |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Ready for Validation (WS4A + WS5 gate artifacts refreshed 2026-04-10) |
 | Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation (R1 release gate refreshed 2026-04-10) |
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
@@ -192,7 +192,7 @@
 
 **Goal:** High-speed ingestion pipeline, pessimistic locking scaffold.
 **Dependencies:** Sprint 1 (WS2 storage foundation)
-**Status:** 🟡 Ready for Validation (WS4 + WS22 closure gates passed 2026-04-10)
+**Status:** 🟡 Ready for Validation (WS4 closure gate passed 2026-04-10; WS22 closure gate refreshed 2026-04-12)
 
 ### Workstreams
 
