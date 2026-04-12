@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (WS22 refresh + closure-date consistency sync)
+**Last updated:** 2026-04-12 (WS22 + WS4 parser + Sprint 5 release-label sync)
 
 ---
 
@@ -33,7 +33,7 @@
 | Sprint 2 | SQL Parity + Row Store + HTAP Query (WS1A, WS2A, WS3) | Ready for Validation | 🟡 Ready for Validation (WS3 + closure + release gates all green 2026-04-10; WS2A+WS1A all green) |
 | Sprint 3 | Ingestion + Pessimistic Locking (WS4, WS22) | Ready for Validation | 🟡 Ready for Validation (WS4 evidence 2026-04-10; WS22 evidence refreshed 2026-04-12) |
 | Sprint 4 | Streaming + Security (WS4A, WS5) | In Flight | 🟡 Ready for Validation (WS4A + WS5 gate artifacts refreshed 2026-04-10) |
-| Sprint 5 | Distributed HA/FT + Release R1 Gate (WS6) | In Flight | 🟡 Ready for Validation (R1 release gate refreshed 2026-04-10) |
+| Sprint 5 | Distributed HA/FT + Release R2 Gate (WS6) | In Flight | 🟡 Ready for Validation (R2 failover gate refreshed 2026-04-10) |
 | Sprint 6 | Plugin + AI + Audit (WS7, WS8, WS8A) | In Flight | 🟡 Ready for Validation (WS7/WS8/WS8A plus R3 release-gate bundle refreshed 2026-04-10) |
 | Sprint 7 | UX/DX + Drivers + i18n (WS9, WS9A, WS10, WS11) | In Flight | 🟡 Ready for Validation (DX/API cluster rerun green in session 131 on 2026-04-10) |
 | Sprint 8 | Reliability + Ops + Config (WS12, WS13, WS14) + Release R2 Gate | In Flight | 🟡 Ready for Validation (Ops/Resilience rerun green in session 136 on 2026-04-10, `started_at_utc: 2026-04-10T10:20:14Z`; R2 failover rerun green, `started_at_utc: 2026-04-10T10:17:48Z`) |
@@ -211,7 +211,7 @@
 
 ### Sprint 3 Deliverables
 - [x] WS4: Ingestion connector/registry scaffold created
-- [ ] WS4: Multi-format ingest (CSV/Parquet/JSON/Excel) runtime implementation
+- [x] WS4: Multi-format ingest (CSV/Parquet/JSON/Excel) runtime implementation
 - [x] WS4: Runtime ingest endpoints enforce operator auth + resource-scoped RBAC
 - [ ] WS4: Multithreaded import benchmark (REQ-07)
 - [x] WS22: Pessimistic lock acquire/release endpoints online
@@ -237,8 +237,8 @@
 
 | Gate | Scope | Status Source |
 |---|---|---|
-| WS4 Ingest Parser Smoke | Epic 4 + REQ-06 (CSV + JSON/NDJSON connectors + runtime ingest endpoints protected by mixed operator-or-tenant RBAC) | `tests/kpi/results/ws4/ws4-ingest-parser-smoke.json` |
-| WS4 Gate Summary | Epic 4 (ingest plugin scaffold + CSV/JSON parsers) | `tests/kpi/results/ws4/ws4-gate-summary.json` |
+| WS4 Ingest Parser Smoke | Epic 4 + REQ-06 (CSV + JSON/NDJSON + Parquet + Excel connectors + runtime ingest endpoints protected by mixed operator-or-tenant RBAC) | `tests/kpi/results/ws4/ws4-ingest-parser-smoke.json` |
+| WS4 Gate Summary | Epic 4 (ingest plugin scaffold + CSV/JSON/Parquet/Excel parsers) | `tests/kpi/results/ws4/ws4-gate-summary.json` |
 
 ---
 
@@ -278,11 +278,11 @@
 
 ---
 
-## Sprint 5 — Distributed HA/FT + Release R1 Gate
+## Sprint 5 — Distributed HA/FT + Release R2 Gate
 
-**Goal:** Distributed HA/FT/autoscaling/anti-SPOF, close R1 release gate.
+**Goal:** Distributed HA/FT/autoscaling/anti-SPOF, close R2 failover release gate.
 **Dependencies:** Sprint 1 (WS2), Sprint 2 (WS3)
-**Status:** ✅ WS6 Validated (2026-04-10) / R1 Ready for Validation
+**Status:** ✅ WS6 Validated (2026-04-10) / R2 Ready for Validation
 
 ### Workstreams
 
@@ -304,13 +304,13 @@
 - [x] WS6: RTO/RPO threshold scoring
 - [x] WS6: Chaos node-loss/rejoin + flap-resistance + reconcile latency
 - [x] WS6: Closure gate + R2 failover release gate evidence
-- [ ] R1 Release Gate: Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers fully validated
+- [x] R2 Failover Release Gate: WS6 + Ops/Resilience linkage validated
 
-### R1 Release Gate
+### R2 Failover Release Gate
 
 | Release | Scope Snapshot | Status | Gate Criteria |
 |---|---|---|---|
-| R1 | Single-node HTAP baseline + SQL/ingest/RBAC/basic drivers | Sprint 5 | 🟡 Ready for Validation | PR-002..PR-005 complete + KPI smoke baseline + WS1 UDF closure + R1 SQL/UDF gate (latest refresh 2026-04-10) |
+| R2 | Distributed HTAP baseline + failover/Ops resilience linkage | Sprint 5 | 🟡 Ready for Validation | WS6 closure + release-ops-resilience cluster + release-r2-failover gate (latest refresh 2026-04-10) |
 
 ### Gate Evidence — WS6 Release + Closure
 
@@ -1875,4 +1875,5 @@ A tracker row moves to **Done** only when:
 - Evidence artifacts are attached.
 - Dependencies in prerequisite gate are satisfied.
 - Risk register impact is updated.
+
 

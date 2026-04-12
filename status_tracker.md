@@ -7,7 +7,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-12 (WS22 refresh + closure-date consistency sync)
+**Last updated:** 2026-04-12 (WS22 + WS4 parser + Sprint 5 release-label sync)
 
 ---
 
@@ -341,7 +341,7 @@ Actual gate artifact status verified by artifact inspection. WS22 now has refres
 | WS8A gate | **passed** (2026-04-10 closure refresh) | **ready_for_validation** | Primary artifacts `ws8a-gate-summary.json`, `ws8a-closure-gate-summary.json`, and `ws8a-release-readiness.json` are current after the 2026-04-10 rerun; prior `ws8a-audit-companion` failure was resolved by adding required `chain_hash` in `tests/kpi/fixtures/ws8a/audit-events-sample.json`. |
 | WS9/WS9A/WS10 | **passed** (2026-04-10 DX/API refresh) | **ready_for_validation** | `ws9-gate-summary.json` and `ws10-gate-summary.json` refreshed 2026-04-10 via `run-release-dx-api-gate.ps1`; `ws9a` contract smoke and `release-dx-api-readiness.json` both green. |
 | WS11, WS15 | **passed** (2026-04-10 refresh) | **ready_for_validation** | WS11 i18n smoke + WS15 competitive-parity/backlog-score smokes both passed; gate summaries refreshed. |
-| R1 release gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `release-r1-sql-udf-readiness.json` + CI mirror refreshed via `run-release-r1-sql-udf-gate.ps1`; packs: `r1-baseline-checklist` (2026-04-10), `ws1-closure-gate` (2026-04-10), `ws22-closure-gate` (2026-04-10). |
+| R1 release gate | **passed** (2026-04-10 refresh) | **ready_for_validation** | `release-r1-sql-udf-readiness.json` + CI mirror refreshed via `run-release-r1-sql-udf-gate.ps1`; packs: `r1-baseline-checklist` (2026-04-10), `ws1-closure-gate` (2026-04-10), `ws22-closure-gate` (artifact currently refreshed 2026-04-12). |
 | R2 failover gate | **passed** (2026-04-10 session 136 refresh) | **ready_for_validation** | `release-r2-failover-readiness.json` and `ci-release-r2-failover-readiness.json` reran with `started_at_utc: 2026-04-10T10:17:48Z`; both show ready after rerun. |
 | R3 autonomous gate | **passed** (2026-04-10 refresh) | ready_for_validation | `release-r3-autonomous-readiness.json` + CI mirror refreshed; linkage checks are populated and passing (`ws8_closure`, `ws7_closure`, `ws8_release_summary`). |
 | R3 agent-authoring gate | **passed** (2026-04-10 refresh) | ready_for_validation | `release-r3-agent-authoring-readiness.json` + CI mirror refreshed; linkage checks are populated and passing (`ws8a_closure`, `ws8a_release_summary`, `ws8_closure`, `ws7_closure`). |
@@ -982,4 +982,5 @@ A tracker row moves to **Done** only when:
 | Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | In Progress |
 | WS7 plugin framework + connector pack | Extensibility Team | Ingestion Team, Security Team | Ready for Validation |
 | WS15 competitive feature adoption track | Architecture + Query Team | AI Platform Team, Integrations Team | Ready for Validation |
+
 
