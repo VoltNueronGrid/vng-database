@@ -1,7 +1,7 @@
 # VoltNueronGrid DB — Combined Status Tracker
 
-**Supersedes:** `status_tracker.md`, `status-tracker-v2.md`, `status-tracker-sprintwise-v1.md`  
-**Last updated:** 2026-04-12 (rollup; see `status_tracker.md` for full detail)  
+**Supersedes:** `status-tracker.md`, `status-tracker-sprintwise-v1.md`  
+**Last updated:** 2026-04-13 (rollup; see `status-tracker.md` for full detail)  
 **Source docs:** `reference/voltnuerongrid-db-design.md`, `reference/voltnuerongrid-ws.md`
 
 ---
@@ -19,7 +19,7 @@ To remove drift across prior tracker files, this tracker uses one status model:
 | DEFERRED | Intentionally paused pending external dependency |
 | BLOCKED | Cannot proceed due to active blocker |
 
-**Precedence used for correctness:** implementation maturity from `status-tracker-v2.md` (latest session updates), release/governance posture from `status_tracker.md` and sprint planning from `status-tracker-sprintwise-v1.md`.
+**Precedence used for correctness:** release/governance posture from `status-tracker.md` and sprint planning from `status-tracker-sprintwise-v1.md`.
 
 ---
 

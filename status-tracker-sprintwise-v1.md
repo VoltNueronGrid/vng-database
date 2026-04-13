@@ -7,7 +7,7 @@
 
 **Purpose:** Sprint-by-sprint execution view — tracks all requirements, epics, hardening items, prerequisites, releases, and governance closures.
 
-**Last updated:** 2026-04-12 (Session 29 auth+failover hardening completion, release-readiness finalization)
+**Last updated:** 2026-04-13 (tracker consolidation + Session 29 auth+failover completion retained)
 
 ---
 
@@ -577,7 +577,7 @@ Evidence chronology note: use `tests/kpi/results/ws5/ws5-gate-summary.json`, `te
 
 ## Full Release Tracker
 
-Canonical audit reference: release and auth/failover chronology assertions are anchored in `status_tracker.md` section 5.22 (Gate Reality Check).
+Canonical audit reference: release and auth/failover chronology assertions are anchored in `status-tracker.md` section 5.22 (Gate Reality Check).
 
 | Release | Scope Snapshot | Sprint Target | Status | Gate Criteria |
 |---|---|---|---|---|

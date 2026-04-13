@@ -172,7 +172,7 @@ Next step: scaffold Rust workspace and implement Phase 1 core engine foundations
   - Uses multiple subagents in parallel for read-only discovery each iteration.
   - Implements one slice per iteration across SQL, exec, and service layers.
   - Updates both tracker files each iteration:
-  - status_tracker.md
+  - status-tracker.md
   - status-tracker-sprintwise-v1.md
   - Runs targeted tests and full suites.
   - Creates one commit per successful iteration and pushes immediately.
