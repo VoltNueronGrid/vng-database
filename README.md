@@ -94,6 +94,20 @@ Execution modes:
 
 Current repo state is design-first. The commands below are the intended runbooks once scaffolding is in place.
 
+### Single-Node (Run locally):
+```bash
+Set-Location "D:\by\polap-db"
+$env:VNG_ADMIN_API_KEY="secret"
+cargo run -p voltnuerongridd
+```
+
+### Command to test benchmark:
+```bash
+Set-Location "D:\by\polap-db"
+$env:VNG_ADMIN_API_KEY="secret"
+pwsh ./tests/kpi/scripts/run-req10-benchmark-smoke.ps1 -BaseUrl "http://127.0.0.1:8080"
+```
+
 ### Single-Node (Local Laptop)
 
 - Prerequisites: Docker Desktop, Rust toolchain, 16 GB RAM recommended
