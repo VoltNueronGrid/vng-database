@@ -1,19 +1,19 @@
 {
   "gate": "release-ops-resilience-cluster",
-  "status": "passed",
+  "status": "failed",
   "release_targets": [
     "R2",
     "R3"
   ],
-  "release_readiness": "ready_for_validation",
+  "release_readiness": "blocked",
   "scope": [
     "WS12",
     "WS13",
     "WS14"
   ],
-  "started_at_utc": "2026-04-10T10:20:14.5158929Z",
-  "finished_at_utc": "2026-04-10T10:20:28.6981404Z",
-  "duration_ms": 14182,
+  "started_at_utc": "2026-04-14T06:15:38.6524499Z",
+  "finished_at_utc": "2026-04-14T06:15:51.6872973Z",
+  "duration_ms": 13035,
   "packs": [
     {
       "pack": "ws12-reliability-smoke",
@@ -29,8 +29,8 @@
     },
     {
       "pack": "ws14-config-gate",
-      "status": "passed",
-      "detail": "ok",
+      "status": "failed",
+      "detail": "script_invocation_failed",
       "artifact": "tests/kpi/results/ws14/ws14-gate-summary.json"
     }
   ]

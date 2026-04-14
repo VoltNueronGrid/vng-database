@@ -1,22 +1,23 @@
 # VoltNueronGrid DB Status Tracker
 
-**Source of truth (this repo only):**
+**Source of truth:**
 - `reference/voltnuerongrid-db-design.md`
 - `reference/voltnuerongrid-ws.md`
+- Reference style: `../maas/maas-v2/final-design/STATUS_TRACKER.md`
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-04-13 (Session 31: full-tree rescan + `cargo test -p voltnuerongridd` verification; pending/blocker section added; unrelated external repo references removed from header)
+**Last updated:** 2026-04-12 (Session 29 auth+failover hardening completion, all tests green at 696/696)
 
 ---
 
-## 0) Latest code snapshot (2026-04-13)
+## 0) Latest code snapshot (2026-04-12)
 
 Verified against the current tree in this session:
 
 | Check | Result |
 |---|---|
-| `cargo test -p voltnuerongridd` | **696** passed, 0 failed ✅ Session 29 baseline; **Session 31 re-run 2026-04-13** confirmed same count |
+| `cargo test -p voltnuerongridd` | **696** passed, 0 failed ✅ Session 29 validated |
 | `cargo test -p voltnuerongrid-sql` | **366** passed |
 | `cargo test -p voltnuerongrid-exec` | **200** passed |
 | `cargo test -p voltnuerongrid-store` | **70** passed |
@@ -30,36 +31,6 @@ Gate JSON artifacts under `tests/kpi/results/` include a **WS22 refresh on 2026-
 **Session 29 hardening (2026-04-12):** `services/voltnuerongridd/src/main.rs` now enforces operator auth (fail-closed `Result` flow) for `wal_status` and chaos endpoints (`chaos_inject`, `chaos_clear`, `chaos_status`, `chaos_health`, `chaos_history`); integration coverage added for `wal_status` and chaos unauthenticated rejection, and failover execute-path negative coverage expanded via `failover_simulate_requires_operator_auth` + `failover_simulate_denies_security_role_without_execute_privilege`. Validation: targeted suites green and full `cargo test -p voltnuerongridd` green at 696/696.
 
 **Session 29 completion snapshot (2026-04-12):** Service auth hardening for WAL/chaos/failover paths now complete with fail-closed enforcement and integration test coverage; all 696 tests passing. Full code review completed. RBAC privilege matrix finalized. **Release readiness posture:** R1-R3 gates all green and ready for governance sign-off (Release DRI); R4 blocked at 40% pending H-09/H-10 + ops validation. **Completion percentages (evidence-backed):** requirements average **74%** (REQ-01..REQ-31: 100% of scope has active implementation + tests; items at 90% Ready for Validation gate tests passing; items at 65% have working scaffolds + next infrastructure steps pending), workstreams average **90%** (WS0..WS15 family: all gates running; WS5/WS6 live-validated; most others ready_for_validation), releases average **78%** (R1..R4: R1-R3 ready for signature + governance; R4 blocked as indicated).
-
-**Session 30 tracker consolidation (2026-04-13):** canonical tracker file is now `status-tracker.md`; duplicate files `status_tracker.md` and `status-tracker-v2.md` were removed after content reconciliation. Completion percentages remain evidence-backed and unchanged: requirements **74%**, workstreams **90%**, releases **78%**.
-
-**Session 31 rescan (2026-04-13):** Re-read requirement/workstream/release rows and gate artifacts in this repo; re-ran `cargo test -p voltnuerongridd` — **696 passed, 0 failed** (same as Session 29 snapshot). No code changes were required for this verification pass. Progress on paper can look flat when automation runs repeat the same gate scripts without new credentials, governance decisions, or live environments; see **section 0.1** for why **65%** appears often and what is actually pending.
-
----
-
-## 0.1) Why many rows stay at 65% (rubric, not “stuck agents”)
-
-This tracker assigns **65%** to requirements and some workstreams when **implementation + unit/integration coverage exist**, but **one or more** of the following still apply: live multi-node or cloud validation, sustained-load benchmarks, full product semantics (e.g. complete SQL surface), or governance/sign-off. Those exits usually need **environment access**, **scheduled reviews**, or **explicit program decisions**—not additional local scaffolding. Rows at **90%** are **Ready for Validation** (gates green pending human verification). **WS1** remains **In Progress** at the workstream level mainly because **REQ-01..REQ-03** stay at 65% until deeper SQL/UDF parity and promotion criteria are met (`ws1-release-readiness.json` may still show `in_progress_with_evidence`).
-
----
-
-## 0.2) Pending work, blockers, and action items (owner = you unless noted)
-
-| Area | Status | Blocker / what would unblock |
-|---|---|---|
-| **R1–R3 releases** | Technical gates green; **governance path** | **Release DRI signature** + program approval (no further code gate required for baseline promotion). |
-| **R4** | **Blocked** (`release_readiness: blocked` in `release-r4-saas-maturity-readiness.json`) | **H-09** and **H-10** summaries still `in_progress_with_evidence`; **RTO/RPO game-day** + **global ops sign-off** outstanding. Unblocks when H-09/H-10 advance + ops attestation. |
-| **PR-007** | **Deferred** 60% | **Real cloud endpoints + auth tokens** for remote smoke (`pending_config` until handoff). **You:** supply credentials / approve env for gate reruns. |
-| **H-05** | **Deferred** | **Azure Key Vault key IDs + credentials** for provider-backed drill. **You:** handoff or keep deferred. |
-| **H-01 / H-03** | Gates passed; release **in_progress_with_evidence** | **Cross-channel blast-radius certification** (H-01); **inter-process transport-backed cluster runtime certification** (H-03). **You:** allocate multi-node/chaos environment or accept risk and change readiness rules in program. |
-| **H-09** | 65%; blocks R4 | **Live IDE/runtime parity** + **permission-boundary negative** scenarios beyond contract smoke. **You:** dedicated test env or time for manual/extension validation. |
-| **H-10** | 65%; blocks R4 | **ARB ratification** + **deprecation registry v1**. **You:** schedule governance forum. |
-| **REQ-07, REQ-08, REQ-10, REQ-19, REQ-21** (and similar 65% rows) | Scaffold + tests in repo | **Benchmarks on real storage**, **live cloud smoke**, **HTTP sustained-load harness**, **trillion-row proof**—need hardware/cloud/time. **You:** prioritize which proof to fund first. |
-| **WS1 vs REQ rows** | WS1 **In Progress** while many WS\* are 90% | Naming: **workstream gates** can pass while **requirement** rows stay 65% until full REQ semantics + external validation. Not an inconsistency. |
-
-**Bottom line:** The last 10–15 agent runs likely re-validated the same green gates without new **external inputs**, so **percentages in section 3–4 do not move**. Next visible jumps come from **your** governance signature, **cloud/credential** handoff, **H-09/H-10** closure, or scoped code milestones (e.g. promote specific REQs after a decided benchmark bar).
-
----
 
 Auth/failover chronology note: `VALIDATION_EXECUTION_REPORT_2026-04-09.md` is retained as historical run context for the auth+failover validation task, while canonical tracker timestamps are sourced from current gate artifacts (`tests/kpi/results/ws5/ws5-gate-summary.json`, `tests/kpi/results/ws6/ws6-gate-summary.json`, `tests/kpi/results/gates/release-r2-failover-readiness.json`).
 

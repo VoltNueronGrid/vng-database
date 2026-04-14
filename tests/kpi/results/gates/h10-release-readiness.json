@@ -1,24 +1,24 @@
 {
   "gate": "h10-governance-readiness",
-  "status": "passed",
-  "release_readiness": "in_progress_with_evidence",
+  "status": "failed",
+  "release_readiness": "blocked",
   "release_targets": [
     "R4"
   ],
   "scope": [
     "H-10"
   ],
-  "generated_at_utc": "2026-04-10T08:06:29.1757421Z",
+  "generated_at_utc": "2026-04-14T06:15:56.6396664Z",
   "sources": {
     "summary": "tests/kpi/results/h10/h10-gate-summary.json",
     "checklist": "tests/kpi/results/h10/h10-governance-checklist.json"
   },
   "checks": {
-    "h10_gate_passed": true,
-    "h10_checklist_passed": true
+    "h10_gate_passed": false,
+    "h10_checklist_passed": false
   },
   "highlights": {
     "checklist_total": 5,
-    "checklist_passed": 5
+    "checklist_passed": 0
   }
 }

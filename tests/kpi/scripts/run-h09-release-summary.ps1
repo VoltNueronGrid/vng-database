@@ -22,6 +22,8 @@ foreach ($path in @($SummaryPath, $ParityPath)) {
 $summary = Get-Content -Raw -Path $SummaryPath | ConvertFrom-Json
 $parity = Get-Content -Raw -Path $ParityPath | ConvertFrom-Json
 
+$programSignoffApproved = ([string]$env:VNG_PROGRAM_SIGNOFF_APPROVED).ToLowerInvariant() -in @("1", "true", "yes", "y")
+
 $checks = [ordered]@{
   h09_gate_passed = ([string]$summary.status -eq "passed")
   h09_parity_smoke_passed = ([string]$parity.status -eq "passed")
@@ -32,7 +34,7 @@ $status = if ((@($checks.Values | Where-Object { $_ -eq $false }).Count) -eq 0) 
 $artifact = [ordered]@{
   gate = "h09-ide-parity-readiness"
   status = $status
-  release_readiness = if ($status -eq "passed") { "in_progress_with_evidence" } else { "blocked" }
+  release_readiness = if ($status -ne "passed") { "blocked" } elseif ($programSignoffApproved) { "ready_for_validation" } else { "in_progress_with_evidence" }
   release_targets = @("R4")
   scope = @("H-09", "REQ-28")
   generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")

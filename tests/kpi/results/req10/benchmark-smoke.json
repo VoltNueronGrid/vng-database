@@ -1,9 +1,9 @@
 {
   "smoke": "req10-benchmark",
-  "status": "passed",
-  "checks_passed": 12,
+  "status": "failed",
+  "checks_passed": 8,
   "checks_total": 12,
-  "generated_at_utc": "2026-04-10T13:36:28.8523885+05:30",
+  "generated_at_utc": "2026-04-14T11:45:56.3074009+05:30",
   "checks": [
     {
       "check": "benchmark-ingest-route-exists",
@@ -47,23 +47,23 @@
     },
     {
       "check": "live-benchmark-ingest-responds",
-      "ok": true,
-      "detail": "benchmark/ingest status=ok rps=1000000"
+      "ok": false,
+      "detail": "Error: No connection could be made because the target machine actively refused it."
     },
     {
       "check": "live-benchmark-ingest-rps-positive",
-      "ok": true,
-      "detail": "records_per_second=1000000"
+      "ok": false,
+      "detail": "Skipped (request failed)"
     },
     {
       "check": "live-benchmark-query-responds",
-      "ok": true,
-      "detail": "benchmark/query status=ok ops=116279"
+      "ok": false,
+      "detail": "Error: No connection could be made because the target machine actively refused it."
     },
     {
       "check": "live-benchmark-query-ops-positive",
-      "ok": true,
-      "detail": "ops_per_second=116279"
+      "ok": false,
+      "detail": "Skipped (request failed)"
     }
   ]
 }

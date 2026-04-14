@@ -1,16 +1,16 @@
 {
   "smoke": "req08-cloud-saas-deployment-baseline",
   "status": "passed",
-  "started_at_utc": "2026-04-10T08:06:28.1920682Z",
-  "finished_at_utc": "2026-04-10T08:06:28.3188331Z",
-  "duration_ms": 127,
+  "started_at_utc": "2026-04-14T06:15:51.7460898Z",
+  "finished_at_utc": "2026-04-14T06:15:51.8291689Z",
+  "duration_ms": 83,
   "providers_checked": [
     "aws",
     "azure",
     "gcp"
   ],
   "critical_failed": 0,
-  "total_checks": 37,
+  "total_checks": 35,
   "checks": [
     {
       "check": "cloud_dir_exists_aws",
@@ -183,17 +183,7 @@
       "detail": "cache/redis/6380 present in a provider README"
     },
     {
-      "check": "design_doc_approx_count_distinct",
-      "ok": false,
-      "detail": "reference/voltnuerongrid-db-design.md"
-    },
-    {
-      "check": "design_doc_top_n",
-      "ok": false,
-      "detail": "reference/voltnuerongrid-db-design.md"
-    },
-    {
-      "check": "design_doc_bottom_n",
+      "check": "design_doc_present",
       "ok": false,
       "detail": "reference/voltnuerongrid-db-design.md"
     }

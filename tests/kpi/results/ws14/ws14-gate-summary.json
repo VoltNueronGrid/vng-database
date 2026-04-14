@@ -1,26 +1,26 @@
 {
   "gate": "ws14",
-  "status": "passed",
-  "started_at_utc": "2026-04-10T10:20:21.8330890Z",
-  "finished_at_utc": "2026-04-10T10:20:28.6882952Z",
-  "duration_ms": 6855,
+  "status": "failed",
+  "started_at_utc": "2026-04-14T06:15:43.1067599Z",
+  "finished_at_utc": "2026-04-14T06:15:51.6811555Z",
+  "duration_ms": 8574,
   "packs": [
     {
       "pack": "ws14-config-baseline",
-      "status": "passed",
-      "detail": "ok",
+      "status": "failed",
+      "detail": "WS14 config contract smoke failed.",
       "artifact": "tests/kpi/results/ws14/config-contract-smoke.json"
     },
     {
       "pack": "ws14-schema-lint",
-      "status": "passed",
-      "detail": "ok",
+      "status": "failed",
+      "detail": "WS14 schema lint gate failed.",
       "artifact": "tests/kpi/results/ws14/schema-lint-gate.json"
     },
     {
       "pack": "ws14-config-conformance",
-      "status": "passed",
-      "detail": "ok",
+      "status": "failed",
+      "detail": "Cannot find path 'D:\\by\\polap-db\\reference\\config-contracts\\ws14\\driver-routing-config.json' because it does not exist.",
       "artifact": "tests/kpi/results/ws14/config-conformance-aggregate.json"
     }
   ]
