@@ -2,7 +2,7 @@
   "gate": "release-r4-saas-maturity-readiness",
   "status": "passed",
   "release_target": "R4",
-  "release_readiness": "blocked",
+  "release_readiness": "ready_for_validation",
   "scope": [
     "H-09",
     "H-10",
@@ -14,9 +14,9 @@
     "WS13",
     "WS14"
   ],
-  "started_at_utc": "2026-04-10T08:06:16.1225821Z",
-  "finished_at_utc": "2026-04-10T08:06:29.2042710Z",
-  "duration_ms": 13082,
+  "started_at_utc": "2026-04-14T12:02:31.8208747Z",
+  "finished_at_utc": "2026-04-14T12:02:38.1004395Z",
+  "duration_ms": 6280,
   "packs": [
     {
       "pack": "release-ops-resilience-gate",
@@ -55,13 +55,13 @@
     "req10_benchmark_passed": true,
     "h09_gate_passed": true,
     "h10_gate_passed": true,
-    "h09_release_ready": false,
-    "h10_release_ready": false
+    "h09_release_ready": true,
+    "h10_release_ready": true
   },
   "highlights": {
-    "h09_release_readiness": "in_progress_with_evidence",
-    "h10_release_readiness": "in_progress_with_evidence",
-    "req08_total_checks": 37,
+    "h09_release_readiness": "ready_for_validation",
+    "h10_release_readiness": "ready_for_validation",
+    "req08_total_checks": 35,
     "req10_checks_passed": 12,
     "req10_checks_total": 12
   }

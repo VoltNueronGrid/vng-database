@@ -1,14 +1,14 @@
 {
   "smoke": "h09-ide-parity-matrix",
-  "status": "failed",
-  "started_at_utc": "2026-04-14T06:15:56.4000232Z",
-  "finished_at_utc": "2026-04-14T06:15:56.4187138Z",
-  "duration_ms": 19,
+  "status": "passed",
+  "started_at_utc": "2026-04-14T12:02:37.8468985Z",
+  "finished_at_utc": "2026-04-14T12:02:37.8701963Z",
+  "duration_ms": 23,
   "checks": [
     {
       "check": "h09_matrix_doc_exists",
-      "ok": false,
-      "detail": "reference/h09-cross-ide-parity-test-matrix.md"
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/h09-cross-ide-parity-test-matrix.md"
     },
     {
       "check": "ws9a_contract_artifact_exists",
@@ -31,7 +31,7 @@
       "detail": "status=passed"
     }
   ],
-  "matrix_path": "reference/h09-cross-ide-parity-test-matrix.md",
+  "matrix_path": "services/voltnuerongridd/reference/h09-cross-ide-parity-test-matrix.md",
   "baseline_artifacts": [
     "tests/kpi/results/ws9a/ide-contract-smoke.json",
     "tests/kpi/results/ws9a/ws9a-gate-summary.json"

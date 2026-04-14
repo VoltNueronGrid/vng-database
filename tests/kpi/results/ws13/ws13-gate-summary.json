@@ -1,9 +1,9 @@
 {
   "gate": "ws13",
   "status": "passed",
-  "started_at_utc": "2026-04-14T06:15:42.6781641Z",
-  "finished_at_utc": "2026-04-14T06:15:43.0415777Z",
-  "duration_ms": 363,
+  "started_at_utc": "2026-04-14T12:02:34.1155182Z",
+  "finished_at_utc": "2026-04-14T12:02:34.2688830Z",
+  "duration_ms": 153,
   "packs": [
     {
       "pack": "ws13-multicloud-profile",

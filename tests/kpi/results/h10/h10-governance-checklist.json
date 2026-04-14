@@ -1,33 +1,33 @@
 {
   "smoke": "h10-governance-checklist",
-  "status": "failed",
-  "started_at_utc": "2026-04-14T06:15:56.5863933Z",
-  "finished_at_utc": "2026-04-14T06:15:56.5900648Z",
-  "duration_ms": 4,
+  "status": "passed",
+  "started_at_utc": "2026-04-14T12:02:38.0364821Z",
+  "finished_at_utc": "2026-04-14T12:02:38.0469927Z",
+  "duration_ms": 11,
   "checks": [
     {
       "check": "arb_charter_exists",
-      "ok": false,
-      "detail": "reference/h10-arb-charter.md"
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/h10-arb-charter.md"
     },
     {
       "check": "deprecation_policy_exists",
-      "ok": false,
-      "detail": "reference/h10-deprecation-policy.md"
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/h10-deprecation-policy.md"
     },
     {
       "check": "deprecation_registry_exists",
-      "ok": false,
-      "detail": "reference/h10-deprecation-registry.md"
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/h10-deprecation-registry.md"
     },
     {
       "check": "governance_checklist_exists",
-      "ok": false,
-      "detail": "reference/h10-governance-checklist.md"
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/h10-governance-checklist.md"
     },
     {
       "check": "deprecation_registry_seeded",
-      "ok": false,
+      "ok": true,
       "detail": "Contains initial D-001 entry"
     }
   ]

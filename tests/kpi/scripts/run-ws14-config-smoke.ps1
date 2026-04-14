@@ -12,10 +12,26 @@ function Ensure-OutputDir {
   }
 }
 
+function Resolve-FirstExistingPath {
+  param([string[]]$Candidates)
+  $valid = @($Candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $found = $valid | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ([string]::IsNullOrWhiteSpace($found)) {
+    return $valid[0]
+  }
+  return $found
+}
+
 Ensure-OutputDir -PathValue $OutputPath
 
-$driverJsonPath = "reference/config-contracts/ws14/driver-routing-config.json"
-$securityJsonPath = "reference/config-contracts/ws14/security-control-config.json"
+$driverJsonPath = Resolve-FirstExistingPath -Candidates @(
+  "reference/config-contracts/ws14/driver-routing-config.json",
+  "services/voltnuerongridd/reference/config-contracts/ws14/driver-routing-config.json"
+)
+$securityJsonPath = Resolve-FirstExistingPath -Candidates @(
+  "reference/config-contracts/ws14/security-control-config.json",
+  "services/voltnuerongridd/reference/config-contracts/ws14/security-control-config.json"
+)
 
 $start = Get-Date
 $command = "cargo test -p voltnuerongrid-driver-rust validates_driver_contract; cargo test -p voltnuerongrid-auth validates_security_config; json schema parse checks"

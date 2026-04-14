@@ -21,17 +21,45 @@ function Add-Check {
   }
 }
 
+function Resolve-FirstExistingPath {
+  param([string[]]$Candidates)
+  $valid = @($Candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $found = $valid | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ([string]::IsNullOrWhiteSpace($found)) {
+    return $valid[0]
+  }
+  return $found
+}
+
 Ensure-OutputDir -PathValue $OutputPath
 $start = Get-Date
 $checks = @()
 
 $files = @{
-  driverYaml = "reference/config-contracts/ws14/driver-routing-config.yaml"
-  driverJson = "reference/config-contracts/ws14/driver-routing-config.json"
-  driverProps = "reference/config-contracts/ws14/driver-routing-config.properties"
-  securityYaml = "reference/config-contracts/ws14/security-control-config.yaml"
-  securityJson = "reference/config-contracts/ws14/security-control-config.json"
-  securityProps = "reference/config-contracts/ws14/security-control-config.properties"
+  driverYaml = Resolve-FirstExistingPath -Candidates @(
+    "reference/config-contracts/ws14/driver-routing-config.yaml",
+    "services/voltnuerongridd/reference/config-contracts/ws14/driver-routing-config.yaml"
+  )
+  driverJson = Resolve-FirstExistingPath -Candidates @(
+    "reference/config-contracts/ws14/driver-routing-config.json",
+    "services/voltnuerongridd/reference/config-contracts/ws14/driver-routing-config.json"
+  )
+  driverProps = Resolve-FirstExistingPath -Candidates @(
+    "reference/config-contracts/ws14/driver-routing-config.properties",
+    "services/voltnuerongridd/reference/config-contracts/ws14/driver-routing-config.properties"
+  )
+  securityYaml = Resolve-FirstExistingPath -Candidates @(
+    "reference/config-contracts/ws14/security-control-config.yaml",
+    "services/voltnuerongridd/reference/config-contracts/ws14/security-control-config.yaml"
+  )
+  securityJson = Resolve-FirstExistingPath -Candidates @(
+    "reference/config-contracts/ws14/security-control-config.json",
+    "services/voltnuerongridd/reference/config-contracts/ws14/security-control-config.json"
+  )
+  securityProps = Resolve-FirstExistingPath -Candidates @(
+    "reference/config-contracts/ws14/security-control-config.properties",
+    "services/voltnuerongridd/reference/config-contracts/ws14/security-control-config.properties"
+  )
 }
 
 foreach ($k in $files.Keys) {

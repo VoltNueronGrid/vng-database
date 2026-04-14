@@ -21,15 +21,37 @@ function Add-Check {
   }
 }
 
+function Resolve-FirstExistingPath {
+  param([string[]]$Candidates)
+  $valid = @($Candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $found = $valid | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ([string]::IsNullOrWhiteSpace($found)) {
+    return $valid[0]
+  }
+  return $found
+}
+
 Ensure-OutputDir -PathValue $OutputPath
 
 $start = Get-Date
 $checks = @()
 
-$charterPath = "reference/h10-arb-charter.md"
-$policyPath = "reference/h10-deprecation-policy.md"
-$registryPath = "reference/h10-deprecation-registry.md"
-$checklistPath = "reference/h10-governance-checklist.md"
+$charterPath = Resolve-FirstExistingPath -Candidates @(
+  "reference/h10-arb-charter.md",
+  "services/voltnuerongridd/reference/h10-arb-charter.md"
+)
+$policyPath = Resolve-FirstExistingPath -Candidates @(
+  "reference/h10-deprecation-policy.md",
+  "services/voltnuerongridd/reference/h10-deprecation-policy.md"
+)
+$registryPath = Resolve-FirstExistingPath -Candidates @(
+  "reference/h10-deprecation-registry.md",
+  "services/voltnuerongridd/reference/h10-deprecation-registry.md"
+)
+$checklistPath = Resolve-FirstExistingPath -Candidates @(
+  "reference/h10-governance-checklist.md",
+  "services/voltnuerongridd/reference/h10-governance-checklist.md"
+)
 
 Add-Check -Name "arb_charter_exists" -Ok (Test-Path $charterPath) -Detail $charterPath
 Add-Check -Name "deprecation_policy_exists" -Ok (Test-Path $policyPath) -Detail $policyPath

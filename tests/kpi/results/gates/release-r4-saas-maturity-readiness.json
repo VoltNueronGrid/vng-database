@@ -1,8 +1,8 @@
 {
   "gate": "release-r4-saas-maturity-readiness",
-  "status": "failed",
+  "status": "passed",
   "release_target": "R4",
-  "release_readiness": "blocked",
+  "release_readiness": "ready_for_validation",
   "scope": [
     "H-09",
     "H-10",
@@ -14,14 +14,14 @@
     "WS13",
     "WS14"
   ],
-  "started_at_utc": "2026-04-14T06:15:38.5746460Z",
-  "finished_at_utc": "2026-04-14T06:15:56.6678781Z",
-  "duration_ms": 18093,
+  "started_at_utc": "2026-04-14T12:02:31.8208747Z",
+  "finished_at_utc": "2026-04-14T12:02:38.1004395Z",
+  "duration_ms": 6280,
   "packs": [
     {
       "pack": "release-ops-resilience-gate",
-      "status": "failed",
-      "detail": "script_invocation_failed",
+      "status": "passed",
+      "detail": "ok",
       "artifact": "tests/kpi/results/gates/release-ops-resilience-readiness.json"
     },
     {
@@ -38,31 +38,31 @@
     },
     {
       "pack": "h09-gate",
-      "status": "failed",
-      "detail": "script_invocation_failed",
+      "status": "passed",
+      "detail": "ok",
       "artifact": "tests/kpi/results/gates/h09-release-readiness.json"
     },
     {
       "pack": "h10-gate",
-      "status": "failed",
-      "detail": "script_invocation_failed",
+      "status": "passed",
+      "detail": "ok",
       "artifact": "tests/kpi/results/gates/h10-release-readiness.json"
     }
   ],
   "checks": {
-    "ops_resilience_ready": false,
+    "ops_resilience_ready": true,
     "req08_cloud_saas_passed": true,
-    "req10_benchmark_passed": false,
-    "h09_gate_passed": false,
-    "h10_gate_passed": false,
-    "h09_release_ready": false,
-    "h10_release_ready": false
+    "req10_benchmark_passed": true,
+    "h09_gate_passed": true,
+    "h10_gate_passed": true,
+    "h09_release_ready": true,
+    "h10_release_ready": true
   },
   "highlights": {
-    "h09_release_readiness": "blocked",
-    "h10_release_readiness": "blocked",
+    "h09_release_readiness": "ready_for_validation",
+    "h10_release_readiness": "ready_for_validation",
     "req08_total_checks": 35,
-    "req10_checks_passed": 8,
+    "req10_checks_passed": 12,
     "req10_checks_total": 12
   }
 }

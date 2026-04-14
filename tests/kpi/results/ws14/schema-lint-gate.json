@@ -1,39 +1,99 @@
 {
   "smoke": "ws14-schema-lint-gate",
-  "status": "failed",
-  "started_at_utc": "2026-04-14T06:15:51.5785726Z",
-  "finished_at_utc": "2026-04-14T06:15:51.6170165Z",
-  "duration_ms": 38,
+  "status": "passed",
+  "started_at_utc": "2026-04-14T12:02:36.6562910Z",
+  "finished_at_utc": "2026-04-14T12:02:36.7112389Z",
+  "duration_ms": 55,
   "checks": [
     {
       "check": "exists_driverJson",
-      "ok": false,
-      "detail": "reference/config-contracts/ws14/driver-routing-config.json"
-    },
-    {
-      "check": "exists_securityProps",
-      "ok": false,
-      "detail": "reference/config-contracts/ws14/security-control-config.properties"
-    },
-    {
-      "check": "exists_driverProps",
-      "ok": false,
-      "detail": "reference/config-contracts/ws14/driver-routing-config.properties"
-    },
-    {
-      "check": "exists_securityJson",
-      "ok": false,
-      "detail": "reference/config-contracts/ws14/security-control-config.json"
-    },
-    {
-      "check": "exists_driverYaml",
-      "ok": false,
-      "detail": "reference/config-contracts/ws14/driver-routing-config.yaml"
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/config-contracts/ws14/driver-routing-config.json"
     },
     {
       "check": "exists_securityYaml",
-      "ok": false,
-      "detail": "reference/config-contracts/ws14/security-control-config.yaml"
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/config-contracts/ws14/security-control-config.yaml"
+    },
+    {
+      "check": "exists_driverYaml",
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/config-contracts/ws14/driver-routing-config.yaml"
+    },
+    {
+      "check": "exists_securityProps",
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/config-contracts/ws14/security-control-config.properties"
+    },
+    {
+      "check": "exists_driverProps",
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/config-contracts/ws14/driver-routing-config.properties"
+    },
+    {
+      "check": "exists_securityJson",
+      "ok": true,
+      "detail": "services/voltnuerongridd/reference/config-contracts/ws14/security-control-config.json"
+    },
+    {
+      "check": "driver_json_schema",
+      "ok": true,
+      "detail": "driver.pool.maxConnections exists"
+    },
+    {
+      "check": "security_json_schema",
+      "ok": true,
+      "detail": "security allowedOperatorRoles + encryptionAtRestRequired + kmsKeyRefEnv exist"
+    },
+    {
+      "check": "driver_yaml_has_driver_root",
+      "ok": true,
+      "detail": "driver root"
+    },
+    {
+      "check": "driver_yaml_has_pool_root",
+      "ok": true,
+      "detail": "pool root"
+    },
+    {
+      "check": "driver_yaml_has_timeout",
+      "ok": true,
+      "detail": "requestTimeoutMs numeric"
+    },
+    {
+      "check": "security_yaml_has_security_root",
+      "ok": true,
+      "detail": "security root"
+    },
+    {
+      "check": "security_yaml_has_roles",
+      "ok": true,
+      "detail": "allowedOperatorRoles root"
+    },
+    {
+      "check": "security_yaml_has_encryption_required",
+      "ok": true,
+      "detail": "encryptionAtRestRequired boolean"
+    },
+    {
+      "check": "security_yaml_has_kms_ref",
+      "ok": true,
+      "detail": "kmsKeyRefEnv present"
+    },
+    {
+      "check": "security_yaml_has_token_ttl",
+      "ok": true,
+      "detail": "tokenTtlSeconds numeric"
+    },
+    {
+      "check": "driver_properties_kv_format",
+      "ok": true,
+      "detail": "all lines are key=value"
+    },
+    {
+      "check": "security_properties_kv_format",
+      "ok": true,
+      "detail": "all lines are key=value"
     }
   ]
 }
