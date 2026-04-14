@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "id": "bench-admin-1",
+  "method": "tools/benchmark",
+  "params": {
+    "benchmark_name": "query_select_all",
+    "params": {
+      "dataset": "small"
+    },
+    "iterations": 50
+  },
+  "headers": {
+    "x_vng_admin_key": "secret"
+  }
+}

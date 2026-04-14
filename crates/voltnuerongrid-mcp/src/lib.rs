@@ -284,6 +284,26 @@ async fn handle_benchmark_tool(params: &Value, auth: &McpAuthContext) -> Result<
     }))
 }
 
+/// Blocking wrapper for stdio MCP server
+/// 
+/// Converts async process_request to sync for use in blocking contexts (stdio server).
+/// Uses tokio::runtime::Handle to run async code in existing runtime, or creates one if needed.
+pub fn process_mcp_request_blocking(request: McpRequest) -> McpResponse {
+    let capabilities = McpServerCapabilities::default();
+    
+    // Try to use existing tokio runtime, or create a new one
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.block_on(process_request(request, &capabilities))
+        }
+        Err(_) => {
+            // No existing runtime, create new one
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(process_request(request, &capabilities))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

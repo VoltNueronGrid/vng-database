@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": "health-operator-1",
+  "method": "tools/health",
+  "params": {
+    "detailed": true
+  },
+  "headers": {
+    "x_vng_operator_id": "operator-1"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "<YOUR_MCP_HOST_COMMAND_HERE>"
+      ],
+      "env": {
+        "VNG_ADMIN_API_KEY": "secret",
+        "VNG_HTTP_BIND": "127.0.0.1:8080",
+        "VNG_MCP_LOG_LEVEL": "info"
+      }
+    }
+  }
+}

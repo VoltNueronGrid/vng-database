@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": "schema-operator-1",
+  "method": "tools/schema",
+  "params": {
+    "schema_filter": "public"
+  },
+  "headers": {
+    "x_vng_operator_id": "operator-1"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "id": "query-operator-1",
+  "method": "tools/query",
+  "params": {
+    "sql_query": "SELECT 1 AS value",
+    "timeout_ms": 1000,
+    "max_rows": 10
+  },
+  "headers": {
+    "x_vng_operator_id": "operator-1"
+  }
+}

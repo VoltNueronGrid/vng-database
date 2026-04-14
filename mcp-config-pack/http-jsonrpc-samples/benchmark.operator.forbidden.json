@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "id": "bench-op-forbidden-1",
+  "method": "tools/benchmark",
+  "params": {
+    "benchmark_name": "query_select_all",
+    "params": {
+      "dataset": "small"
+    },
+    "iterations": 10
+  },
+  "headers": {
+    "x_vng_operator_id": "operator-1"
+  }
+}

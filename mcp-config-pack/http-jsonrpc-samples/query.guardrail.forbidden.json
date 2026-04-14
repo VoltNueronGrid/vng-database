@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "id": "query-guardrail-forbidden-1",
+  "method": "tools/query",
+  "params": {
+    "sql_query": "DELETE FROM users WHERE id = 1",
+    "timeout_ms": 1000
+  },
+  "headers": {
+    "x_vng_operator_id": "operator-1"
+  }
+}
