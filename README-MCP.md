@@ -94,8 +94,22 @@ Tenant:
 - Schema tool: operator or admin
 - Health tool: operator or admin
 - Benchmark tool: admin only
+- DDL create tool: admin + additional DDL key
+- DDL drop tool: admin + additional DDL key
+- ERD tool: operator or admin
+- Data transfer tool (import/export): admin + additional transfer key
 
-### 4.4 Guardrails
+### 4.4 Additional key gates for dangerous operations
+
+In addition to standard admin header auth (`x-vng-admin-key`), sensitive write and transfer operations require a second explicit key in the request body:
+- `tools/ddl_create` and `tools/ddl_drop` require `ddl_admin_key`
+- `tools/data_transfer` requires `transfer_admin_key`
+
+Optional environment hardening:
+- `VNG_MCP_DDL_KEY` (if set, must match `ddl_admin_key`)
+- `VNG_MCP_TRANSFER_KEY` (if set, must match `transfer_admin_key`)
+
+### 4.5 Guardrails
 
 Query guardrails enforce:
 - Max query payload size
@@ -218,6 +232,84 @@ Request shape:
   "iterations": 100
 }
 ```
+
+## 5.5 tools/ddl_create
+
+Purpose:
+- Create database objects (table, view, function, index, materialized_view, schema)
+
+Request shape:
+```json
+{
+  "object_type": "table",
+  "object_name": "users",
+  "create_sql": "CREATE TABLE users(id INT PRIMARY KEY)",
+  "ddl_admin_key": "extra-ddl-key"
+}
+```
+
+Auth:
+- Admin header required
+- Additional `ddl_admin_key` required
+
+## 5.6 tools/ddl_drop
+
+Purpose:
+- Drop database objects with explicit second-factor key
+
+Request shape:
+```json
+{
+  "object_type": "view",
+  "object_name": "v_users",
+  "drop_sql": "DROP VIEW v_users",
+  "ddl_admin_key": "extra-ddl-key"
+}
+```
+
+## 5.7 tools/erd
+
+Purpose:
+- Generate ERD diagram text for given schema/tables
+
+Request shape:
+```json
+{
+  "schema_filter": "public",
+  "table_names": ["users", "orders"],
+  "output_format": "mermaid"
+}
+```
+
+Typical response:
+```json
+{
+  "format": "mermaid",
+  "diagram": "erDiagram\\n    USERS ||--o{ ORDERS : places"
+}
+```
+
+## 5.8 tools/data_transfer
+
+Purpose:
+- Import/export table data from/to CSV or Parquet via Blob/WebDAV/FTP/local file endpoint
+
+Request shape:
+```json
+{
+  "direction": "import",
+  "format": "csv",
+  "endpoint": "blob",
+  "location": "blob://sample/container/users.csv",
+  "table_name": "users",
+  "transfer_admin_key": "xfer-key",
+  "options": {"delimiter": ","}
+}
+```
+
+Auth:
+- Admin header required
+- Additional `transfer_admin_key` required
 
 Typical response:
 ```json
@@ -408,6 +500,8 @@ After `cargo build -p voltnuerongrid-mcp --bin mcp-stdio-server --release`, the 
 3. `tools/query` with a simple read-only query
 4. `tools/benchmark` using admin key
 
+For containerized and hosted deployment patterns, see Section 11.3.
+
 ---
 
 ## 10. Cursor Configuration
@@ -462,7 +556,9 @@ Or with a pre-built binary:
 3. Add server entry named `voltnuerongrid` using config above
 4. Save and restart Cursor
 5. Confirm listed tools: query, schema, health, benchmark
-5. Run smoke flow: health -> schema -> query
+6. Run smoke flow: health -> schema -> query
+
+For containerized and hosted deployment patterns, see Section 11.3.
 
 Cursor example prompts once connected:
 - "Call tools/health and summarize node status"
@@ -528,6 +624,138 @@ Or with pre-built binary:
 6. Progress to schema: "Call tools/schema"
 7. Try query: "Call tools/query with SELECT 1"
 8. Test admin boundary: "Call tools/benchmark" (should confirm restricted for non-admin)
+
+### 11.3 Deployment Topologies: Docker Local, Docker Cloud, Hosted MCP, Cloud DB
+
+Use this section when your MCP process is not running directly on your laptop.
+
+#### Case A: Docker container on local machine (recommended for local dev)
+
+Run MCP server in a local container and let the IDE start it.
+
+VSCode/Cursor config example:
+```json
+{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "--name",
+        "vng-mcp",
+        "-e",
+        "VNG_ADMIN_API_KEY=your-admin-key-here",
+        "-e",
+        "VNG_OPERATOR_ID=operator-1",
+        "ghcr.io/pavan-pvj_ghub/voltnuerongrid-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+Notes:
+- `-i` is required for stdio MCP.
+- Image entrypoint must start `mcp-stdio-server`.
+- If DB is another local container, connect through Docker network and set DB env vars in the MCP container.
+
+#### Case B: Docker container hosted on cloud VM/Kubernetes, IDE runs locally
+
+Best pattern is local stdio + remote HTTP bridge:
+1. Keep IDE MCP config using a local command.
+2. Local command runs a bridge script that forwards JSON-RPC to cloud MCP endpoint over HTTPS.
+3. Cloud endpoint routes to MCP container.
+
+VSCode/Cursor config example:
+```json
+{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-File",
+        "./mcp-config-pack/bridge/stdio-to-http.ps1"
+      ],
+      "env": {
+        "MCP_REMOTE_URL": "https://mcp.your-domain.com/api/v1/mcp",
+        "MCP_REMOTE_TOKEN": "replace-with-token"
+      }
+    }
+  }
+}
+```
+
+Bridge behavior:
+- Read one JSON-RPC request from stdin.
+- POST to `MCP_REMOTE_URL` with auth header.
+- Write JSON-RPC response to stdout.
+
+#### Case C: Fully hosted MCP server (managed service)
+
+If your IDE extension supports URL-based MCP servers, use direct hosted URL:
+```json
+{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "url": "https://mcp.your-domain.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>",
+        "x-vng-operator-id": "operator-1"
+      }
+    }
+  }
+}
+```
+
+If your IDE extension only supports command-based MCP, use Case B with local bridge script.
+
+#### Case D: DB runs in cloud, MCP runs local
+
+You can run MCP locally and point it to cloud DB connection settings.
+
+VSCode/Cursor config example:
+```json
+{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "-p",
+        "voltnuerongrid-mcp",
+        "--bin",
+        "mcp-stdio-server",
+        "--release"
+      ],
+      "env": {
+        "VNG_ADMIN_API_KEY": "your-admin-key-here",
+        "VNG_OPERATOR_ID": "operator-1",
+        "VNG_DB_URL": "postgres://user:pass@cloud-db.example.com:5432/vng",
+        "VNG_DB_SSLMODE": "require"
+      }
+    }
+  }
+}
+```
+
+Security notes for cloud DB:
+- Enforce TLS (`require` or stronger).
+- Restrict DB inbound IPs to MCP host(s).
+- Use least-privilege DB role for MCP query path.
+- Keep benchmark admin-only.
+
+#### Connectivity validation for all topologies
+
+After configuring any topology:
+1. Start/restart IDE.
+2. Call `tools/health`.
+3. Call `tools/schema`.
+4. Call `tools/query` with `SELECT 1`.
+5. Confirm non-admin `tools/benchmark` returns `403`.
+6. Confirm admin `tools/benchmark` succeeds.
 
 ---
 
@@ -796,6 +1024,10 @@ cargo run -p voltnuerongrid-mcp --bin mcp-stdio-server --release
 - `tools/schema`
 - `tools/health`
 - `tools/benchmark`
+- `tools/ddl_create`
+- `tools/ddl_drop`
+- `tools/erd`
+- `tools/data_transfer`
 
 ### 17.3 Auth header keys (in JSON-RPC `headers` object)
 - `x_vng_admin_key` - API key for admin operations

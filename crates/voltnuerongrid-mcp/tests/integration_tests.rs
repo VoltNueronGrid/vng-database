@@ -290,3 +290,174 @@ async fn mcp_012_auth_context_from_full_headers() {
         assert_eq!(auth.auth_level, expected_level);
     }
 }
+
+#[tokio::test]
+async fn mcp_013_admin_can_create_object_with_additional_key() {
+    let capabilities = McpServerCapabilities::default();
+
+    let admin_headers = McpRequestHeaders {
+        x_vng_admin_key: Some("admin-key".to_string()),
+        x_vng_operator_id: None,
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+
+    let req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "13".to_string(),
+        method: "tools/ddl_create".to_string(),
+        params: json!({
+            "object_type": "table",
+            "object_name": "users",
+            "create_sql": "CREATE TABLE users(id INT PRIMARY KEY)",
+            "ddl_admin_key": "extra-ddl-key"
+        }),
+        headers: admin_headers,
+    };
+
+    let resp = process_request(req, &capabilities).await;
+    assert!(resp.error.is_none());
+}
+
+#[tokio::test]
+async fn mcp_014_operator_cannot_create_object_even_with_additional_key() {
+    let capabilities = McpServerCapabilities::default();
+
+    let operator_headers = McpRequestHeaders {
+        x_vng_admin_key: None,
+        x_vng_operator_id: Some("op-001".to_string()),
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+
+    let req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "14".to_string(),
+        method: "tools/ddl_create".to_string(),
+        params: json!({
+            "object_type": "view",
+            "object_name": "v_users",
+            "create_sql": "CREATE VIEW v_users AS SELECT * FROM users",
+            "ddl_admin_key": "extra-ddl-key"
+        }),
+        headers: operator_headers,
+    };
+
+    let resp = process_request(req, &capabilities).await;
+    assert!(resp.error.is_some());
+    assert_eq!(resp.error.as_ref().unwrap().code, 403);
+}
+
+#[tokio::test]
+async fn mcp_015_missing_additional_key_is_rejected_for_drop() {
+    let capabilities = McpServerCapabilities::default();
+
+    let admin_headers = McpRequestHeaders {
+        x_vng_admin_key: Some("admin-key".to_string()),
+        x_vng_operator_id: None,
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+
+    let req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "15".to_string(),
+        method: "tools/ddl_drop".to_string(),
+        params: json!({
+            "object_type": "table",
+            "object_name": "users",
+            "drop_sql": "DROP TABLE users",
+            "ddl_admin_key": ""
+        }),
+        headers: admin_headers,
+    };
+
+    let resp = process_request(req, &capabilities).await;
+    assert!(resp.error.is_some());
+    assert_eq!(resp.error.as_ref().unwrap().code, 401);
+}
+
+#[tokio::test]
+async fn mcp_016_operator_can_generate_erd() {
+    let capabilities = McpServerCapabilities::default();
+
+    let operator_headers = McpRequestHeaders {
+        x_vng_admin_key: None,
+        x_vng_operator_id: Some("op-001".to_string()),
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+
+    let req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "16".to_string(),
+        method: "tools/erd".to_string(),
+        params: json!({
+            "schema_filter": "public",
+            "table_names": ["users", "orders"],
+            "output_format": "mermaid"
+        }),
+        headers: operator_headers,
+    };
+
+    let resp = process_request(req, &capabilities).await;
+    assert!(resp.error.is_none());
+    let result = resp.result.unwrap();
+    assert_eq!(result["format"], "mermaid");
+}
+
+#[tokio::test]
+async fn mcp_017_data_transfer_requires_admin_and_additional_key() {
+    let capabilities = McpServerCapabilities::default();
+
+    let admin_headers = McpRequestHeaders {
+        x_vng_admin_key: Some("admin-key".to_string()),
+        x_vng_operator_id: None,
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+
+    let ok_req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "17".to_string(),
+        method: "tools/data_transfer".to_string(),
+        params: json!({
+            "direction": "import",
+            "format": "csv",
+            "endpoint": "blob",
+            "location": "blob://sample/container/users.csv",
+            "table_name": "users",
+            "transfer_admin_key": "xfer-key",
+            "options": {"delimiter": ","}
+        }),
+        headers: admin_headers,
+    };
+
+    let ok_resp = process_request(ok_req, &capabilities).await;
+    assert!(ok_resp.error.is_none());
+
+    let operator_headers = McpRequestHeaders {
+        x_vng_admin_key: None,
+        x_vng_operator_id: Some("op-001".to_string()),
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+    let denied_req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "18".to_string(),
+        method: "tools/data_transfer".to_string(),
+        params: json!({
+            "direction": "export",
+            "format": "parquet",
+            "endpoint": "ftp",
+            "location": "ftp://host/export/users.parquet",
+            "table_name": "users",
+            "transfer_admin_key": "xfer-key"
+        }),
+        headers: operator_headers,
+    };
+
+    let denied_resp = process_request(denied_req, &capabilities).await;
+    assert!(denied_resp.error.is_some());
+    assert_eq!(denied_resp.error.as_ref().unwrap().code, 403);
+}

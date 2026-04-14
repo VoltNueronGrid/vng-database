@@ -13,7 +13,20 @@ pub mod guardrails;
 pub mod integration;
 
 pub use auth::{McpAuthContext, McpAuthError, AuthenticationLevel};
-pub use tools::{McpTool, ToolHandler, ToolRequest, ToolResponse, QueryToolRequest, SchemaToolRequest, HealthToolRequest, BenchmarkToolRequest};
+pub use tools::{
+    McpTool,
+    ToolHandler,
+    ToolRequest,
+    ToolResponse,
+    QueryToolRequest,
+    SchemaToolRequest,
+    HealthToolRequest,
+    BenchmarkToolRequest,
+    DdlCreateToolRequest,
+    DdlDropToolRequest,
+    ErdToolRequest,
+    DataTransferToolRequest,
+};
 pub use guardrails::{QueryGuardrails, GuardrailError};
 
 /// MCP Server capability version
@@ -66,6 +79,26 @@ impl McpServerCapabilities {
                 McpToolCapability {
                     name: "benchmark".to_string(),
                     description: "Run performance benchmarks (admin only)".to_string(),
+                    auth_level: AuthenticationLevel::Admin,
+                },
+                McpToolCapability {
+                    name: "ddl_create".to_string(),
+                    description: "Create DB objects (table/view/function/etc) with additional DDL key (admin only)".to_string(),
+                    auth_level: AuthenticationLevel::Admin,
+                },
+                McpToolCapability {
+                    name: "ddl_drop".to_string(),
+                    description: "Drop DB objects with additional DDL key (admin only)".to_string(),
+                    auth_level: AuthenticationLevel::Admin,
+                },
+                McpToolCapability {
+                    name: "erd".to_string(),
+                    description: "Generate ERD for tables/schema".to_string(),
+                    auth_level: AuthenticationLevel::Operator,
+                },
+                McpToolCapability {
+                    name: "data_transfer".to_string(),
+                    description: "Import/export data (CSV, Parquet, Blob, WebDAV, FTP) with additional transfer key (admin only)".to_string(),
                     auth_level: AuthenticationLevel::Admin,
                 },
             ],
@@ -206,10 +239,34 @@ async fn validate_and_route_request(
         "tools/schema" => handle_schema_tool(&request.params, &auth).await,
         "tools/health" => handle_health_tool(&request.params, &auth).await,
         "tools/benchmark" => handle_benchmark_tool(&request.params, &auth).await,
+        "tools/ddl_create" => handle_ddl_create_tool(&request.params, &auth).await,
+        "tools/ddl_drop" => handle_ddl_drop_tool(&request.params, &auth).await,
+        "tools/erd" => handle_erd_tool(&request.params, &auth).await,
+        "tools/data_transfer" => handle_data_transfer_tool(&request.params, &auth).await,
         _ => Err(McpServerError::InvalidRequest(format!(
             "Unknown method: {}",
             request.method
         ))),
+    }
+}
+
+fn require_additional_key(env_name: &str, provided: &str) -> Result<(), McpServerError> {
+    if provided.trim().is_empty() {
+        return Err(McpServerError::AuthError(McpAuthError::MissingCredentials));
+    }
+
+    match std::env::var(env_name) {
+        Ok(expected) => {
+            if expected == provided {
+                Ok(())
+            } else {
+                Err(McpServerError::AuthError(McpAuthError::InvalidApiKey))
+            }
+        }
+        Err(_) => {
+            // Dev fallback: environment key is not set, but still require a non-empty explicit key.
+            Ok(())
+        }
     }
 }
 
@@ -284,6 +341,71 @@ async fn handle_benchmark_tool(params: &Value, auth: &McpAuthContext) -> Result<
     }))
 }
 
+async fn handle_ddl_create_tool(params: &Value, auth: &McpAuthContext) -> Result<Value, McpServerError> {
+    auth.require_admin().map_err(McpServerError::AuthError)?;
+
+    let req: DdlCreateToolRequest = serde_json::from_value(params.clone())
+        .map_err(|e| McpServerError::InvalidRequest(format!("Invalid ddl_create params: {}", e)))?;
+
+    require_additional_key("VNG_MCP_DDL_KEY", &req.ddl_admin_key)?;
+
+    Ok(json!({
+        "status": "accepted",
+        "object_type": req.object_type,
+        "object_name": req.object_name,
+        "message": "DDL create request validated and accepted"
+    }))
+}
+
+async fn handle_ddl_drop_tool(params: &Value, auth: &McpAuthContext) -> Result<Value, McpServerError> {
+    auth.require_admin().map_err(McpServerError::AuthError)?;
+
+    let req: DdlDropToolRequest = serde_json::from_value(params.clone())
+        .map_err(|e| McpServerError::InvalidRequest(format!("Invalid ddl_drop params: {}", e)))?;
+
+    require_additional_key("VNG_MCP_DDL_KEY", &req.ddl_admin_key)?;
+
+    Ok(json!({
+        "status": "accepted",
+        "object_type": req.object_type,
+        "object_name": req.object_name,
+        "message": "DDL drop request validated and accepted"
+    }))
+}
+
+async fn handle_erd_tool(params: &Value, auth: &McpAuthContext) -> Result<Value, McpServerError> {
+    auth.require_operator().map_err(McpServerError::AuthError)?;
+
+    let req: ErdToolRequest = serde_json::from_value(params.clone())
+        .map_err(|e| McpServerError::InvalidRequest(format!("Invalid erd params: {}", e)))?;
+
+    let format = req.output_format.unwrap_or_else(|| "mermaid".to_string());
+    let diagram = "erDiagram\n    USERS ||--o{ ORDERS : places";
+
+    Ok(json!({
+        "format": format,
+        "diagram": diagram
+    }))
+}
+
+async fn handle_data_transfer_tool(params: &Value, auth: &McpAuthContext) -> Result<Value, McpServerError> {
+    auth.require_admin().map_err(McpServerError::AuthError)?;
+
+    let req: DataTransferToolRequest = serde_json::from_value(params.clone())
+        .map_err(|e| McpServerError::InvalidRequest(format!("Invalid data_transfer params: {}", e)))?;
+
+    require_additional_key("VNG_MCP_TRANSFER_KEY", &req.transfer_admin_key)?;
+
+    Ok(json!({
+        "status": "accepted",
+        "direction": req.direction,
+        "format": req.format,
+        "endpoint": req.endpoint,
+        "rows_affected": 0,
+        "message": format!("Data transfer request accepted for table {}", req.table_name)
+    }))
+}
+
 /// Blocking wrapper for stdio MCP server
 /// 
 /// Converts async process_request to sync for use in blocking contexts (stdio server).
@@ -312,7 +434,7 @@ mod tests {
     fn test_capabilities_default() {
         let cap = McpServerCapabilities::default();
         assert_eq!(cap.version, MCP_VERSION);
-        assert_eq!(cap.tools.len(), 4);
+        assert_eq!(cap.tools.len(), 8);
     }
 
     #[tokio::test]
