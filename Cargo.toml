@@ -13,6 +13,7 @@ members = [
   "crates/voltnuerongrid-auth",
   "crates/voltnuerongrid-audit",
   "crates/voltnuerongrid-failover",
+  "crates/voltnuerongrid-mcp",
   "services/voltnuerongridd",
   "drivers/voltnuerongrid-driver-rust",
   "tools/voltnuerongrid-audit-companion",
