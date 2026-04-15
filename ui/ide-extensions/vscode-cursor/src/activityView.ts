@@ -16,6 +16,9 @@ export class VngActionsProvider implements vscode.TreeDataProvider<VngActionItem
     new VngActionItem("Connection Wizard", "vng.connectWizard", "Configure runtime target and auth mode"),
     new VngActionItem("Test Connection", "vng.testConnection", "Run health, SQL, and schema checks"),
     new VngActionItem("Run Query", "vng.runQuery", "Execute SQL statement"),
+    new VngActionItem("Cancel Active Query", "vng.cancelActiveQuery", "Cancel running SQL execution"),
+    new VngActionItem("Show Query Results", "vng.showQueryResults", "Open paginated query result grid"),
+    new VngActionItem("Search Query History", "vng.searchQueryHistory", "Find and re-run recent SQL"),
     new VngActionItem("Analyze Query", "vng.analyzeQuery", "Inspect SQL behavior and diagnostics"),
     new VngActionItem("Show Schema Registry", "vng.showSchemaRegistry", "List available schema metadata"),
   ];

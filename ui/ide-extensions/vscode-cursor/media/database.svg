@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  <ellipse cx="64" cy="24" rx="40" ry="14" fill="#3A86FF"/>
+  <path d="M24 24V48C24 55.732 41.909 62 64 62C86.091 62 104 55.732 104 48V24" fill="#2E6FD1"/>
+  <ellipse cx="64" cy="48" rx="40" ry="14" fill="#4C95FF"/>
+  <path d="M24 48V72C24 79.732 41.909 86 64 86C86.091 86 104 79.732 104 72V48" fill="#2E6FD1"/>
+  <ellipse cx="64" cy="72" rx="40" ry="14" fill="#63A6FF"/>
+  <path d="M24 72V96C24 103.732 41.909 110 64 110C86.091 110 104 103.732 104 96V72" fill="#2E6FD1"/>
+  <ellipse cx="64" cy="96" rx="40" ry="14" fill="#7AB6FF"/>
+</svg>

@@ -1,8 +1,8 @@
 {
   "name": "voltnuerongrid-vscode-cursor",
   "displayName": "VoltNueronGrid Tools (VSCode/Cursor)",
-  "description": "Phase 1 IDE connectivity extension for VoltNueronGrid DB",
-  "version": "0.1.1",
+  "description": "Professional database client for VoltNueronGrid DB with connection management, SQL editor, and database explorer",
+  "version": "0.2.0",
   "publisher": "voltnuerongrid",
   "repository": {
     "type": "git",
@@ -11,6 +11,9 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "activationEvents": [
+    "onLanguage:sql"
+  ],
   "extensionKind": [
     "ui",
     "workspace"
@@ -42,6 +45,15 @@
         {
           "id": "vngActions",
           "name": "Actions"
+        },
+        {
+          "id": "vngDatabaseExplorer",
+          "name": "Database Explorer",
+          "icon": "media/database.svg"
+        },
+        {
+          "id": "vngQueryHistory",
+          "name": "Query History"
         }
       ]
     },
@@ -56,6 +68,80 @@
           "command": "vng.testConnection",
           "when": "view == vngActions",
           "group": "navigation@2"
+        },
+        {
+          "command": "vng.manageConnections",
+          "when": "view == vngActions",
+          "group": "navigation@3"
+        },
+        {
+          "command": "vng.refreshSchema",
+          "when": "view == vngDatabaseExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vng.refreshQueryHistory",
+          "when": "view == vngQueryHistory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vng.searchQueryHistory",
+          "when": "view == vngQueryHistory",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vng.clearQueryHistory",
+          "when": "view == vngQueryHistory",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "vng.sql.executeSelectionOrFile",
+          "when": "resourceExtname == .sql",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vng.sql.analyzeSelectionOrFile",
+          "when": "resourceExtname == .sql",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "vng.copyName",
+          "when": "view == vngDatabaseExplorer && (viewItem == table || viewItem == column)",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "vng.showTableDDL",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "2_queries@1"
+        },
+        {
+          "command": "vng.showSQLTemplate",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "2_queries@2"
+        },
+        {
+          "command": "vng.generateMockData",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "2_queries@3"
+        },
+        {
+          "command": "vng.dumpTableStruct",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "3_export@1"
+        },
+        {
+          "command": "vng.dropTable",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "4_danger@1"
+        },
+        {
+          "command": "vng.reRunHistoryQuery",
+          "when": "view == vngQueryHistory && viewItem == historyEntry",
+          "group": "inline@1"
         }
       ]
     },
@@ -69,8 +155,47 @@
         "title": "VoltNueronGrid: Test Connection"
       },
       {
+        "command": "vng.manageConnections",
+        "title": "VoltNueronGrid: Manage Connections"
+      },
+      {
+        "command": "vng.quickSwitchConnection",
+        "title": "VoltNueronGrid: Quick Switch Connection"
+      },
+      {
         "command": "vng.runQuery",
         "title": "VoltNueronGrid: Run Query"
+      },
+      {
+        "command": "vng.cancelActiveQuery",
+        "title": "VoltNueronGrid: Cancel Active Query"
+      },
+      {
+        "command": "vng.showQueryResults",
+        "title": "VoltNueronGrid: Show Query Results"
+      },
+      {
+        "command": "vng.refreshQueryHistory",
+        "title": "VoltNueronGrid: Refresh Query History",
+        "icon": "$(refresh)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.searchQueryHistory",
+        "title": "VoltNueronGrid: Search Query History",
+        "icon": "$(search)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.clearQueryHistory",
+        "title": "VoltNueronGrid: Clear Query History",
+        "icon": "$(trash)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.reRunHistoryQuery",
+        "title": "VoltNueronGrid: Re-run History Query",
+        "category": "VoltNueronGrid"
       },
       {
         "command": "vng.analyzeQuery",
@@ -83,6 +208,69 @@
       {
         "command": "vng.focusPanel",
         "title": "VoltNueronGrid: Focus Panel"
+      },
+      {
+        "command": "vng.refreshSchema",
+        "title": "Refresh Schema",
+        "icon": "$(refresh)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.copyName",
+        "title": "Copy Name",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.showTableDDL",
+        "title": "Show DDL",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.showSQLTemplate",
+        "title": "SQL Template",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.generateMockData",
+        "title": "Generate Mock Data",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.dumpTableStruct",
+        "title": "Dump Structure",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.dropTable",
+        "title": "Drop Table",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.sql.executeSelectionOrFile",
+        "title": "VoltNueronGrid: Execute SQL (Selection/File)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.sql.analyzeSelectionOrFile",
+        "title": "VoltNueronGrid: Analyze SQL (Selection/File)",
+        "category": "VoltNueronGrid"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vng.sql.executeSelectionOrFile",
+        "key": "ctrl+enter",
+        "when": "editorTextFocus && resourceExtname == .sql"
+      },
+      {
+        "command": "vng.sql.analyzeSelectionOrFile",
+        "key": "ctrl+shift+enter",
+        "when": "editorTextFocus && resourceExtname == .sql"
+      },
+      {
+        "command": "vng.quickSwitchConnection",
+        "key": "ctrl+shift+d",
+        "when": "editorTextFocus || explorerViewletVisible"
       }
     ],
     "configuration": {
@@ -92,6 +280,37 @@
           "type": "string",
           "default": "http://127.0.0.1:8080",
           "description": "Base URL for the VoltNueronGrid runtime service"
+        },
+        "voltnuerongrid.sql.runOnSave": {
+          "type": "string",
+          "enum": [
+            "never",
+            "prompt",
+            "always"
+          ],
+          "default": "prompt",
+          "description": "Run SQL automatically when a .sql file is saved"
+        },
+        "voltnuerongrid.sql.runOnOpen": {
+          "type": "string",
+          "enum": [
+            "never",
+            "prompt",
+            "always"
+          ],
+          "default": "never",
+          "description": "Run SQL automatically when a .sql file is opened"
+        },
+        "voltnuerongrid.schema.cache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable caching for schema registry data"
+        },
+        "voltnuerongrid.schema.cache.ttlSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 5,
+          "description": "Schema cache time-to-live in seconds"
         }
       }
     }

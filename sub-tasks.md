@@ -1,8 +1,99 @@
 # Sub-Tasks Plan — Completion Roadmap
 
 **Project:** VoltNueronGrid DB (`polap-db`)  
-**Last updated:** 2026-04-14  
+**Last updated:** 2026-04-15  
 **Program sign-off:** Approved by requester (governance intent), with technical gates still source-of-truth for release JSON states.
+
+---
+
+## IDE Extension Refactoring: Full Database Client (2026-04-15)
+
+**Objective:** Transform VSCode extension from simple wizard to professional database client with connection management, database explorer, SQL editor, query execution, and advanced features.
+
+**Current State:** v0.2.0 with modular architecture, explorer lazy loading, schema cache configurability, full connection management editor (including SSL and advanced options), status bar quick switch, richer SQL completion/hover/signature/snippet support, and complete Phase 5 query execution stack (timeout/cancel/statement streaming), results webview (pagination/sort/filter/export), and persistent query history sidebar with search/re-run  
+**Target State:** v0.3.0+ with full database client UI/UX  
+**Estimated Effort:** 21-34 days (10 phases, 30+ tasks)
+
+### Phase 1: Architecture & Core Infrastructure [EST: 2-3 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-1.1 | Create modular extension directory structure (providers, views, services, commands, ui, models) | ✅ Complete | Dev | 2026-04-15 |
+| IDE-1.2 | Define shared TypeScript data models (Connection, Schema, Table, Column, QueryResult) | ✅ Complete | Dev | 2026-04-15 |
+| IDE-1.3 | Build ConnectionManager service (add/delete/switch, SecretStorage, persistence) | ✅ Complete | Dev | 2026-04-15 |
+
+### Phase 2: Database Explorer & Tree Views [EST: 2-3 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-2.1 | Create TreeDataProvider for database explorer (schemas, tables, columns with lazy load) | ✅ Complete | Dev | 2026-04-19 |
+| IDE-2.2 | Implement context menu actions (Copy Name, Show DDL, SQL Template, Dump, Drop, Edit, etc.) | ✅ Complete | Dev | 2026-04-15 |
+
+### Phase 3: Connection Management UI [EST: 3-4 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-3.1 | Build connection config webview (React/HTML form with validation, SSL tab, advanced options) | ✅ Complete | Dev | 2026-04-22 |
+| IDE-3.2 | Create connection list panel with add/edit/delete/test/switch actions | ✅ Complete | Dev | 2026-04-22 |
+| IDE-3.3 | Add status bar connection indicator with quick switcher | ✅ Complete | Dev | 2026-04-23 |
+
+### Phase 4: SQL Editor Integration [EST: 3-4 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-4.1 | Detect .sql files and add execute toolbar with keyboard shortcuts (Ctrl+Enter) | ✅ Complete | Dev | 2026-04-15 |
+| IDE-4.2 | Implement SQL autocomplete provider (tables, columns, keywords, functions) | ✅ Complete | Dev | 2026-04-25 |
+| IDE-4.3 | Add SQL syntax highlighting and diagnostics (invalid table/column detection) | ✅ Complete | Dev | 2026-04-26 |
+
+### Phase 5: Query Execution & Results [EST: 2-3 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-5.1 | Build QueryExecutionService (parse, execute, stream, cancel, timeout handling) | ✅ Complete | Dev | 2026-04-27 |
+| IDE-5.2 | Create results display webview (paginated table, sort, filter, export CSV/JSON) | ✅ Complete | Dev | 2026-04-28 |
+| IDE-5.3 | Implement query history sidebar (recent queries, re-execute, search, persistence) | ✅ Complete | Dev | 2026-04-29 |
+
+### Phase 6: Advanced Features [EST: 3-4 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-6.1 | Build inline table editor (edit cells, add/delete rows, save to database) | ⏳ Not Started | Dev | 2026-05-01 |
+| IDE-6.2 | Create schema management UI (create/alter table wizard, DDL preview) | ⏳ Not Started | Dev | 2026-05-02 |
+| IDE-6.3 | Implement comprehensive settings panel (editor, results, connection, keybindings) | ⏳ Not Started | Dev | 2026-05-02 |
+| IDE-6.4 | Define and register keyboard shortcuts (Ctrl+Enter, Ctrl+Shift+F, Ctrl+Alt+C, etc.) | ⏳ Not Started | Dev | 2026-05-03 |
+
+### Phase 7: UI Polish & Accessibility [EST: 2-3 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-7.1 | Create professional icon set (database, schema, table, execute, etc.) with light/dark theme support | ⏳ Not Started | Design/Dev | 2026-05-04 |
+| IDE-7.2 | Add accessibility features (ARIA labels, keyboard navigation, screen reader support, color contrast) | ⏳ Not Started | Dev/QA | 2026-05-05 |
+| IDE-7.3 | Implement status messages and notifications (connecting, query running, errors, success) | ⏳ Not Started | Dev | 2026-05-05 |
+
+### Phase 8: Testing & Documentation [EST: 2-3 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-8.1 | Write unit tests for models, services, providers (target 80%+ coverage) | ⏳ Not Started | QA | 2026-05-07 |
+| IDE-8.2 | Write integration tests for core workflows (connection → query → results, autocomplete, tree) | ⏳ Not Started | QA | 2026-05-08 |
+| IDE-8.3 | Write documentation (README, FEATURE_GUIDE, ARCHITECTURE, troubleshooting) | ⏳ Not Started | Dev/Doc | 2026-05-08 |
+
+### Phase 9: Performance & Optimization [EST: 1-2 days]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-9.1 | Profile UI performance and fix bottlenecks (tree render, autocomplete, results table) | ⏳ Not Started | Dev/Perf | 2026-05-09 |
+| IDE-9.2 | Implement caching strategy (schema cache, query result cache, connection pool reuse) | ⏳ Not Started | Dev | 2026-05-09 |
+| IDE-9.3 | Optimize bundle size (code splitting, lazy loading, measure startup time < 1s) | ⏳ Not Started | Dev | 2026-05-10 |
+
+### Phase 10: Release & Publishing [EST: 1 day]
+
+| ID | Task | Status | Owner | Target |
+|---|---|---|---|---|
+| IDE-10.1 | Bump version to 0.3.0, write CHANGELOG, tag release | ⏳ Not Started | Dev/Release | 2026-05-11 |
+| IDE-10.2 | Package VSIX, test on clean install, publish to VS Code Marketplace | ⏳ Not Started | Release | 2026-05-11 |
+
+---
 
 ---
 
