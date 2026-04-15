@@ -1,9 +1,9 @@
 {
   "gate": "ws1",
-  "status": "passed",
-  "started_at_utc": "2026-04-10T02:26:53.1150282Z",
-  "finished_at_utc": "2026-04-10T02:27:03.2485754Z",
-  "duration_ms": 10134,
+  "status": "failed",
+  "started_at_utc": "2026-04-15T02:29:38.6685804Z",
+  "finished_at_utc": "2026-04-15T02:30:09.0667890Z",
+  "duration_ms": 30398,
   "packs": [
     {
       "pack": "ws1-sql-core-tests",
@@ -32,22 +32,22 @@
     },
     {
       "pack": "ws1-sql-analyze-runtime-smoke",
-      "status": "passed",
+      "status": "failed",
       "detail": "run-sql-analyze-smoke.ps1"
     },
     {
       "pack": "ws1-sql-route-runtime-smoke",
-      "status": "passed",
+      "status": "failed",
       "detail": "run-sql-route-smoke.ps1"
     },
     {
       "pack": "ws1-sql-execute-runtime-smoke",
-      "status": "passed",
-      "detail": "run-sql-execute-udf-smoke.ps1"
+      "status": "failed",
+      "detail": "Cannot index into a null array."
     },
     {
       "pack": "ws1-sql-transaction-runtime-smoke",
-      "status": "passed",
+      "status": "failed",
       "detail": "run-sql-transaction-smoke.ps1"
     },
     {
@@ -57,17 +57,17 @@
     },
     {
       "pack": "ws1-gate-trend-comparison",
-      "status": "passed",
+      "status": "failed",
       "detail": "tests/kpi/scripts/run-ws1-gate-trend-compare.ps1"
     },
     {
       "pack": "ws1-udf-stability-badge",
-      "status": "passed",
+      "status": "failed",
       "detail": "tests/kpi/scripts/run-ws1-udf-stability-badge.ps1"
     },
     {
       "pack": "ws1-release-summary",
-      "status": "passed",
+      "status": "failed",
       "detail": "tests/kpi/scripts/run-ws1-release-summary.ps1"
     }
   ]

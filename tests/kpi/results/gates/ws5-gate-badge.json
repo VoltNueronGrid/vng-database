@@ -1,0 +1,7 @@
+{
+  "label": "ws5-security-runtime",
+  "message": "2/2 passed + tenant-audit",
+  "color": "green",
+  "source_summary": "tests/kpi/results/ws5/ws5-gate-summary.json",
+  "generated_at_utc": "2026-04-15T02:31:30.8222535Z"
+}

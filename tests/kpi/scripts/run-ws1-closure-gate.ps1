@@ -1,5 +1,6 @@
 param(
-  [string]$OutputPath = "tests/kpi/results/ws1/ws1-closure-gate-summary.json"
+  [string]$OutputPath = "tests/kpi/results/ws1/ws1-closure-gate-summary.json",
+  [string]$BaseUrl = "http://127.0.0.1:8080"
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,7 +28,7 @@ $status = "passed"
 
 try {
   $global:LASTEXITCODE = 0
-  & "tests/kpi/scripts/run-ws1-gate.ps1" -OutputPath $ws1SummaryPath -ReleaseSummaryOutputPath $ws1ReleasePath 2>&1 | Out-Null
+  & "tests/kpi/scripts/run-ws1-gate.ps1" -OutputPath $ws1SummaryPath -ReleaseSummaryOutputPath $ws1ReleasePath -BaseUrl $BaseUrl 2>&1 | Out-Null
   if (-not $?) {
     $status = "failed"
     $runs += [ordered]@{ pack = "ws1-gate"; status = "failed"; detail = "script_invocation_failed"; artifact = $ws1SummaryPath }

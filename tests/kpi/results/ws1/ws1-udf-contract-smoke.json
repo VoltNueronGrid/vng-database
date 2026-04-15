@@ -6,7 +6,7 @@
     "cargo test -p voltnuerongrid-sql function_registry_supports_polyglot_udf_contract -- --nocapture",
     "cargo test -p voltnuerongrid-sql classifies_core_statements -- --nocapture"
   ],
-  "timestamp_utc": "2026-04-10T05:36:14.2078190Z",
+  "timestamp_utc": "2026-04-15T02:31:19.6803895Z",
   "checks": {
     "function_language_rust_declared": true,
     "function_language_javascript_declared": true,
@@ -15,5 +15,5 @@
     "polyglot_udf_registry_test_passes": true,
     "create_function_classification_test_passes": true
   },
-  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_sql-db50013cf5e36acc.exe)\n\nrunning 1 test\ntest tests::function_registry_supports_polyglot_udf_contract ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 365 filtered out; finished in 0.00s\n\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_sql-db50013cf5e36acc.exe)\n\nrunning 1 test\ntest tests::classifies_core_statements ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 365 filtered out; finished in 0.00s\n\n"
+  "output_excerpt": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_sql-db50013cf5e36acc.exe)\n\nrunning 1 test\ntest tests::function_registry_supports_polyglot_udf_contract ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 365 filtered out; finished in 0.00s\n\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running unittests src\\lib.rs (D:\\by\\target\\debug\\deps\\voltnuerongrid_sql-db50013cf5e36acc.exe)\n\nrunning 1 test\ntest tests::classifies_core_statements ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 365 filtered out; finished in 0.00s\n\n"
 }

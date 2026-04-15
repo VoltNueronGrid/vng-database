@@ -1,10 +1,10 @@
 {
   "smoke": "sql-transaction-runtime",
   "status": "passed",
-  "base_url": "http://127.0.0.1:8080",
+  "base_url": "http://127.0.0.1:8081",
   "tenant_id": "acme",
   "user_id": "analyst-acme",
-  "timestamp_utc": "2026-04-10T05:36:18.8786614Z",
+  "timestamp_utc": "2026-04-15T02:31:24.4341837Z",
   "checks": {
     "transaction_requires_user_headers": true,
     "transaction_status_committed": true,
@@ -16,7 +16,7 @@
   },
   "committed_response": {
     "status": "committed",
-    "transaction_id": "tx-4",
+    "transaction_id": "tx-2",
     "statements_executed": 2,
     "requires_transaction": false,
     "touches_catalog": false,

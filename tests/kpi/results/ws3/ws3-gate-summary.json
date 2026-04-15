@@ -1,9 +1,9 @@
 {
   "gate": "ws3",
   "status": "passed",
-  "started_at_utc": "2026-04-10T03:12:33.2747511Z",
-  "finished_at_utc": "2026-04-10T03:12:36.1065710Z",
-  "duration_ms": 2832,
+  "started_at_utc": "2026-04-15T02:30:15.0229392Z",
+  "finished_at_utc": "2026-04-15T02:30:17.0875604Z",
+  "duration_ms": 2065,
   "packs": [
     {
       "pack": "ws3-query-routing",

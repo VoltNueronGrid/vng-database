@@ -2,9 +2,9 @@
   "gate": "ws1-closure-gate",
   "status": "passed",
   "validation_posture": "ready_for_validation",
-  "started_at_utc": "2026-04-10T05:36:07.5542454Z",
-  "finished_at_utc": "2026-04-10T05:36:19.0920096Z",
-  "duration_ms": 11538,
+  "started_at_utc": "2026-04-15T02:31:13.1371634Z",
+  "finished_at_utc": "2026-04-15T02:31:24.5970424Z",
+  "duration_ms": 11460,
   "artifacts": {
     "ws1_gate": "tests/kpi/results/ws1/ws1-gate-summary.json",
     "ws1_release": "tests/kpi/results/gates/ws1-release-readiness.json",

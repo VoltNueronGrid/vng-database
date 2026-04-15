@@ -59,9 +59,26 @@ try {
   $third = Invoke-CargoTestCapture -Arguments @("test", "-p", "voltnuerongrid-auth", "ws5_")
   $outputLines = @($first.Text + $second.Text + $third.Text)
 
-  $jsonRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/security-control-config.json"
-  $yamlRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/security-control-config.yaml"
-  $propsRaw = Get-Content -Raw -Path "reference/config-contracts/ws14/security-control-config.properties"
+  $contractRootCandidates = @(
+    "reference/config-contracts/ws14",
+    "services/voltnuerongridd/reference/config-contracts/ws14"
+  )
+
+  $contractRoot = $null
+  foreach ($candidate in $contractRootCandidates) {
+    if (Test-Path -Path (Join-Path $candidate "security-control-config.json")) {
+      $contractRoot = $candidate
+      break
+    }
+  }
+
+  if (-not $contractRoot) {
+    throw "Cannot find security contract files under any known ws14 contract path."
+  }
+
+  $jsonRaw = Get-Content -Raw -Path (Join-Path $contractRoot "security-control-config.json")
+  $yamlRaw = Get-Content -Raw -Path (Join-Path $contractRoot "security-control-config.yaml")
+  $propsRaw = Get-Content -Raw -Path (Join-Path $contractRoot "security-control-config.properties")
 
   $securityContractChecks.json_tls = ($jsonRaw -match '"tlsRequired"\s*:\s*true')
   $securityContractChecks.json_encryption = ($jsonRaw -match '"encryptionAtRestRequired"\s*:\s*true')

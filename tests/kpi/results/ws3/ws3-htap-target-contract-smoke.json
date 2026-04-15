@@ -1,7 +1,7 @@
 {
   "smoke": "ws3-htap-target-contract",
   "status": "passed",
-  "timestamp_utc": "2026-04-10T03:12:36.0987237Z",
+  "timestamp_utc": "2026-04-15T02:30:17.0786715Z",
   "targets_path": "tests/kpi/config/targets.yaml",
   "scenario_path": "tests/kpi/scenarios/htap-mixed-throughput.yaml",
   "targets": {

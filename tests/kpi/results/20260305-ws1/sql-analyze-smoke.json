@@ -1,10 +1,10 @@
 {
   "smoke": "sql-analyze-runtime",
   "status": "passed",
-  "base_url": "http://127.0.0.1:8080",
+  "base_url": "http://127.0.0.1:8081",
   "tenant_id": "acme",
   "user_id": "analyst-acme",
-  "timestamp_utc": "2026-04-10T05:36:18.6917687Z",
+  "timestamp_utc": "2026-04-15T02:31:24.2567808Z",
   "checks": {
     "analyze_requires_user_headers": true,
     "analyze_status_ok": true,

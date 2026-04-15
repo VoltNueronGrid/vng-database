@@ -1,97 +1,269 @@
-﻿{
-    "smoke":  "ws5-tenant-audit-runtime",
-    "status":  "passed",
-    "base_url":  "http://127.0.0.1:18081",
-    "tenant_id":  "acme",
-    "admin_user_id":  "admin-acme",
-    "tenant_user_id":  "analyst-acme",
-    "other_tenant_id":  "globex",
-    "other_tenant_user_id":  "analyst-globex",
-    "timestamp_utc":  "2026-03-08T06:16:53.5952736Z",
-    "checks":  {
-                   "audit_requires_user_headers":  true,
-                   "tenant_route_generates_event":  true,
-                   "tenant_store_generates_event":  true,
-                   "tenant_ingest_generates_event":  true,
-                   "other_tenant_route_generates_event":  true,
-                   "tenant_audit_status_ok":  true,
-                   "tenant_audit_has_events":  true,
-                   "tenant_audit_contains_tenant_actor":  true,
-                   "tenant_audit_contains_tenant_id":  true,
-                   "tenant_audit_contains_storage_action":  true,
-                   "tenant_audit_contains_ingest_action":  true,
-                   "tenant_audit_excludes_other_tenant_actor":  true,
-                   "tenant_audit_excludes_other_tenant_id":  true
-               },
-    "generated_actions":  {
-                              "sql_route":  {
-                                                "status":  "ok",
-                                                "route_path":  "hybrid",
-                                                "reason":  "mixed transactional and analytical workload",
-                                                "statements":  [
-                                                                   {
-                                                                       "statement":  "BEGIN",
-                                                                       "path":  "oltp"
-                                                                   },
-                                                                   {
-                                                                       "statement":  "SELECT region, SUM(amount) FROM orders GROUP BY region",
-                                                                       "path":  "olap"
-                                                                   }
-                                                               ]
-                                            },
-                              "store_create_index":  {
-                                                         "column":  "customer_id",
-                                                         "index_name":  "idx_acme_audit_1772950612",
-                                                         "status":  "created",
-                                                         "table":  "tenant/acme/orders",
-                                                         "unique":  false
-                                                     },
-                              "ingest_csv":  {
-                                                 "connector_id":  "orders-csv-1772950612",
-                                                 "records_parsed":  1,
-                                                 "status":  "ok"
-                                             }
-                          },
-    "audit_response":  {
-                           "status":  "ok",
-                           "total_events":  4,
-                           "events":  [
-                                          {
-                                              "event_id":  1,
-                                              "occurred_epoch_ms":  1772950553691,
-                                              "actor":  "analyst-acme",
-                                              "action":  "sql_route",
-                                              "kind":  "sql",
-                                              "outcome":  "ok",
-                                              "details_json":  "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}"
-                                          },
-                                          {
-                                              "event_id":  3,
-                                              "occurred_epoch_ms":  1772950613176,
-                                              "actor":  "analyst-acme",
-                                              "action":  "sql_route",
-                                              "kind":  "sql",
-                                              "outcome":  "ok",
-                                              "details_json":  "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}"
-                                          },
-                                          {
-                                              "event_id":  4,
-                                              "occurred_epoch_ms":  1772950613272,
-                                              "actor":  "admin-acme",
-                                              "action":  "store_create_index",
-                                              "kind":  "storage",
-                                              "outcome":  "ok",
-                                              "details_json":  "{\"actor_type\":\"tenant_user\",\"column\":\"customer_id\",\"index_name\":\"idx_acme_audit_1772950612\",\"route_scope\":\"store/indexes/create\",\"table\":\"tenant/acme/orders\",\"tenant_id\":\"acme\",\"unique\":false,\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}"
-                                          },
-                                          {
-                                              "event_id":  5,
-                                              "occurred_epoch_ms":  1772950613320,
-                                              "actor":  "admin-acme",
-                                              "action":  "ingest_csv",
-                                              "kind":  "ingest",
-                                              "outcome":  "ok",
-                                              "details_json":  "{\"actor_type\":\"tenant_user\",\"connector_id\":\"orders-csv-1772950612\",\"records_parsed\":1,\"route_scope\":\"ingest/connectors/csv\",\"tenant_id\":\"acme\",\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}"
-                                          }
-                                      ]
-                       }
+{
+  "smoke": "ws5-tenant-audit-runtime",
+  "status": "passed",
+  "base_url": "http://127.0.0.1:8081",
+  "tenant_id": "acme",
+  "admin_user_id": "admin-acme",
+  "tenant_user_id": "analyst-acme",
+  "other_tenant_id": "globex",
+  "other_tenant_user_id": "analyst-globex",
+  "timestamp_utc": "2026-04-15T02:31:30.7803506Z",
+  "checks": {
+    "audit_requires_user_headers": true,
+    "tenant_route_generates_event": true,
+    "tenant_store_generates_event": true,
+    "tenant_ingest_generates_event": true,
+    "other_tenant_route_generates_event": true,
+    "tenant_audit_status_ok": true,
+    "tenant_audit_has_events": true,
+    "tenant_audit_contains_tenant_actor": true,
+    "tenant_audit_contains_tenant_id": true,
+    "tenant_audit_contains_storage_action": true,
+    "tenant_audit_contains_ingest_action": true,
+    "tenant_audit_excludes_other_tenant_actor": true,
+    "tenant_audit_excludes_other_tenant_id": true
+  },
+  "generated_actions": {
+    "sql_route": {
+      "status": "ok",
+      "route_path": "hybrid",
+      "reason": "mixed transactional and analytical workload",
+      "statements": [
+        {
+          "statement": "BEGIN",
+          "path": "oltp",
+          "planner_path": "oltp",
+          "estimated_rows": 0,
+          "relative_cost": 0.05
+        },
+        {
+          "statement": "SELECT region, SUM(amount) FROM orders GROUP BY region",
+          "path": "olap",
+          "planner_path": "olap",
+          "estimated_rows": 500,
+          "relative_cost": 45.0
+        }
+      ],
+      "batch_estimated_rows": 500,
+      "batch_relative_cost": 45.05
+    },
+    "store_create_index": {
+      "column": "customer_id",
+      "index_name": "idx_acme_audit_1776220290",
+      "status": "created",
+      "table": "tenant/acme/orders",
+      "unique": false
+    },
+    "ingest_csv": {
+      "connector_id": "orders-csv-1776220290",
+      "records_parsed": 1,
+      "status": "ok"
+    }
+  },
+  "audit_response": {
+    "status": "ok",
+    "total_events": 20,
+    "events": [
+      {
+        "event_id": 2,
+        "occurred_epoch_ms": 1776219545874,
+        "actor": "analyst-acme",
+        "action": "sql_route",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "6968deed28dfac20"
+      },
+      {
+        "event_id": 3,
+        "occurred_epoch_ms": 1776219546010,
+        "actor": "analyst-acme",
+        "action": "sql_execute",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"transactional workload detected\",\"rejected_statement_count\":0,\"route_path\":\"oltp\",\"route_scope\":\"sql/execute\",\"tenant_id\":\"acme\",\"udf_guardrail_status\":\"passed\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "06097c5304ad9af3"
+      },
+      {
+        "event_id": 4,
+        "occurred_epoch_ms": 1776219546021,
+        "actor": "analyst-acme",
+        "action": "sql_execute",
+        "kind": "sql",
+        "outcome": "blocked",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"udf_guardrail_blocked_python_payload\",\"rejected_statement_count\":2,\"route_path\":\"unknown\",\"route_scope\":\"sql/execute\",\"tenant_id\":\"acme\",\"udf_guardrail_status\":\"blocked\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "4d9fdaf00c477ad5"
+      },
+      {
+        "event_id": 5,
+        "occurred_epoch_ms": 1776219546115,
+        "actor": "analyst-acme",
+        "action": "sql_transaction",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"rejected_statement_count\":0,\"requires_transaction\":false,\"route_scope\":\"sql/transaction\",\"statements_executed\":2,\"tenant_id\":\"acme\",\"touches_catalog\":false,\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "c1931ab7933d31a5"
+      },
+      {
+        "event_id": 6,
+        "occurred_epoch_ms": 1776219546123,
+        "actor": "analyst-acme",
+        "action": "sql_transaction",
+        "kind": "sql",
+        "outcome": "error",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"rejected_statement_count\":1,\"requires_transaction\":false,\"route_scope\":\"sql/transaction\",\"statements_executed\":0,\"tenant_id\":\"acme\",\"touches_catalog\":false,\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "ac6ea871a2a9da24"
+      },
+      {
+        "event_id": 7,
+        "occurred_epoch_ms": 1776219588049,
+        "actor": "analyst-acme",
+        "action": "sql_route",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "1852f1a9d3f146d2"
+      },
+      {
+        "event_id": 8,
+        "occurred_epoch_ms": 1776219588076,
+        "actor": "admin-acme",
+        "action": "store_create_index",
+        "kind": "storage",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"column\":\"customer_id\",\"index_name\":\"idx_acme_audit_1776219587\",\"route_scope\":\"store/indexes/create\",\"table\":\"tenant/acme/orders\",\"tenant_id\":\"acme\",\"unique\":false,\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}",
+        "chain_hash": "a6ab56afdccc8b42"
+      },
+      {
+        "event_id": 9,
+        "occurred_epoch_ms": 1776219588102,
+        "actor": "admin-acme",
+        "action": "ingest_csv",
+        "kind": "ingest",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"connector_id\":\"orders-csv-1776219587\",\"outbox_events_written\":1,\"records_parsed\":1,\"route_scope\":\"ingest/connectors/csv\",\"tenant_id\":\"acme\",\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}",
+        "chain_hash": "4e40f65422233b1b"
+      },
+      {
+        "event_id": 10,
+        "occurred_epoch_ms": 1776219837500,
+        "actor": "analyst-acme",
+        "action": "sql_route",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "b216032fd8fbe5f7"
+      },
+      {
+        "event_id": 11,
+        "occurred_epoch_ms": 1776219837542,
+        "actor": "admin-acme",
+        "action": "store_create_index",
+        "kind": "storage",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"column\":\"customer_id\",\"index_name\":\"idx_acme_audit_1776219837\",\"route_scope\":\"store/indexes/create\",\"table\":\"tenant/acme/orders\",\"tenant_id\":\"acme\",\"unique\":false,\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}",
+        "chain_hash": "1936511e9820b42e"
+      },
+      {
+        "event_id": 12,
+        "occurred_epoch_ms": 1776219837553,
+        "actor": "admin-acme",
+        "action": "ingest_csv",
+        "kind": "ingest",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"connector_id\":\"orders-csv-1776219837\",\"outbox_events_written\":1,\"records_parsed\":1,\"route_scope\":\"ingest/connectors/csv\",\"tenant_id\":\"acme\",\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}",
+        "chain_hash": "dc62cb5e11015dd3"
+      },
+      {
+        "event_id": 13,
+        "occurred_epoch_ms": 1776220284243,
+        "actor": "analyst-acme",
+        "action": "sql_analyze",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"rejected_statements\":1,\"route_scope\":\"sql/analyze\",\"tenant_id\":\"acme\",\"total_statements\":4,\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "308876931198d6c5"
+      },
+      {
+        "event_id": 14,
+        "occurred_epoch_ms": 1776220284299,
+        "actor": "analyst-acme",
+        "action": "sql_route",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "796ba37028641eef"
+      },
+      {
+        "event_id": 15,
+        "occurred_epoch_ms": 1776220284358,
+        "actor": "analyst-acme",
+        "action": "sql_execute",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"transactional workload detected\",\"rejected_statement_count\":0,\"route_path\":\"oltp\",\"route_scope\":\"sql/execute\",\"tenant_id\":\"acme\",\"udf_guardrail_status\":\"passed\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "09bc579232b5a877"
+      },
+      {
+        "event_id": 16,
+        "occurred_epoch_ms": 1776220284363,
+        "actor": "analyst-acme",
+        "action": "sql_execute",
+        "kind": "sql",
+        "outcome": "blocked",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"udf_guardrail_blocked_python_payload\",\"rejected_statement_count\":2,\"route_path\":\"unknown\",\"route_scope\":\"sql/execute\",\"tenant_id\":\"acme\",\"udf_guardrail_status\":\"blocked\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "3b0c199062cdd25b"
+      },
+      {
+        "event_id": 17,
+        "occurred_epoch_ms": 1776220284425,
+        "actor": "analyst-acme",
+        "action": "sql_transaction",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"rejected_statement_count\":0,\"requires_transaction\":false,\"route_scope\":\"sql/transaction\",\"statements_executed\":2,\"tenant_id\":\"acme\",\"touches_catalog\":false,\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "9f89f06d0a2bde76"
+      },
+      {
+        "event_id": 18,
+        "occurred_epoch_ms": 1776220284429,
+        "actor": "analyst-acme",
+        "action": "sql_transaction",
+        "kind": "sql",
+        "outcome": "error",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"rejected_statement_count\":1,\"requires_transaction\":false,\"route_scope\":\"sql/transaction\",\"statements_executed\":0,\"tenant_id\":\"acme\",\"touches_catalog\":false,\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "da99ecd01d219d3e"
+      },
+      {
+        "event_id": 19,
+        "occurred_epoch_ms": 1776220290710,
+        "actor": "analyst-acme",
+        "action": "sql_route",
+        "kind": "sql",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"reason\":\"mixed transactional and analytical workload\",\"route_path\":\"hybrid\",\"route_scope\":\"sql/route\",\"statement_count\":2,\"tenant_id\":\"acme\",\"user_id\":\"analyst-acme\",\"user_role\":\"tenant_analyst\"}",
+        "chain_hash": "7119876088501215"
+      },
+      {
+        "event_id": 20,
+        "occurred_epoch_ms": 1776220290721,
+        "actor": "admin-acme",
+        "action": "store_create_index",
+        "kind": "storage",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"column\":\"customer_id\",\"index_name\":\"idx_acme_audit_1776220290\",\"route_scope\":\"store/indexes/create\",\"table\":\"tenant/acme/orders\",\"tenant_id\":\"acme\",\"unique\":false,\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}",
+        "chain_hash": "04a3fd60d3b9582d"
+      },
+      {
+        "event_id": 21,
+        "occurred_epoch_ms": 1776220290727,
+        "actor": "admin-acme",
+        "action": "ingest_csv",
+        "kind": "ingest",
+        "outcome": "ok",
+        "details_json": "{\"actor_type\":\"tenant_user\",\"connector_id\":\"orders-csv-1776220290\",\"outbox_events_written\":1,\"records_parsed\":1,\"route_scope\":\"ingest/connectors/csv\",\"tenant_id\":\"acme\",\"user_id\":\"admin-acme\",\"user_role\":\"tenant_admin\"}",
+        "chain_hash": "6300fbd0fd356f94"
+      }
+    ]
+  }
 }

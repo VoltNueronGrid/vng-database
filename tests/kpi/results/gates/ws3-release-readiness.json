@@ -10,7 +10,7 @@
     "WS3",
     "REQ-31"
   ],
-  "generated_at_utc": "2026-04-10T03:12:36.3517703Z",
+  "generated_at_utc": "2026-04-15T02:30:17.2486610Z",
   "sources": {
     "summary": "tests/kpi/results/ws3/ws3-gate-summary.json",
     "score": "tests/kpi/results/ws3/ws3-performance-score.json",

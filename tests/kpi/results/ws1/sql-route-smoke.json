@@ -1,10 +1,10 @@
 {
   "smoke": "sql-route-runtime",
   "status": "passed",
-  "base_url": "http://127.0.0.1:8080",
+  "base_url": "http://127.0.0.1:8081",
   "tenant_id": "acme",
   "user_id": "analyst-acme",
-  "timestamp_utc": "2026-04-10T05:36:18.7581877Z",
+  "timestamp_utc": "2026-04-15T02:31:24.3120232Z",
   "checks": {
     "route_requires_user_headers": true,
     "route_status_ok": true,

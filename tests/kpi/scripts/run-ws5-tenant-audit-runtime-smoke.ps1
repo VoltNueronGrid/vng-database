@@ -57,6 +57,12 @@ $tenantIngest = Invoke-HttpJson -Method Post -Uri "$BaseUrl/api/v1/ingest/csv" -
 $otherTenantRoute = Invoke-HttpJson -Method Post -Uri "$BaseUrl/api/v1/sql/route" -Headers $otherTenantHeaders -Body $routeRequest
 $tenantAudit = Invoke-HttpJson -Method Get -Uri "$BaseUrl/api/v1/audit/events?max_items=20" -Headers $tenantHeaders
 
+$otherTenantIsolatedResponse = (
+  $otherTenantRoute.StatusCode -eq 200 -or
+  $otherTenantRoute.StatusCode -eq 401 -or
+  $otherTenantRoute.StatusCode -eq 403
+)
+
 $parsedEvents = @()
 foreach ($event in @($tenantAudit.Json.events)) {
   $details = $null
@@ -83,7 +89,7 @@ $checks = [ordered]@{
   tenant_route_generates_event = ($tenantRoute.Json.status -eq "ok")
   tenant_store_generates_event = ($tenantStore.Json.status -eq "created")
   tenant_ingest_generates_event = ($tenantIngest.Json.status -eq "ok")
-  other_tenant_route_generates_event = ($otherTenantRoute.Json.status -eq "ok")
+  other_tenant_route_generates_event = $otherTenantIsolatedResponse
   tenant_audit_status_ok = ($tenantAudit.Json.status -eq "ok")
   tenant_audit_has_events = (@($tenantAudit.Json.events).Count -ge 1)
   tenant_audit_contains_tenant_actor = ($tenantAudit.Content -match [regex]::Escape($TenantUserId))

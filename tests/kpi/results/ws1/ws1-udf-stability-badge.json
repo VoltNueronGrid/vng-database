@@ -1,9 +1,9 @@
 {
   "label": "ws1-udf-stability",
-  "message": "9/9 stable",
+  "message": "9/9 improved",
   "color": "green",
   "status": "passed",
   "source_summary": "tests/kpi/results/ws1/ws1-gate-summary.json",
   "source_trend": "tests/kpi/results/ws1/ws1-gate-trend-comparison.json",
-  "generated_at_utc": "2026-04-10T05:36:19.0343082Z"
+  "generated_at_utc": "2026-04-15T02:31:24.5323948Z"
 }

@@ -1,6 +1,6 @@
 {
   "id": "ws3-closure-gate",
-  "timestamp": "2026-04-10T07:56:40Z",
+  "timestamp": "2026-04-15T08:00:18Z",
   "status": "passed",
   "validation_posture": "ready_for_validation",
   "checks": {
@@ -21,7 +21,7 @@
       "artifact": "tests/kpi/results/ws3/ws3-gate-summary.json"
     }
   ],
-  "elapsed_ms": 4089,
+  "elapsed_ms": 4107,
   "scope": "HTAP query execution and routing (Epic 3, REQ-31)",
   "release_target": "R3"
 }

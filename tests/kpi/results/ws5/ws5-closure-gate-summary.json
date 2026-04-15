@@ -1,0 +1,34 @@
+{
+  "gate": "ws5-closure-gate",
+  "status": "passed",
+  "validation_posture": "ready_for_validation",
+  "started_at_utc": "2026-04-15T02:31:26.0552193Z",
+  "finished_at_utc": "2026-04-15T02:31:30.8477418Z",
+  "duration_ms": 4793,
+  "artifacts": {
+    "ws5_gate": "tests/kpi/results/ws5/ws5-gate-summary.json",
+    "ws5_badge": "tests/kpi/results/gates/ws5-gate-badge.json",
+    "ws5_security_smoke": "tests/kpi/results/ws5/operator-auth-smoke.json",
+    "ws5_tenant_audit_runtime": "tests/kpi/results/ws5/tenant-audit-runtime-smoke.json"
+  },
+  "checks": {
+    "ws5_gate_passed": true,
+    "ws5_security_smoke_passed": true,
+    "ws5_tenant_audit_runtime_passed": true,
+    "ws5_badge_green": true
+  },
+  "runs": [
+    {
+      "pack": "ws5-gate",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/ws5/ws5-gate-summary.json"
+    },
+    {
+      "pack": "ws5-gate-badge",
+      "status": "passed",
+      "detail": "ok",
+      "artifact": "tests/kpi/results/gates/ws5-gate-badge.json"
+    }
+  ]
+}

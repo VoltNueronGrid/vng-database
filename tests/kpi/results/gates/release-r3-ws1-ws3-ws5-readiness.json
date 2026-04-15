@@ -1,0 +1,52 @@
+{
+  "gate": "release-r3-ws1-ws3-ws5-readiness",
+  "status": "passed",
+  "release_readiness": "ready_for_validation",
+  "release": "R3",
+  "generated_at_utc": "2026-04-15T02:33:38.9636496Z",
+  "checks": {
+    "ws1_closure": {
+      "status": "passed",
+      "validation_posture": "ready_for_validation",
+      "source": "tests/kpi/results/ws1/ws1-closure-gate-summary.json"
+    },
+    "ws1_release_summary": {
+      "status": "passed",
+      "release_readiness": "in_progress_with_evidence",
+      "source": "tests/kpi/results/gates/ws1-release-readiness.json"
+    },
+    "ws3_closure": {
+      "status": "passed",
+      "validation_posture": "ready_for_validation",
+      "source": "tests/kpi/results/ws3/ws3-closure-gate-summary.json"
+    },
+    "ws3_release_summary": {
+      "status": "passed",
+      "release_readiness": "ready_for_validation",
+      "source": "tests/kpi/results/gates/ws3-release-readiness.json"
+    },
+    "ws5_closure": {
+      "status": "passed",
+      "validation_posture": "ready_for_validation",
+      "source": "tests/kpi/results/ws5/ws5-closure-gate-summary.json"
+    },
+    "ws5_gate_badge": {
+      "status": "passed",
+      "color": "green",
+      "source": "tests/kpi/results/gates/ws5-gate-badge.json"
+    }
+  },
+  "highlights": {
+    "workstreams_included": [
+      "WS1",
+      "WS3",
+      "WS5"
+    ],
+    "closure_gates_passed": 3,
+    "closure_gates_total": 3,
+    "closure_validation_ready_count": 3,
+    "ws1_release_summary_readiness": "in_progress_with_evidence",
+    "ws3_release_summary_readiness": "ready_for_validation",
+    "ws5_runtime_security_badge": "2/2 passed + tenant-audit"
+  }
+}
