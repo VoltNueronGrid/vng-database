@@ -2,9 +2,15 @@ import * as vscode from "vscode";
 import { readConnection, runConnectionWizard } from "./config";
 import { analyzeSql, executeSql, getSchemaRegistry, runConnectivityChecks, toPermissionMessage } from "./client";
 import { RuntimeConnection } from "./config";
+import { VngActionsProvider } from "./activityView";
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("VoltNueronGrid");
+  const actionsProvider = new VngActionsProvider();
+  const actionsView = vscode.window.createTreeView("vngActions", {
+    treeDataProvider: actionsProvider,
+    showCollapseAll: false,
+  });
 
   const connect = vscode.commands.registerCommand("vng.connectWizard", async () => {
     const connection = await runConnectionWizard(context);
@@ -108,7 +114,14 @@ export function activate(context: vscode.ExtensionContext): void {
     await presentResponse("Schema Registry", response.status, response.bodyText, connection, output);
   });
 
-  context.subscriptions.push(connect, test, queryRunner, diagnostics, schema, output);
+  const focusPanel = vscode.commands.registerCommand("vng.focusPanel", async () => {
+    // Open the contributed activity container first.
+    await vscode.commands.executeCommand("workbench.view.extension.vngExplorer");
+    // Then focus the concrete view to ensure visibility.
+    await vscode.commands.executeCommand("vngActions.focus");
+  });
+
+  context.subscriptions.push(connect, test, queryRunner, diagnostics, schema, focusPanel, actionsView, output);
 }
 
 export function deactivate(): void {

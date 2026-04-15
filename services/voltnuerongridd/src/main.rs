@@ -94,6 +94,7 @@ impl PessimisticLockContentionMetrics {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 enum AcidTxState {
     Active,
     Committed,
@@ -2350,6 +2351,7 @@ struct AuditSnapshotResponse {
 
 #[derive(Deserialize)]
 struct AuditPurgeRequest {
+    #[allow(dead_code)]
     confirm: bool,
 }
 

@@ -38,8 +38,14 @@ exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const config_1 = require("./config");
 const client_1 = require("./client");
+const activityView_1 = require("./activityView");
 function activate(context) {
     const output = vscode.window.createOutputChannel("VoltNueronGrid");
+    const actionsProvider = new activityView_1.VngActionsProvider();
+    const actionsView = vscode.window.createTreeView("vngActions", {
+        treeDataProvider: actionsProvider,
+        showCollapseAll: false,
+    });
     const connect = vscode.commands.registerCommand("vng.connectWizard", async () => {
         const connection = await (0, config_1.runConnectionWizard)(context);
         if (!connection) {
@@ -125,7 +131,13 @@ function activate(context) {
         const response = await (0, client_1.getSchemaRegistry)(connection);
         await presentResponse("Schema Registry", response.status, response.bodyText, connection, output);
     });
-    context.subscriptions.push(connect, test, queryRunner, diagnostics, schema, output);
+    const focusPanel = vscode.commands.registerCommand("vng.focusPanel", async () => {
+        // Open the contributed activity container first.
+        await vscode.commands.executeCommand("workbench.view.extension.vngExplorer");
+        // Then focus the concrete view to ensure visibility.
+        await vscode.commands.executeCommand("vngActions.focus");
+    });
+    context.subscriptions.push(connect, test, queryRunner, diagnostics, schema, focusPanel, actionsView, output);
 }
 function deactivate() {
     // No long-running resources to dispose.

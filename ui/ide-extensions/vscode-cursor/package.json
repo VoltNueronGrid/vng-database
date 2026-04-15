@@ -2,7 +2,7 @@
   "name": "voltnuerongrid-vscode-cursor",
   "displayName": "VoltNueronGrid Tools (VSCode/Cursor)",
   "description": "Phase 1 IDE connectivity extension for VoltNueronGrid DB",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "voltnuerongrid",
   "repository": {
     "type": "git",
@@ -11,11 +11,54 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
   "categories": [
     "Other"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": true
+    }
+  },
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vngExplorer",
+          "title": "VoltNueronGrid",
+          "icon": "media/volt-neuron-grid.svg"
+        }
+      ]
+    },
+    "views": {
+      "vngExplorer": [
+        {
+          "id": "vngActions",
+          "name": "Actions"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "vng.connectWizard",
+          "when": "view == vngActions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vng.testConnection",
+          "when": "view == vngActions",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "vng.connectWizard",
@@ -36,6 +79,10 @@
       {
         "command": "vng.showSchemaRegistry",
         "title": "VoltNueronGrid: Show Schema Registry"
+      },
+      {
+        "command": "vng.focusPanel",
+        "title": "VoltNueronGrid: Focus Panel"
       }
     ],
     "configuration": {

@@ -160,6 +160,7 @@ impl RaftNode {
     }
 
     /// The leader won an election; transition to Leader.
+    #[allow(dead_code)]
     pub fn become_leader(&mut self) {
         self.fencing_token += 1;
         self.role = RaftRole::Leader;
