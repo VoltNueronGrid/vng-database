@@ -45,6 +45,20 @@ async fn setup_mock_runtime() -> MockRuntimeGuard {
         Json(json!({"status":"ok","active_count":1,"total_count":1,"entries":[{"object_name":"users","object_kind":"table"}]}))
     }
 
+    async fn catalog_table_columns(Path(table_name): Path<String>) -> Json<Value> {
+        Json(json!({
+            "status": "ok",
+            "table_name": table_name,
+            "columns": [
+                {"name":"id","data_type":"INT","nullable":false,"primary_key":true},
+                {"name":"email","data_type":"TEXT","nullable":true,"primary_key":false}
+            ],
+            "indexes": [
+                {"name":"idx_users_email","columns":["email"],"unique":true}
+            ]
+        }))
+    }
+
     async fn benchmark_ingest() -> Json<Value> {
         Json(json!({"status":"ok","wall_time_ms":5,"records_per_second":1000.0}))
     }
@@ -90,6 +104,7 @@ async fn setup_mock_runtime() -> MockRuntimeGuard {
         .route("/api/v1/sre/reliability/status", get(reliability))
         .route("/api/v1/sql/execute", post(sql_execute))
         .route("/api/v1/catalog/schemas", get(catalog))
+        .route("/api/v1/catalog/tables/:table_name/columns", get(catalog_table_columns))
         .route("/api/v1/benchmark/ingest", post(benchmark_ingest))
         .route("/api/v1/benchmark/query", post(benchmark_query))
         .route("/api/v1/store/htap/export", post(htap_export))
@@ -703,6 +718,52 @@ async fn mcp_020_proxy_disabled_returns_runtime_proxy_error() {
         .unwrap()
         .message
         .contains("Runtime proxy is disabled"));
+}
+
+#[tokio::test]
+#[serial]
+async fn mcp_021_schema_populates_columns_and_indexes_from_runtime() {
+    let _runtime = setup_mock_runtime().await;
+    let capabilities = McpServerCapabilities::default();
+
+    let operator_headers = McpRequestHeaders {
+        x_vng_admin_key: None,
+        x_vng_operator_id: Some("op-001".to_string()),
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+
+    let req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "23".to_string(),
+        method: "tools/schema".to_string(),
+        params: json!({}),
+        headers: operator_headers,
+    };
+
+    let resp = process_request(req, &capabilities).await;
+    assert!(resp.error.is_none());
+    let result = resp.result.expect("schema result should be present");
+    let tables = result
+        .get("tables")
+        .and_then(|v| v.as_array())
+        .expect("tables should be an array");
+    assert!(!tables.is_empty());
+
+    let first = &tables[0];
+    let columns = first
+        .get("columns")
+        .and_then(|v| v.as_array())
+        .expect("columns should be an array");
+    let indexes = first
+        .get("indexes")
+        .and_then(|v| v.as_array())
+        .expect("indexes should be an array");
+
+    assert!(!columns.is_empty());
+    assert_eq!(columns[0]["name"], "id");
+    assert!(!indexes.is_empty());
+    assert_eq!(indexes[0]["name"], "idx_users_email");
 }
 
 

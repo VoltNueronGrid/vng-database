@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use base64::Engine;
 use axum::routing::{get, post};
@@ -24,6 +24,7 @@ use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{
     eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale,
 };
+use voltnuerongrid_sql::ast::Statement;
 use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
 use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
@@ -5365,6 +5366,8 @@ async fn main() {
         .route("/api/v1/ingest/outbox/replay", post(ingest_outbox_replay))
         // REQ-02 DDL catalog endpoint
         .route("/api/v1/catalog/schemas", get(catalog_schemas))
+        // REQ-02 DDL catalog table metadata endpoint (columns + indexes)
+        .route("/api/v1/catalog/tables/:table_name/columns", get(catalog_table_columns))
         // REQ-23 ACID transaction introspection
         .route("/api/v1/sql/transactions/active", get(sql_transactions_active))
         // S2-WS2-05: isolation stats per active transaction
@@ -18111,11 +18114,34 @@ struct CatalogSchemasResponse {
     entries: Vec<CatalogEntryView>,
 }
 
+#[derive(Serialize)]
+struct CatalogTableColumnView {
+    name: String,
+    data_type: String,
+    nullable: bool,
+    primary_key: bool,
+}
+
+#[derive(Serialize)]
+struct CatalogTableIndexView {
+    name: String,
+    columns: Vec<String>,
+    unique: bool,
+}
+
+#[derive(Serialize)]
+struct CatalogTableColumnsResponse {
+    status: &'static str,
+    table_name: String,
+    columns: Vec<CatalogTableColumnView>,
+    indexes: Vec<CatalogTableIndexView>,
+}
+
 async fn catalog_schemas(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<CatalogSchemasResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "catalog/schemas")?;
+    require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/catalog/schemas")?;
     let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
     let active = catalog.active_entries();
     let entries: Vec<CatalogEntryView> = active
@@ -18135,6 +18161,81 @@ async fn catalog_schemas(
         entries,
     };
     Ok((StatusCode::OK, Json(resp)))
+}
+
+async fn catalog_table_columns(
+    State(state): State<AppState>,
+    Path(table_name): Path<String>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<CatalogTableColumnsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/catalog/schemas")?;
+
+    let normalized_name = table_name.trim().to_ascii_lowercase();
+    let entry = {
+        let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+        catalog.get(&normalized_name).cloned()
+    };
+
+    let Some(entry) = entry else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(CatalogTableColumnsResponse {
+                status: "not_found",
+                table_name,
+                columns: Vec::new(),
+                indexes: Vec::new(),
+            }),
+        ));
+    };
+
+    if entry.dropped {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(CatalogTableColumnsResponse {
+                status: "not_found",
+                table_name: entry.object_name,
+                columns: Vec::new(),
+                indexes: Vec::new(),
+            }),
+        ));
+    }
+
+    let columns = match voltnuerongrid_sql::parse_one(&entry.original_statement) {
+        Ok(Statement::CreateTable(stmt)) => stmt
+            .columns
+            .iter()
+            .map(|column| CatalogTableColumnView {
+                name: column.name.clone(),
+                data_type: column.data_type.clone(),
+                nullable: true,
+                primary_key: false,
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+
+    let indexes = {
+        let mgr = state.index_manager.lock().expect("index lock");
+        mgr.list_indexes()
+            .iter()
+            .filter(|idx| idx.table.eq_ignore_ascii_case(&entry.object_name))
+            .map(|idx| CatalogTableIndexView {
+                name: idx.name.clone(),
+                columns: vec![idx.column.clone()],
+                unique: idx.unique,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(CatalogTableColumnsResponse {
+            status: "ok",
+            table_name: entry.object_name,
+            columns,
+            indexes,
+        }),
+    ))
 }
 
 // â”€â”€ REQ-23: ACID active transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -21639,6 +21740,54 @@ mod tests {
         let catalog = state.ddl_catalog.lock().unwrap();
         assert_eq!(catalog.active_count(), 0, "table should be gone after drop");
         assert_eq!(catalog.total_count(), 1, "total should include dropped entry");
+    }
+
+    #[test]
+    fn ws2_catalog_table_columns_returns_columns_for_created_table() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(Some("secret"));
+        let tenant_headers = tenant_user_headers("admin-acme", "acme");
+
+        let create_req = SqlExecuteRequest {
+            sql_batch: "CREATE TABLE orders (id INT, amount FLOAT)".to_string(),
+            max_rows: None,
+        };
+        let _ = rt.block_on(sql_execute(State(state.clone()), tenant_headers.clone(), Json(create_req)))
+            .expect("create should succeed");
+
+        let response = rt
+            .block_on(catalog_table_columns(
+                State(state.clone()),
+                Path("orders".to_string()),
+                tenant_headers,
+            ))
+            .expect("catalog_table_columns should succeed");
+
+        assert_eq!(response.0, StatusCode::OK);
+        let body = response.1.0;
+        assert_eq!(body.status, "ok");
+        assert_eq!(body.table_name.to_ascii_lowercase(), "orders");
+        assert_eq!(body.columns.len(), 2);
+        assert_eq!(body.columns[0].name.to_ascii_lowercase(), "id");
+        assert_eq!(body.columns[1].name.to_ascii_lowercase(), "amount");
+    }
+
+    #[test]
+    fn ws2_catalog_table_columns_requires_auth() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(None);
+        let headers = HeaderMap::new();
+
+        let result = rt.block_on(catalog_table_columns(
+            State(state),
+            Path("orders".to_string()),
+            headers,
+        ));
+
+        match result {
+            Ok(_) => panic!("expected auth error"),
+            Err((status, _)) => assert_eq!(status, StatusCode::UNAUTHORIZED),
+        }
     }
 
     // â”€â”€ REQ-23: ACID transaction tracking tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -506,26 +506,49 @@ async fn handle_schema_tool(
         .cloned()
         .unwrap_or_default();
 
-    let tables: Vec<Value> = entries
-        .into_iter()
-        .filter(|entry| {
-            if let Some(filter) = &req.table_filter {
-                return entry
-                    .get("object_name")
-                    .and_then(|name| name.as_str())
-                    .map(|name| name.contains(filter))
-                    .unwrap_or(false);
-            }
-            true
-        })
-        .map(|entry| {
-            json!({
-                "name": entry.get("object_name").cloned().unwrap_or_else(|| json!("")),
-                "columns": [],
-                "indexes": []
-            })
-        })
-        .collect();
+    let mut tables: Vec<Value> = Vec::new();
+    for entry in entries.into_iter().filter(|entry| {
+        if let Some(filter) = &req.table_filter {
+            return entry
+                .get("object_name")
+                .and_then(|name| name.as_str())
+                .map(|name| name.contains(filter))
+                .unwrap_or(false);
+        }
+        true
+    }) {
+        let table_name = entry
+            .get("object_name")
+            .and_then(|name| name.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Best-effort metadata hydration so MCP schema remains backward-compatible
+        // when talking to an older runtime that does not expose this endpoint yet.
+        let metadata_resp = if table_name.is_empty() {
+            None
+        } else {
+            let endpoint = format!("/api/v1/catalog/tables/{}/columns", table_name);
+            forward_to_runtime("GET", endpoint.as_str(), None, headers).await.ok()
+        };
+
+        let columns = metadata_resp
+            .as_ref()
+            .and_then(|meta| meta.get("columns"))
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let indexes = metadata_resp
+            .as_ref()
+            .and_then(|meta| meta.get("indexes"))
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+
+        tables.push(json!({
+            "name": table_name,
+            "columns": columns,
+            "indexes": indexes,
+        }));
+    }
 
     Ok(json!({
         "tables": tables,
