@@ -98,6 +98,10 @@ Tenant:
 - DDL drop tool: admin + additional DDL key
 - ERD tool: operator or admin
 - Data transfer tool (import/export): admin + additional transfer key
+- Cluster topology tool: admin only
+- Transaction admin tool: admin only
+- Lock admin tool: admin only
+- Cluster node manage tool: admin only
 
 ### 4.4 Additional key gates for dangerous operations
 
@@ -311,6 +315,74 @@ Auth:
 - Admin header required
 - Additional `transfer_admin_key` required
 
+## 5.9 tools/cluster_topology
+
+Purpose:
+- Return cluster node topology, node status, active/passive/dead counts, session counts, transaction counts, lock counts, and per-node CPU/RAM capacity with runtime usage estimates
+
+Request shape:
+```json
+{
+  "include_nodes": true
+}
+```
+
+## 5.10 tools/transaction_admin
+
+Purpose:
+- List active transactions or commit / roll back a live transaction
+
+Request shape:
+```json
+{
+  "action": "rollback",
+  "transaction_id": "tx-admin-42",
+  "reason": "manual_deadlock_resolution"
+}
+```
+
+## 5.11 tools/lock_admin
+
+Purpose:
+- List active locks, kill a specific lock, or kill a deadlock victim transaction and release its locks
+
+Request shape:
+```json
+{
+  "action": "kill_deadlock",
+  "transaction_id": "tx-deadlock-victim",
+  "reason": "cycle_detected"
+}
+```
+
+## 5.12 tools/cluster_node_manage
+
+Purpose:
+- Add a node or remove a node while migrating active sessions and transactions to another node
+
+Add node request:
+```json
+{
+  "action": "add",
+  "node_id": "node-3",
+  "role": "follower",
+  "desired_status": "active",
+  "total_cpu_cores": 8,
+  "total_ram_mb": 16384,
+  "reason": "scale_out_for_peak_load"
+}
+```
+
+Remove node request:
+```json
+{
+  "action": "remove",
+  "node_id": "node-2",
+  "target_node_id": "node-1",
+  "reason": "scale_in_cost_optimization"
+}
+```
+
 Typical response:
 ```json
 {
@@ -501,6 +573,51 @@ After `cargo build -p voltnuerongrid-mcp --bin mcp-stdio-server --release`, the 
 4. `tools/benchmark` using admin key
 
 For containerized and hosted deployment patterns, see Section 11.3.
+
+### 9.4 Runtime proxy mode (live service execution)
+
+By default, `mcp-stdio-server` uses local in-process tool logic.
+To execute admin MCP methods against the live `voltnuerongridd` runtime endpoints, enable proxy mode:
+
+```json
+{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "-p",
+        "voltnuerongrid-mcp",
+        "--bin",
+        "mcp-stdio-server",
+        "--release"
+      ],
+      "env": {
+        "VNG_ADMIN_API_KEY": "your-admin-key-here",
+        "VNG_MCP_RUNTIME_PROXY": "true",
+        "VNG_RUNTIME_BASE_URL": "http://127.0.0.1:8080"
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `VNG_MCP_RUNTIME_PROXY=true` enables forwarding from MCP handlers to runtime HTTP endpoints.
+- `VNG_RUNTIME_BASE_URL` is optional. If omitted, the MCP server falls back to `http://{VNG_HTTP_BIND}` or `http://127.0.0.1:8080`.
+- Both `http://` and `https://` runtime URLs are supported in proxy mode.
+- MCP request headers are forwarded to runtime, including `x-vng-admin-key`, `x-vng-operator-id`, `x-vng-tenant-id`, and `x-vng-user-id` when provided.
+
+Method to runtime endpoint mapping:
+
+| MCP method | Runtime endpoint | HTTP method |
+|---|---|---|
+| `tools/cluster_topology` | `/api/v1/admin/cluster/topology` | `GET` |
+| `tools/transaction_admin` | `/api/v1/admin/sql/transactions/control` | `POST` |
+| `tools/lock_admin` | `/api/v1/admin/sql/locks/control` | `POST` |
+| `tools/cluster_node_manage` | `/api/v1/admin/cluster/nodes/manage` | `POST` |
+
+If runtime returns non-2xx, MCP surfaces it as a tool error with the runtime status and response body.
 
 ---
 
@@ -1028,6 +1145,10 @@ cargo run -p voltnuerongrid-mcp --bin mcp-stdio-server --release
 - `tools/ddl_drop`
 - `tools/erd`
 - `tools/data_transfer`
+- `tools/cluster_topology`
+- `tools/transaction_admin`
+- `tools/lock_admin`
+- `tools/cluster_node_manage`
 
 ### 17.3 Auth header keys (in JSON-RPC `headers` object)
 - `x_vng_admin_key` - API key for admin operations

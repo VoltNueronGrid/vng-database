@@ -93,14 +93,20 @@ impl QueryGuardrails {
     fn check_suspicious_patterns(req: &QueryToolRequest) -> Result<(), GuardrailError> {
         let lower_query = req.sql_query.to_lowercase();
 
-        // Check for common SQL injection patterns
-        if lower_query.contains("/*") || lower_query.contains("--") {
-            // Comments might be OK in some contexts, but flag them for review
-            if lower_query.contains("*/") && lower_query.find("/*").unwrap_or(0) < lower_query.rfind("*/").unwrap_or(0) {
+        // Check for SQL block comments /* ... */
+        if lower_query.contains("/*") && lower_query.contains("*/") {
+            if lower_query.find("/*").unwrap_or(0) < lower_query.rfind("*/").unwrap_or(0) {
                 return Err(GuardrailError::SuspiciousPattern(
-                    "SQL comments detected".to_string(),
+                    "SQL block comments detected".to_string(),
                 ));
             }
+        }
+
+        // Check for SQL single-line comments --
+        if lower_query.contains("--") {
+            return Err(GuardrailError::SuspiciousPattern(
+                "SQL single-line comments detected".to_string(),
+            ));
         }
 
         // Check for stacked queries
@@ -253,5 +259,31 @@ mod tests {
             max_rows: None,
         };
         assert!(QueryGuardrails::validate(&req2).is_err());
+    }
+
+    #[test]
+    fn test_single_line_comment_blocked() {
+        let req = QueryToolRequest {
+            sql_query: "SELECT 1 -- OR 1=1".to_string(),
+            timeout_ms: None,
+            tenant_id: None,
+            max_rows: None,
+        };
+        let result = QueryGuardrails::validate(&req);
+        assert!(result.is_err(), "-- comment should be rejected");
+        assert!(result.unwrap_err().to_string().contains("single-line comments"));
+    }
+
+    #[test]
+    fn test_block_comment_blocked() {
+        let req = QueryToolRequest {
+            sql_query: "SELECT /* malicious */ 1".to_string(),
+            timeout_ms: None,
+            tenant_id: None,
+            max_rows: None,
+        };
+        let result = QueryGuardrails::validate(&req);
+        assert!(result.is_err(), "/* */ comment should be rejected");
+        assert!(result.unwrap_err().to_string().contains("block comments"));
     }
 }

@@ -164,15 +164,27 @@ pub struct BenchmarkToolRequest {
 }
 
 /// Benchmark result
+///
+/// Latency percentile and throughput fields are optional because the runtime benchmark endpoints
+/// (`/api/v1/benchmark/ingest`, `/api/v1/benchmark/query`) do not expose per-percentile latency
+/// statistics. They will be `null` unless a future runtime release provides them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BenchmarkToolResponse {
     pub name: String,
     pub duration_ms: u64,
     pub ops_per_sec: f64,
-    pub latency_p50_ms: f64,
-    pub latency_p99_ms: f64,
-    pub latency_p999_ms: f64,
-    pub throughput_bytes_per_sec: usize,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_p50_ms: Option<f64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_p99_ms: Option<f64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_p999_ms: Option<f64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throughput_bytes_per_sec: Option<usize>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -290,6 +302,113 @@ pub struct DataTransferToolResponse {
     pub message: String,
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Cluster / Runtime Admin Tools
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClusterTopologyToolRequest {
+    #[serde(default)]
+    pub include_nodes: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClusterTopologyNode {
+    pub node_id: String,
+    pub role: String,
+    pub status: String,
+    pub total_cpu_cores: u32,
+    pub total_ram_mb: u64,
+    pub used_cpu_pct: f64,
+    pub used_ram_mb: u64,
+    pub active_sessions: usize,
+    pub passive_sessions: usize,
+    pub live_transactions: usize,
+    pub total_transactions: usize,
+    pub live_locks: usize,
+    pub draining: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClusterTopologyToolResponse {
+    pub leader_node_id: String,
+    pub total_nodes: usize,
+    pub active_nodes: usize,
+    pub passive_nodes: usize,
+    pub dead_nodes: usize,
+    pub active_sessions: usize,
+    pub passive_sessions: usize,
+    pub live_transactions: usize,
+    pub total_transactions: usize,
+    pub live_locks: usize,
+    pub nodes: Vec<ClusterTopologyNode>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionAdminToolRequest {
+    pub action: String,
+    #[serde(default)]
+    pub transaction_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionAdminToolResponse {
+    pub status: String,
+    pub action: String,
+    pub affected_count: usize,
+    pub active_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LockAdminToolRequest {
+    pub action: String,
+    #[serde(default)]
+    pub lock_id: Option<String>,
+    #[serde(default)]
+    pub transaction_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LockAdminToolResponse {
+    pub status: String,
+    pub action: String,
+    pub released_lock_count: usize,
+    pub active_lock_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClusterNodeManageToolRequest {
+    pub action: String,
+    pub node_id: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub desired_status: Option<String>,
+    #[serde(default)]
+    pub total_cpu_cores: Option<u32>,
+    #[serde(default)]
+    pub total_ram_mb: Option<u64>,
+    #[serde(default)]
+    pub target_node_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClusterNodeManageToolResponse {
+    pub status: String,
+    pub action: String,
+    pub node_id: String,
+    pub cluster_size: usize,
+    pub migrated_transactions: usize,
+    pub migrated_sessions: usize,
+    pub message: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,15 +480,30 @@ mod tests {
             name: "query_select_all".to_string(),
             duration_ms: 1000,
             ops_per_sec: 1000.0,
-            latency_p50_ms: 0.5,
-            latency_p99_ms: 5.0,
-            latency_p999_ms: 50.0,
-            throughput_bytes_per_sec: 1024 * 1024,
+            latency_p50_ms: Some(0.5),
+            latency_p99_ms: Some(5.0),
+            latency_p999_ms: Some(50.0),
+            throughput_bytes_per_sec: Some(1024 * 1024),
         };
 
         let json = serde_json::to_value(&bench).unwrap();
         assert_eq!(json.get("name").and_then(|v| v.as_str()), Some("query_select_all"));
         assert_eq!(json.get("ops_per_sec").and_then(|v| v.as_f64()), Some(1000.0));
+        assert_eq!(json.get("latency_p50_ms").and_then(|v| v.as_f64()), Some(0.5));
+
+        // When all fields None they should be absent from serialized output
+        let sparse = BenchmarkToolResponse {
+            name: "sparse".to_string(),
+            duration_ms: 5,
+            ops_per_sec: 100.0,
+            latency_p50_ms: None,
+            latency_p99_ms: None,
+            latency_p999_ms: None,
+            throughput_bytes_per_sec: None,
+        };
+        let sparse_json = serde_json::to_value(&sparse).unwrap();
+        assert!(sparse_json.get("latency_p50_ms").is_none());
+        assert!(sparse_json.get("throughput_bytes_per_sec").is_none());
     }
 
     #[test]
@@ -415,5 +549,38 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         let deserialized: DataTransferToolRequest = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized.table_name, "users");
+    }
+
+    #[test]
+    fn test_cluster_topology_response_serialization() {
+        let response = ClusterTopologyToolResponse {
+            leader_node_id: "node-1".to_string(),
+            total_nodes: 2,
+            active_nodes: 1,
+            passive_nodes: 1,
+            dead_nodes: 0,
+            active_sessions: 4,
+            passive_sessions: 2,
+            live_transactions: 3,
+            total_transactions: 9,
+            live_locks: 1,
+            nodes: vec![ClusterTopologyNode {
+                node_id: "node-1".to_string(),
+                role: "leader".to_string(),
+                status: "active".to_string(),
+                total_cpu_cores: 8,
+                total_ram_mb: 16384,
+                used_cpu_pct: 33.0,
+                used_ram_mb: 2048,
+                active_sessions: 4,
+                passive_sessions: 0,
+                live_transactions: 3,
+                total_transactions: 9,
+                live_locks: 1,
+                draining: false,
+            }],
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json.get("total_nodes").and_then(|value| value.as_u64()), Some(2));
     }
 }

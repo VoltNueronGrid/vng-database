@@ -59,6 +59,12 @@ impl McpAuthContext {
         // Check admin first (highest privilege)
         if let Some(admin_key) = &headers.x_vng_admin_key {
             if !admin_key.is_empty() {
+                // Validate against VNG_ADMIN_API_KEY if configured
+                if let Ok(expected) = std::env::var("VNG_ADMIN_API_KEY") {
+                    if !expected.is_empty() && expected != *admin_key {
+                        return Err(McpAuthError::InvalidApiKey);
+                    }
+                }
                 return Ok(McpAuthContext {
                     is_admin: true,
                     operator_id: None,
@@ -150,6 +156,7 @@ mod tests {
 
     #[test]
     fn test_admin_auth() {
+        unsafe { std::env::remove_var("VNG_ADMIN_API_KEY"); }
         let headers = McpRequestHeaders {
             x_vng_admin_key: Some("secret-key".to_string()),
             x_vng_operator_id: None,
@@ -224,6 +231,7 @@ mod tests {
 
     #[test]
     fn test_admin_can_access_any_tenant() {
+        unsafe { std::env::remove_var("VNG_ADMIN_API_KEY"); }
         let headers = McpRequestHeaders {
             x_vng_admin_key: Some("secret-key".to_string()),
             x_vng_operator_id: None,
@@ -242,5 +250,50 @@ mod tests {
         // Verify auth levels are ordered correctly
         assert!(AuthenticationLevel::Admin > AuthenticationLevel::Operator);
         assert!(AuthenticationLevel::Operator > AuthenticationLevel::Tenant);
+    }
+
+    #[test]
+    fn test_admin_key_validated_against_env_var() {
+        unsafe {
+            std::env::set_var("VNG_ADMIN_API_KEY", "correct-secret");
+        }
+        // Wrong key rejected
+        let bad_headers = McpRequestHeaders {
+            x_vng_admin_key: Some("wrong-key".to_string()),
+            x_vng_operator_id: None,
+            x_vng_tenant_id: None,
+            x_vng_user_id: None,
+        };
+        assert!(McpAuthContext::from_headers(&bad_headers).is_err());
+
+        // Correct key accepted
+        let good_headers = McpRequestHeaders {
+            x_vng_admin_key: Some("correct-secret".to_string()),
+            x_vng_operator_id: None,
+            x_vng_tenant_id: None,
+            x_vng_user_id: None,
+        };
+        let auth = McpAuthContext::from_headers(&good_headers).unwrap();
+        assert!(auth.is_admin);
+
+        unsafe {
+            std::env::remove_var("VNG_ADMIN_API_KEY");
+        }
+    }
+
+    #[test]
+    fn test_admin_key_accepted_when_env_var_not_set() {
+        unsafe {
+            std::env::remove_var("VNG_ADMIN_API_KEY");
+        }
+        // When env var is not set, any non-empty key is accepted (dev mode)
+        let headers = McpRequestHeaders {
+            x_vng_admin_key: Some("any-key".to_string()),
+            x_vng_operator_id: None,
+            x_vng_tenant_id: None,
+            x_vng_user_id: None,
+        };
+        let auth = McpAuthContext::from_headers(&headers).unwrap();
+        assert!(auth.is_admin);
     }
 }

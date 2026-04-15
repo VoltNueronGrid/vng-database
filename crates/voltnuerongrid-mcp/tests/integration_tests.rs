@@ -1,7 +1,9 @@
 /// Integration tests for VoltNueronGrid MCP Server
 /// Tests the full end-to-end flow including authentication, authorization, guardrails, and tool execution
 
-use serde_json::json;
+use axum::{extract::Path, routing::{get, post}, Json, Router};
+use serde_json::{json, Value};
+use serial_test::serial;
 use voltnuerongrid_mcp::{
     McpRequest, McpRequestHeaders, McpServerCapabilities, process_request,
     auth::{McpAuthContext, AuthenticationLevel},
@@ -9,8 +11,117 @@ use voltnuerongrid_mcp::{
     guardrails::QueryGuardrails,
 };
 
+struct MockRuntimeGuard {
+    _handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for MockRuntimeGuard {
+    fn drop(&mut self) {
+        self._handle.abort();
+        unsafe {
+            std::env::remove_var("VNG_MCP_RUNTIME_PROXY");
+            std::env::remove_var("VNG_RUNTIME_BASE_URL");
+            std::env::remove_var("VNG_MCP_DDL_KEY");
+            std::env::remove_var("VNG_MCP_TRANSFER_KEY");
+            std::env::remove_var("VNG_ADMIN_API_KEY");
+        }
+    }
+}
+
+async fn setup_mock_runtime() -> MockRuntimeGuard {
+    async fn health() -> Json<Value> {
+        Json(json!({"status":"ok","node_id":"node-1","cluster_mode":"single"}))
+    }
+
+    async fn reliability() -> Json<Value> {
+        Json(json!({"status":"ok","node_count":1,"replication_lag_ms":0,"uptime_ms":1000}))
+    }
+
+    async fn sql_execute() -> Json<Value> {
+        Json(json!({"status":"ok","columns":["v"],"rows":[[1]],"execution_time_ms":1,"rowcount":1,"route_path":"oltp","reason":"test"}))
+    }
+
+    async fn catalog() -> Json<Value> {
+        Json(json!({"status":"ok","active_count":1,"total_count":1,"entries":[{"object_name":"users","object_kind":"table"}]}))
+    }
+
+    async fn benchmark_ingest() -> Json<Value> {
+        Json(json!({"status":"ok","wall_time_ms":5,"records_per_second":1000.0}))
+    }
+
+    async fn benchmark_query() -> Json<Value> {
+        Json(json!({"status":"ok","wall_time_ms":4,"ops_per_second":2000.0}))
+    }
+
+    async fn htap_export() -> Json<Value> {
+        Json(json!({"status":"ok","mutation_count":2}))
+    }
+
+    async fn ingest_csv() -> Json<Value> {
+        Json(json!({"status":"ok","records_parsed":3}))
+    }
+
+    async fn ingest_parquet() -> Json<Value> {
+        Json(json!({"status":"ok","records_parsed":4}))
+    }
+
+    async fn admin_cluster_topology() -> Json<Value> {
+        Json(json!({"status":"ok","leader_node_id":"node-1","total_nodes":1,"active_nodes":1,"passive_nodes":0,"dead_nodes":0,"active_sessions":0,"passive_sessions":0,"live_transactions":0,"total_transactions":0,"live_locks":0,"nodes":[]}))
+    }
+
+    async fn admin_transactions() -> Json<Value> {
+        Json(json!({"status":"ok","action":"list","affected_count":0,"active_count":0,"transactions":[]}))
+    }
+
+    async fn admin_locks() -> Json<Value> {
+        Json(json!({"status":"ok","action":"list","released_lock_count":0,"active_lock_count":0,"locks":[]}))
+    }
+
+    async fn admin_nodes() -> Json<Value> {
+        Json(json!({"status":"ok","action":"add","node_id":"node-2","cluster_size":2,"migrated_transactions":0,"migrated_sessions":0}))
+    }
+
+    async fn catch_all(Path(_path): Path<String>) -> Json<Value> {
+        Json(json!({"status":"ok"}))
+    }
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/api/v1/sre/reliability/status", get(reliability))
+        .route("/api/v1/sql/execute", post(sql_execute))
+        .route("/api/v1/catalog/schemas", get(catalog))
+        .route("/api/v1/benchmark/ingest", post(benchmark_ingest))
+        .route("/api/v1/benchmark/query", post(benchmark_query))
+        .route("/api/v1/store/htap/export", post(htap_export))
+        .route("/api/v1/ingest/csv", post(ingest_csv))
+        .route("/api/v1/ingest/parquet", post(ingest_parquet))
+        .route("/api/v1/admin/cluster/topology", get(admin_cluster_topology))
+        .route("/api/v1/admin/sql/transactions/control", post(admin_transactions))
+        .route("/api/v1/admin/sql/locks/control", post(admin_locks))
+        .route("/api/v1/admin/cluster/nodes/manage", post(admin_nodes))
+        .route("/*path", get(catch_all).post(catch_all));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind mock runtime");
+    let address = listener.local_addr().expect("mock runtime addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve mock runtime");
+    });
+
+    unsafe {
+        std::env::set_var("VNG_MCP_RUNTIME_PROXY", "true");
+        std::env::set_var("VNG_RUNTIME_BASE_URL", format!("http://{}", address));
+        std::env::set_var("VNG_MCP_DDL_KEY", "extra-ddl-key");
+        std::env::set_var("VNG_MCP_TRANSFER_KEY", "xfer-key");
+        std::env::set_var("VNG_ADMIN_API_KEY", "admin-key");
+    }
+
+    MockRuntimeGuard { _handle: handle }
+}
+
 #[tokio::test]
+#[serial]
 async fn mcp_001_admin_can_execute_all_tools() {
+    let _runtime = setup_mock_runtime().await;
     let capabilities = McpServerCapabilities::default();
 
     let admin_headers = McpRequestHeaders {
@@ -35,7 +146,9 @@ async fn mcp_001_admin_can_execute_all_tools() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_002_operator_can_execute_operator_tools_not_admin() {
+    let _runtime = setup_mock_runtime().await;
     let capabilities = McpServerCapabilities::default();
 
     let operator_headers = McpRequestHeaders {
@@ -76,6 +189,7 @@ async fn mcp_002_operator_can_execute_operator_tools_not_admin() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_003_tenant_cannot_access_operator_tools() {
     let capabilities = McpServerCapabilities::default();
 
@@ -103,6 +217,7 @@ async fn mcp_003_tenant_cannot_access_operator_tools() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_004_missing_auth_returns_401() {
     let capabilities = McpServerCapabilities::default();
 
@@ -127,7 +242,9 @@ async fn mcp_004_missing_auth_returns_401() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_005_unknown_method_returns_400() {
+    unsafe { std::env::remove_var("VNG_ADMIN_API_KEY"); }
     let capabilities = McpServerCapabilities::default();
 
     let admin_headers = McpRequestHeaders {
@@ -151,6 +268,7 @@ async fn mcp_005_unknown_method_returns_400() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_006_query_guardrails_enforce_safety() {
     // Test that guardrails prevent dangerous queries
     let dangerous_queries = vec![
@@ -174,7 +292,9 @@ async fn mcp_006_query_guardrails_enforce_safety() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_007_admin_auth_precedence() {
+    unsafe { std::env::remove_var("VNG_ADMIN_API_KEY"); }
     // Verify admin takes precedence over operator/tenant
     let auth_headers = McpRequestHeaders {
         x_vng_admin_key: Some("admin-key".to_string()),
@@ -190,6 +310,7 @@ async fn mcp_007_admin_auth_precedence() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_008_operator_auth_precedence() {
     // Verify operator takes precedence over tenant
     let auth_headers = McpRequestHeaders {
@@ -206,6 +327,7 @@ async fn mcp_008_operator_auth_precedence() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_009_result_size_guardrails() {
     // Test result size calculation and limits
     let size = voltnuerongrid_mcp::guardrails::QueryGuardrails::estimate_result_size(
@@ -224,6 +346,7 @@ async fn mcp_009_result_size_guardrails() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_010_tenant_isolation_verification() {
     let tenant_auth = McpAuthContext {
         is_admin: false,
@@ -241,6 +364,7 @@ async fn mcp_010_tenant_isolation_verification() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_011_max_request_size_enforced() {
     // Verify max request size is set correctly
     let capabilities = McpServerCapabilities::default();
@@ -249,7 +373,9 @@ async fn mcp_011_max_request_size_enforced() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_012_auth_context_from_full_headers() {
+    unsafe { std::env::remove_var("VNG_ADMIN_API_KEY"); }
     // Test all authentication pathways
     let tests = vec![
         (
@@ -292,7 +418,9 @@ async fn mcp_012_auth_context_from_full_headers() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_013_admin_can_create_object_with_additional_key() {
+    let _runtime = setup_mock_runtime().await;
     let capabilities = McpServerCapabilities::default();
 
     let admin_headers = McpRequestHeaders {
@@ -320,6 +448,7 @@ async fn mcp_013_admin_can_create_object_with_additional_key() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_014_operator_cannot_create_object_even_with_additional_key() {
     let capabilities = McpServerCapabilities::default();
 
@@ -349,6 +478,7 @@ async fn mcp_014_operator_cannot_create_object_even_with_additional_key() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_015_missing_additional_key_is_rejected_for_drop() {
     let capabilities = McpServerCapabilities::default();
 
@@ -378,7 +508,9 @@ async fn mcp_015_missing_additional_key_is_rejected_for_drop() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_016_operator_can_generate_erd() {
+    let _runtime = setup_mock_runtime().await;
     let capabilities = McpServerCapabilities::default();
 
     let operator_headers = McpRequestHeaders {
@@ -407,7 +539,9 @@ async fn mcp_016_operator_can_generate_erd() {
 }
 
 #[tokio::test]
+#[serial]
 async fn mcp_017_data_transfer_requires_admin_and_additional_key() {
+    let _runtime = setup_mock_runtime().await;
     let capabilities = McpServerCapabilities::default();
 
     let admin_headers = McpRequestHeaders {
@@ -428,7 +562,11 @@ async fn mcp_017_data_transfer_requires_admin_and_additional_key() {
             "location": "blob://sample/container/users.csv",
             "table_name": "users",
             "transfer_admin_key": "xfer-key",
-            "options": {"delimiter": ","}
+            "options": {
+                "delimiter": ",",
+                "connector_id": "mcp-transfer",
+                "csv_data": "id,name\n1,Alice"
+            }
         }),
         headers: admin_headers,
     };
@@ -461,3 +599,110 @@ async fn mcp_017_data_transfer_requires_admin_and_additional_key() {
     assert!(denied_resp.error.is_some());
     assert_eq!(denied_resp.error.as_ref().unwrap().code, 403);
 }
+
+#[tokio::test]
+#[serial]
+async fn mcp_018_cluster_topology_is_admin_only() {
+    let _runtime = setup_mock_runtime().await;
+    let capabilities = McpServerCapabilities::default();
+
+    let admin_headers = McpRequestHeaders {
+        x_vng_admin_key: Some("admin-key".to_string()),
+        x_vng_operator_id: None,
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+    let admin_req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "19".to_string(),
+        method: "tools/cluster_topology".to_string(),
+        params: json!({"include_nodes": true}),
+        headers: admin_headers,
+    };
+    let admin_resp = process_request(admin_req, &capabilities).await;
+    assert!(admin_resp.error.is_none());
+
+    let operator_headers = McpRequestHeaders {
+        x_vng_admin_key: None,
+        x_vng_operator_id: Some("op-001".to_string()),
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+    let denied_req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "20".to_string(),
+        method: "tools/cluster_topology".to_string(),
+        params: json!({"include_nodes": true}),
+        headers: operator_headers,
+    };
+    let denied_resp = process_request(denied_req, &capabilities).await;
+    assert!(denied_resp.error.is_some());
+    assert_eq!(denied_resp.error.as_ref().unwrap().code, 403);
+}
+
+#[tokio::test]
+#[serial]
+async fn mcp_019_cluster_node_manage_accepts_admin_request() {
+    let _runtime = setup_mock_runtime().await;
+    let capabilities = McpServerCapabilities::default();
+    let admin_headers = McpRequestHeaders {
+        x_vng_admin_key: Some("admin-key".to_string()),
+        x_vng_operator_id: None,
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+
+    let req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "21".to_string(),
+        method: "tools/cluster_node_manage".to_string(),
+        params: json!({
+            "action": "add",
+            "node_id": "node-2",
+            "role": "follower",
+            "desired_status": "active",
+            "total_cpu_cores": 4,
+            "total_ram_mb": 8192
+        }),
+        headers: admin_headers,
+    };
+
+    let resp = process_request(req, &capabilities).await;
+    assert!(resp.error.is_none());
+    assert_eq!(resp.result.unwrap()["node_id"], "node-2");
+}
+
+#[tokio::test]
+#[serial]
+async fn mcp_020_proxy_disabled_returns_runtime_proxy_error() {
+    unsafe {
+        std::env::set_var("VNG_MCP_RUNTIME_PROXY", "false");
+        std::env::remove_var("VNG_ADMIN_API_KEY");
+    }
+    let capabilities = McpServerCapabilities::default();
+    let admin_headers = McpRequestHeaders {
+        x_vng_admin_key: Some("admin-key".to_string()),
+        x_vng_operator_id: Some("op-001".to_string()),
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+    let req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "22".to_string(),
+        method: "tools/health".to_string(),
+        params: json!({}),
+        headers: admin_headers,
+    };
+
+    let resp = process_request(req, &capabilities).await;
+    assert!(resp.error.is_some());
+    assert_eq!(resp.error.as_ref().unwrap().code, 400);
+    assert!(resp
+        .error
+        .as_ref()
+        .unwrap()
+        .message
+        .contains("Runtime proxy is disabled"));
+}
+
+

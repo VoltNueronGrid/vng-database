@@ -103,6 +103,7 @@ enum AcidTxState {
 #[derive(Debug, Clone, Serialize)]
 struct AcidTxEntry {
     transaction_id: String,
+    assigned_node_id: String,
     state: AcidTxState,
     isolation_level: String,
     started_at_unix_ms: u128,
@@ -129,7 +130,7 @@ struct AcidTransactionRegistry {
 }
 
 impl AcidTransactionRegistry {
-    fn begin(&mut self, tx_id: &str, isolation_level: &str, now_ms: u128) {
+    fn begin(&mut self, tx_id: &str, assigned_node_id: &str, isolation_level: &str, now_ms: u128) {
         let read_snapshot_at_ms = if isolation_level == "repeatable_read" {
             Some(now_ms)
         } else {
@@ -139,6 +140,7 @@ impl AcidTransactionRegistry {
             tx_id.to_string(),
             AcidTxEntry {
                 transaction_id: tx_id.to_string(),
+                assigned_node_id: assigned_node_id.to_string(),
                 state: AcidTxState::Active,
                 isolation_level: isolation_level.to_string(),
                 started_at_unix_ms: now_ms,
@@ -283,6 +285,17 @@ impl AcidTransactionRegistry {
     fn all_transactions(&self) -> Vec<&AcidTxEntry> {
         self.transactions.values().collect()
     }
+
+    fn reassign_active_node(&mut self, source_node_id: &str, target_node_id: &str) -> usize {
+        let mut reassigned = 0usize;
+        for entry in self.transactions.values_mut() {
+            if entry.state == AcidTxState::Active && entry.assigned_node_id == source_node_id {
+                entry.assigned_node_id = target_node_id.to_string();
+                reassigned += 1;
+            }
+        }
+        reassigned
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,6 +303,108 @@ enum DeadlockScanOutcome {
     CycleDetected,
     ScanCapReached,
     NoCycle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClusterNodeRuntime {
+    node_id: String,
+    role: String,
+    status: String,
+    total_cpu_cores: u32,
+    total_ram_mb: u64,
+    draining: bool,
+    last_heartbeat_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ClusterTopologyNodeEntry {
+    node_id: String,
+    role: String,
+    status: String,
+    total_cpu_cores: u32,
+    total_ram_mb: u64,
+    used_cpu_pct: f64,
+    used_ram_mb: u64,
+    active_sessions: usize,
+    passive_sessions: usize,
+    live_transactions: usize,
+    total_transactions: usize,
+    live_locks: usize,
+    draining: bool,
+    last_heartbeat_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminClusterTopologyResponse {
+    status: &'static str,
+    leader_node_id: String,
+    total_nodes: usize,
+    active_nodes: usize,
+    passive_nodes: usize,
+    dead_nodes: usize,
+    active_sessions: usize,
+    passive_sessions: usize,
+    live_transactions: usize,
+    total_transactions: usize,
+    live_locks: usize,
+    nodes: Vec<ClusterTopologyNodeEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminTransactionControlRequest {
+    action: String,
+    transaction_id: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminTransactionControlResponse {
+    status: &'static str,
+    action: String,
+    affected_count: usize,
+    active_count: usize,
+    transactions: Vec<AcidTxEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminLockControlRequest {
+    action: String,
+    lock_id: Option<String>,
+    transaction_id: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminLockControlResponse {
+    status: &'static str,
+    action: String,
+    released_lock_count: usize,
+    active_lock_count: usize,
+    locks: Vec<PessimisticLockRecord>,
+    affected_transactions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminClusterNodeManageRequest {
+    action: String,
+    node_id: String,
+    role: Option<String>,
+    desired_status: Option<String>,
+    total_cpu_cores: Option<u32>,
+    total_ram_mb: Option<u64>,
+    target_node_id: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminClusterNodeManageResponse {
+    status: &'static str,
+    action: String,
+    node_id: String,
+    cluster_size: usize,
+    migrated_transactions: usize,
+    migrated_sessions: usize,
+    message: String,
 }
 
 #[derive(Clone)]
@@ -304,6 +419,7 @@ struct AppState {
     rbac_privilege_matrix: Arc<RbacPrivilegeMatrix>,
     kms_runtime: Arc<Mutex<KmsRuntimeState>>,
     leader_node_id: Arc<Mutex<String>>,
+    cluster_nodes: Arc<Mutex<HashMap<String, ClusterNodeRuntime>>>,
     audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
     action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
     dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
@@ -1250,6 +1366,7 @@ struct DriverSession {
     driver_name: String,
     driver_version: String,
     connected_at_ms: u64,
+    assigned_node_id: String,
     pooled_connection_id: Option<String>,
 }
 
@@ -1297,6 +1414,7 @@ struct DriverSessionInfo {
     driver_name: String,
     driver_version: String,
     connected_at_ms: u64,
+    assigned_node_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1754,7 +1872,7 @@ struct PessimisticLockReleaseRequest {
     resource: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct PessimisticLockRecord {
     lock_id: String,
     transaction_id: String,
@@ -4724,6 +4842,7 @@ async fn main() {
         rbac_privilege_matrix,
         kms_runtime,
         leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
+        cluster_nodes: Arc::new(Mutex::new(initial_cluster_nodes(&node_id))),
         audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
         action_records: Arc::new(Mutex::new(Vec::new())),
         dr_hook_records: Arc::new(Mutex::new(Vec::new())),
@@ -4794,6 +4913,10 @@ async fn main() {
         .route("/api/v1/olap/query", post(olap_query))
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/failover/simulate", post(failover_simulate))
+        .route("/api/v1/admin/cluster/topology", get(admin_cluster_topology))
+        .route("/api/v1/admin/sql/transactions/control", post(admin_sql_transaction_control))
+        .route("/api/v1/admin/sql/locks/control", post(admin_sql_lock_control))
+        .route("/api/v1/admin/cluster/nodes/manage", post(admin_cluster_node_manage))
         .route("/api/v1/sre/reliability/status", get(sre_reliability_status))
         .route("/api/v1/sre/rate-limit/check", post(sre_rate_limit_check))
         .route(
@@ -5406,7 +5529,7 @@ async fn sql_transaction(
             .to_string();
         let mut acid = state.acid_transactions.lock().expect("acid_tx lock");
         if has_begin {
-            acid.begin(&tx_id, &iso_level, now_ms);
+            acid.begin(&tx_id, &state.node_id, &iso_level, now_ms);
         }
         for stmt in &req.statements {
             let upper = stmt.to_ascii_uppercase();
@@ -6355,6 +6478,309 @@ async fn failover_simulate(
         requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
         handoff_report,
     }))
+}
+
+async fn admin_cluster_topology(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AdminClusterTopologyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    Ok((StatusCode::OK, Json(cluster_topology_snapshot(&state))))
+}
+
+async fn admin_sql_transaction_control(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AdminTransactionControlRequest>,
+) -> Result<(StatusCode, Json<AdminTransactionControlResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    let action = req.action.to_ascii_lowercase();
+    let now_ms = now_unix_ms();
+    let mut affected_count = 0usize;
+
+    match action.as_str() {
+        "list" => {}
+        "commit" | "rollback" => {
+            let Some(transaction_id) = req.transaction_id.as_deref() else {
+                return Ok((StatusCode::BAD_REQUEST, Json(AdminTransactionControlResponse {
+                    status: "error",
+                    action,
+                    affected_count: 0,
+                    active_count: 0,
+                    transactions: Vec::new(),
+                })));
+            };
+
+            let mut acid = state.acid_transactions.lock().expect("acid_transactions admin control lock");
+            affected_count = if action == "commit" {
+                usize::from(acid.commit(transaction_id, now_ms))
+            } else {
+                usize::from(acid.rollback(transaction_id, now_ms))
+            };
+            drop(acid);
+
+            if action == "rollback" {
+                let mut lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin rollback lock");
+                let mut wait_graph = state.pessimistic_lock_waits.lock().expect("pessimistic_lock_waits admin rollback lock");
+                let released = release_locks_for_transaction(&mut lock_table, &mut wait_graph, transaction_id);
+                if released > 0 {
+                    state.pessimistic_lock_metrics.lock_releases.fetch_add(released as u64, Ordering::Relaxed);
+                }
+            }
+
+            append_audit_event(
+                &state,
+                AuditEventKind::Sql,
+                "admin",
+                "admin_sql_transaction_control",
+                if affected_count > 0 { "ok" } else { "not_found" },
+                &json!({
+                    "action": action,
+                    "transaction_id": transaction_id,
+                    "reason": req.reason,
+                    "affected_count": affected_count,
+                })
+                .to_string(),
+            );
+        }
+        _ => {
+            return Ok((StatusCode::BAD_REQUEST, Json(AdminTransactionControlResponse {
+                status: "error",
+                action,
+                affected_count: 0,
+                active_count: 0,
+                transactions: Vec::new(),
+            })));
+        }
+    }
+
+    let acid = state.acid_transactions.lock().expect("acid_transactions admin response lock");
+    let active_transactions: Vec<AcidTxEntry> = acid.active_transactions().into_iter().map(|entry| entry.clone()).collect();
+    let active_count = active_transactions.len();
+    Ok((StatusCode::OK, Json(AdminTransactionControlResponse {
+        status: "ok",
+        action,
+        affected_count,
+        active_count,
+        transactions: active_transactions,
+    })))
+}
+
+async fn admin_sql_lock_control(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AdminLockControlRequest>,
+) -> Result<(StatusCode, Json<AdminLockControlResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    let action = req.action.to_ascii_lowercase();
+    let mut released_lock_count = 0usize;
+    let mut affected_transactions = Vec::new();
+
+    {
+        let mut lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin control lock");
+        let mut wait_graph = state.pessimistic_lock_waits.lock().expect("pessimistic_lock_waits admin control lock");
+
+        match action.as_str() {
+            "list" => {}
+            "kill_lock" => {
+                if let Some(lock_id) = req.lock_id.as_deref() {
+                    if let Some(record) = lock_table.remove(lock_id) {
+                        affected_transactions.push(record.transaction_id.clone());
+                        wait_graph.retain(|waiting_tx, holder_tx| waiting_tx != &record.transaction_id && holder_tx != &record.transaction_id);
+                        released_lock_count = 1;
+                    }
+                } else if let Some(transaction_id) = req.transaction_id.as_deref() {
+                    released_lock_count = release_locks_for_transaction(&mut lock_table, &mut wait_graph, transaction_id);
+                    if released_lock_count > 0 {
+                        affected_transactions.push(transaction_id.to_string());
+                    }
+                } else {
+                    return Ok((StatusCode::BAD_REQUEST, Json(AdminLockControlResponse {
+                        status: "error",
+                        action,
+                        released_lock_count: 0,
+                        active_lock_count: lock_table.len(),
+                        locks: lock_table.values().cloned().collect(),
+                        affected_transactions: Vec::new(),
+                    })));
+                }
+            }
+            "kill_deadlock" => {
+                let Some(transaction_id) = req.transaction_id.as_deref() else {
+                    return Ok((StatusCode::BAD_REQUEST, Json(AdminLockControlResponse {
+                        status: "error",
+                        action,
+                        released_lock_count: 0,
+                        active_lock_count: lock_table.len(),
+                        locks: lock_table.values().cloned().collect(),
+                        affected_transactions: Vec::new(),
+                    })));
+                };
+                released_lock_count = release_locks_for_transaction(&mut lock_table, &mut wait_graph, transaction_id);
+                if released_lock_count > 0 {
+                    affected_transactions.push(transaction_id.to_string());
+                }
+                let mut acid = state.acid_transactions.lock().expect("acid_transactions deadlock victim lock");
+                let _ = acid.rollback(transaction_id, now_unix_ms());
+            }
+            _ => {
+                return Ok((StatusCode::BAD_REQUEST, Json(AdminLockControlResponse {
+                    status: "error",
+                    action,
+                    released_lock_count: 0,
+                    active_lock_count: lock_table.len(),
+                    locks: lock_table.values().cloned().collect(),
+                    affected_transactions: Vec::new(),
+                })));
+            }
+        }
+
+        if released_lock_count > 0 {
+            state.pessimistic_lock_metrics.lock_releases.fetch_add(released_lock_count as u64, Ordering::Relaxed);
+        }
+    }
+
+    let lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin control response lock");
+    let locks: Vec<PessimisticLockRecord> = lock_table.values().cloned().collect();
+    drop(lock_table);
+    append_audit_event(
+        &state,
+        AuditEventKind::Sql,
+        "admin",
+        "admin_sql_lock_control",
+        "ok",
+        &json!({
+            "action": action,
+            "released_lock_count": released_lock_count,
+            "reason": req.reason,
+            "affected_transactions": affected_transactions,
+        })
+        .to_string(),
+    );
+    Ok((StatusCode::OK, Json(AdminLockControlResponse {
+        status: "ok",
+        action,
+        released_lock_count,
+        active_lock_count: locks.len(),
+        locks,
+        affected_transactions,
+    })))
+}
+
+async fn admin_cluster_node_manage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AdminClusterNodeManageRequest>,
+) -> Result<(StatusCode, Json<AdminClusterNodeManageResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    let action = req.action.to_ascii_lowercase();
+    let mut migrated_transactions = 0usize;
+    let mut migrated_sessions = 0usize;
+
+    match action.as_str() {
+        "add" => {
+            let mut nodes = state.cluster_nodes.lock().expect("cluster_nodes add lock");
+            let entry = nodes.entry(req.node_id.clone()).or_insert(ClusterNodeRuntime {
+                node_id: req.node_id.clone(),
+                role: req.role.clone().unwrap_or_else(|| "follower".to_string()),
+                status: req.desired_status.clone().unwrap_or_else(|| "active".to_string()),
+                total_cpu_cores: req.total_cpu_cores.unwrap_or_else(default_node_cpu_cores),
+                total_ram_mb: req.total_ram_mb.unwrap_or_else(default_node_ram_mb),
+                draining: false,
+                last_heartbeat_ms: now_unix_ms_u64(),
+            });
+            entry.last_heartbeat_ms = now_unix_ms_u64();
+            drop(nodes);
+            let mut replicas = state.replica_replay_states.lock().expect("replica_replay_states add lock");
+            replicas.entry(req.node_id.clone()).or_insert_with(|| ReplicaReplayState::new(&req.node_id));
+        }
+        "remove" => {
+            let target_node_id = {
+                let nodes = state.cluster_nodes.lock().expect("cluster_nodes remove select lock");
+                choose_migration_target(&nodes, &req.node_id, req.target_node_id.as_deref())
+            };
+
+            let Some(target_node_id) = target_node_id else {
+                return Ok((StatusCode::CONFLICT, Json(AdminClusterNodeManageResponse {
+                    status: "error",
+                    action,
+                    node_id: req.node_id,
+                    cluster_size: 0,
+                    migrated_transactions: 0,
+                    migrated_sessions: 0,
+                    message: "no viable target node available for drain/remove".to_string(),
+                })));
+            };
+
+            {
+                let mut acid = state.acid_transactions.lock().expect("acid_transactions node manage lock");
+                migrated_transactions = acid.reassign_active_node(&req.node_id, &target_node_id);
+            }
+            {
+                let mut sessions = state.driver_sessions.lock().expect("driver_sessions node manage lock");
+                migrated_sessions = migrate_driver_sessions(&mut sessions, &req.node_id, &target_node_id);
+            }
+            {
+                let mut nodes = state.cluster_nodes.lock().expect("cluster_nodes remove lock");
+                nodes.remove(&req.node_id);
+                if let Some(target) = nodes.get_mut(&target_node_id) {
+                    target.status = "active".to_string();
+                    target.draining = false;
+                    if *state.leader_node_id.lock().expect("leader_node_id remove lock") == req.node_id {
+                        target.role = "leader".to_string();
+                    }
+                }
+            }
+            {
+                let mut replicas = state.replica_replay_states.lock().expect("replica_replay_states remove lock");
+                replicas.remove(&req.node_id);
+            }
+            {
+                let mut leader = state.leader_node_id.lock().expect("leader_node_id node manage lock");
+                if *leader == req.node_id {
+                    *leader = target_node_id;
+                }
+            }
+        }
+        _ => {
+            return Ok((StatusCode::BAD_REQUEST, Json(AdminClusterNodeManageResponse {
+                status: "error",
+                action,
+                node_id: req.node_id,
+                cluster_size: 0,
+                migrated_transactions: 0,
+                migrated_sessions: 0,
+                message: "unsupported action; expected add or remove".to_string(),
+            })));
+        }
+    }
+
+    let cluster_size = state.cluster_nodes.lock().expect("cluster_nodes count lock").len();
+    append_audit_event(
+        &state,
+        AuditEventKind::Failover,
+        "admin",
+        "admin_cluster_node_manage",
+        "ok",
+        &json!({
+            "action": action,
+            "node_id": req.node_id,
+            "reason": req.reason,
+            "migrated_transactions": migrated_transactions,
+            "migrated_sessions": migrated_sessions,
+            "cluster_size": cluster_size,
+        })
+        .to_string(),
+    );
+    Ok((StatusCode::OK, Json(AdminClusterNodeManageResponse {
+        status: "ok",
+        action,
+        node_id: req.node_id,
+        cluster_size,
+        migrated_transactions,
+        migrated_sessions,
+        message: "cluster membership updated".to_string(),
+    })))
 }
 
 async fn sre_reliability_status(
@@ -9215,6 +9641,7 @@ async fn driver_connect(
         driver_name: req.driver_name,
         driver_version: req.driver_version,
         connected_at_ms: now_epoch_ms_chaos(),
+        assigned_node_id: state.node_id.clone(),
         pooled_connection_id,
     });
     let negotiated: Vec<String> = req.requested_capabilities
@@ -13337,6 +13764,7 @@ async fn driver_session_list(
             driver_name: sess.driver_name.clone(),
             driver_version: sess.driver_version.clone(),
             connected_at_ms: sess.connected_at_ms,
+            assigned_node_id: sess.assigned_node_id.clone(),
         })
         .collect();
     let session_count = list.len();
@@ -14638,6 +15066,214 @@ fn build_failover_handoff_report(
                 actual: gap.actual,
             })
             .collect(),
+    }
+}
+
+fn default_node_cpu_cores() -> u32 {
+    std::thread::available_parallelism()
+        .map(|value| value.get() as u32)
+        .unwrap_or(4)
+}
+
+fn default_node_ram_mb() -> u64 {
+    env::var("VNG_NODE_TOTAL_RAM_MB")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(16_384)
+}
+
+fn initial_cluster_nodes(node_id: &str) -> HashMap<String, ClusterNodeRuntime> {
+    let mut nodes = HashMap::new();
+    nodes.insert(
+        node_id.to_string(),
+        ClusterNodeRuntime {
+            node_id: node_id.to_string(),
+            role: "leader".to_string(),
+            status: "active".to_string(),
+            total_cpu_cores: env::var("VNG_NODE_TOTAL_CPU_CORES")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or_else(default_node_cpu_cores),
+            total_ram_mb: default_node_ram_mb(),
+            draining: false,
+            last_heartbeat_ms: now_unix_ms_u64(),
+        },
+    );
+    nodes
+}
+
+fn require_admin_api_key(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
+    let Some(required_key) = state.admin_api_key.as_ref() else {
+        return Err(auth_error(headers, "missing_or_invalid_admin_key"));
+    };
+
+    let provided = headers
+        .get("x-vng-admin-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+
+    if provided != required_key {
+        return Err(auth_error(headers, "missing_or_invalid_admin_key"));
+    }
+
+    Ok(())
+}
+
+fn release_locks_for_transaction(
+    lock_table: &mut HashMap<String, PessimisticLockRecord>,
+    wait_graph: &mut HashMap<String, String>,
+    transaction_id: &str,
+) -> usize {
+    let before = lock_table.len();
+    lock_table.retain(|_, record| record.transaction_id != transaction_id);
+    wait_graph.retain(|waiting_tx, holder_tx| waiting_tx != transaction_id && holder_tx != transaction_id);
+    before.saturating_sub(lock_table.len())
+}
+
+fn choose_migration_target(
+    nodes: &HashMap<String, ClusterNodeRuntime>,
+    source_node_id: &str,
+    requested_target_node_id: Option<&str>,
+) -> Option<String> {
+    if let Some(target_node_id) = requested_target_node_id {
+        if target_node_id != source_node_id {
+            if let Some(node) = nodes.get(target_node_id) {
+                if node.status != "dead" {
+                    return Some(target_node_id.to_string());
+                }
+            }
+        }
+    }
+
+    nodes.iter()
+        .filter(|(node_id, node)| node_id.as_str() != source_node_id && node.status != "dead")
+        .max_by_key(|(_, node)| if node.status == "active" { 2 } else { 1 })
+        .map(|(node_id, _)| node_id.clone())
+}
+
+fn migrate_driver_sessions(
+    sessions: &mut HashMap<String, DriverSession>,
+    source_node_id: &str,
+    target_node_id: &str,
+) -> usize {
+    let mut migrated = 0usize;
+    for session in sessions.values_mut() {
+        if session.assigned_node_id == source_node_id {
+            session.assigned_node_id = target_node_id.to_string();
+            migrated += 1;
+        }
+    }
+    migrated
+}
+
+fn cluster_topology_snapshot(state: &AppState) -> AdminClusterTopologyResponse {
+    let leader_node_id = state
+        .leader_node_id
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_else(|_| state.node_id.clone());
+    let cluster_nodes = state.cluster_nodes.lock().expect("cluster_nodes lock topology");
+    let sessions = state.driver_sessions.lock().expect("driver_sessions lock topology");
+    let transactions = state.acid_transactions.lock().expect("acid_transactions lock topology");
+    let locks = state.pessimistic_locks.lock().expect("pessimistic_locks lock topology");
+    let failure_signals = state.cluster_failure_signals.lock().expect("cluster_failure_signals lock topology");
+
+    let mut active_nodes = 0usize;
+    let mut passive_nodes = 0usize;
+    let mut dead_nodes = 0usize;
+    let mut active_sessions = 0usize;
+    let mut passive_sessions = 0usize;
+    let mut live_transactions = 0usize;
+    let total_transactions = transactions.all_transactions().len();
+    let live_locks = locks.len();
+    let mut nodes = Vec::new();
+
+    for node in cluster_nodes.values() {
+        let node_dead = failure_signals.iter().any(|signal| {
+            signal.node_id == node.node_id && !signal.resolved && signal.severity.eq_ignore_ascii_case("critical")
+        }) || node.status == "dead";
+        let effective_status = if node_dead {
+            "dead".to_string()
+        } else {
+            node.status.clone()
+        };
+        let node_active_sessions = sessions.values().filter(|session| session.assigned_node_id == node.node_id).count();
+        let node_live_transactions = transactions
+            .active_transactions()
+            .into_iter()
+            .filter(|entry| entry.assigned_node_id == node.node_id)
+            .count();
+        let node_total_transactions = transactions
+            .all_transactions()
+            .into_iter()
+            .filter(|entry| entry.assigned_node_id == node.node_id)
+            .count();
+        let node_live_locks = locks.values().filter(|record| {
+            transactions
+                .transactions
+                .get(&record.transaction_id)
+                .map(|entry| entry.assigned_node_id == node.node_id)
+                .unwrap_or(false)
+        }).count();
+        let node_passive_sessions = if effective_status == "passive" { node_active_sessions } else { 0 };
+        let node_effective_active_sessions = if effective_status == "active" { node_active_sessions } else { 0 };
+
+        match effective_status.as_str() {
+            "active" => active_nodes += 1,
+            "passive" => passive_nodes += 1,
+            _ => dead_nodes += 1,
+        }
+        active_sessions += node_effective_active_sessions;
+        passive_sessions += node_passive_sessions;
+        live_transactions += node_live_transactions;
+
+        let estimated_cpu = ((node_effective_active_sessions as f64 * 4.0)
+            + (node_live_transactions as f64 * 6.0)
+            + (node_live_locks as f64 * 1.5)
+            + if node.role == "leader" { 8.0 } else { 3.0 })
+            .min(100.0);
+        let estimated_ram = (512u64
+            + (node_active_sessions as u64 * 128)
+            + (node_live_transactions as u64 * 96)
+            + (node_live_locks as u64 * 16))
+            .min(node.total_ram_mb.max(512));
+
+        nodes.push(ClusterTopologyNodeEntry {
+            node_id: node.node_id.clone(),
+            role: node.role.clone(),
+            status: effective_status,
+            total_cpu_cores: node.total_cpu_cores,
+            total_ram_mb: node.total_ram_mb,
+            used_cpu_pct: estimated_cpu,
+            used_ram_mb: estimated_ram,
+            active_sessions: node_effective_active_sessions,
+            passive_sessions: node_passive_sessions,
+            live_transactions: node_live_transactions,
+            total_transactions: node_total_transactions,
+            live_locks: node_live_locks,
+            draining: node.draining,
+            last_heartbeat_ms: node.last_heartbeat_ms,
+        });
+    }
+
+    nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+
+    AdminClusterTopologyResponse {
+        status: "ok",
+        leader_node_id,
+        total_nodes: nodes.len(),
+        active_nodes,
+        passive_nodes,
+        dead_nodes,
+        active_sessions,
+        passive_sessions,
+        live_transactions,
+        total_transactions,
+        live_locks,
+        nodes,
     }
 }
 
@@ -17652,6 +18288,12 @@ mod tests {
         headers
     }
 
+    fn admin_headers(admin_key: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-vng-admin-key", HeaderValue::from_str(admin_key).expect("admin key"));
+        headers
+    }
+
     fn tenant_user_headers(user_id: &str, tenant_id: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert("x-vng-user-id", HeaderValue::from_str(user_id).expect("user id"));
@@ -17676,6 +18318,7 @@ mod tests {
             rbac_privilege_matrix: Arc::new(default_rbac_privilege_matrix()),
             kms_runtime: Arc::new(Mutex::new(load_kms_runtime_state(&security_config))),
             leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
+            cluster_nodes: Arc::new(Mutex::new(initial_cluster_nodes("node-1"))),
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
             action_records: Arc::new(Mutex::new(Vec::new())),
             dr_hook_records: Arc::new(Mutex::new(Vec::new())),
@@ -21123,7 +21766,7 @@ mod tests {
         let state = state_with_key(None);
         {
             let mut acid = state.acid_transactions.lock().unwrap();
-            acid.begin("tx-concurrent", "serializable", 1_000_u128);
+            acid.begin("tx-concurrent", "node-1", "serializable", 1_000_u128);
             acid.record_statement("tx-concurrent", Some("inventory".to_string()));
         }
         // Now attempt a second serializable transaction writing to the same table
@@ -21986,7 +22629,7 @@ mod tests {
 
         {
             let mut acid = state.acid_transactions.lock().unwrap();
-            acid.begin(tx_id, "read_committed", now_ms);
+            acid.begin(tx_id, "node-1", "read_committed", now_ms);
             acid.record_statement(tx_id, Some("orders".to_string()));
             acid.record_statement(tx_id, Some("inventory".to_string()));
             acid.record_statement(tx_id, Some("orders".to_string())); // same table again
@@ -22402,7 +23045,7 @@ mod tests {
         let now_ms = 2_000_000_u128;
         {
             let mut acid = state.acid_transactions.lock().unwrap();
-            acid.begin(tx_id, "read_uncommitted", now_ms);
+            acid.begin(tx_id, "node-1", "read_uncommitted", now_ms);
             let entry = acid.all_transactions().into_iter()
                 .find(|t| t.transaction_id == tx_id)
                 .expect("tx must exist in registry");
@@ -22422,7 +23065,7 @@ mod tests {
         let now_ms = 3_000_000_u128;
         {
             let mut acid = state.acid_transactions.lock().unwrap();
-            acid.begin(tx_id, "serializable", now_ms);
+            acid.begin(tx_id, "node-1", "serializable", now_ms);
             let entry = acid.all_transactions().into_iter()
                 .find(|t| t.transaction_id == tx_id)
                 .expect("tx must exist in registry");
@@ -23582,7 +24225,7 @@ mod tests {
         let state = state_with_key(Some("test-key"));
         {
             let mut acid = state.acid_transactions.lock().unwrap();
-            acid.begin("tx-iso-1", "serializable", 0u128);
+            acid.begin("tx-iso-1", "node-1", "serializable", 0u128);
         }
         let headers = operator_headers("test-key", "admin");
         let (status, Json(body)) = sql_transactions_isolation(State(state), headers).await.unwrap();
@@ -25297,6 +25940,7 @@ mod tests {
                 driver_name: "test-driver".to_string(),
                 driver_version: "1.0".to_string(),
                 connected_at_ms: 12345,
+                assigned_node_id: "node-1".to_string(),
                 pooled_connection_id: None,
             });
         }
@@ -25332,6 +25976,7 @@ mod tests {
                 driver_name: "rust-driver".to_string(),
                 driver_version: "1.0.0".to_string(),
                 connected_at_ms: 0,
+                assigned_node_id: "node-1".to_string(),
                 pooled_connection_id: None,
             });
         }
@@ -25366,6 +26011,7 @@ mod tests {
                 driver_name: "test-drv".to_string(),
                 driver_version: "2.0.0".to_string(),
                 connected_at_ms: 0,
+                assigned_node_id: "node-1".to_string(),
                 pooled_connection_id: None,
             });
         }
@@ -25402,6 +26048,7 @@ mod tests {
                 driver_name: "test-drv".to_string(),
                 driver_version: "1.0.0".to_string(),
                 connected_at_ms: 0,
+                assigned_node_id: "node-1".to_string(),
                 pooled_connection_id: None,
             });
         }
@@ -29515,6 +30162,138 @@ mod tests {
         let res = rows_column_alias_count(State(state), hdrs).await;
         assert!(res.is_err(), "missing auth should be rejected");
         assert_eq!(res.unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_cluster_topology_reports_runtime_counts() {
+        let state = state_with_key(Some("secret"));
+        {
+            let mut sessions = state.driver_sessions.lock().unwrap();
+            sessions.insert("sess-a".to_string(), DriverSession {
+                driver_name: "rust".to_string(),
+                driver_version: "1.0.0".to_string(),
+                connected_at_ms: 1,
+                assigned_node_id: "node-1".to_string(),
+                pooled_connection_id: None,
+            });
+        }
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            acid.begin("tx-1", "node-1", "read_committed", now_unix_ms());
+        }
+        let (status, Json(body)) = admin_cluster_topology(State(state), admin_headers("secret")).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.total_nodes, 1);
+        assert_eq!(body.active_sessions, 1);
+        assert_eq!(body.live_transactions, 1);
+        assert_eq!(body.nodes[0].node_id, "node-1");
+    }
+
+    #[tokio::test]
+    async fn admin_transaction_control_can_rollback_and_release_locks() {
+        let state = state_with_key(Some("secret"));
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            acid.begin("tx-admin-1", "node-1", "serializable", now_unix_ms());
+        }
+        {
+            let mut locks = state.pessimistic_locks.lock().unwrap();
+            locks.insert("lock-1".to_string(), PessimisticLockRecord {
+                lock_id: "lock-1".to_string(),
+                transaction_id: "tx-admin-1".to_string(),
+                resource: "users:1".to_string(),
+                owner: "test-owner".to_string(),
+                acquired_unix_ms: now_unix_ms(),
+                expires_unix_ms: now_unix_ms() + 30_000,
+            });
+        }
+        let req = AdminTransactionControlRequest {
+            action: "rollback".to_string(),
+            transaction_id: Some("tx-admin-1".to_string()),
+            reason: Some("test".to_string()),
+        };
+        let (status, Json(body)) = admin_sql_transaction_control(State(state.clone()), admin_headers("secret"), Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.affected_count, 1);
+        assert!(state.pessimistic_locks.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn admin_lock_control_can_kill_deadlock_victim() {
+        let state = state_with_key(Some("secret"));
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            acid.begin("tx-dead", "node-1", "read_committed", now_unix_ms());
+        }
+        {
+            let mut locks = state.pessimistic_locks.lock().unwrap();
+            locks.insert("lock-dead".to_string(), PessimisticLockRecord {
+                lock_id: "lock-dead".to_string(),
+                transaction_id: "tx-dead".to_string(),
+                resource: "orders:7".to_string(),
+                owner: "test-owner".to_string(),
+                acquired_unix_ms: now_unix_ms(),
+                expires_unix_ms: now_unix_ms() + 30_000,
+            });
+        }
+        let req = AdminLockControlRequest {
+            action: "kill_deadlock".to_string(),
+            lock_id: None,
+            transaction_id: Some("tx-dead".to_string()),
+            reason: Some("cycle_detected".to_string()),
+        };
+        let (status, Json(body)) = admin_sql_lock_control(State(state.clone()), admin_headers("secret"), Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.released_lock_count, 1);
+        assert!(body.affected_transactions.contains(&"tx-dead".to_string()));
+    }
+
+    #[tokio::test]
+    async fn admin_cluster_node_manage_removes_node_and_migrates_work() {
+        let state = state_with_key(Some("secret"));
+        {
+            let mut nodes = state.cluster_nodes.lock().unwrap();
+            nodes.insert("node-2".to_string(), ClusterNodeRuntime {
+                node_id: "node-2".to_string(),
+                role: "follower".to_string(),
+                status: "active".to_string(),
+                total_cpu_cores: 4,
+                total_ram_mb: 8192,
+                draining: false,
+                last_heartbeat_ms: now_unix_ms_u64(),
+            });
+        }
+        {
+            let mut sessions = state.driver_sessions.lock().unwrap();
+            sessions.insert("sess-node-2".to_string(), DriverSession {
+                driver_name: "rust".to_string(),
+                driver_version: "1.0.0".to_string(),
+                connected_at_ms: 1,
+                assigned_node_id: "node-2".to_string(),
+                pooled_connection_id: None,
+            });
+        }
+        {
+            let mut acid = state.acid_transactions.lock().unwrap();
+            acid.begin("tx-node-2", "node-2", "read_committed", now_unix_ms());
+        }
+        let req = AdminClusterNodeManageRequest {
+            action: "remove".to_string(),
+            node_id: "node-2".to_string(),
+            role: None,
+            desired_status: None,
+            total_cpu_cores: None,
+            total_ram_mb: None,
+            target_node_id: Some("node-1".to_string()),
+            reason: Some("scale_in".to_string()),
+        };
+        let (status, Json(body)) = admin_cluster_node_manage(State(state.clone()), admin_headers("secret"), Json(req)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.migrated_transactions, 1);
+        assert_eq!(body.migrated_sessions, 1);
+        assert!(!state.cluster_nodes.lock().unwrap().contains_key("node-2"));
+        let acid = state.acid_transactions.lock().unwrap();
+        assert_eq!(acid.transactions.get("tx-node-2").unwrap().assigned_node_id, "node-1");
     }
 
 }

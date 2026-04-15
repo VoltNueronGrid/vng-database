@@ -18,6 +18,169 @@ It is designed for:
 ## Recent Implementation Updates
 
 - WS5 TLS hardening: runtime TLS endpoints now expose cert/key preflight readiness (`cert_present`, `key_present`, `cert_pair_configured`, `preflight_ok`) and rotation only proceeds when both cert/key files exist.
+- MCP admin control-plane expansion: cluster topology, transaction commit/rollback, lock/deadlock control, and cluster node add/remove are now implemented in the runtime service and exposed through MCP contracts.
+
+## MCP Admin Cluster Management
+
+VoltNueronGrid now includes admin-oriented MCP/runtime functionality for cluster and runtime operations:
+
+- Cluster topology summary with node counts, node role/status, session counts, transaction counts, lock counts, and per-node CPU/RAM capacity plus estimated usage
+- Transaction administration: list active transactions, commit a live transaction, roll back a live transaction
+- Lock administration: list locks, kill a specific lock, kill a deadlock victim transaction and release its locks
+- Cluster scale operations: add a node, remove a node, and migrate active sessions/transactions to surviving nodes during scale-in
+
+### Runtime service endpoints
+
+- `GET /api/v1/admin/cluster/topology`
+- `POST /api/v1/admin/sql/transactions/control`
+- `POST /api/v1/admin/sql/locks/control`
+- `POST /api/v1/admin/cluster/nodes/manage`
+
+These endpoints require the admin header:
+
+```text
+x-vng-admin-key: <your-admin-key>
+```
+
+### MCP tool names
+
+- `tools/cluster_topology`
+- `tools/transaction_admin`
+- `tools/lock_admin`
+- `tools/cluster_node_manage`
+
+### Example: inspect cluster topology through MCP
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "cluster-topology-1",
+  "method": "tools/cluster_topology",
+  "params": {
+    "include_nodes": true
+  },
+  "headers": {
+    "x_vng_admin_key": "secret"
+  }
+}
+```
+
+Expected response shape:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "cluster-topology-1",
+  "result": {
+    "leader_node_id": "node-1",
+    "total_nodes": 2,
+    "active_nodes": 1,
+    "passive_nodes": 1,
+    "dead_nodes": 0,
+    "active_sessions": 4,
+    "passive_sessions": 2,
+    "live_transactions": 3,
+    "total_transactions": 9,
+    "live_locks": 1,
+    "nodes": [
+      {
+        "node_id": "node-1",
+        "role": "leader",
+        "status": "active",
+        "total_cpu_cores": 8,
+        "total_ram_mb": 16384,
+        "used_cpu_pct": 33.0,
+        "used_ram_mb": 2048,
+        "active_sessions": 4,
+        "passive_sessions": 0,
+        "live_transactions": 3,
+        "total_transactions": 9,
+        "live_locks": 1,
+        "draining": false
+      }
+    ]
+  }
+}
+```
+
+### Example: roll back a live transaction through MCP
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "tx-admin-1",
+  "method": "tools/transaction_admin",
+  "params": {
+    "action": "rollback",
+    "transaction_id": "tx-admin-42",
+    "reason": "manual_deadlock_resolution"
+  },
+  "headers": {
+    "x_vng_admin_key": "secret"
+  }
+}
+```
+
+### Example: kill a deadlock victim through MCP
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "lock-admin-1",
+  "method": "tools/lock_admin",
+  "params": {
+    "action": "kill_deadlock",
+    "transaction_id": "tx-deadlock-victim",
+    "reason": "cycle_detected"
+  },
+  "headers": {
+    "x_vng_admin_key": "secret"
+  }
+}
+```
+
+### Example: add a node through MCP
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "node-manage-1",
+  "method": "tools/cluster_node_manage",
+  "params": {
+    "action": "add",
+    "node_id": "node-3",
+    "role": "follower",
+    "desired_status": "active",
+    "total_cpu_cores": 8,
+    "total_ram_mb": 16384,
+    "reason": "scale_out_for_peak_load"
+  },
+  "headers": {
+    "x_vng_admin_key": "secret"
+  }
+}
+```
+
+### Example: remove a node with workload migration
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "node-manage-2",
+  "method": "tools/cluster_node_manage",
+  "params": {
+    "action": "remove",
+    "node_id": "node-2",
+    "target_node_id": "node-1",
+    "reason": "scale_in_cost_optimization"
+  },
+  "headers": {
+    "x_vng_admin_key": "secret"
+  }
+}
+```
+
+In the current single-process runtime scaffold, node add/remove and workload migration operate on the in-memory cluster model and reassign active transactions/sessions without dropping them. This provides a usable control-plane contract now and a clear path to future multi-process cluster orchestration.
 
 ## High level architecture diagram
 
