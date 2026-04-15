@@ -103,13 +103,21 @@ The following are feasible, but they are **multi-sprint implementation tracks**,
 
 ### 4.2 IDE connectivity track — usable extension path
 
+Phase 1 priority target: VSCode + Cursor. Additional IDE extensions are scheduled as a later-phase expansion.
+
 | ID | Task | Status | Dependencies |
 |---|---|---|---|
-| IDE-001 | Choose first IDE target (recommended: VSCode/Cursor) | ⬜ | prioritization |
-| IDE-002 | Implement connection wizard (URL, admin key, tenant/user headers) | ⬜ | IDE-001 |
-| IDE-003 | Add query runner + schema introspection + diagnostics | ⬜ | IDE-002 |
-| IDE-004 | Add auth-aware feature gating and permission errors | ⬜ | IDE-003 |
-| IDE-005 | Package extension + publish private feed + smoke tests | ⬜ | IDE-004 |
+| IDE-001 | Choose first IDE target (Phase 1: VSCode/Cursor) | ✅ | prioritization |
+| IDE-002 | Implement connection wizard (URL, admin key, tenant/user headers) | ✅ Done | IDE-001 |
+| IDE-003 | Add query runner + schema introspection + diagnostics | ✅ Done | IDE-002 |
+| IDE-004 | Add auth-aware feature gating and permission errors | ✅ Done | IDE-003 |
+| IDE-005 | Package extension + publish private feed + smoke tests | 🟨 In progress | IDE-004 |
+| IDE-006 | Add additional IDE extensions (Phase 2): AntiGravity, Windsor, Eclipse, Jetbrains | 🟨 In progress | IDE-005 |
+
+IDE-005 progress note (2026-04-15): VSCode/Cursor extension has local smoke script and packaging config in place; remaining step is private-feed publish with environment credentials.
+IDE-005 env blocker note (2026-04-15): local package attempt is blocked by npm authentication (401); publish remains pending until registry credentials are refreshed.
+IDE-005 closeout evidence (2026-04-15): VSIX artifact produced at `ui/ide-extensions/vscode-cursor/voltnuerongrid-vscode-cursor-0.1.0.vsix`; private-feed publish remains blocked pending feed endpoint details, PAT source, and Azure DevOps CLI extension readiness.
+IDE-006 progress note (2026-04-15): Added Windsor contract and Phase 2 adapter scaffolds for AntiGravity, Windsor, Eclipse, and Jetbrains with implementation plans and connection samples.
 
 ### 4.3 MCP track — production-ready server capability
 

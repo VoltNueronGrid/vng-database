@@ -1,0 +1,63 @@
+{
+  "name": "voltnuerongrid-vscode-cursor",
+  "displayName": "VoltNueronGrid Tools (VSCode/Cursor)",
+  "description": "Phase 1 IDE connectivity extension for VoltNueronGrid DB",
+  "version": "0.1.0",
+  "publisher": "voltnuerongrid",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pavan-Pvj_ghub/polap-db.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vng.connectWizard",
+        "title": "VoltNueronGrid: Connection Wizard"
+      },
+      {
+        "command": "vng.testConnection",
+        "title": "VoltNueronGrid: Test Connection"
+      },
+      {
+        "command": "vng.runQuery",
+        "title": "VoltNueronGrid: Run Query"
+      },
+      {
+        "command": "vng.analyzeQuery",
+        "title": "VoltNueronGrid: Analyze Query"
+      },
+      {
+        "command": "vng.showSchemaRegistry",
+        "title": "VoltNueronGrid: Show Schema Registry"
+      }
+    ],
+    "configuration": {
+      "title": "VoltNueronGrid",
+      "properties": {
+        "voltnuerongrid.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8080",
+          "description": "Base URL for the VoltNueronGrid runtime service"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^2.30.0",
+    "typescript": "^5.5.4"
+  }
+}

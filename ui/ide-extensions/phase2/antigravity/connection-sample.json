@@ -1,0 +1,9 @@
+{
+  "runtimeTarget": "local",
+  "baseUrl": "http://127.0.0.1:8080",
+  "mode": "tenant",
+  "headers": {
+    "x-vng-tenant-id": "acme",
+    "x-vng-user-id": "alice"
+  }
+}

@@ -1,0 +1,9 @@
+.vscode/**
+.vscode-test/**
+out/test/**
+src/**
+**/*.map
+**/*.ts
+README.md
+smoke-test.ps1
+.npmrc.temp

@@ -1,0 +1,9 @@
+{
+  "runtimeTarget": "custom",
+  "baseUrl": "https://runtime.example.com",
+  "mode": "tenant",
+  "headers": {
+    "x-vng-tenant-id": "tenant-01",
+    "x-vng-user-id": "user-01"
+  }
+}

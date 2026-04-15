@@ -1,0 +1,12 @@
+{
+  "ide": "windsor",
+  "display_name": "VoltNueronGrid Tools for Windsor",
+  "extension_version": "0.1.0",
+  "contract_ref": "./common-api-contract.json",
+  "features": [
+    "sql_editor_execute",
+    "schema_introspection",
+    "autonomous_action_authorize",
+    "audit_event_viewer"
+  ]
+}

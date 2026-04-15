@@ -1,0 +1,9 @@
+{
+  "runtimeTarget": "docker",
+  "baseUrl": "http://host.docker.internal:8080",
+  "mode": "operator",
+  "headers": {
+    "x-vng-admin-key": "${secure}",
+    "x-vng-operator-id": "ops-1"
+  }
+}

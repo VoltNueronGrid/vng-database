@@ -1,0 +1,8 @@
+{
+  "runtimeTarget": "cloud",
+  "baseUrl": "https://your-cloud-vng-endpoint",
+  "mode": "admin",
+  "headers": {
+    "x-vng-admin-key": "${secure}"
+  }
+}
