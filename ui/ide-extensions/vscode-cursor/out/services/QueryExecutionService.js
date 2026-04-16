@@ -6,14 +6,31 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.QueryExecutionService = void 0;
 exports.createQueryExecutionService = createQueryExecutionService;
 const QueryResult_1 = require("../models/QueryResult");
+const QueryHistory_1 = require("./QueryHistory");
 class QueryExecutionService {
     constructor(httpClient, context) {
         this.context = context;
         this.queryHistory = new Map();
+        this.queryResultCache = new Map();
         this.maxHistorySize = 100;
         this.historyStorageKey = "vng.queryHistory";
         this.activeExecutions = new Map();
+        this.executionSequence = 0;
+        this.queryCacheConfig = {
+            enabled: true,
+            ttlMs: 30 * 1000,
+            maxEntries: 100,
+        };
         this.httpClient = httpClient;
+        this.refreshQueryCacheConfig();
+        const workspace = getWorkspace();
+        if (workspace) {
+            this.configDisposable = workspace.onDidChangeConfiguration((event) => {
+                if (event.affectsConfiguration("voltnuerongrid.query.cache")) {
+                    this.refreshQueryCacheConfig();
+                }
+            });
+        }
     }
     async initialize() {
         if (!this.context) {
@@ -30,9 +47,10 @@ class QueryExecutionService {
      */
     async executeQuery(connection, query, options) {
         const startTime = Date.now();
-        const resultId = options?.executionId ?? `result-${startTime}`;
+        const resultId = options?.executionId ?? this.createExecutionId("result", startTime);
         const timeoutMs = options?.timeoutMs ?? connection.settings.advanced.connectionTimeout ?? 30000;
         const controller = new AbortController();
+        const cacheKey = this.createQueryCacheKey(connection.id, query);
         const handleAbort = () => controller.abort();
         if (options?.signal) {
             if (options.signal.aborted) {
@@ -62,6 +80,11 @@ class QueryExecutionService {
                 };
                 await this.addToHistory(connection.id, resultId, query, invalidResult);
                 return invalidResult;
+            }
+            const cachedResult = this.getCachedResult(cacheKey, resultId, query, startTime);
+            if (cachedResult) {
+                await this.addToHistory(connection.id, resultId, query, cachedResult);
+                return cachedResult;
             }
             // Execute query
             const response = await this.httpClient.executeQuery(connection, query, {
@@ -97,6 +120,7 @@ class QueryExecutionService {
             }
             // Add to history
             await this.addToHistory(connection.id, resultId, query, result);
+            this.storeCachedResult(cacheKey, result);
             return result;
         }
         catch (error) {
@@ -133,8 +157,13 @@ class QueryExecutionService {
      */
     async executeMultiple(connection, queries, options) {
         const results = [];
-        for (const query of queries) {
-            const result = await this.executeQuery(connection, query, options);
+        const executionGroupId = options?.executionId;
+        for (let index = 0; index < queries.length; index += 1) {
+            const query = queries[index];
+            const result = await this.executeQuery(connection, query, {
+                ...options,
+                executionId: executionGroupId ? `${executionGroupId}-${index + 1}` : options?.executionId,
+            });
             results.push(result);
         }
         return results;
@@ -144,7 +173,7 @@ class QueryExecutionService {
         const total = statements.length;
         const results = [];
         const stopOnError = options?.stopOnError ?? true;
-        const streamId = options?.executionId ?? `stream-${Date.now()}`;
+        const streamId = options?.executionId ?? this.createExecutionId("stream");
         for (let index = 0; index < statements.length; index += 1) {
             const statement = statements[index];
             const result = await this.executeQuery(connection, statement, {
@@ -176,22 +205,13 @@ class QueryExecutionService {
      * Add query to history
      */
     async addToHistory(connectionId, resultId, query, result) {
-        const entry = {
-            id: `hist-${Date.now()}`,
-            query,
-            connectionId,
-            timestamp: Date.now(),
-            executionTime: result.executionTime,
-            status: result.status === "success" ? "success" : "error",
-            resultId,
-        };
+        const entry = (0, QueryHistory_1.createQueryHistoryEntry)(connectionId, resultId, query, result);
         this.queryHistory.set(entry.id, entry);
         // Trim history to max size
         if (this.queryHistory.size > this.maxHistorySize) {
-            const oldest = Array.from(this.queryHistory.entries())
-                .sort((a, b) => a[1].timestamp - b[1].timestamp)[0];
-            if (oldest) {
-                this.queryHistory.delete(oldest[0]);
+            const oldestEntryId = (0, QueryHistory_1.findOldestHistoryEntryId)(this.queryHistory.entries());
+            if (oldestEntryId) {
+                this.queryHistory.delete(oldestEntryId);
             }
         }
         await this.persistHistory();
@@ -250,6 +270,13 @@ class QueryExecutionService {
     getActiveExecutionIds() {
         return Array.from(this.activeExecutions.keys());
     }
+    dispose() {
+        this.configDisposable?.dispose();
+    }
+    createExecutionId(prefix, timestamp = Date.now()) {
+        this.executionSequence += 1;
+        return `${prefix}-${timestamp}-${this.executionSequence}`;
+    }
     async persistHistory() {
         if (!this.context) {
             return;
@@ -257,8 +284,83 @@ class QueryExecutionService {
         const snapshot = this.getHistory();
         await this.context.globalState.update(this.historyStorageKey, snapshot);
     }
+    createQueryCacheKey(connectionId, query) {
+        const normalized = query
+            .trim()
+            .replace(/\s+/g, " ")
+            .replace(/\s*;\s*$/, ";");
+        return `${connectionId}::${normalized}`;
+    }
+    getCachedResult(cacheKey, resultId, query, startTime) {
+        if (!this.queryCacheConfig.enabled) {
+            return undefined;
+        }
+        const cached = this.queryResultCache.get(cacheKey);
+        if (!cached) {
+            return undefined;
+        }
+        if (Date.now() - cached.timestamp > this.queryCacheConfig.ttlMs) {
+            this.queryResultCache.delete(cacheKey);
+            return undefined;
+        }
+        return {
+            ...cached.result,
+            id: resultId,
+            query,
+            executionTime: Math.min(cached.result.executionTime, 1),
+            timestamp: startTime,
+        };
+    }
+    storeCachedResult(cacheKey, result) {
+        if (!this.queryCacheConfig.enabled || result.status !== "success") {
+            return;
+        }
+        this.queryResultCache.set(cacheKey, {
+            result: { ...result },
+            timestamp: Date.now(),
+        });
+        if (this.queryResultCache.size <= this.queryCacheConfig.maxEntries) {
+            return;
+        }
+        const oldestEntry = this.queryResultCache.keys().next().value;
+        if (oldestEntry) {
+            this.queryResultCache.delete(oldestEntry);
+        }
+    }
+    refreshQueryCacheConfig() {
+        const workspace = getWorkspace();
+        if (!workspace) {
+            return;
+        }
+        const config = workspace.getConfiguration("voltnuerongrid");
+        const enabled = config.get("query.cache.enabled", true);
+        const ttlSeconds = config.get("query.cache.ttlSeconds", 30);
+        const maxEntries = config.get("query.cache.maxEntries", 100);
+        this.queryCacheConfig = {
+            enabled,
+            ttlMs: Math.max(1, ttlSeconds) * 1000,
+            maxEntries: Math.max(1, maxEntries),
+        };
+        if (!enabled) {
+            this.queryResultCache.clear();
+        }
+    }
 }
 exports.QueryExecutionService = QueryExecutionService;
+function getWorkspace() {
+    try {
+        // Keep runtime vscode dependency optional so Node tests can run without extension host modules.
+        const vscodeRuntime = require("vscode");
+        const workspace = vscodeRuntime.workspace;
+        if (!workspace || typeof workspace.getConfiguration !== "function") {
+            return undefined;
+        }
+        return workspace;
+    }
+    catch {
+        return undefined;
+    }
+}
 function createQueryExecutionService(httpClient, context) {
     return new QueryExecutionService(httpClient, context);
 }

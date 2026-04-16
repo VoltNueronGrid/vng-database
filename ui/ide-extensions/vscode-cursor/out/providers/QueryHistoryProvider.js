@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.QueryHistoryProvider = void 0;
 exports.createQueryHistoryProvider = createQueryHistoryProvider;
 const vscode = __importStar(require("vscode"));
+const QueryHistoryTree_1 = require("./QueryHistoryTree");
 class QueryHistoryProvider {
     constructor(queryExecutionService) {
         this.queryExecutionService = queryExecutionService;
@@ -58,11 +59,12 @@ class QueryHistoryProvider {
             return treeItem;
         }
         const entry = element.entry;
+        const presentation = (0, QueryHistoryTree_1.describeQueryHistoryEntry)(entry);
         treeItem.id = entry.id;
         treeItem.contextValue = "historyEntry";
-        treeItem.iconPath = new vscode.ThemeIcon(entry.status === "success" ? "pass-filled" : "error");
-        treeItem.description = `${entry.status} • ${entry.executionTime ?? 0} ms • ${new Date(entry.timestamp).toLocaleTimeString()}`;
-        treeItem.tooltip = `${entry.query}\n\nStatus: ${entry.status}\nExecution: ${entry.executionTime ?? 0} ms\nTimestamp: ${new Date(entry.timestamp).toLocaleString()}`;
+        treeItem.iconPath = new vscode.ThemeIcon(presentation.iconId);
+        treeItem.description = presentation.description;
+        treeItem.tooltip = presentation.tooltip;
         treeItem.command = {
             command: "vng.reRunHistoryQuery",
             title: "Re-run Query",
@@ -75,24 +77,10 @@ class QueryHistoryProvider {
             return [];
         }
         const entries = this.queryExecutionService.getHistory(this.activeConnectionId).slice(0, 50);
-        if (entries.length === 0) {
-            return [{ type: "empty", label: "No query history yet" }];
-        }
-        return entries.map((entry) => ({
-            type: "entry",
-            label: summarizeQuery(entry.query),
-            entry,
-        }));
+        return (0, QueryHistoryTree_1.buildQueryHistoryItems)(entries);
     }
 }
 exports.QueryHistoryProvider = QueryHistoryProvider;
-function summarizeQuery(query) {
-    const normalized = query.replace(/\s+/g, " ").trim();
-    if (normalized.length <= 70) {
-        return normalized;
-    }
-    return `${normalized.slice(0, 67)}...`;
-}
 function createQueryHistoryProvider(queryExecutionService) {
     return new QueryHistoryProvider(queryExecutionService);
 }

@@ -53,7 +53,8 @@ import {
 } from "./ui/ConnectionManagerWebview";
 import { ConnectionEditorMessage, ConnectionEditorState, createConnectionEditorPanel } from "./ui/ConnectionEditorWebview";
 import { QueryResult, exportAsCSV, exportAsJSON } from "./models";
-import { QueryResultsMessage, QueryResultsState, createQueryResultsPanel } from "./ui/QueryResultsWebview";
+import { QueryResultsMessage, createQueryResultsPanel } from "./ui/QueryResultsWebview";
+import { QueryResultsState, createDefaultQueryResultsState, createQueryResultsState } from "./ui/QueryResultsState";
 import { TableEditorMessage, TableEditorState, createTableEditorPanel } from "./ui/TableEditorWebview";
 
 // Global service instances
@@ -114,20 +115,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let tableEditorState: TableEditorState | undefined;
   let tableEditorPanel: ReturnType<typeof createTableEditorPanel> | undefined;
 
-  const buildDefaultQueryResultState = (): QueryResultsState => ({
-    operation: "Query Results",
-    connectionName: connectionManager.getActiveConnection()?.settings.name ?? "No active connection",
-    result: {
-      id: "empty",
-      query: "",
-      status: "success",
-      rows: [],
-      columns: [],
-      rowCount: 0,
-      executionTime: 0,
-      timestamp: Date.now(),
-    },
-  });
+  const buildDefaultQueryResultState = (): QueryResultsState =>
+    createDefaultQueryResultsState(connectionManager.getActiveConnection()?.settings.name ?? "No active connection");
 
   const exportLatestQueryResult = async (format: "csv" | "json") => {
     if (!latestQueryResult) {
@@ -176,11 +165,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const publishQueryResult = async (result: QueryResult, operation: string, connectionName: string) => {
     latestQueryResult = result;
-    latestQueryResultState = {
-      operation,
-      connectionName,
-      result,
-    };
+    latestQueryResultState = createQueryResultsState(result, operation, connectionName);
 
     const panel = ensureQueryResultsPanel();
     await panel.updateState(latestQueryResultState);
@@ -1356,6 +1341,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export function deactivate(): void {
   // Clean up service resources if needed
+  queryExecutionService.dispose();
   schemaManager.clearCache();
   schemaManager.dispose();
 }

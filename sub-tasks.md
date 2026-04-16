@@ -10,7 +10,7 @@
 
 **Objective:** Transform VSCode extension from simple wizard to professional database client with connection management, database explorer, SQL editor, query execution, and advanced features.
 
-**Current State:** v0.2.0 with modular architecture, explorer lazy loading, schema cache configurability, full connection management editor (including SSL and advanced options), status bar quick switch, richer SQL completion/hover/signature/snippet support, and complete Phase 5 query execution stack (timeout/cancel/statement streaming), results webview (pagination/sort/filter/export), and persistent query history sidebar with search/re-run  
+**Current State:** v0.3.0 with modular architecture, explorer lazy loading, schema cache configurability, full connection management editor (including SSL and advanced options), status bar quick switch, richer SQL completion/hover/signature/snippet support, complete query execution/results/history workflows, and Phase 9 optimization slice (query-result cache + SQL table-reference cache reuse + startup diagnostics deferral)  
 **Target State:** v0.3.0+ with full database client UI/UX  
 **Estimated Effort:** 21-34 days (10 phases, 30+ tasks)
 
@@ -84,24 +84,30 @@ Execution order: **Next (starts immediately after Phase 6 exit criteria are met)
 
 | ID | Task | Status | Owner | Target |
 |---|---|---|---|---|
-| IDE-8.1 | Write unit tests for models, services, providers (target 80%+ coverage) | ⏳ Not Started | QA | 2026-05-07 |
-| IDE-8.2 | Write integration tests for core workflows (connection → query → results, autocomplete, tree) | ⏳ Not Started | QA | 2026-05-08 |
-| IDE-8.3 | Write documentation (README, FEATURE_GUIDE, ARCHITECTURE, troubleshooting) | ⏳ Not Started | Dev/Doc | 2026-05-08 |
+| IDE-8.1 | Write unit tests for models, services, providers (target 80%+ coverage) | ✅ Complete | QA | 2026-05-07 |
+| IDE-8.2 | Write integration tests for core workflows (connection → query → results, autocomplete, tree) | ✅ Complete | QA | 2026-05-08 |
+| IDE-8.3 | Write documentation (README, FEATURE_GUIDE, ARCHITECTURE, troubleshooting) | ✅ Complete | Dev/Doc | 2026-05-08 |
+
+Progress note (2026-04-16): Phase 8 is complete. Extracted SQL autocomplete/search intelligence into a pure module and added workflow-style tests for completion context, alias/table resolution, signature context, and diagnostic suggestion parsing. Expanded query workflow tests for connection -> query -> results-state publication -> query-history behavior, and fixed execution/history ID collision defects found by those tests. Raised low-coverage modules by adding targeted tests for `Schema` and `TableEditorSql` branches. Explicit coverage run via `node --test --experimental-test-coverage out/test/**/*.test.js` reports 95.29% line coverage overall, with `Schema` at 100.00%, `TableEditorSql` at 94.69%, and `SqlIntelligence` at 90.66%.
 
 ### Phase 9: Performance & Optimization [EST: 1-2 days]
 
 | ID | Task | Status | Owner | Target |
 |---|---|---|---|---|
-| IDE-9.1 | Profile UI performance and fix bottlenecks (tree render, autocomplete, results table) | ⏳ Not Started | Dev/Perf | 2026-05-09 |
-| IDE-9.2 | Implement caching strategy (schema cache, query result cache, connection pool reuse) | ⏳ Not Started | Dev | 2026-05-09 |
-| IDE-9.3 | Optimize bundle size (code splitting, lazy loading, measure startup time < 1s) | ⏳ Not Started | Dev | 2026-05-10 |
+| IDE-9.1 | Profile UI performance and fix bottlenecks (tree render, autocomplete, results table) | ✅ Complete | Dev/Perf | 2026-05-09 |
+| IDE-9.2 | Implement caching strategy (schema cache, query result cache, connection pool reuse) | ✅ Complete | Dev | 2026-05-09 |
+| IDE-9.3 | Optimize bundle size (code splitting, lazy loading, measure startup time < 1s) | ✅ Complete | Dev | 2026-05-10 |
+
+Progress note (2026-04-16): Phase 9 optimization slice implemented and validated. Added query-result caching with TTL/max-entry controls in `QueryExecutionService`, reused SQL table-reference shaping via schema-timestamp-aware cache, and removed eager startup diagnostics scan in favor of active-document updates. Validation evidence: `npm run build` passing, `npm test` passing (42/42), coverage run reporting 93.98% line coverage, and startup benchmark (`npm run benchmark:startup`) reporting cold-load metrics over 10 runs: min 91.977 ms, avg 110.916 ms, p95 146.446 ms, max 146.446 ms.
 
 ### Phase 10: Release & Publishing [EST: 1 day]
 
 | ID | Task | Status | Owner | Target |
 |---|---|---|---|---|
-| IDE-10.1 | Bump version to 0.3.0, write CHANGELOG, tag release | ⏳ Not Started | Dev/Release | 2026-05-11 |
-| IDE-10.2 | Package VSIX, test on clean install, publish to VS Code Marketplace | ⏳ Not Started | Release | 2026-05-11 |
+| IDE-10.1 | Bump version to 0.3.0, write CHANGELOG, tag release | 🟨 In Progress | Dev/Release | 2026-05-11 |
+| IDE-10.2 | Package VSIX, test on clean install, publish to VS Code Marketplace | 🟨 In Progress | Release | 2026-05-11 |
+
+Progress note (2026-04-16): Release prep advanced to version `0.3.0` with changelog added and VSIX artifact generated: `ui/ide-extensions/vscode-cursor/voltnuerongrid-vscode-cursor-0.3.0.vsix`. Clean-install validation is now passing in an isolated Cursor profile (`--user-data-dir` and `--extensions-dir`): install command reported `Extension 'voltnuerongrid-vscode-cursor-0.3.0.vsix' was successfully installed.` and list command reported `voltnuerongrid.voltnuerongrid-vscode-cursor@0.3.0`. Remaining release operations: git tag creation on release commit and Marketplace/private-feed publish with credentials.
 
 ---
 
@@ -117,6 +123,7 @@ Execution order: **Next (starts immediately after Phase 6 exit criteria are met)
 | H-10 release readiness JSON | ✅ `ready_for_validation` | with `VNG_PROGRAM_SIGNOFF_APPROVED=true` |
 | REQ-10 benchmark smoke (live) | ✅ 12/12 passed | local server on `127.0.0.1:8080`, admin key set |
 | R4 release gate | ✅ Passing | `release-r4-saas-maturity-readiness.json` now `passed / ready_for_validation` |
+| IDE extension Phase 9/10 validation | ✅ Partial complete | `npm run build` pass, `npm test` pass (42/42), coverage 93.98% line, VSIX `0.3.0` packaged |
 
 ---
 

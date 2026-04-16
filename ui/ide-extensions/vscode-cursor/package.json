@@ -2,7 +2,7 @@
   "name": "voltnuerongrid-vscode-cursor",
   "displayName": "VoltNueronGrid Tools (VSCode/Cursor)",
   "description": "Professional database client for VoltNueronGrid DB with connection management, SQL editor, and database explorer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "voltnuerongrid",
   "repository": {
     "type": "git",
@@ -463,6 +463,23 @@
           "default": 300,
           "minimum": 5,
           "description": "Schema cache time-to-live in seconds"
+        },
+        "voltnuerongrid.query.cache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable in-memory cache for successful query results"
+        },
+        "voltnuerongrid.query.cache.ttlSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "description": "Query result cache time-to-live in seconds"
+        },
+        "voltnuerongrid.query.cache.maxEntries": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "description": "Maximum cached successful query results"
         }
       }
     }
@@ -470,6 +487,7 @@
   "scripts": {
     "build": "tsc -p ./",
     "test": "npm run build && node --test out/test/**/*.test.js",
+    "benchmark:startup": "npm run build && node ./tools/benchmark-startup.js --runs 10",
     "watch": "tsc -watch -p ./",
     "package": "vsce package --allow-missing-repository"
   },

@@ -2,10 +2,11 @@
  * QueryExecutionService: execute queries and manage results
  */
 
-import * as vscode from "vscode";
+import type * as vscode from "vscode";
 import { Connection } from "../models/Connection";
 import { QueryResult, QueryHistoryEntry, parseQueryResult } from "../models/QueryResult";
 import { HttpClient } from "./HttpClient";
+import { createQueryHistoryEntry, findOldestHistoryEntryId } from "./QueryHistory";
 
 export interface QueryExecutionOptions {
   timeoutMs?: number;
@@ -18,15 +19,48 @@ export interface QueryStreamOptions extends QueryExecutionOptions {
   stopOnError?: boolean;
 }
 
+interface QueryResultCacheConfig {
+  enabled: boolean;
+  ttlMs: number;
+  maxEntries: number;
+}
+
+interface WorkspaceConfigApi {
+  getConfiguration: (section: string) => {
+    get: <T>(path: string, defaultValue: T) => T;
+  };
+  onDidChangeConfiguration: (listener: (event: { affectsConfiguration: (section: string) => boolean }) => void) => {
+    dispose: () => void;
+  };
+}
+
 export class QueryExecutionService {
   private httpClient: HttpClient;
   private queryHistory: Map<string, QueryHistoryEntry> = new Map();
+  private queryResultCache: Map<string, { result: QueryResult; timestamp: number }> = new Map();
   private maxHistorySize = 100;
   private readonly historyStorageKey = "vng.queryHistory";
   private readonly activeExecutions: Map<string, AbortController> = new Map();
+  private executionSequence = 0;
+  private readonly configDisposable?: vscode.Disposable;
+  private queryCacheConfig: QueryResultCacheConfig = {
+    enabled: true,
+    ttlMs: 30 * 1000,
+    maxEntries: 100,
+  };
 
   constructor(httpClient: HttpClient, private readonly context?: vscode.ExtensionContext) {
     this.httpClient = httpClient;
+    this.refreshQueryCacheConfig();
+
+    const workspace = getWorkspace();
+    if (workspace) {
+      this.configDisposable = workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("voltnuerongrid.query.cache")) {
+          this.refreshQueryCacheConfig();
+        }
+      });
+    }
   }
 
   async initialize(): Promise<void> {
@@ -46,9 +80,10 @@ export class QueryExecutionService {
    */
   async executeQuery(connection: Connection, query: string, options?: QueryExecutionOptions): Promise<QueryResult> {
     const startTime = Date.now();
-    const resultId = options?.executionId ?? `result-${startTime}`;
+    const resultId = options?.executionId ?? this.createExecutionId("result", startTime);
     const timeoutMs = options?.timeoutMs ?? connection.settings.advanced.connectionTimeout ?? 30000;
     const controller = new AbortController();
+    const cacheKey = this.createQueryCacheKey(connection.id, query);
 
     const handleAbort = () => controller.abort();
     if (options?.signal) {
@@ -80,6 +115,12 @@ export class QueryExecutionService {
         };
         await this.addToHistory(connection.id, resultId, query, invalidResult);
         return invalidResult;
+      }
+
+      const cachedResult = this.getCachedResult(cacheKey, resultId, query, startTime);
+      if (cachedResult) {
+        await this.addToHistory(connection.id, resultId, query, cachedResult);
+        return cachedResult;
       }
 
       // Execute query
@@ -117,6 +158,7 @@ export class QueryExecutionService {
 
       // Add to history
       await this.addToHistory(connection.id, resultId, query, result);
+      this.storeCachedResult(cacheKey, result);
 
       return result;
     } catch (error) {
@@ -155,8 +197,14 @@ export class QueryExecutionService {
    */
   async executeMultiple(connection: Connection, queries: string[], options?: QueryExecutionOptions): Promise<QueryResult[]> {
     const results: QueryResult[] = [];
-    for (const query of queries) {
-      const result = await this.executeQuery(connection, query, options);
+    const executionGroupId = options?.executionId;
+
+    for (let index = 0; index < queries.length; index += 1) {
+      const query = queries[index];
+      const result = await this.executeQuery(connection, query, {
+        ...options,
+        executionId: executionGroupId ? `${executionGroupId}-${index + 1}` : options?.executionId,
+      });
       results.push(result);
     }
     return results;
@@ -171,7 +219,7 @@ export class QueryExecutionService {
     const total = statements.length;
     const results: QueryResult[] = [];
     const stopOnError = options?.stopOnError ?? true;
-    const streamId = options?.executionId ?? `stream-${Date.now()}`;
+    const streamId = options?.executionId ?? this.createExecutionId("stream");
 
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index];
@@ -215,24 +263,15 @@ export class QueryExecutionService {
     query: string,
     result: QueryResult
   ): Promise<void> {
-    const entry: QueryHistoryEntry = {
-      id: `hist-${Date.now()}`,
-      query,
-      connectionId,
-      timestamp: Date.now(),
-      executionTime: result.executionTime,
-      status: result.status === "success" ? "success" : "error",
-      resultId,
-    };
+    const entry = createQueryHistoryEntry(connectionId, resultId, query, result);
 
     this.queryHistory.set(entry.id, entry);
 
     // Trim history to max size
     if (this.queryHistory.size > this.maxHistorySize) {
-      const oldest = Array.from(this.queryHistory.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp)[0];
-      if (oldest) {
-        this.queryHistory.delete(oldest[0]);
+      const oldestEntryId = findOldestHistoryEntryId(this.queryHistory.entries());
+      if (oldestEntryId) {
+        this.queryHistory.delete(oldestEntryId);
       }
     }
 
@@ -302,6 +341,15 @@ export class QueryExecutionService {
     return Array.from(this.activeExecutions.keys());
   }
 
+  dispose(): void {
+    this.configDisposable?.dispose();
+  }
+
+  private createExecutionId(prefix: string, timestamp = Date.now()): string {
+    this.executionSequence += 1;
+    return `${prefix}-${timestamp}-${this.executionSequence}`;
+  }
+
   private async persistHistory(): Promise<void> {
     if (!this.context) {
       return;
@@ -309,6 +357,95 @@ export class QueryExecutionService {
 
     const snapshot = this.getHistory();
     await this.context.globalState.update(this.historyStorageKey, snapshot);
+  }
+
+  private createQueryCacheKey(connectionId: string, query: string): string {
+    const normalized = query
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/\s*;\s*$/, ";");
+
+    return `${connectionId}::${normalized}`;
+  }
+
+  private getCachedResult(cacheKey: string, resultId: string, query: string, startTime: number): QueryResult | undefined {
+    if (!this.queryCacheConfig.enabled) {
+      return undefined;
+    }
+
+    const cached = this.queryResultCache.get(cacheKey);
+    if (!cached) {
+      return undefined;
+    }
+
+    if (Date.now() - cached.timestamp > this.queryCacheConfig.ttlMs) {
+      this.queryResultCache.delete(cacheKey);
+      return undefined;
+    }
+
+    return {
+      ...cached.result,
+      id: resultId,
+      query,
+      executionTime: Math.min(cached.result.executionTime, 1),
+      timestamp: startTime,
+    };
+  }
+
+  private storeCachedResult(cacheKey: string, result: QueryResult): void {
+    if (!this.queryCacheConfig.enabled || result.status !== "success") {
+      return;
+    }
+
+    this.queryResultCache.set(cacheKey, {
+      result: { ...result },
+      timestamp: Date.now(),
+    });
+
+    if (this.queryResultCache.size <= this.queryCacheConfig.maxEntries) {
+      return;
+    }
+
+    const oldestEntry = this.queryResultCache.keys().next().value;
+    if (oldestEntry) {
+      this.queryResultCache.delete(oldestEntry);
+    }
+  }
+
+  private refreshQueryCacheConfig(): void {
+    const workspace = getWorkspace();
+    if (!workspace) {
+      return;
+    }
+
+    const config = workspace.getConfiguration("voltnuerongrid");
+    const enabled = config.get<boolean>("query.cache.enabled", true);
+    const ttlSeconds = config.get<number>("query.cache.ttlSeconds", 30);
+    const maxEntries = config.get<number>("query.cache.maxEntries", 100);
+    this.queryCacheConfig = {
+      enabled,
+      ttlMs: Math.max(1, ttlSeconds) * 1000,
+      maxEntries: Math.max(1, maxEntries),
+    };
+
+    if (!enabled) {
+      this.queryResultCache.clear();
+    }
+  }
+}
+
+function getWorkspace(): WorkspaceConfigApi | undefined {
+  try {
+    // Keep runtime vscode dependency optional so Node tests can run without extension host modules.
+    const vscodeRuntime = require("vscode") as { workspace?: WorkspaceConfigApi };
+    const workspace = vscodeRuntime.workspace;
+    if (!workspace || typeof workspace.getConfiguration !== "function") {
+      return undefined;
+    }
+
+    return workspace;
+  } catch {
+    return undefined;
   }
 }
 

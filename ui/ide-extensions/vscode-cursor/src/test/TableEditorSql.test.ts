@@ -6,7 +6,13 @@ import {
   buildInsertStatement,
   buildSelectPageSql,
   buildUpdateStatement,
+  countPendingChanges,
   deriveTableEditorCapabilities,
+  encodeSqlValue,
+  hasAnyRowValue,
+  quoteIdentifier,
+  toEditorValue,
+  validateDraftRow,
   validateColumnInput,
 } from "../services/TableEditorSql";
 import { TableEditorRow, TableEditorTarget } from "../models/TableEditor";
@@ -110,4 +116,125 @@ test("validateColumnInput rejects malformed JSON values", () => {
   assert.ok(metadataColumn);
   const message = validateColumnInput(metadataColumn!, "{bad json}");
   assert.equal(message, "must be valid JSON");
+});
+
+test("quoteIdentifier and toEditorValue handle escaping and object conversion", () => {
+  assert.equal(quoteIdentifier('weird"name'), '"weird""name"');
+  assert.equal(toEditorValue(42), "42");
+  assert.equal(toEditorValue({ active: true }), '{"active":true}');
+
+  const circular: Record<string, unknown> = {};
+  circular.self = circular;
+  assert.match(toEditorValue(circular), /\[object Object\]/);
+});
+
+test("validateDraftRow enforces required fields and skips binary columns", () => {
+  const tableWithBinary: Table = {
+    ...table,
+    columns: [
+      ...columns,
+      { name: "blob_data", type: "BYTEA", nullable: false, isPrimaryKey: false, isUnique: false, isForeignKey: false },
+    ],
+  };
+
+  const row: TableEditorRow = {
+    rowId: "draft-2",
+    kind: "draft",
+    isDeleted: false,
+    values: {
+      id: "",
+      name: "",
+      active: "maybe",
+      metadata: "",
+      blob_data: "",
+    },
+  };
+
+  const errors = validateDraftRow(tableWithBinary, row);
+  assert.ok(errors.some((entry) => entry.includes("Column 'id' is required.")));
+  assert.ok(errors.some((entry) => entry.includes("Column 'name' is required.")));
+  assert.ok(errors.some((entry) => entry.includes("must be true/false")));
+  assert.ok(!errors.some((entry) => entry.includes("blob_data")));
+});
+
+test("countPendingChanges and hasAnyRowValue reflect draft/update/delete semantics", () => {
+  const capabilities = deriveTableEditorCapabilities(table);
+  const rows: TableEditorRow[] = [
+    {
+      rowId: "draft",
+      kind: "draft",
+      isDeleted: false,
+      values: { id: "", name: "new", active: "true", metadata: "" },
+    },
+    {
+      rowId: "existing-update",
+      kind: "existing",
+      isDeleted: false,
+      values: { id: "1", name: "updated", active: "true", metadata: "" },
+      originalValues: { id: "1", name: "old", active: "true", metadata: "" },
+    },
+    {
+      rowId: "existing-delete",
+      kind: "existing",
+      isDeleted: true,
+      values: { id: "2", name: "gone", active: "false", metadata: "" },
+      originalValues: { id: "2", name: "gone", active: "false", metadata: "" },
+    },
+  ];
+
+  assert.equal(hasAnyRowValue(rows[0]), true);
+  assert.equal(countPendingChanges(rows, capabilities), 3);
+});
+
+test("buildUpdateStatement returns null for unchanged rows and throws when no key is available", () => {
+  const unchangedRow: TableEditorRow = {
+    rowId: "existing-same",
+    kind: "existing",
+    isDeleted: false,
+    values: { id: "7", name: "Same", active: "true", metadata: "" },
+    originalValues: { id: "7", name: "Same", active: "true", metadata: "" },
+  };
+
+  const capabilities = deriveTableEditorCapabilities(table);
+  assert.equal(buildUpdateStatement(target, table, unchangedRow, capabilities), null);
+
+  const noKeyCapabilities = { ...capabilities, keyColumns: [] };
+  assert.throws(
+    () => buildDeleteStatement(target, table, unchangedRow, noKeyCapabilities),
+    /does not expose a key/
+  );
+});
+
+test("encodeSqlValue covers nullable, defaults, numeric and binary validation errors", () => {
+  const defaultedColumn: Column = {
+    name: "status",
+    type: "VARCHAR",
+    nullable: false,
+    isPrimaryKey: false,
+    isUnique: false,
+    isForeignKey: false,
+    defaultValue: "'new'",
+  };
+  assert.equal(encodeSqlValue(defaultedColumn, ""), "'new'");
+
+  const nullableInt: Column = {
+    name: "quota",
+    type: "INT",
+    nullable: true,
+    isPrimaryKey: false,
+    isUnique: false,
+    isForeignKey: false,
+  };
+  assert.equal(encodeSqlValue(nullableInt, "NULL"), "NULL");
+  assert.throws(() => encodeSqlValue(nullableInt, "1.2"), /must be an integer/);
+
+  const binaryColumn: Column = {
+    name: "blob_data",
+    type: "BYTEA",
+    nullable: true,
+    isPrimaryKey: false,
+    isUnique: false,
+    isForeignKey: false,
+  };
+  assert.throws(() => encodeSqlValue(binaryColumn, "ff"), /read-only/);
 });

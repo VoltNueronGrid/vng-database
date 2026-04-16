@@ -1,11 +1,6 @@
 import * as vscode from "vscode";
 import { QueryResult } from "../models";
-
-export interface QueryResultsState {
-  operation: string;
-  connectionName: string;
-  result: QueryResult;
-}
+import { QueryResultsState } from "./QueryResultsState";
 
 export type QueryResultsMessage =
   | { type: "ready" }

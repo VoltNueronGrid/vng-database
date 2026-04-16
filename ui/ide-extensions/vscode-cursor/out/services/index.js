@@ -3,7 +3,7 @@
  * Services module - export all service classes
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createTableEditorService = exports.TableEditorService = exports.toSafeErrorMessage = exports.redactSecrets = exports.createSchemaManager = exports.SchemaManager = exports.createQueryExecutionService = exports.QueryExecutionService = exports.createHttpClient = exports.HttpClient = exports.createConnectionManager = exports.ConnectionManager = void 0;
+exports.createTableEditorService = exports.TableEditorService = exports.toSafeErrorMessage = exports.redactSecrets = exports.createSchemaManager = exports.SchemaManager = exports.toQueryHistoryStatus = exports.findOldestHistoryEntryId = exports.createQueryHistoryEntry = exports.createQueryExecutionService = exports.QueryExecutionService = exports.createHttpClient = exports.HttpClient = exports.createConnectionManager = exports.ConnectionManager = void 0;
 var ConnectionManager_1 = require("./ConnectionManager");
 Object.defineProperty(exports, "ConnectionManager", { enumerable: true, get: function () { return ConnectionManager_1.ConnectionManager; } });
 Object.defineProperty(exports, "createConnectionManager", { enumerable: true, get: function () { return ConnectionManager_1.createConnectionManager; } });
@@ -13,6 +13,10 @@ Object.defineProperty(exports, "createHttpClient", { enumerable: true, get: func
 var QueryExecutionService_1 = require("./QueryExecutionService");
 Object.defineProperty(exports, "QueryExecutionService", { enumerable: true, get: function () { return QueryExecutionService_1.QueryExecutionService; } });
 Object.defineProperty(exports, "createQueryExecutionService", { enumerable: true, get: function () { return QueryExecutionService_1.createQueryExecutionService; } });
+var QueryHistory_1 = require("./QueryHistory");
+Object.defineProperty(exports, "createQueryHistoryEntry", { enumerable: true, get: function () { return QueryHistory_1.createQueryHistoryEntry; } });
+Object.defineProperty(exports, "findOldestHistoryEntryId", { enumerable: true, get: function () { return QueryHistory_1.findOldestHistoryEntryId; } });
+Object.defineProperty(exports, "toQueryHistoryStatus", { enumerable: true, get: function () { return QueryHistory_1.toQueryHistoryStatus; } });
 var SchemaManager_1 = require("./SchemaManager");
 Object.defineProperty(exports, "SchemaManager", { enumerable: true, get: function () { return SchemaManager_1.SchemaManager; } });
 Object.defineProperty(exports, "createSchemaManager", { enumerable: true, get: function () { return SchemaManager_1.createSchemaManager; } });

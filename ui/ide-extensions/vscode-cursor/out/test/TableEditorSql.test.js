@@ -93,4 +93,109 @@ const target = {
     const message = (0, TableEditorSql_1.validateColumnInput)(metadataColumn, "{bad json}");
     strict_1.default.equal(message, "must be valid JSON");
 });
+(0, node_test_1.default)("quoteIdentifier and toEditorValue handle escaping and object conversion", () => {
+    strict_1.default.equal((0, TableEditorSql_1.quoteIdentifier)('weird"name'), '"weird""name"');
+    strict_1.default.equal((0, TableEditorSql_1.toEditorValue)(42), "42");
+    strict_1.default.equal((0, TableEditorSql_1.toEditorValue)({ active: true }), '{"active":true}');
+    const circular = {};
+    circular.self = circular;
+    strict_1.default.match((0, TableEditorSql_1.toEditorValue)(circular), /\[object Object\]/);
+});
+(0, node_test_1.default)("validateDraftRow enforces required fields and skips binary columns", () => {
+    const tableWithBinary = {
+        ...table,
+        columns: [
+            ...columns,
+            { name: "blob_data", type: "BYTEA", nullable: false, isPrimaryKey: false, isUnique: false, isForeignKey: false },
+        ],
+    };
+    const row = {
+        rowId: "draft-2",
+        kind: "draft",
+        isDeleted: false,
+        values: {
+            id: "",
+            name: "",
+            active: "maybe",
+            metadata: "",
+            blob_data: "",
+        },
+    };
+    const errors = (0, TableEditorSql_1.validateDraftRow)(tableWithBinary, row);
+    strict_1.default.ok(errors.some((entry) => entry.includes("Column 'id' is required.")));
+    strict_1.default.ok(errors.some((entry) => entry.includes("Column 'name' is required.")));
+    strict_1.default.ok(errors.some((entry) => entry.includes("must be true/false")));
+    strict_1.default.ok(!errors.some((entry) => entry.includes("blob_data")));
+});
+(0, node_test_1.default)("countPendingChanges and hasAnyRowValue reflect draft/update/delete semantics", () => {
+    const capabilities = (0, TableEditorSql_1.deriveTableEditorCapabilities)(table);
+    const rows = [
+        {
+            rowId: "draft",
+            kind: "draft",
+            isDeleted: false,
+            values: { id: "", name: "new", active: "true", metadata: "" },
+        },
+        {
+            rowId: "existing-update",
+            kind: "existing",
+            isDeleted: false,
+            values: { id: "1", name: "updated", active: "true", metadata: "" },
+            originalValues: { id: "1", name: "old", active: "true", metadata: "" },
+        },
+        {
+            rowId: "existing-delete",
+            kind: "existing",
+            isDeleted: true,
+            values: { id: "2", name: "gone", active: "false", metadata: "" },
+            originalValues: { id: "2", name: "gone", active: "false", metadata: "" },
+        },
+    ];
+    strict_1.default.equal((0, TableEditorSql_1.hasAnyRowValue)(rows[0]), true);
+    strict_1.default.equal((0, TableEditorSql_1.countPendingChanges)(rows, capabilities), 3);
+});
+(0, node_test_1.default)("buildUpdateStatement returns null for unchanged rows and throws when no key is available", () => {
+    const unchangedRow = {
+        rowId: "existing-same",
+        kind: "existing",
+        isDeleted: false,
+        values: { id: "7", name: "Same", active: "true", metadata: "" },
+        originalValues: { id: "7", name: "Same", active: "true", metadata: "" },
+    };
+    const capabilities = (0, TableEditorSql_1.deriveTableEditorCapabilities)(table);
+    strict_1.default.equal((0, TableEditorSql_1.buildUpdateStatement)(target, table, unchangedRow, capabilities), null);
+    const noKeyCapabilities = { ...capabilities, keyColumns: [] };
+    strict_1.default.throws(() => (0, TableEditorSql_1.buildDeleteStatement)(target, table, unchangedRow, noKeyCapabilities), /does not expose a key/);
+});
+(0, node_test_1.default)("encodeSqlValue covers nullable, defaults, numeric and binary validation errors", () => {
+    const defaultedColumn = {
+        name: "status",
+        type: "VARCHAR",
+        nullable: false,
+        isPrimaryKey: false,
+        isUnique: false,
+        isForeignKey: false,
+        defaultValue: "'new'",
+    };
+    strict_1.default.equal((0, TableEditorSql_1.encodeSqlValue)(defaultedColumn, ""), "'new'");
+    const nullableInt = {
+        name: "quota",
+        type: "INT",
+        nullable: true,
+        isPrimaryKey: false,
+        isUnique: false,
+        isForeignKey: false,
+    };
+    strict_1.default.equal((0, TableEditorSql_1.encodeSqlValue)(nullableInt, "NULL"), "NULL");
+    strict_1.default.throws(() => (0, TableEditorSql_1.encodeSqlValue)(nullableInt, "1.2"), /must be an integer/);
+    const binaryColumn = {
+        name: "blob_data",
+        type: "BYTEA",
+        nullable: true,
+        isPrimaryKey: false,
+        isUnique: false,
+        isForeignKey: false,
+    };
+    strict_1.default.throws(() => (0, TableEditorSql_1.encodeSqlValue)(binaryColumn, "ff"), /read-only/);
+});
 //# sourceMappingURL=TableEditorSql.test.js.map

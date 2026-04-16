@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerSqlEditorFeatures = registerSqlEditorFeatures;
 const vscode = __importStar(require("vscode"));
 const client_1 = require("../client");
+const SqlIntelligence_1 = require("./SqlIntelligence");
 const SQL_KEYWORDS = [
     "SELECT",
     "FROM",
@@ -78,6 +79,7 @@ const SQL_KEYWORDS = [
 ];
 const TABLE_DIAGNOSTIC_CODE = "VNG_SQL_UNKNOWN_TABLE";
 const COLUMN_DIAGNOSTIC_CODE = "VNG_SQL_UNKNOWN_COLUMN";
+const tableRefCacheByConnection = new Map();
 const SQL_FUNCTIONS = [
     { name: "COUNT", signature: "COUNT(expression)", description: "Returns the number of matching rows.", category: "aggregate", parameters: ["expression"], snippet: "COUNT(${1:*})" },
     { name: "SUM", signature: "SUM(expression)", description: "Returns the sum of numeric values.", category: "aggregate", parameters: ["expression"], snippet: "SUM(${1:expression})" },
@@ -176,34 +178,34 @@ function registerSqlEditorFeatures(deps) {
             if (activeConnection) {
                 try {
                     tables = await listSchemaTables(deps.schemaManager, activeConnection);
-                    aliases = extractAliases(sqlBeforeCursor, tables);
+                    aliases = (0, SqlIntelligence_1.extractAliases)(sqlBeforeCursor, tables);
                 }
                 catch {
                     tables = [];
                 }
             }
-            const context = getCompletionContext(sqlBeforeCursor);
-            const activeClause = getActiveClause(sqlBeforeCursor);
-            const aliasTarget = getAliasTarget(sqlBeforeCursor);
+            const context = (0, SqlIntelligence_1.getCompletionContext)(sqlBeforeCursor);
+            const activeClause = (0, SqlIntelligence_1.getActiveClause)(sqlBeforeCursor);
+            const aliasTarget = (0, SqlIntelligence_1.getAliasTarget)(sqlBeforeCursor);
             for (const fn of SQL_FUNCTIONS) {
                 const functionItem = new vscode.CompletionItem(fn.name, vscode.CompletionItemKind.Function);
                 functionItem.insertText = new vscode.SnippetString(fn.snippet ?? `${fn.name}()`);
                 functionItem.detail = `${fn.category} function`;
                 functionItem.documentation = new vscode.MarkdownString(`**${fn.signature}**\n\n${fn.description}`);
-                functionItem.sortText = buildSortText("function", activeClause, fn.name);
+                functionItem.sortText = (0, SqlIntelligence_1.buildSortText)("function", activeClause, fn.name);
                 items.push(functionItem);
             }
             for (const snippet of SQL_SNIPPETS.filter((candidate) => candidate.contexts.includes(context))) {
                 const snippetItem = new vscode.CompletionItem(snippet.label, vscode.CompletionItemKind.Snippet);
                 snippetItem.insertText = new vscode.SnippetString(snippet.snippet);
                 snippetItem.detail = snippet.detail;
-                snippetItem.sortText = buildSortText("snippet", activeClause, snippet.label);
+                snippetItem.sortText = (0, SqlIntelligence_1.buildSortText)("snippet", activeClause, snippet.label);
                 items.push(snippetItem);
             }
             for (const keyword of SQL_KEYWORDS) {
                 const keywordItem = new vscode.CompletionItem(keyword, vscode.CompletionItemKind.Keyword);
                 keywordItem.insertText = keyword;
-                keywordItem.sortText = buildSortText("keyword", activeClause, keyword);
+                keywordItem.sortText = (0, SqlIntelligence_1.buildSortText)("keyword", activeClause, keyword);
                 items.push(keywordItem);
             }
             if (tables.length > 0) {
@@ -211,7 +213,7 @@ function registerSqlEditorFeatures(deps) {
                     addTableCompletionItems(items, tables, activeClause);
                 }
                 else if (aliasTarget) {
-                    const resolvedTable = resolveAliasOrTableReference(aliasTarget, aliases, tables);
+                    const resolvedTable = (0, SqlIntelligence_1.resolveAliasOrTableReference)(aliasTarget, aliases, tables);
                     if (resolvedTable) {
                         addColumnCompletionItems(items, [resolvedTable], activeClause, aliasTarget);
                     }
@@ -243,7 +245,7 @@ function registerSqlEditorFeatures(deps) {
     });
     const signatureHelpProvider = vscode.languages.registerSignatureHelpProvider([{ language: "sql" }, { pattern: "**/*.sql" }], {
         provideSignatureHelp(document, position) {
-            const context = getSignatureContext(document.getText(new vscode.Range(new vscode.Position(0, 0), position)));
+            const context = (0, SqlIntelligence_1.getSignatureContext)(document.getText(new vscode.Range(new vscode.Position(0, 0), position)));
             if (!context) {
                 return undefined;
             }
@@ -356,7 +358,7 @@ function registerSqlEditorFeatures(deps) {
             const diagnostics = await computeDiagnostics(document, deps.schemaManager, activeConnection);
             clearDiagnosticDataForDocument(document.uri, diagnosticDataByKey);
             for (const diagnostic of diagnostics) {
-                const suggestions = getSuggestionsFromDiagnosticMessage(diagnostic.message);
+                const suggestions = (0, SqlIntelligence_1.getSuggestionsFromDiagnosticMessage)(diagnostic.message);
                 if (suggestions.length > 0) {
                     const kind = diagnostic.code === TABLE_DIAGNOSTIC_CODE ? "table" : "column";
                     diagnosticDataByKey.set(createDiagnosticKey(document.uri, diagnostic), {
@@ -385,7 +387,11 @@ function registerSqlEditorFeatures(deps) {
         diagnosticsCollection.delete(document.uri);
         clearDiagnosticDataForDocument(document.uri, diagnosticDataByKey);
     });
-    void Promise.all(vscode.workspace.textDocuments.filter(isSqlDocument).map((document) => updateSqlDiagnostics(document)));
+    // Avoid eager scanning of all open SQL docs during activation to reduce startup cost.
+    const activeDocument = vscode.window.activeTextEditor?.document;
+    if (activeDocument && isSqlDocument(activeDocument)) {
+        void updateSqlDiagnostics(activeDocument);
+    }
     return [
         executeSelectionOrFile,
         analyzeSelectionOrFile,
@@ -473,7 +479,7 @@ async function computeDiagnostics(document, schemaManager, connection) {
         return diagnostics;
     }
     const tables = await listSchemaTables(schemaManager, connection);
-    const aliases = extractAliases(text, tables);
+    const aliases = (0, SqlIntelligence_1.extractAliases)(text, tables);
     if (tables.length === 0) {
         return diagnostics;
     }
@@ -481,13 +487,13 @@ async function computeDiagnostics(document, schemaManager, connection) {
     let match;
     while ((match = tableRegex.exec(text)) !== null) {
         const rawTableName = match[2];
-        const normalizedTable = normalizeIdentifier(rawTableName);
-        const resolvedTable = resolveTableReference(normalizedTable, tables);
+        const normalizedTable = (0, SqlIntelligence_1.normalizeIdentifier)(rawTableName);
+        const resolvedTable = (0, SqlIntelligence_1.resolveTableReference)(normalizedTable, tables);
         if (!resolvedTable) {
             const start = match.index + match[0].lastIndexOf(rawTableName);
             const end = start + rawTableName.length;
             const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
-            const suggestions = suggestNames(normalizedTable, tables.map((table) => table.fullName));
+            const suggestions = (0, SqlIntelligence_1.suggestNames)(normalizedTable, tables.map((table) => table.fullName));
             const diagnostic = new vscode.Diagnostic(range, `Unknown table '${rawTableName}'.`, vscode.DiagnosticSeverity.Error);
             diagnostic.code = TABLE_DIAGNOSTIC_CODE;
             diagnostic.source = "voltnuerongrid-sql";
@@ -499,9 +505,9 @@ async function computeDiagnostics(document, schemaManager, connection) {
     }
     const columnRegex = /\b([a-zA-Z_][\w$]*)\.([a-zA-Z_][\w$]*)\b/g;
     while ((match = columnRegex.exec(text)) !== null) {
-        const tablePart = normalizeIdentifier(match[1]);
-        const columnPart = normalizeIdentifier(match[2]);
-        const resolvedTable = resolveAliasOrTableReference(tablePart, aliases, tables);
+        const tablePart = (0, SqlIntelligence_1.normalizeIdentifier)(match[1]);
+        const columnPart = (0, SqlIntelligence_1.normalizeIdentifier)(match[2]);
+        const resolvedTable = (0, SqlIntelligence_1.resolveAliasOrTableReference)(tablePart, aliases, tables);
         if (!resolvedTable) {
             continue;
         }
@@ -509,7 +515,7 @@ async function computeDiagnostics(document, schemaManager, connection) {
             const start = match.index + match[0].lastIndexOf(match[2]);
             const end = start + match[2].length;
             const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
-            const suggestions = suggestNames(columnPart, Array.from(resolvedTable.columns));
+            const suggestions = (0, SqlIntelligence_1.suggestNames)(columnPart, Array.from(resolvedTable.columns));
             const diagnostic = new vscode.Diagnostic(range, `Unknown column '${match[2]}' on table '${resolvedTable.fullName}'.`, vscode.DiagnosticSeverity.Warning);
             diagnostic.code = COLUMN_DIAGNOSTIC_CODE;
             diagnostic.source = "voltnuerongrid-sql";
@@ -531,12 +537,12 @@ function addTableCompletionItems(items, tables, activeClause) {
         const tableItem = new vscode.CompletionItem(table.table, vscode.CompletionItemKind.Struct);
         tableItem.detail = `${table.database}.${table.schema}`;
         tableItem.insertText = table.table;
-        tableItem.sortText = buildSortText("table", activeClause, table.table);
+        tableItem.sortText = (0, SqlIntelligence_1.buildSortText)("table", activeClause, table.table);
         items.push(tableItem);
         const qualifiedItem = new vscode.CompletionItem(table.fullName, vscode.CompletionItemKind.Struct);
         qualifiedItem.detail = "qualified table name";
         qualifiedItem.insertText = table.fullName;
-        qualifiedItem.sortText = buildSortText("table", activeClause, table.fullName);
+        qualifiedItem.sortText = (0, SqlIntelligence_1.buildSortText)("table", activeClause, table.fullName);
         items.push(qualifiedItem);
     }
 }
@@ -552,110 +558,18 @@ function addColumnCompletionItems(items, tables, activeClause, aliasTarget) {
             const columnItem = new vscode.CompletionItem(column, vscode.CompletionItemKind.Field);
             columnItem.detail = `${aliasTarget ?? table.schema}.${table.table}.${column}`;
             columnItem.insertText = column;
-            columnItem.sortText = buildSortText("column", activeClause, `${table.table}.${column}`);
+            columnItem.sortText = (0, SqlIntelligence_1.buildSortText)("column", activeClause, `${table.table}.${column}`);
             items.push(columnItem);
         }
     }
 }
-function getCompletionContext(sqlBeforeCursor) {
-    if (/([a-zA-Z_][\w$]*)\.\s*$/.test(sqlBeforeCursor)) {
-        return "column";
-    }
-    const activeClause = getActiveClause(sqlBeforeCursor);
-    if (["FROM", "JOIN", "UPDATE", "INTO", "TABLE"].includes(activeClause)) {
-        return "table";
-    }
-    if (["SELECT", "WHERE", "GROUP BY", "ORDER BY", "HAVING"].includes(activeClause)) {
-        return "column";
-    }
-    return "general";
-}
-function getActiveClause(sqlBeforeCursor) {
-    const upper = sqlBeforeCursor.toUpperCase();
-    const clauses = ["GROUP BY", "ORDER BY", "HAVING", "SELECT", "FROM", "JOIN", "WHERE", "UPDATE", "INTO", "TABLE", "ON"];
-    let activeClause = "";
-    let bestIndex = -1;
-    for (const clause of clauses) {
-        const index = upper.lastIndexOf(clause);
-        if (index > bestIndex) {
-            bestIndex = index;
-            activeClause = clause;
-        }
-    }
-    return activeClause;
-}
-function buildSortText(role, activeClause, label) {
-    const clausePriority = {
-        SELECT: { column: "01", function: "02", snippet: "03", keyword: "04", table: "09" },
-        WHERE: { column: "01", function: "02", keyword: "03", snippet: "04", table: "09" },
-        HAVING: { column: "01", function: "02", keyword: "03", snippet: "04", table: "09" },
-        "GROUP BY": { column: "01", function: "02", keyword: "03", snippet: "04", table: "09" },
-        "ORDER BY": { column: "01", keyword: "02", function: "03", snippet: "04", table: "09" },
-        FROM: { table: "01", snippet: "02", keyword: "03", function: "08", column: "09" },
-        JOIN: { table: "01", snippet: "02", keyword: "03", function: "08", column: "09" },
-        INTO: { table: "01", snippet: "02", keyword: "03", function: "08", column: "09" },
-        UPDATE: { table: "01", keyword: "02", snippet: "03", function: "08", column: "09" },
-        TABLE: { table: "01", keyword: "02", snippet: "03", function: "08", column: "09" },
-        ON: { column: "01", keyword: "02", function: "03", snippet: "04", table: "09" },
-    };
-    const normalizedClause = clausePriority[activeClause] ? activeClause : "";
-    const defaultPriority = { snippet: "01", function: "02", keyword: "03", table: "04", column: "05" };
-    const priority = normalizedClause ? clausePriority[normalizedClause][role] ?? defaultPriority[role] : defaultPriority[role];
-    return `${priority}_${label.toLowerCase()}`;
-}
-function getSignatureContext(sqlBeforeCursor) {
-    let depth = 0;
-    let activeParameter = 0;
-    for (let index = sqlBeforeCursor.length - 1; index >= 0; index -= 1) {
-        const char = sqlBeforeCursor[index];
-        if (char === ")") {
-            depth += 1;
-            continue;
-        }
-        if (char === "(") {
-            if (depth === 0) {
-                const functionMatch = sqlBeforeCursor.slice(0, index).match(/([A-Za-z_][\w$]*)\s*$/);
-                if (!functionMatch) {
-                    return undefined;
-                }
-                return {
-                    functionName: functionMatch[1].toUpperCase(),
-                    activeParameter,
-                };
-            }
-            depth -= 1;
-            continue;
-        }
-        if (char === "," && depth === 0) {
-            activeParameter += 1;
-        }
-    }
-    return undefined;
-}
-function getAliasTarget(sqlBeforeCursor) {
-    const match = sqlBeforeCursor.match(/([a-zA-Z_][\w$]*)\.\s*$/);
-    return match ? normalizeIdentifier(match[1]) : undefined;
-}
-function extractAliases(text, tables) {
-    const aliases = new Map();
-    const aliasRegex = /\b(from|join)\s+([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*){0,2})(?:\s+(?:as\s+)?([a-zA-Z_][\w$]*))?/gi;
-    let match;
-    while ((match = aliasRegex.exec(text)) !== null) {
-        const tableRef = normalizeIdentifier(match[2]);
-        const alias = match[3] ? normalizeIdentifier(match[3]) : undefined;
-        const resolvedTable = resolveTableReference(tableRef, tables);
-        if (alias && resolvedTable) {
-            aliases.set(alias.toLowerCase(), resolvedTable);
-        }
-    }
-    return aliases;
-}
-function resolveAliasOrTableReference(value, aliases, tables) {
-    const normalized = normalizeIdentifier(value).toLowerCase();
-    return aliases.get(normalized) ?? resolveTableReference(value, tables);
-}
 async function listSchemaTables(schemaManager, connection) {
     const registry = await schemaManager.getSchemaRegistry(connection);
+    const cacheKey = connection.id;
+    const cached = tableRefCacheByConnection.get(cacheKey);
+    if (cached && cached.registryTimestamp === registry.timestamp) {
+        return cached.tables;
+    }
     const result = [];
     for (const database of registry.databases) {
         for (const schema of database.schemas || []) {
@@ -670,65 +584,12 @@ async function listSchemaTables(schemaManager, connection) {
             }
         }
     }
+    tableRefCacheByConnection.set(cacheKey, {
+        registryTimestamp: registry.timestamp,
+        tables: result,
+        cachedAt: Date.now(),
+    });
     return result;
-}
-function resolveTableReference(value, tables) {
-    const normalized = normalizeIdentifier(value);
-    const parts = normalized.split(".");
-    if (parts.length >= 3) {
-        const [database, schema, table] = parts.slice(parts.length - 3);
-        return tables.find((candidate) => candidate.database.toLowerCase() === database.toLowerCase() &&
-            candidate.schema.toLowerCase() === schema.toLowerCase() &&
-            candidate.table.toLowerCase() === table.toLowerCase());
-    }
-    if (parts.length === 2) {
-        const [schema, table] = parts;
-        return tables.find((candidate) => candidate.schema.toLowerCase() === schema.toLowerCase() && candidate.table.toLowerCase() === table.toLowerCase());
-    }
-    return tables.find((candidate) => candidate.table.toLowerCase() === normalized.toLowerCase());
-}
-function normalizeIdentifier(value) {
-    return value.replace(/["`\[\]]/g, "").trim();
-}
-function suggestNames(input, candidates) {
-    const normalizedInput = input.toLowerCase();
-    const prefixMatches = candidates.filter((candidate) => candidate.toLowerCase().startsWith(normalizedInput));
-    if (prefixMatches.length > 0) {
-        return prefixMatches.slice(0, 3);
-    }
-    const fuzzyMatches = candidates
-        .map((candidate) => ({
-        candidate,
-        score: levenshtein(normalizedInput, candidate.toLowerCase()),
-    }))
-        .sort((left, right) => left.score - right.score)
-        .map((entry) => entry.candidate);
-    return fuzzyMatches.slice(0, 3);
-}
-function levenshtein(source, target) {
-    if (source === target) {
-        return 0;
-    }
-    if (source.length === 0) {
-        return target.length;
-    }
-    if (target.length === 0) {
-        return source.length;
-    }
-    const matrix = Array.from({ length: source.length + 1 }, () => Array.from({ length: target.length + 1 }).fill(0));
-    for (let i = 0; i <= source.length; i++) {
-        matrix[i][0] = i;
-    }
-    for (let j = 0; j <= target.length; j++) {
-        matrix[0][j] = j;
-    }
-    for (let i = 1; i <= source.length; i++) {
-        for (let j = 1; j <= target.length; j++) {
-            const cost = source[i - 1] === target[j - 1] ? 0 : 1;
-            matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
-        }
-    }
-    return matrix[source.length][target.length];
 }
 function createDiagnosticKey(uri, diagnostic) {
     return `${uri.toString()}|${String(diagnostic.code)}|${diagnostic.range.start.line}:${diagnostic.range.start.character}|${diagnostic.range.end.line}:${diagnostic.range.end.character}|${diagnostic.message}`;
@@ -740,17 +601,5 @@ function clearDiagnosticDataForDocument(uri, map) {
             map.delete(key);
         }
     }
-}
-function getSuggestionsFromDiagnosticMessage(message) {
-    const marker = " Suggestions: ";
-    const markerIndex = message.indexOf(marker);
-    if (markerIndex === -1) {
-        return [];
-    }
-    return message
-        .slice(markerIndex + marker.length)
-        .split(",")
-        .map((item) => item.trim())
-        .filter((item) => item.length > 0);
 }
 //# sourceMappingURL=SqlEditorFeatures.js.map

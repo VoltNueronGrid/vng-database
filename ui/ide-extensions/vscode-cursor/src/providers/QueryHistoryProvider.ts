@@ -1,10 +1,9 @@
 import * as vscode from "vscode";
 import { QueryHistoryEntry } from "../models";
 import { QueryExecutionService } from "../services";
+import { buildQueryHistoryItems, describeQueryHistoryEntry, QueryHistoryListItem } from "./QueryHistoryTree";
 
-export interface QueryHistoryTreeItem {
-  type: "entry" | "empty";
-  label: string;
+export interface QueryHistoryTreeItem extends QueryHistoryListItem {
   entry?: QueryHistoryEntry;
 }
 
@@ -35,13 +34,12 @@ export class QueryHistoryProvider implements vscode.TreeDataProvider<QueryHistor
     }
 
     const entry = element.entry!;
+    const presentation = describeQueryHistoryEntry(entry);
     treeItem.id = entry.id;
     treeItem.contextValue = "historyEntry";
-    treeItem.iconPath = new vscode.ThemeIcon(entry.status === "success" ? "pass-filled" : "error");
-    treeItem.description = `${entry.status} • ${entry.executionTime ?? 0} ms • ${new Date(entry.timestamp).toLocaleTimeString()}`;
-    treeItem.tooltip = `${entry.query}\n\nStatus: ${entry.status}\nExecution: ${entry.executionTime ?? 0} ms\nTimestamp: ${new Date(
-      entry.timestamp
-    ).toLocaleString()}`;
+    treeItem.iconPath = new vscode.ThemeIcon(presentation.iconId);
+    treeItem.description = presentation.description;
+    treeItem.tooltip = presentation.tooltip;
     treeItem.command = {
       command: "vng.reRunHistoryQuery",
       title: "Re-run Query",
@@ -56,24 +54,8 @@ export class QueryHistoryProvider implements vscode.TreeDataProvider<QueryHistor
     }
 
     const entries = this.queryExecutionService.getHistory(this.activeConnectionId).slice(0, 50);
-    if (entries.length === 0) {
-      return [{ type: "empty", label: "No query history yet" }];
-    }
-
-    return entries.map((entry) => ({
-      type: "entry",
-      label: summarizeQuery(entry.query),
-      entry,
-    }));
+    return buildQueryHistoryItems(entries);
   }
-}
-
-function summarizeQuery(query: string): string {
-  const normalized = query.replace(/\s+/g, " ").trim();
-  if (normalized.length <= 70) {
-    return normalized;
-  }
-  return `${normalized.slice(0, 67)}...`;
 }
 
 export function createQueryHistoryProvider(queryExecutionService: QueryExecutionService): QueryHistoryProvider {

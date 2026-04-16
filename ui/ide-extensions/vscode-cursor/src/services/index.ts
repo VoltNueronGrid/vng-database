@@ -10,6 +10,7 @@ export {
 	QueryStreamOptions,
 	createQueryExecutionService,
 } from "./QueryExecutionService";
+export { createQueryHistoryEntry, findOldestHistoryEntryId, toQueryHistoryStatus } from "./QueryHistory";
 export { SchemaManager, createSchemaManager } from "./SchemaManager";
 export { redactSecrets, toSafeErrorMessage } from "./SecretSafeErrors";
 export { TableEditorService, createTableEditorService } from "./TableEditorService";

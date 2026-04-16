@@ -50,6 +50,7 @@ const ConnectionManagerWebview_1 = require("./ui/ConnectionManagerWebview");
 const ConnectionEditorWebview_1 = require("./ui/ConnectionEditorWebview");
 const models_2 = require("./models");
 const QueryResultsWebview_1 = require("./ui/QueryResultsWebview");
+const QueryResultsState_1 = require("./ui/QueryResultsState");
 const TableEditorWebview_1 = require("./ui/TableEditorWebview");
 // Global service instances
 let connectionManager;
@@ -100,20 +101,7 @@ async function activate(context) {
     let connectionEditorState;
     let tableEditorState;
     let tableEditorPanel;
-    const buildDefaultQueryResultState = () => ({
-        operation: "Query Results",
-        connectionName: connectionManager.getActiveConnection()?.settings.name ?? "No active connection",
-        result: {
-            id: "empty",
-            query: "",
-            status: "success",
-            rows: [],
-            columns: [],
-            rowCount: 0,
-            executionTime: 0,
-            timestamp: Date.now(),
-        },
-    });
+    const buildDefaultQueryResultState = () => (0, QueryResultsState_1.createDefaultQueryResultsState)(connectionManager.getActiveConnection()?.settings.name ?? "No active connection");
     const exportLatestQueryResult = async (format) => {
         if (!latestQueryResult) {
             vscode.window.showWarningMessage("No query result available to export.");
@@ -152,11 +140,7 @@ async function activate(context) {
     };
     const publishQueryResult = async (result, operation, connectionName) => {
         latestQueryResult = result;
-        latestQueryResultState = {
-            operation,
-            connectionName,
-            result,
-        };
+        latestQueryResultState = (0, QueryResultsState_1.createQueryResultsState)(result, operation, connectionName);
         const panel = ensureQueryResultsPanel();
         await panel.updateState(latestQueryResultState);
         panel.reveal();
@@ -1113,6 +1097,7 @@ async function activate(context) {
 }
 function deactivate() {
     // Clean up service resources if needed
+    queryExecutionService.dispose();
     schemaManager.clearCache();
     schemaManager.dispose();
 }
