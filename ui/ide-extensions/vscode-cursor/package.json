@@ -77,6 +77,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "vng.newConnection",
+          "when": "view == vngDatabaseExplorer",
+          "group": "navigation@2"
+        },
+        {
           "command": "vng.refreshQueryHistory",
           "when": "view == vngQueryHistory",
           "group": "navigation@1"
@@ -105,6 +110,36 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "vng.connectConnection",
+          "when": "view == vngDatabaseExplorer && viewItem == connectionInactive",
+          "group": "0_connection@1"
+        },
+        {
+          "command": "vng.disconnectConnection",
+          "when": "view == vngDatabaseExplorer && viewItem == connectionActive",
+          "group": "0_connection@1"
+        },
+        {
+          "command": "vng.editConnection",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@2"
+        },
+        {
+          "command": "vng.testConnection",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@3"
+        },
+        {
+          "command": "vng.deleteConnection",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@4"
+        },
+        {
+          "command": "vng.newConnection",
+          "when": "view == vngDatabaseExplorer && viewItem == emptyState",
+          "group": "0_connection@1"
+        },
         {
           "command": "vng.copyName",
           "when": "view == vngDatabaseExplorer && (viewItem == table || viewItem == column)",
@@ -169,6 +204,31 @@
       {
         "command": "vng.manageConnections",
         "title": "VoltNueronGrid: Manage Connections"
+      },
+      {
+        "command": "vng.newConnection",
+        "title": "VoltNueronGrid: Create New Connection",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.editConnection",
+        "title": "VoltNueronGrid: Edit Connection",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.connectConnection",
+        "title": "VoltNueronGrid: Connect Connection",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.disconnectConnection",
+        "title": "VoltNueronGrid: Disconnect Connection",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.deleteConnection",
+        "title": "VoltNueronGrid: Delete Connection",
+        "category": "VoltNueronGrid"
       },
       {
         "command": "vng.quickSwitchConnection",

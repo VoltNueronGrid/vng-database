@@ -226,12 +226,12 @@ Reported mismatch: expected rich "new/edit connection" form + database list tree
 
 | ID | Task | Status | Owner | Target | Dependencies | Acceptance criteria |
 |---|---|---|---|---|---|---|
-| IDE-UX-001 | Rework **Create New Connection** flow to open a dedicated connection editor webview/panel (not command-only/runtime-target dialog) | 🟨 In Progress | Dev | 2026-04-18 | IDE-3.1/IDE-3.2 | Clicking "Create New Connection" opens form with host, port, username, password, database, SSL, advanced options; supports Save and Connect |
-| IDE-UX-002 | Ensure **Edit Connection** opens the same rich editor with values prefilled from selected saved connection | ⏳ Not Started | Dev | 2026-04-18 | IDE-UX-001 | Editing any connection shows full pre-populated form and persists updates |
-| IDE-UX-003 | Replace/augment left sidebar root with **Connections -> Databases** tree for active connection | ⏳ Not Started | Dev | 2026-04-19 | IDE-2.1/IDE-3.2 | Sidebar lists saved connections and, when connected, shows expandable databases/schemas/tables/columns |
-| IDE-UX-004 | Add per-connection actions in tree/context menu: Connect, Disconnect, Edit, Delete, Refresh | ⏳ Not Started | Dev | 2026-04-19 | IDE-UX-003 | User can disconnect directly from sidebar and tree updates immediately |
-| IDE-UX-005 | Implement empty-state view in sidebar: "No connections available. Please create a new one." with CTA button | ⏳ Not Started | Dev/UX | 2026-04-20 | IDE-UX-001 | When no saved connections exist, message + action are visible and keyboard accessible |
-| IDE-UX-006 | Wire empty-state CTA to open connection editor in split/adjacent panel | ⏳ Not Started | Dev | 2026-04-20 | IDE-UX-005 | Clicking CTA opens the create connection page beside explorer and allows immediate data entry |
+| IDE-UX-001 | Rework **Create New Connection** flow to open a dedicated connection editor webview/panel (not command-only/runtime-target dialog) | ✅ Complete | Dev | 2026-04-18 | IDE-3.1/IDE-3.2 | Clicking "Create New Connection" opens form with host, port, username, password, database, SSL, advanced options; supports Save and Connect |
+| IDE-UX-002 | Ensure **Edit Connection** opens the same rich editor with values prefilled from selected saved connection | ✅ Complete | Dev | 2026-04-18 | IDE-UX-001 | Editing any connection shows full pre-populated form and persists updates |
+| IDE-UX-003 | Replace/augment left sidebar root with **Connections -> Databases** tree for active connection | ✅ Complete | Dev | 2026-04-19 | IDE-2.1/IDE-3.2 | Sidebar lists saved connections and, when connected, shows expandable databases/schemas/tables/columns |
+| IDE-UX-004 | Add per-connection actions in tree/context menu: Connect, Disconnect, Edit, Delete, Refresh | ✅ Complete | Dev | 2026-04-19 | IDE-UX-003 | User can disconnect directly from sidebar and tree updates immediately |
+| IDE-UX-005 | Implement empty-state view in sidebar: "No connections available. Please create a new one." with CTA button | ✅ Complete | Dev/UX | 2026-04-20 | IDE-UX-001 | When no saved connections exist, message + action are visible and keyboard accessible |
+| IDE-UX-006 | Wire empty-state CTA to open connection editor in split/adjacent panel | ✅ Complete | Dev | 2026-04-20 | IDE-UX-005 | Clicking CTA opens the create connection page beside explorer and allows immediate data entry |
 | IDE-UX-007 | Add state transitions and telemetry-safe notifications for connect/disconnect/create/edit failures | ⏳ Not Started | Dev | 2026-04-21 | IDE-UX-001..006 | Clear non-blocking messages on success/failure; no secrets in logs |
 | IDE-UX-008 | Add integration tests for: empty state -> create -> connect -> expand db tree -> disconnect | ⏳ Not Started | QA/Dev | 2026-04-22 | IDE-UX-001..007 | Test suite validates end-to-end UX parity and prevents regression |
 
@@ -252,9 +252,11 @@ Implementation note: this correction block is prioritized ahead of multi-IDE ada
 - Sidebar supports connection lifecycle (connect/disconnect) plus expandable database exploration from active connections.
 - Integration coverage passes for empty-state -> create -> connect -> expand tree -> disconnect with no critical regressions.
 
+IDE-UX progress note (2026-04-16): The connection flow now opens a dedicated create/edit panel with the full advanced form, and the Database Explorer now roots on saved connections with inline connect/disconnect/edit/delete actions plus an empty-state CTA that opens the editor beside the explorer. Remaining IDE-UX work is notifications/telemetry-safe failure handling and integration coverage.
+
 **Next execution kickoff (immediate)**
 
-- Start with **Phase 6: Advanced Features [EST: 3-4 days]** after IDE-UX closure.
+- Start with **IDE-UX-007** notification/error-state hardening and **IDE-UX-008** integration coverage.
 - Then run **Phase 7: UI Polish & Accessibility [EST: 2-3 days]** as the direct follow-up.
 
 ### 4.3 MCP track — production-ready server capability

@@ -47,6 +47,7 @@ const providers_1 = require("./providers");
 const commands_1 = require("./commands");
 const sql_1 = require("./sql");
 const ConnectionManagerWebview_1 = require("./ui/ConnectionManagerWebview");
+const ConnectionEditorWebview_1 = require("./ui/ConnectionEditorWebview");
 const models_2 = require("./models");
 const QueryResultsWebview_1 = require("./ui/QueryResultsWebview");
 const TableEditorWebview_1 = require("./ui/TableEditorWebview");
@@ -94,6 +95,9 @@ async function activate(context) {
     let latestQueryResult;
     let latestQueryResultState;
     let queryResultsPanel;
+    let connectionManagerPanel;
+    let connectionEditorPanel;
+    let connectionEditorState;
     let tableEditorState;
     let tableEditorPanel;
     const buildDefaultQueryResultState = () => ({
@@ -161,6 +165,183 @@ async function activate(context) {
         if (tableEditorPanel && tableEditorState) {
             await tableEditorPanel.updateState(tableEditorState);
         }
+    };
+    const defaultConnectionDraft = () => ({
+        name: "",
+        baseUrl: "http://127.0.0.1:8080",
+        mode: "admin",
+        runtimeTarget: "custom",
+        adminKey: "",
+        operatorId: "",
+        tenantId: "",
+        userId: "",
+        ssl: {
+            enabled: false,
+            rejectUnauthorized: true,
+        },
+        advanced: {
+            connectionTimeout: 5000,
+            idleTimeout: 300000,
+            keepAlive: true,
+            maxConnections: 10,
+        },
+    });
+    const draftFromConnection = (connection) => ({
+        id: connection.id,
+        name: connection.settings.name,
+        baseUrl: connection.settings.baseUrl,
+        mode: connection.settings.mode,
+        runtimeTarget: connection.settings.runtimeTarget,
+        adminKey: "",
+        operatorId: connection.settings.operatorId ?? "",
+        tenantId: connection.settings.tenantId ?? "",
+        userId: connection.settings.userId ?? "",
+        ssl: {
+            enabled: connection.settings.ssl.enabled,
+            caPath: connection.settings.ssl.caPath,
+            certPath: connection.settings.ssl.certPath,
+            keyPath: connection.settings.ssl.keyPath,
+            rejectUnauthorized: connection.settings.ssl.rejectUnauthorized ?? true,
+        },
+        advanced: {
+            connectionTimeout: connection.settings.advanced.connectionTimeout ?? 5000,
+            idleTimeout: connection.settings.advanced.idleTimeout ?? 300000,
+            keepAlive: connection.settings.advanced.keepAlive ?? true,
+            maxConnections: connection.settings.advanced.maxConnections ?? 10,
+        },
+    });
+    const buildConnectionManagerState = () => ({
+        connections: connectionManager.listConnections().map((connection) => ({
+            id: connection.id,
+            name: connection.settings.name,
+            mode: connection.settings.mode,
+            baseUrl: connection.settings.baseUrl,
+            active: connection.isActive,
+            connected: connection.isConnected,
+        })),
+    });
+    const syncConnectionViews = async () => {
+        const activeConnection = connectionManager.getActiveConnection();
+        databaseExplorerProvider.setConnections(connectionManager.listConnections());
+        databaseExplorerProvider.setConnection(activeConnection);
+        queryHistoryProvider.setActiveConnection(activeConnection?.id);
+        updateConnectionStatusBar();
+        if (connectionManagerPanel) {
+            await connectionManagerPanel.updateState(buildConnectionManagerState());
+        }
+    };
+    const closeConnectionEditorPanel = () => {
+        connectionEditorState = undefined;
+        if (connectionEditorPanel) {
+            connectionEditorPanel.panel.dispose();
+            connectionEditorPanel = undefined;
+        }
+    };
+    const saveConnectionDraft = async (draft, mode) => {
+        if (!draft.name.trim()) {
+            vscode.window.showWarningMessage("Connection name is required.");
+            return false;
+        }
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(draft.baseUrl);
+            if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+                throw new Error("Only http/https URLs are supported.");
+            }
+        }
+        catch {
+            vscode.window.showWarningMessage("Enter a valid base URL (http/https).");
+            return false;
+        }
+        if (draft.mode === "operator" && (!(draft.operatorId ?? "").trim() || !draft.adminKey?.trim())) {
+            vscode.window.showWarningMessage("Operator mode requires Operator ID and Admin Key.");
+            return false;
+        }
+        if (draft.mode === "tenant" && (!(draft.tenantId ?? "").trim() || !(draft.userId ?? "").trim())) {
+            vscode.window.showWarningMessage("Tenant mode requires Tenant ID and User ID.");
+            return false;
+        }
+        const connectionPatch = {
+            name: draft.name.trim(),
+            baseUrl: draft.baseUrl.replace(/\/$/, ""),
+            host: parsedUrl.hostname,
+            port: parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === "https:" ? 443 : 80,
+            mode: draft.mode,
+            runtimeTarget: draft.runtimeTarget,
+            operatorId: draft.mode === "operator" ? (draft.operatorId ?? "").trim() : undefined,
+            tenantId: draft.mode === "tenant" ? (draft.tenantId ?? "").trim() : undefined,
+            userId: draft.mode === "tenant" ? (draft.userId ?? "").trim() : undefined,
+            ssl: {
+                enabled: draft.ssl.enabled,
+                caPath: draft.ssl.caPath?.trim() || undefined,
+                certPath: draft.ssl.certPath?.trim() || undefined,
+                keyPath: draft.ssl.keyPath?.trim() || undefined,
+                rejectUnauthorized: draft.ssl.rejectUnauthorized ?? true,
+            },
+            advanced: {
+                connectionTimeout: draft.advanced.connectionTimeout ?? 5000,
+                idleTimeout: draft.advanced.idleTimeout ?? 300000,
+                keepAlive: draft.advanced.keepAlive ?? true,
+                maxConnections: draft.advanced.maxConnections ?? 10,
+            },
+            lastUsed: Date.now(),
+        };
+        if (draft.adminKey?.trim()) {
+            connectionPatch.adminKey = draft.adminKey.trim();
+        }
+        const validationError = (0, models_1.validateConnectionSettings)(connectionPatch);
+        if (validationError) {
+            vscode.window.showWarningMessage(validationError);
+            return false;
+        }
+        if (mode === "edit" && draft.id) {
+            await connectionManager.updateConnection(draft.id, connectionPatch);
+            vscode.window.showInformationMessage("Connection updated.");
+        }
+        else {
+            const created = await connectionManager.addConnection((0, models_1.createDefaultConnection)({
+                id: `conn-${Date.now()}`,
+                ...connectionPatch,
+                serverType: "voltnuerongrid",
+            }));
+            await connectionManager.setActiveConnection(created.id);
+            vscode.window.showInformationMessage("Connection created.");
+        }
+        await syncConnectionViews();
+        closeConnectionEditorPanel();
+        return true;
+    };
+    const openConnectionEditor = async (state) => {
+        connectionEditorState = state;
+        if (!connectionEditorPanel) {
+            connectionEditorPanel = (0, ConnectionEditorWebview_1.createConnectionEditorPanel)(context, state, async (message) => {
+                if (message.type === "cancel") {
+                    closeConnectionEditorPanel();
+                    return;
+                }
+                await saveConnectionDraft(message.draft, connectionEditorState?.mode ?? "create");
+            });
+            connectionEditorPanel.panel.onDidDispose(() => {
+                connectionEditorState = undefined;
+                connectionEditorPanel = undefined;
+            });
+            context.subscriptions.push(connectionEditorPanel.panel);
+            return;
+        }
+        await connectionEditorPanel.updateState(state);
+        connectionEditorPanel.panel.reveal(vscode.ViewColumn.Beside);
+    };
+    const resolveConnectionId = (input) => {
+        if (!input) {
+            return undefined;
+        }
+        if (typeof input === "string") {
+            return input;
+        }
+        if (input.type === "connection") {
+            return input.data.id;
+        }
+        return undefined;
     };
     const resolveTableEditorConnection = () => connectionManager.getConnection(tableEditorState?.connectionId ?? "") ?? undefined;
     const handleTableEditorMessage = async (message) => {
@@ -340,6 +521,7 @@ async function activate(context) {
     // Update database explorer when active connection changes
     const activeConnection = connectionManager.getActiveConnection();
     if (activeConnection) {
+        databaseExplorerProvider.setConnections(connectionManager.listConnections());
         databaseExplorerProvider.setConnection(activeConnection);
         queryHistoryProvider.setActiveConnection(activeConnection.id);
     }
@@ -348,10 +530,12 @@ async function activate(context) {
         const legacyConnection = await (0, config_1.readConnection)(context);
         if (legacyConnection) {
             const migrated = await upsertManagedConnection(legacyConnection);
+            databaseExplorerProvider.setConnections(connectionManager.listConnections());
             databaseExplorerProvider.setConnection(migrated);
             queryHistoryProvider.setActiveConnection(migrated.id);
         }
     }
+    databaseExplorerProvider.setConnections(connectionManager.listConnections());
     updateConnectionStatusBar();
     const connect = vscode.commands.registerCommand("vng.connectWizard", async () => {
         const connection = await (0, config_1.runConnectionWizard)(context);
@@ -360,8 +544,7 @@ async function activate(context) {
             return;
         }
         const managed = await upsertManagedConnection(connection);
-        databaseExplorerProvider.setConnection(managed);
-        updateConnectionStatusBar();
+        await syncConnectionViews();
         vscode.window.showInformationMessage(`Saved VoltNueronGrid connection for ${connection.settings.mode} mode.`);
     });
     const quickSwitchConnection = vscode.commands.registerCommand("vng.quickSwitchConnection", async () => {
@@ -383,228 +566,143 @@ async function activate(context) {
             return;
         }
         const active = await connectionManager.setActiveConnection(pick.connectionId);
-        databaseExplorerProvider.setConnection(active);
-        queryHistoryProvider.setActiveConnection(active?.id);
-        updateConnectionStatusBar();
+        await syncConnectionViews();
         if (active) {
             vscode.window.showInformationMessage(`Active connection set to '${active.settings.name}'.`);
         }
     });
     const manageConnections = vscode.commands.registerCommand("vng.manageConnections", async () => {
-        let editor;
-        const defaultDraft = () => ({
-            name: "",
-            baseUrl: "http://127.0.0.1:8080",
-            mode: "admin",
-            runtimeTarget: "custom",
-            adminKey: "",
-            operatorId: "",
-            tenantId: "",
-            userId: "",
-            ssl: {
-                enabled: false,
-                rejectUnauthorized: true,
-            },
-            advanced: {
-                connectionTimeout: 5000,
-                idleTimeout: 300000,
-                keepAlive: true,
-                maxConnections: 10,
-            },
-        });
-        const draftFromConnection = (connection) => ({
-            id: connection.id,
-            name: connection.settings.name,
-            baseUrl: connection.settings.baseUrl,
-            mode: connection.settings.mode,
-            runtimeTarget: connection.settings.runtimeTarget,
-            adminKey: "",
-            operatorId: connection.settings.operatorId ?? "",
-            tenantId: connection.settings.tenantId ?? "",
-            userId: connection.settings.userId ?? "",
-            ssl: {
-                enabled: connection.settings.ssl.enabled,
-                caPath: connection.settings.ssl.caPath,
-                certPath: connection.settings.ssl.certPath,
-                keyPath: connection.settings.ssl.keyPath,
-                rejectUnauthorized: connection.settings.ssl.rejectUnauthorized ?? true,
-            },
-            advanced: {
-                connectionTimeout: connection.settings.advanced.connectionTimeout ?? 5000,
-                idleTimeout: connection.settings.advanced.idleTimeout ?? 300000,
-                keepAlive: connection.settings.advanced.keepAlive ?? true,
-                maxConnections: connection.settings.advanced.maxConnections ?? 10,
-            },
-        });
-        const buildWebviewState = () => ({
-            connections: connectionManager.listConnections().map((connection) => ({
-                id: connection.id,
-                name: connection.settings.name,
-                mode: connection.settings.mode,
-                baseUrl: connection.settings.baseUrl,
-                active: connection.isActive,
-                connected: connection.isConnected,
-            })),
-            editor,
-        });
-        const panel = (0, ConnectionManagerWebview_1.createConnectionManagerPanel)(context, buildWebviewState(), async (message) => {
+        if (connectionManagerPanel) {
+            await connectionManagerPanel.updateState(buildConnectionManagerState());
+            connectionManagerPanel.panel.reveal(vscode.ViewColumn.One);
+            return;
+        }
+        connectionManagerPanel = (0, ConnectionManagerWebview_1.createConnectionManagerPanel)(context, buildConnectionManagerState(), async (message) => {
             if (message.type === "refresh") {
-                await panel.updateState(buildWebviewState());
+                await connectionManagerPanel?.updateState(buildConnectionManagerState());
                 return;
             }
             if (message.type === "openCreate") {
-                editor = {
+                await openConnectionEditor({
                     mode: "create",
-                    draft: defaultDraft(),
-                };
-                await panel.updateState(buildWebviewState());
-                return;
-            }
-            if (message.type === "cancelEdit") {
-                editor = undefined;
-                await panel.updateState(buildWebviewState());
+                    draft: defaultConnectionDraft(),
+                });
                 return;
             }
             if (message.type === "openEdit") {
                 const selected = connectionManager.getConnection(message.id);
                 if (!selected) {
-                    await panel.updateState(buildWebviewState());
                     return;
                 }
-                editor = {
+                await openConnectionEditor({
                     mode: "edit",
                     draft: draftFromConnection(selected),
-                };
-                await panel.updateState(buildWebviewState());
-                return;
-            }
-            if (message.type === "save") {
-                const draft = message.draft;
-                if (!draft.name.trim()) {
-                    vscode.window.showWarningMessage("Connection name is required.");
-                    await panel.updateState(buildWebviewState());
-                    return;
-                }
-                let parsedUrl;
-                try {
-                    parsedUrl = new URL(draft.baseUrl);
-                    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-                        throw new Error("Only http/https URLs are supported.");
-                    }
-                }
-                catch {
-                    vscode.window.showWarningMessage("Enter a valid base URL (http/https).");
-                    await panel.updateState(buildWebviewState());
-                    return;
-                }
-                if (draft.mode === "operator" && (!(draft.operatorId ?? "").trim() || !draft.adminKey?.trim())) {
-                    vscode.window.showWarningMessage("Operator mode requires Operator ID and Admin Key.");
-                    await panel.updateState(buildWebviewState());
-                    return;
-                }
-                if (draft.mode === "tenant" && (!(draft.tenantId ?? "").trim() || !(draft.userId ?? "").trim())) {
-                    vscode.window.showWarningMessage("Tenant mode requires Tenant ID and User ID.");
-                    await panel.updateState(buildWebviewState());
-                    return;
-                }
-                const connectionPatch = {
-                    name: draft.name.trim(),
-                    baseUrl: draft.baseUrl.replace(/\/$/, ""),
-                    host: parsedUrl.hostname,
-                    port: parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === "https:" ? 443 : 80,
-                    mode: draft.mode,
-                    runtimeTarget: draft.runtimeTarget,
-                    operatorId: draft.mode === "operator" ? (draft.operatorId ?? "").trim() : undefined,
-                    tenantId: draft.mode === "tenant" ? (draft.tenantId ?? "").trim() : undefined,
-                    userId: draft.mode === "tenant" ? (draft.userId ?? "").trim() : undefined,
-                    ssl: {
-                        enabled: draft.ssl.enabled,
-                        caPath: draft.ssl.caPath?.trim() || undefined,
-                        certPath: draft.ssl.certPath?.trim() || undefined,
-                        keyPath: draft.ssl.keyPath?.trim() || undefined,
-                        rejectUnauthorized: draft.ssl.rejectUnauthorized ?? true,
-                    },
-                    advanced: {
-                        connectionTimeout: draft.advanced.connectionTimeout ?? 5000,
-                        idleTimeout: draft.advanced.idleTimeout ?? 300000,
-                        keepAlive: draft.advanced.keepAlive ?? true,
-                        maxConnections: draft.advanced.maxConnections ?? 10,
-                    },
-                    lastUsed: Date.now(),
-                };
-                if (draft.adminKey?.trim()) {
-                    connectionPatch.adminKey = draft.adminKey.trim();
-                }
-                const validationError = (0, models_1.validateConnectionSettings)(connectionPatch);
-                if (validationError) {
-                    vscode.window.showWarningMessage(validationError);
-                    await panel.updateState(buildWebviewState());
-                    return;
-                }
-                if (editor?.mode === "edit" && draft.id) {
-                    await connectionManager.updateConnection(draft.id, connectionPatch);
-                    vscode.window.showInformationMessage("Connection updated.");
-                }
-                else {
-                    const created = await connectionManager.addConnection((0, models_1.createDefaultConnection)({
-                        id: `conn-${Date.now()}`,
-                        ...connectionPatch,
-                        serverType: "voltnuerongrid",
-                    }));
-                    await connectionManager.setActiveConnection(created.id);
-                    vscode.window.showInformationMessage("Connection created.");
-                }
-                const activeConnection = connectionManager.getActiveConnection();
-                databaseExplorerProvider.setConnection(activeConnection);
-                queryHistoryProvider.setActiveConnection(activeConnection?.id);
-                updateConnectionStatusBar();
-                editor = undefined;
-                await panel.updateState(buildWebviewState());
+                });
                 return;
             }
             const selected = connectionManager.getConnection(message.id);
             if (!selected) {
-                await panel.updateState(buildWebviewState());
+                await connectionManagerPanel?.updateState(buildConnectionManagerState());
                 return;
             }
             if (message.type === "delete") {
                 const confirmation = await vscode.window.showWarningMessage(`Delete connection '${selected.settings.name}'?`, { modal: true }, "Delete");
                 if (confirmation === "Delete") {
                     await connectionManager.deleteConnection(message.id);
-                    const activeConnection = connectionManager.getActiveConnection();
-                    databaseExplorerProvider.setConnection(activeConnection);
-                    queryHistoryProvider.setActiveConnection(activeConnection?.id);
-                    updateConnectionStatusBar();
-                    if (editor?.mode === "edit" && editor.draft.id === message.id) {
-                        editor = undefined;
-                    }
+                    await syncConnectionViews();
                 }
-                await panel.updateState(buildWebviewState());
+                await connectionManagerPanel?.updateState(buildConnectionManagerState());
                 return;
             }
             if (message.type === "activate") {
                 const active = await connectionManager.setActiveConnection(message.id);
-                databaseExplorerProvider.setConnection(active);
-                queryHistoryProvider.setActiveConnection(active?.id);
-                updateConnectionStatusBar();
+                await syncConnectionViews();
                 if (active) {
                     vscode.window.showInformationMessage(`Active connection set to '${active.settings.name}'.`);
                 }
-                await panel.updateState(buildWebviewState());
+                await connectionManagerPanel?.updateState(buildConnectionManagerState());
                 return;
             }
             if (message.type === "test") {
                 const result = await httpClient.testConnection(selected);
                 connectionManager.setConnectionStatus(message.id, result.isHealthy);
-                updateConnectionStatusBar();
+                await syncConnectionViews();
                 vscode.window.showInformationMessage(result.isHealthy ? `Connection test succeeded for '${selected.settings.name}'.` : `Connection test failed: ${result.message}`);
-                await panel.updateState(buildWebviewState());
+                await connectionManagerPanel?.updateState(buildConnectionManagerState());
             }
         });
-        context.subscriptions.push(panel.panel);
+        connectionManagerPanel.panel.onDidDispose(() => {
+            connectionManagerPanel = undefined;
+        });
+        context.subscriptions.push(connectionManagerPanel.panel);
     });
-    const test = vscode.commands.registerCommand("vng.testConnection", async () => {
-        const connection = await ensureConnection(context);
+    const newConnection = vscode.commands.registerCommand("vng.newConnection", async () => {
+        await openConnectionEditor({
+            mode: "create",
+            draft: defaultConnectionDraft(),
+        });
+    });
+    const editConnection = vscode.commands.registerCommand("vng.editConnection", async (input) => {
+        const connectionId = resolveConnectionId(input);
+        if (!connectionId) {
+            vscode.window.showWarningMessage("Select a connection to edit.");
+            return;
+        }
+        const connection = connectionManager.getConnection(connectionId);
+        if (!connection) {
+            vscode.window.showWarningMessage("The selected connection is no longer available.");
+            return;
+        }
+        await openConnectionEditor({
+            mode: "edit",
+            draft: draftFromConnection(connection),
+        });
+    });
+    const connectConnection = vscode.commands.registerCommand("vng.connectConnection", async (input) => {
+        const connectionId = resolveConnectionId(input);
+        if (!connectionId) {
+            vscode.window.showWarningMessage("Select a connection to connect.");
+            return;
+        }
+        const active = await connectionManager.setActiveConnection(connectionId);
+        await syncConnectionViews();
+        if (active) {
+            vscode.window.showInformationMessage(`Active connection set to '${active.settings.name}'.`);
+        }
+    });
+    const disconnectConnection = vscode.commands.registerCommand("vng.disconnectConnection", async () => {
+        const active = connectionManager.getActiveConnection();
+        if (!active) {
+            vscode.window.showInformationMessage("No active connection to disconnect.");
+            return;
+        }
+        await connectionManager.clearActiveConnection();
+        await syncConnectionViews();
+        vscode.window.showInformationMessage(`Disconnected '${active.settings.name}'.`);
+    });
+    const deleteConnectionCommand = vscode.commands.registerCommand("vng.deleteConnection", async (input) => {
+        const connectionId = resolveConnectionId(input);
+        if (!connectionId) {
+            vscode.window.showWarningMessage("Select a connection to delete.");
+            return;
+        }
+        const selected = connectionManager.getConnection(connectionId);
+        if (!selected) {
+            vscode.window.showWarningMessage("The selected connection is no longer available.");
+            return;
+        }
+        const confirmation = await vscode.window.showWarningMessage(`Delete connection '${selected.settings.name}'?`, { modal: true }, "Delete");
+        if (confirmation !== "Delete") {
+            return;
+        }
+        await connectionManager.deleteConnection(connectionId);
+        await syncConnectionViews();
+        vscode.window.showInformationMessage(`Deleted '${selected.settings.name}'.`);
+    });
+    const test = vscode.commands.registerCommand("vng.testConnection", async (input) => {
+        const selectedConnectionId = resolveConnectionId(input);
+        const managedConnection = selectedConnectionId ? connectionManager.getConnection(selectedConnectionId) : null;
+        const connection = managedConnection ? toRuntimeConnection(managedConnection) : await ensureConnection(context);
         if (!connection) {
             vscode.window.showWarningMessage("No VoltNueronGrid connection configured.");
             return;
@@ -616,6 +714,10 @@ async function activate(context) {
             try {
                 const checks = await (0, client_1.runConnectivityChecks)(connection);
                 const failed = checks.filter((check) => !check.ok);
+                if (managedConnection) {
+                    connectionManager.setConnectionStatus(managedConnection.id, failed.length === 0);
+                    await syncConnectionViews();
+                }
                 const summary = checks
                     .map((check) => `${check.method} ${check.endpoint} -> ${check.status} (${check.ok ? "ok" : "failed"})`)
                     .join("\n");
@@ -944,7 +1046,7 @@ async function activate(context) {
             });
         });
     };
-    context.subscriptions.push(connect, manageConnections, quickSwitchConnection, test, queryRunner, showQueryResults, refreshQueryHistory, clearQueryHistory, searchQueryHistory, reRunHistoryQuery, cancelActiveQuery, diagnostics, schema, focusPanel, refreshSchema, copyName, showTableDDL, showSQLTemplate, generateMockData, dumpTableStruct, dropTable, openTableEditor, openTableEditorPicker, createTableWizard, alterTableWizard, tableEditorSave, tableEditorAddRow, tableEditorDiscard, tableEditorRefresh, ...sqlDisposables, actionsView, databaseView, queryHistoryView, connectionStatusBar, output);
+    context.subscriptions.push(connect, newConnection, editConnection, connectConnection, disconnectConnection, deleteConnectionCommand, manageConnections, quickSwitchConnection, test, queryRunner, showQueryResults, refreshQueryHistory, clearQueryHistory, searchQueryHistory, reRunHistoryQuery, cancelActiveQuery, diagnostics, schema, focusPanel, refreshSchema, copyName, showTableDDL, showSQLTemplate, generateMockData, dumpTableStruct, dropTable, openTableEditor, openTableEditorPicker, createTableWizard, alterTableWizard, tableEditorSave, tableEditorAddRow, tableEditorDiscard, tableEditorRefresh, ...sqlDisposables, actionsView, databaseView, queryHistoryView, connectionStatusBar, output);
 }
 function deactivate() {
     // Clean up service resources if needed

@@ -127,6 +127,19 @@ class ConnectionManager {
         return conn;
     }
     /**
+     * Clear the active connection without deleting any saved profiles.
+     */
+    async clearActiveConnection() {
+        if (this.activeConnectionId) {
+            const prev = this.connections.get(this.activeConnectionId);
+            if (prev) {
+                prev.isActive = false;
+            }
+        }
+        this.activeConnectionId = null;
+        await this.persist();
+    }
+    /**
      * Get all connections
      */
     listConnections() {

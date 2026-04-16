@@ -41,11 +41,13 @@ exports.DatabaseExplorerProvider = void 0;
 exports.createDatabaseExplorerProvider = createDatabaseExplorerProvider;
 const vscode = __importStar(require("vscode"));
 const Schema_1 = require("../models/Schema");
+const DatabaseExplorerTree_1 = require("./DatabaseExplorerTree");
 class DatabaseExplorerProvider {
     constructor(schemaManager) {
         this._onDidChangeTreeData = new vscode.EventEmitter();
         this.onDidChangeTreeData = this._onDidChangeTreeData.event;
         this.connection = null;
+        this.connections = [];
         this.expandedItems = new Set();
         this.schemaManager = schemaManager;
     }
@@ -55,6 +57,10 @@ class DatabaseExplorerProvider {
     setConnection(connection) {
         this.connection = connection;
         this.expandedItems.clear();
+        this.refresh();
+    }
+    setConnections(connections) {
+        this.connections = [...connections];
         this.refresh();
     }
     /**
@@ -69,14 +75,19 @@ class DatabaseExplorerProvider {
     getTreeItem(element) {
         const treeItem = new vscode.TreeItem(element.label);
         treeItem.id = this.getItemId(element);
-        treeItem.contextValue = element.type;
-        treeItem.description = element.type === "column" ? element.data?.type : undefined;
+        treeItem.contextValue = element.contextValue ?? element.type;
+        treeItem.command = element.command;
+        treeItem.description = element.type === "column" ? element.data?.type : element.description;
         // Icons
         if (element.type === "loading") {
             treeItem.iconPath = new vscode.ThemeIcon("loading~spin");
         }
         else if (element.type === "error") {
             treeItem.iconPath = new vscode.ThemeIcon("error");
+        }
+        else if (element.type === "connection") {
+            treeItem.iconPath = new vscode.ThemeIcon(element.data.isActive ? "plug" : "debug-disconnect");
+            treeItem.tooltip = `${element.data.settings.name}\n${element.data.settings.baseUrl}`;
         }
         else if (element.type === "database") {
             treeItem.iconPath = new vscode.ThemeIcon("database");
@@ -93,9 +104,19 @@ class DatabaseExplorerProvider {
             treeItem.iconPath = new vscode.ThemeIcon("symbol-field");
             treeItem.description = `${typeDisplay.label}${column.nullable ? " (null)" : ""}${column.isPrimaryKey ? " (PK)" : ""}`;
         }
+        else if (element.type === "emptyState") {
+            treeItem.iconPath = new vscode.ThemeIcon("add");
+            treeItem.tooltip = "Create a new VoltNueronGrid connection";
+        }
+        else if (element.type === "message") {
+            treeItem.iconPath = new vscode.ThemeIcon("info");
+        }
         // Collapsible state
-        if (element.type === "loading" || element.type === "error") {
+        if (element.type === "loading" || element.type === "error" || element.type === "emptyState" || element.type === "message") {
             treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
+        }
+        else if (element.type === "connection") {
+            treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
         }
         else if (element.type === "database") {
             treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
@@ -115,56 +136,93 @@ class DatabaseExplorerProvider {
      * Get children of an element
      */
     async getChildren(element) {
-        if (!this.connection) {
-            return [];
-        }
         try {
-            // Root level: show databases
             if (!element) {
-                const databases = await this.schemaManager.getDatabases(this.connection);
+                if (this.connections.length === 0) {
+                    return [
+                        {
+                            type: "emptyState",
+                            label: (0, DatabaseExplorerTree_1.getEmptyConnectionMessage)(),
+                            contextValue: "emptyState",
+                            command: {
+                                command: "vng.newConnection",
+                                title: "Create New Connection",
+                            },
+                        },
+                    ];
+                }
+                return this.connections.map((connection) => {
+                    const presentation = (0, DatabaseExplorerTree_1.describeConnectionNode)(connection);
+                    return {
+                        type: "connection",
+                        label: connection.settings.name,
+                        description: presentation.description,
+                        contextValue: presentation.contextValue,
+                        data: connection,
+                    };
+                });
+            }
+            if (element.type === "connection") {
+                const connection = element.data;
+                if (!connection.isActive) {
+                    return [
+                        {
+                            type: "message",
+                            label: (0, DatabaseExplorerTree_1.describeConnectionNode)(connection).browseMessage,
+                            contextValue: "message",
+                        },
+                    ];
+                }
+                const databases = await this.schemaManager.getDatabases(connection);
                 if (databases.length === 0) {
-                    return [{ type: "error", label: "No databases found" }];
+                    return [{ type: "message", label: "No databases found", contextValue: "message" }];
                 }
                 return databases.map((db) => ({
                     type: "database",
                     label: db.name,
-                    data: db,
+                    data: { connectionId: connection.id, database: db },
                 }));
+            }
+            if (!this.connection) {
+                return [];
             }
             // Database level: show schemas
             if (element.type === "database") {
-                const database = element.data;
-                const schemas = await this.schemaManager.getSchemas(this.connection, database.name);
+                const connection = this.resolveConnectionForElement(element) ?? this.connection;
+                const database = this.unwrapDatabase(element.data);
+                const schemas = await this.schemaManager.getSchemas(connection, database.name);
                 if (schemas.length === 0) {
-                    return [{ type: "error", label: "No schemas found" }];
+                    return [{ type: "message", label: "No schemas found", contextValue: "message" }];
                 }
                 return schemas.map((schema) => ({
                     type: "schema",
                     label: schema.name || "default",
-                    data: { database: database.name, schema },
+                    data: { connectionId: connection.id, database: database.name, schema },
                 }));
             }
             // Schema level: show tables
             if (element.type === "schema") {
+                const connection = this.resolveConnectionForElement(element) ?? this.connection;
                 const { database, schema } = element.data;
-                const tables = await this.schemaManager.getTables(this.connection, database, schema.name);
+                const tables = await this.schemaManager.getTables(connection, database, schema.name);
                 if (tables.length === 0) {
-                    return [{ type: "error", label: "No tables found" }];
+                    return [{ type: "message", label: "No tables found", contextValue: "message" }];
                 }
                 return tables
                     .filter((t) => !t.isSystem) // Hide system tables by default
                     .map((table) => ({
                     type: "table",
                     label: table.name,
-                    data: { database, schema: schema.name, table },
+                    data: { connectionId: connection.id, database, schema: schema.name, table },
                 }));
             }
             // Table level: show columns
             if (element.type === "table") {
+                const connection = this.resolveConnectionForElement(element) ?? this.connection;
                 const { database, schema, table } = element.data;
-                const columns = await this.schemaManager.getColumns(this.connection, database, schema, table.name);
+                const columns = await this.schemaManager.getColumns(connection, database, schema, table.name);
                 if (columns.length === 0) {
-                    return [{ type: "error", label: "No columns found" }];
+                    return [{ type: "message", label: "No columns found", contextValue: "message" }];
                 }
                 return columns.map((column) => ({
                     type: "column",
@@ -197,21 +255,43 @@ class DatabaseExplorerProvider {
      */
     getItemId(element) {
         if (element.type === "database") {
-            return `db-${element.data.name}`;
+            const data = element.data;
+            const database = this.unwrapDatabase(data);
+            const connectionId = this.unwrapConnectionId(data) ?? this.connection?.id ?? "default";
+            return `db-${connectionId}-${database.name}`;
+        }
+        if (element.type === "connection") {
+            return `connection-${element.data.id}`;
         }
         if (element.type === "schema") {
-            const { database, schema } = element.data;
-            return `schema-${database}-${schema.name}`;
+            const { connectionId, database, schema } = element.data;
+            return `schema-${connectionId ?? this.connection?.id ?? "default"}-${database}-${schema.name}`;
         }
         if (element.type === "table") {
-            const { database, schema, table } = element.data;
-            return `table-${database}-${schema}-${table.name}`;
+            const { connectionId, database, schema, table } = element.data;
+            return `table-${connectionId ?? this.connection?.id ?? "default"}-${database}-${schema}-${table.name}`;
         }
         if (element.type === "column") {
             const { database, schema, table, column } = element.data;
             return `col-${database}-${schema}-${table}-${column.name}`;
         }
         return `${element.type}-${element.label}`;
+    }
+    resolveConnectionForElement(element) {
+        const connectionId = this.unwrapConnectionId(element.data);
+        if (!connectionId) {
+            return this.connection;
+        }
+        return this.connections.find((connection) => connection.id === connectionId) ?? this.connection;
+    }
+    unwrapConnectionId(data) {
+        if (!data || typeof data !== "object") {
+            return undefined;
+        }
+        return "connectionId" in data ? data.connectionId : undefined;
+    }
+    unwrapDatabase(data) {
+        return "database" in data ? data.database : data;
     }
 }
 exports.DatabaseExplorerProvider = DatabaseExplorerProvider;
