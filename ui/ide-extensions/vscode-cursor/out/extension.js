@@ -89,7 +89,7 @@ async function activate(context) {
     schemaManager = (0, services_1.createSchemaManager)(httpClient);
     tableEditorService = (0, services_1.createTableEditorService)(httpClient, schemaManager);
     // Initialize database explorer
-    databaseExplorerProvider = (0, providers_1.createDatabaseExplorerProvider)(schemaManager);
+    databaseExplorerProvider = (0, providers_1.createDatabaseExplorerProvider)(context.extensionUri, schemaManager);
     queryHistoryProvider = (0, providers_1.createQueryHistoryProvider)(queryExecutionService);
     output.appendLine("[VoltNueronGrid] Extension activated (v0.2.0)");
     let latestQueryResult;

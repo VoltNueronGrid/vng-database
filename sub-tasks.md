@@ -76,9 +76,9 @@ Execution order: **Next (starts immediately after Phase 6 exit criteria are met)
 
 | ID | Task | Status | Owner | Target |
 |---|---|---|---|---|
-| IDE-7.1 | Create professional icon set (database, schema, table, execute, etc.) with light/dark theme support | ⏳ Not Started | Design/Dev | 2026-05-04 |
-| IDE-7.2 | Add accessibility features (ARIA labels, keyboard navigation, screen reader support, color contrast) | ⏳ Not Started | Dev/QA | 2026-05-05 |
-| IDE-7.3 | Implement status messages and notifications (connecting, query running, errors, success) | 🟨 In Progress | Dev | 2026-05-05 |
+| IDE-7.1 | Create professional icon set (database, schema, table, execute, etc.) with light/dark theme support | ✅ Complete | Design/Dev | 2026-05-04 |
+| IDE-7.2 | Add accessibility features (ARIA labels, keyboard navigation, screen reader support, color contrast) | ✅ Complete | Dev/QA | 2026-05-05 |
+| IDE-7.3 | Implement status messages and notifications (connecting, query running, errors, success) | ✅ Complete | Dev | 2026-05-05 |
 
 ### Phase 8: Testing & Documentation [EST: 2-3 days]
 
@@ -239,11 +239,11 @@ Implementation note: this correction block is prioritized ahead of multi-IDE ada
 
 **Daily execution order (stand-up checklist)**
 
-- [ ] **Day 1 (2026-04-18):** Complete IDE-UX-001 and start IDE-UX-002; demo create/edit form parity in-panel.
-- [ ] **Day 2 (2026-04-19):** Complete IDE-UX-003 and IDE-UX-004; verify left tree expand/collapse and disconnect action.
-- [ ] **Day 3 (2026-04-20):** Complete IDE-UX-005 and IDE-UX-006; validate empty-state copy and CTA open-in-adjacent-panel behavior.
-- [ ] **Day 4 (2026-04-21):** Complete IDE-UX-007; confirm user-facing notifications and secret-safe logging on failures.
-- [ ] **Day 5 (2026-04-22):** Complete IDE-UX-008 and run end-to-end regression pass for empty state -> create -> connect -> explore -> disconnect.
+- [x] **Day 1 (2026-04-18):** Complete IDE-UX-001 and start IDE-UX-002; demo create/edit form parity in-panel.
+- [x] **Day 2 (2026-04-19):** Complete IDE-UX-003 and IDE-UX-004; verify left tree expand/collapse and disconnect action.
+- [x] **Day 3 (2026-04-20):** Complete IDE-UX-005 and IDE-UX-006; validate empty-state copy and CTA open-in-adjacent-panel behavior.
+- [x] **Day 4 (2026-04-21):** Complete IDE-UX-007; confirm user-facing notifications and secret-safe logging on failures.
+- [x] **Day 5 (2026-04-22):** Complete IDE-UX-008 and run end-to-end regression pass for empty state -> create -> connect -> explore -> disconnect.
 - [ ] **Daily closeout:** Update task statuses in this table and record blockers/owner handoffs before end-of-day.
 
 **Definition of Done for this week**
@@ -252,12 +252,12 @@ Implementation note: this correction block is prioritized ahead of multi-IDE ada
 - Sidebar supports connection lifecycle (connect/disconnect) plus expandable database exploration from active connections.
 - Integration coverage passes for empty-state -> create -> connect -> expand tree -> disconnect with no critical regressions.
 
-IDE-UX progress note (2026-04-16): Connection workflows now include telemetry-safe failure notifications and secret-redacted error messaging for create/edit/connect/disconnect/test flows. Added integration coverage for empty -> create -> connect -> expand -> disconnect via the connection explorer flow helpers. Phase 7 polish is now started with status/progress notifications on connection lifecycle actions.
+IDE-UX progress note (2026-04-16): Connection workflows now include telemetry-safe failure notifications and secret-redacted error messaging for create/edit/connect/disconnect/test flows. Added integration coverage for empty -> create -> connect -> expand -> disconnect via the connection explorer flow helpers. Phase 7 polish is complete with themed explorer icons, ARIA/live-region support across key webviews, and polished connection lifecycle notifications.
 
 **Next execution kickoff (immediate)**
 
-- Start with **IDE-UX-007** notification/error-state hardening and **IDE-UX-008** integration coverage.
-- Then run **Phase 7: UI Polish & Accessibility [EST: 2-3 days]** as the direct follow-up.
+- Start with **Phase 8: Testing & Documentation** to deepen provider/service coverage, add broader workflow integration tests, and refresh extension documentation.
+- Treat **Phase 9**, **Phase 10**, and the productization tracks below as backlog items that remain intentionally open beyond this session.
 
 ### 4.3 MCP track — production-ready server capability
 

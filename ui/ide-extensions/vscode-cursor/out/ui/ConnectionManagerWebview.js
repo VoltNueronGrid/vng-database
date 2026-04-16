@@ -131,14 +131,14 @@ function getConnectionManagerHtml(webview, initialState) {
   </style>
 </head>
 <body>
-  <div class="toolbar">
-    <button data-action="openCreate">Create New Connection</button>
-    <button class="secondary" data-action="refresh">Refresh</button>
+  <div class="toolbar" role="toolbar" aria-label="Connection manager actions">
+    <button data-action="openCreate" aria-label="Create a new connection profile">Create New Connection</button>
+    <button class="secondary" data-action="refresh" aria-label="Refresh connection profile list">Refresh</button>
   </div>
 
-  <div class="card">
+  <div class="card" role="main" aria-label="VoltNueronGrid connection profiles">
     <div class="hint" style="margin-bottom: 12px;">Manage saved connection profiles here. Create and edit now open a dedicated panel beside the explorer to match the connection-centric UX.</div>
-    <div id="content"></div>
+    <div id="content" role="region" aria-live="polite" aria-label="Connection profile list"></div>
   </div>
 
   <script>
@@ -152,7 +152,7 @@ function getConnectionManagerHtml(webview, initialState) {
     function render() {
       const content = document.getElementById("content");
       if (!state.connections || state.connections.length === 0) {
-        content.innerHTML = '<div class="empty">No connections configured yet. Use Create New Connection to add a profile.</div>';
+        content.innerHTML = '<div class="empty" role="status">No connections configured yet. Use Create New Connection to add a profile.</div>';
       } else {
         const rows = state.connections
           .map((connection) => {
@@ -162,14 +162,14 @@ function getConnectionManagerHtml(webview, initialState) {
               '<td><strong>' + escapeHtml(connection.name) + '</strong></td>' +
               '<td>' + escapeHtml(connection.mode) + '</td>' +
               '<td>' + escapeHtml(connection.baseUrl) + '</td>' +
-              '<td><span class="badge ' + statusClass + '">' + statusLabel + '</span></td>' +
+              '<td><span class="badge ' + statusClass + '" aria-label="Connection status ' + statusLabel + '">' + statusLabel + '</span></td>' +
               '<td>' + (connection.connected ? 'Connected' : 'Unknown') + '</td>' +
               '<td>' +
                 '<div class="actions">' +
-                  '<button class="secondary" data-action="activate" data-id="' + escapeHtml(connection.id) + '">Switch</button>' +
-                  '<button class="secondary" data-action="test" data-id="' + escapeHtml(connection.id) + '">Test</button>' +
-                  '<button class="secondary" data-action="openEdit" data-id="' + escapeHtml(connection.id) + '">Edit</button>' +
-                  '<button class="secondary" data-action="delete" data-id="' + escapeHtml(connection.id) + '">Delete</button>' +
+                  '<button class="secondary" data-action="activate" data-id="' + escapeHtml(connection.id) + '" aria-label="Switch active connection to ' + escapeHtml(connection.name) + '">Switch</button>' +
+                  '<button class="secondary" data-action="test" data-id="' + escapeHtml(connection.id) + '" aria-label="Test connection ' + escapeHtml(connection.name) + '">Test</button>' +
+                  '<button class="secondary" data-action="openEdit" data-id="' + escapeHtml(connection.id) + '" aria-label="Edit connection ' + escapeHtml(connection.name) + '">Edit</button>' +
+                  '<button class="secondary" data-action="delete" data-id="' + escapeHtml(connection.id) + '" aria-label="Delete connection ' + escapeHtml(connection.name) + '">Delete</button>' +
                 '</div>' +
               '</td>' +
             '</tr>';
@@ -177,20 +177,21 @@ function getConnectionManagerHtml(webview, initialState) {
           .join("");
 
         content.innerHTML =
-          '<table>' +
+          '<table aria-label="Saved VoltNueronGrid connections">' +
             '<thead>' +
               '<tr>' +
-                '<th>Name</th>' +
-                '<th>Mode</th>' +
-                '<th>Base URL</th>' +
-                '<th>Status</th>' +
-                '<th>Health</th>' +
-                '<th>Actions</th>' +
+                '<th scope="col">Name</th>' +
+                '<th scope="col">Mode</th>' +
+                '<th scope="col">Base URL</th>' +
+                '<th scope="col">Status</th>' +
+                '<th scope="col">Health</th>' +
+                '<th scope="col">Actions</th>' +
               '</tr>' +
             '</thead>' +
             '<tbody>' + rows + '</tbody>' +
           '</table>';
       }
+    }
 
     function escapeHtml(value) {
       return String(value)

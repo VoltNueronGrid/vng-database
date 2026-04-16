@@ -39,11 +39,13 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
     this._onDidChangeTreeData.event;
 
   private schemaManager: SchemaManager;
+  private extensionUri: vscode.Uri;
   private connection: Connection | null = null;
   private connections: Connection[] = [];
   private expandedItems: Set<string> = new Set();
 
-  constructor(schemaManager: SchemaManager) {
+  constructor(extensionUri: vscode.Uri, schemaManager: SchemaManager) {
+    this.extensionUri = extensionUri;
     this.schemaManager = schemaManager;
   }
 
@@ -78,6 +80,10 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
     treeItem.contextValue = element.contextValue ?? element.type;
     treeItem.command = element.command;
     treeItem.description = element.type === "column" ? (element.data as Column)?.type : element.description;
+    treeItem.accessibilityInformation = {
+      label: this.getAccessibilityLabel(element),
+      role: "treeitem",
+    };
 
     // Icons
     if (element.type === "loading") {
@@ -85,18 +91,18 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
     } else if (element.type === "error") {
       treeItem.iconPath = new vscode.ThemeIcon("error");
     } else if (element.type === "connection") {
-      treeItem.iconPath = new vscode.ThemeIcon((element.data as Connection).isActive ? "plug" : "debug-disconnect");
+      treeItem.iconPath = this.getMediaIcon((element.data as Connection).isActive ? "connection-active" : "connection-inactive");
       treeItem.tooltip = `${(element.data as Connection).settings.name}\n${(element.data as Connection).settings.baseUrl}`;
     } else if (element.type === "database") {
-      treeItem.iconPath = new vscode.ThemeIcon("database");
+      treeItem.iconPath = this.getMediaIcon("database");
     } else if (element.type === "schema") {
-      treeItem.iconPath = new vscode.ThemeIcon("folder");
+      treeItem.iconPath = this.getMediaIcon("schema");
     } else if (element.type === "table") {
-      treeItem.iconPath = new vscode.ThemeIcon("table");
+      treeItem.iconPath = this.getMediaIcon("table");
     } else if (element.type === "column") {
       const column = element.data as Column;
       const typeDisplay = getColumnTypeDisplay(column.type);
-      treeItem.iconPath = new vscode.ThemeIcon("symbol-field");
+      treeItem.iconPath = this.getMediaIcon("column");
       treeItem.description = `${typeDisplay.label}${column.nullable ? " (null)" : ""}${column.isPrimaryKey ? " (PK)" : ""}`;
     } else if (element.type === "emptyState") {
       treeItem.iconPath = new vscode.ThemeIcon("add");
@@ -300,8 +306,39 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
   private unwrapDatabase(data: { connectionId?: string; database: Database } | Database): Database {
     return "database" in data ? data.database : data;
   }
+
+  private getMediaIcon(name: string): { light: vscode.Uri; dark: vscode.Uri } {
+    return {
+      light: vscode.Uri.joinPath(this.extensionUri, "media", `${name}-light.svg`),
+      dark: vscode.Uri.joinPath(this.extensionUri, "media", `${name}-dark.svg`),
+    };
+  }
+
+  private getAccessibilityLabel(element: SchemaTreeItem): string {
+    if (element.type === "connection") {
+      const connection = element.data as Connection;
+      return `Connection ${connection.settings.name}, ${connection.isActive ? "active" : "inactive"}, ${connection.isConnected ? "connected" : "not verified"}`;
+    }
+    if (element.type === "database") {
+      return `Database ${element.label}`;
+    }
+    if (element.type === "schema") {
+      return `Schema ${element.label}`;
+    }
+    if (element.type === "table") {
+      return `Table ${element.label}`;
+    }
+    if (element.type === "column") {
+      const column = (element.data as SchemaTreeColumnData).column;
+      return `Column ${column.name}, type ${getColumnTypeDisplay(column.type).label}${column.isPrimaryKey ? ", primary key" : ""}${column.nullable ? ", nullable" : ""}`;
+    }
+    if (element.type === "emptyState") {
+      return "No connections available. Activate create new connection.";
+    }
+    return element.label;
+  }
 }
 
-export function createDatabaseExplorerProvider(schemaManager: SchemaManager): DatabaseExplorerProvider {
-  return new DatabaseExplorerProvider(schemaManager);
+export function createDatabaseExplorerProvider(extensionUri: vscode.Uri, schemaManager: SchemaManager): DatabaseExplorerProvider {
+  return new DatabaseExplorerProvider(extensionUri, schemaManager);
 }

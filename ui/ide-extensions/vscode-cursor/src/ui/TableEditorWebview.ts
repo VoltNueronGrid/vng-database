@@ -203,28 +203,28 @@ function getTableEditorHtml(initialState: TableEditorState): string {
 <body>
   <div class="headline">
     <div>
-      <h1 id="title"></h1>
+      <h1 id="title" aria-live="polite"></h1>
       <div class="subtitle" id="subtitle"></div>
     </div>
     <div class="subtitle" id="meta"></div>
   </div>
 
-  <div class="toolbar">
-    <button id="addRow">Add Row</button>
-    <button id="save">Save Changes</button>
-    <button id="discard" class="secondary">Discard</button>
-    <button id="refresh" class="secondary">Refresh</button>
+  <div class="toolbar" role="toolbar" aria-label="Table editor actions">
+    <button id="addRow" aria-label="Add a draft row">Add Row</button>
+    <button id="save" aria-label="Save table edits">Save Changes</button>
+    <button id="discard" class="secondary" aria-label="Discard unsaved table edits">Discard</button>
+    <button id="refresh" class="secondary" aria-label="Refresh table rows">Refresh</button>
     <span class="shortcut-hint">Table Editor shortcuts: Ctrl+Shift+F open, Ctrl+S save, Ctrl+Shift+N add row</span>
   </div>
 
-  <div id="noticeBox"></div>
-  <div id="tableContainer" class="table-wrap"></div>
+  <div id="noticeBox" aria-live="polite"></div>
+  <div id="tableContainer" class="table-wrap" role="region" aria-label="Table rows editor"></div>
 
-  <div class="pager">
+  <div class="pager" role="navigation" aria-label="Table editor pagination">
     <div id="pagerText"></div>
     <div>
-      <button class="secondary" id="prevPage">Previous</button>
-      <button class="secondary" id="nextPage">Next</button>
+      <button class="secondary" id="prevPage" aria-label="Previous page of table rows">Previous</button>
+      <button class="secondary" id="nextPage" aria-label="Next page of table rows">Next</button>
     </div>
   </div>
 
@@ -260,24 +260,24 @@ function getTableEditorHtml(initialState: TableEditorState): string {
 
       let notices = "";
       if (session.errorMessage) {
-        notices += '<div class="notice error">' + escapeHtml(session.errorMessage) + "</div>";
+        notices += '<div class="notice error" role="alert">' + escapeHtml(session.errorMessage) + "</div>";
       }
       if (session.infoMessage) {
-        notices += '<div class="notice">' + escapeHtml(session.infoMessage) + "</div>";
+        notices += '<div class="notice" role="status">' + escapeHtml(session.infoMessage) + "</div>";
       }
       if (session.capabilities.readOnlyReason) {
-        notices += '<div class="notice">' + escapeHtml(session.capabilities.readOnlyReason) + "</div>";
+        notices += '<div class="notice" role="status">' + escapeHtml(session.capabilities.readOnlyReason) + "</div>";
       }
       if (session.dirty) {
-        notices += '<div class="notice">Unsaved changes are present. Save or discard before navigating pages or refreshing.</div>';
+        notices += '<div class="notice" role="status">Unsaved changes are present. Save or discard before navigating pages or refreshing.</div>';
       }
       if (session.partialSave && session.pendingSaveSql && session.pendingSaveSql.length > 0) {
         notices +=
-          '<div class="notice error">Partial save detected. Applied ' +
+          '<div class="notice error" role="alert">Partial save detected. Applied ' +
           escapeHtml(String(session.partialSave.applied)) +
           ' of ' +
           escapeHtml(String(session.partialSave.total)) +
-          ' changes. <button id="copyPendingSql" class="secondary">Copy Pending SQL</button></div>';
+          ' changes. <button id="copyPendingSql" class="secondary" aria-label="Open pending SQL statements in a new editor">Copy Pending SQL</button></div>'; 
       }
       noticeBox.innerHTML = notices;
 
@@ -289,12 +289,12 @@ function getTableEditorHtml(initialState: TableEditorState): string {
       }
 
       if (!session.columns.length) {
-        tableContainer.innerHTML = '<div class="empty">No columns were returned for this table.</div>';
+        tableContainer.innerHTML = '<div class="empty" role="status">No columns were returned for this table.</div>';
         pagerText.textContent = "0 rows";
         return;
       }
 
-      const header = ["<th>Actions</th>"]
+      const header = ["<th scope=\"col\">Actions</th>"]
         .concat(
           session.columns.map((column) => {
             const isKey = session.capabilities.keyColumns.includes(column.name);
@@ -303,7 +303,7 @@ function getTableEditorHtml(initialState: TableEditorState): string {
               isKey ? '<span class="key-badge">KEY</span>' : "",
               isReadOnly ? '<span class="read-only-badge">READ ONLY</span>' : "",
             ].join("");
-            return "<th>" + escapeHtml(column.name) + badges + "</th>";
+            return "<th scope=\"col\">" + escapeHtml(column.name) + badges + "</th>";
           })
         )
         .join("");
@@ -314,7 +314,7 @@ function getTableEditorHtml(initialState: TableEditorState): string {
           const actionButton =
             '<button class="secondary row-action" data-row-id="' +
             escapeHtml(row.rowId) +
-            '">' +
+            '" aria-label="' + escapeHtml(actionLabel + ' row ' + row.rowId) + '">' +
             escapeHtml(actionLabel) +
             "</button>";
 
@@ -334,7 +334,7 @@ function getTableEditorHtml(initialState: TableEditorState): string {
                 escapeHtml(row.rowId) +
                 '" data-column-name="' +
                 escapeHtml(column.name) +
-                '" value="' +
+                '" aria-label="' + escapeHtml(column.name + ' for row ' + row.rowId) + '" aria-invalid="' + (cellError ? "true" : "false") + '" value="' +
                 escapeHtml(value) +
                 '" class="' +
                 invalidClass +
@@ -352,7 +352,7 @@ function getTableEditorHtml(initialState: TableEditorState): string {
         })
         .join("");
 
-      tableContainer.innerHTML = "<table><thead><tr>" + header + "</tr></thead><tbody>" + body + "</tbody></table>";
+      tableContainer.innerHTML = "<table aria-label=\"Editable table rows\"><thead><tr>" + header + "</tr></thead><tbody>" + body + "</tbody></table>";
       pagerText.textContent = "Loaded " + session.rows.length + " row(s)";
 
       tableContainer.querySelectorAll("input[data-row-id]").forEach((input) => {

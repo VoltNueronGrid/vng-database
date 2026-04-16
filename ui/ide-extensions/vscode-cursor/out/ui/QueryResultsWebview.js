@@ -163,31 +163,31 @@ function getQueryResultsHtml(initialState) {
   </style>
 </head>
 <body>
-  <div class="summary" id="summary"></div>
-  <div class="toolbar">
-    <input id="filter" type="text" placeholder="Filter rows" />
+  <div class="summary" id="summary" role="status" aria-live="polite"></div>
+  <div class="toolbar" role="toolbar" aria-label="Query results actions">
+    <input id="filter" type="text" aria-label="Filter result rows" placeholder="Filter rows" />
     <label>
       Page size
-      <select id="pageSize">
+      <select id="pageSize" aria-label="Result page size">
         <option value="25">25</option>
         <option value="50" selected>50</option>
         <option value="100">100</option>
         <option value="250">250</option>
       </select>
     </label>
-    <button class="secondary" id="exportCsv">Export CSV</button>
-    <button class="secondary" id="exportJson">Export JSON</button>
+    <button class="secondary" id="exportCsv" aria-label="Export query results as CSV">Export CSV</button>
+    <button class="secondary" id="exportJson" aria-label="Export query results as JSON">Export JSON</button>
   </div>
-  <div id="errorBox"></div>
-  <div id="tableContainer" class="table-wrap"></div>
-  <div class="pager">
+  <div id="errorBox" aria-live="assertive"></div>
+  <div id="tableContainer" class="table-wrap" role="region" aria-label="Query result table"></div>
+  <div class="pager" role="navigation" aria-label="Query result pagination">
     <div id="pagerText"></div>
     <div class="controls">
-      <button class="secondary" id="prevPage">Previous</button>
-      <button class="secondary" id="nextPage">Next</button>
+      <button class="secondary" id="prevPage" aria-label="Previous page of query results">Previous</button>
+      <button class="secondary" id="nextPage" aria-label="Next page of query results">Next</button>
     </div>
   </div>
-  <div id="query" class="query"></div>
+  <div id="query" class="query" role="region" aria-label="Executed SQL query text"></div>
 
   <script>
     const vscode = acquireVsCodeApi();
@@ -277,7 +277,7 @@ function getQueryResultsHtml(initialState) {
       }
 
       if (!columns.length) {
-        tableContainer.innerHTML = '<div class="empty">No tabular result columns were returned.</div>';
+        tableContainer.innerHTML = '<div class="empty" role="status">No tabular result columns were returned.</div>';
         pagerText.textContent = "0 rows";
         return;
       }
@@ -295,7 +295,7 @@ function getQueryResultsHtml(initialState) {
         .map((column) => {
           const isSorted = sortColumn === column.name;
           const marker = isSorted ? (sortDirection === "asc" ? " ▲" : " ▼") : "";
-          return '<th><button data-col="' + escapeHtml(column.name) + '">' + escapeHtml(column.name + marker) + "</button></th>";
+          return '<th scope="col"><button data-col="' + escapeHtml(column.name) + '" aria-label="Sort by ' + escapeHtml(column.name) + '">' + escapeHtml(column.name + marker) + "</button></th>";
         })
         .join("");
 
@@ -308,7 +308,7 @@ function getQueryResultsHtml(initialState) {
         })
         .join("");
 
-      tableContainer.innerHTML = "<table><thead><tr>" + header + "</tr></thead><tbody>" + body + "</tbody></table>";
+      tableContainer.innerHTML = "<table aria-label=\"Query result rows\"><thead><tr>" + header + "</tr></thead><tbody>" + body + "</tbody></table>";
       pagerText.textContent = "Rows " + (sortedRows.length === 0 ? 0 : start + 1) + "-" + Math.min(start + pageRows.length, sortedRows.length) + " of " + sortedRows.length + " | Page " + currentPage + " of " + totalPages;
 
       tableContainer.querySelectorAll("th button").forEach((button) => {

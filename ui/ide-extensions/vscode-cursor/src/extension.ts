@@ -100,7 +100,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   tableEditorService = createTableEditorService(httpClient, schemaManager);
 
   // Initialize database explorer
-  databaseExplorerProvider = createDatabaseExplorerProvider(schemaManager);
+  databaseExplorerProvider = createDatabaseExplorerProvider(context.extensionUri, schemaManager);
   queryHistoryProvider = createQueryHistoryProvider(queryExecutionService);
 
   output.appendLine("[VoltNueronGrid] Extension activated (v0.2.0)");

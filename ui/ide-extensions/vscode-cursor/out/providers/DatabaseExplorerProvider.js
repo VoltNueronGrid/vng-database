@@ -43,12 +43,13 @@ const vscode = __importStar(require("vscode"));
 const Schema_1 = require("../models/Schema");
 const DatabaseExplorerTree_1 = require("./DatabaseExplorerTree");
 class DatabaseExplorerProvider {
-    constructor(schemaManager) {
+    constructor(extensionUri, schemaManager) {
         this._onDidChangeTreeData = new vscode.EventEmitter();
         this.onDidChangeTreeData = this._onDidChangeTreeData.event;
         this.connection = null;
         this.connections = [];
         this.expandedItems = new Set();
+        this.extensionUri = extensionUri;
         this.schemaManager = schemaManager;
     }
     /**
@@ -78,6 +79,10 @@ class DatabaseExplorerProvider {
         treeItem.contextValue = element.contextValue ?? element.type;
         treeItem.command = element.command;
         treeItem.description = element.type === "column" ? element.data?.type : element.description;
+        treeItem.accessibilityInformation = {
+            label: this.getAccessibilityLabel(element),
+            role: "treeitem",
+        };
         // Icons
         if (element.type === "loading") {
             treeItem.iconPath = new vscode.ThemeIcon("loading~spin");
@@ -86,22 +91,22 @@ class DatabaseExplorerProvider {
             treeItem.iconPath = new vscode.ThemeIcon("error");
         }
         else if (element.type === "connection") {
-            treeItem.iconPath = new vscode.ThemeIcon(element.data.isActive ? "plug" : "debug-disconnect");
+            treeItem.iconPath = this.getMediaIcon(element.data.isActive ? "connection-active" : "connection-inactive");
             treeItem.tooltip = `${element.data.settings.name}\n${element.data.settings.baseUrl}`;
         }
         else if (element.type === "database") {
-            treeItem.iconPath = new vscode.ThemeIcon("database");
+            treeItem.iconPath = this.getMediaIcon("database");
         }
         else if (element.type === "schema") {
-            treeItem.iconPath = new vscode.ThemeIcon("folder");
+            treeItem.iconPath = this.getMediaIcon("schema");
         }
         else if (element.type === "table") {
-            treeItem.iconPath = new vscode.ThemeIcon("table");
+            treeItem.iconPath = this.getMediaIcon("table");
         }
         else if (element.type === "column") {
             const column = element.data;
             const typeDisplay = (0, Schema_1.getColumnTypeDisplay)(column.type);
-            treeItem.iconPath = new vscode.ThemeIcon("symbol-field");
+            treeItem.iconPath = this.getMediaIcon("column");
             treeItem.description = `${typeDisplay.label}${column.nullable ? " (null)" : ""}${column.isPrimaryKey ? " (PK)" : ""}`;
         }
         else if (element.type === "emptyState") {
@@ -293,9 +298,38 @@ class DatabaseExplorerProvider {
     unwrapDatabase(data) {
         return "database" in data ? data.database : data;
     }
+    getMediaIcon(name) {
+        return {
+            light: vscode.Uri.joinPath(this.extensionUri, "media", `${name}-light.svg`),
+            dark: vscode.Uri.joinPath(this.extensionUri, "media", `${name}-dark.svg`),
+        };
+    }
+    getAccessibilityLabel(element) {
+        if (element.type === "connection") {
+            const connection = element.data;
+            return `Connection ${connection.settings.name}, ${connection.isActive ? "active" : "inactive"}, ${connection.isConnected ? "connected" : "not verified"}`;
+        }
+        if (element.type === "database") {
+            return `Database ${element.label}`;
+        }
+        if (element.type === "schema") {
+            return `Schema ${element.label}`;
+        }
+        if (element.type === "table") {
+            return `Table ${element.label}`;
+        }
+        if (element.type === "column") {
+            const column = element.data.column;
+            return `Column ${column.name}, type ${(0, Schema_1.getColumnTypeDisplay)(column.type).label}${column.isPrimaryKey ? ", primary key" : ""}${column.nullable ? ", nullable" : ""}`;
+        }
+        if (element.type === "emptyState") {
+            return "No connections available. Activate create new connection.";
+        }
+        return element.label;
+    }
 }
 exports.DatabaseExplorerProvider = DatabaseExplorerProvider;
-function createDatabaseExplorerProvider(schemaManager) {
-    return new DatabaseExplorerProvider(schemaManager);
+function createDatabaseExplorerProvider(extensionUri, schemaManager) {
+    return new DatabaseExplorerProvider(extensionUri, schemaManager);
 }
 //# sourceMappingURL=DatabaseExplorerProvider.js.map

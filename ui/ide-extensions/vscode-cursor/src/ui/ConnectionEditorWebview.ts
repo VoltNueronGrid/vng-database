@@ -147,10 +147,10 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
   </style>
 </head>
 <body>
-  <div class="card">
-    <h2 id="title"></h2>
+  <div class="card" role="main" aria-label="Connection editor">
+    <h2 id="title" aria-live="polite"></h2>
     <p class="lede">Use the same rich form for create and edit flows. Save persists the profile and keeps secrets in VS Code secret storage.</p>
-    <div id="editor"></div>
+    <div id="editor" role="form" aria-label="Connection details form"></div>
   </div>
   <script>
     const vscode = acquireVsCodeApi();
@@ -224,15 +224,15 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
         '<div class="grid">' +
           '<label class="field full">' +
             '<span>Name</span>' +
-            '<input id="draft-name" type="text" value="' + escapeHtml(draft.name || "") + '" />' +
+            '<input id="draft-name" type="text" aria-label="Connection name" value="' + escapeHtml(draft.name || "") + '" />' +
           '</label>' +
           '<label class="field full">' +
             '<span>Base URL</span>' +
-            '<input id="draft-baseUrl" type="text" value="' + escapeHtml(draft.baseUrl || "") + '" />' +
+            '<input id="draft-baseUrl" type="text" aria-label="Connection base URL" value="' + escapeHtml(draft.baseUrl || "") + '" />' +
           '</label>' +
           '<label class="field">' +
             '<span>Mode</span>' +
-            '<select id="draft-mode">' +
+            '<select id="draft-mode" aria-label="Connection mode">' +
               '<option value="admin"' + (draft.mode === "admin" ? ' selected' : '') + '>admin</option>' +
               '<option value="operator"' + (draft.mode === "operator" ? ' selected' : '') + '>operator</option>' +
               '<option value="tenant"' + (draft.mode === "tenant" ? ' selected' : '') + '>tenant</option>' +
@@ -240,7 +240,7 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
           '</label>' +
           '<label class="field">' +
             '<span>Runtime Target</span>' +
-            '<select id="draft-runtimeTarget">' +
+            '<select id="draft-runtimeTarget" aria-label="Runtime target">' +
               '<option value="local"' + (draft.runtimeTarget === "local" ? ' selected' : '') + '>local</option>' +
               '<option value="docker"' + (draft.runtimeTarget === "docker" ? ' selected' : '') + '>docker</option>' +
               '<option value="cloud"' + (draft.runtimeTarget === "cloud" ? ' selected' : '') + '>cloud</option>' +
@@ -249,42 +249,42 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
           '</label>' +
           '<label class="field full">' +
             '<span>Admin Key</span>' +
-            '<input id="draft-adminKey" type="password" value="' + escapeHtml(draft.adminKey || "") + '" placeholder="Leave blank to keep existing key on edit" />' +
+            '<input id="draft-adminKey" type="password" aria-label="Admin API key" value="' + escapeHtml(draft.adminKey || "") + '" placeholder="Leave blank to keep existing key on edit" />' +
           '</label>' +
           '<label class="field' + (isOperator ? '' : ' full') + '">' +
             '<span>Operator ID</span>' +
-            '<input id="draft-operatorId" type="text" value="' + escapeHtml(draft.operatorId || "") + '" ' + (isOperator ? '' : 'disabled') + ' />' +
+            '<input id="draft-operatorId" type="text" aria-label="Operator ID" value="' + escapeHtml(draft.operatorId || "") + '" ' + (isOperator ? '' : 'disabled') + ' />' +
           '</label>' +
           '<label class="field' + (isTenant ? '' : ' full') + '">' +
             '<span>Tenant ID</span>' +
-            '<input id="draft-tenantId" type="text" value="' + escapeHtml(draft.tenantId || "") + '" ' + (isTenant ? '' : 'disabled') + ' />' +
+            '<input id="draft-tenantId" type="text" aria-label="Tenant ID" value="' + escapeHtml(draft.tenantId || "") + '" ' + (isTenant ? '' : 'disabled') + ' />' +
           '</label>' +
           '<label class="field' + (isTenant ? '' : ' full') + '">' +
             '<span>User ID</span>' +
-            '<input id="draft-userId" type="text" value="' + escapeHtml(draft.userId || "") + '" ' + (isTenant ? '' : 'disabled') + ' />' +
+            '<input id="draft-userId" type="text" aria-label="User ID" value="' + escapeHtml(draft.userId || "") + '" ' + (isTenant ? '' : 'disabled') + ' />' +
           '</label>' +
         '</div>' +
         '<div class="section">' +
           '<h3>SSL / TLS</h3>' +
           '<label class="checkbox">' +
-            '<input id="draft-ssl-enabled" type="checkbox" ' + (sslEnabled ? 'checked' : '') + ' />' +
+            '<input id="draft-ssl-enabled" type="checkbox" aria-label="Enable SSL or TLS metadata" ' + (sslEnabled ? 'checked' : '') + ' />' +
             '<span>Enable SSL / TLS metadata</span>' +
           '</label>' +
           '<div class="grid">' +
             '<label class="field full">' +
               '<span>CA Path</span>' +
-              '<input id="draft-ssl-caPath" type="text" value="' + escapeHtml(draft.ssl?.caPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
+              '<input id="draft-ssl-caPath" type="text" aria-label="SSL certificate authority path" value="' + escapeHtml(draft.ssl?.caPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
             '</label>' +
             '<label class="field full">' +
               '<span>Certificate Path</span>' +
-              '<input id="draft-ssl-certPath" type="text" value="' + escapeHtml(draft.ssl?.certPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
+              '<input id="draft-ssl-certPath" type="text" aria-label="SSL certificate path" value="' + escapeHtml(draft.ssl?.certPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
             '</label>' +
             '<label class="field full">' +
               '<span>Key Path</span>' +
-              '<input id="draft-ssl-keyPath" type="text" value="' + escapeHtml(draft.ssl?.keyPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
+              '<input id="draft-ssl-keyPath" type="text" aria-label="SSL private key path" value="' + escapeHtml(draft.ssl?.keyPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
             '</label>' +
             '<label class="checkbox field full">' +
-              '<input id="draft-ssl-rejectUnauthorized" type="checkbox" ' + ((draft.ssl?.rejectUnauthorized ?? true) ? 'checked' : '') + ' ' + (sslEnabled ? '' : 'disabled') + ' />' +
+              '<input id="draft-ssl-rejectUnauthorized" type="checkbox" aria-label="Reject unauthorized certificates" ' + ((draft.ssl?.rejectUnauthorized ?? true) ? 'checked' : '') + ' ' + (sslEnabled ? '' : 'disabled') + ' />' +
               '<span>Reject unauthorized certificates</span>' +
             '</label>' +
           '</div>' +
@@ -294,25 +294,25 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
           '<div class="grid">' +
             '<label class="field">' +
               '<span>Connection Timeout (ms)</span>' +
-              '<input id="draft-advanced-connectionTimeout" type="number" min="1" value="' + escapeHtml(String(draft.advanced?.connectionTimeout ?? 5000)) + '" />' +
+              '<input id="draft-advanced-connectionTimeout" type="number" min="1" aria-label="Connection timeout milliseconds" value="' + escapeHtml(String(draft.advanced?.connectionTimeout ?? 5000)) + '" />' +
             '</label>' +
             '<label class="field">' +
               '<span>Idle Timeout (ms)</span>' +
-              '<input id="draft-advanced-idleTimeout" type="number" min="1" value="' + escapeHtml(String(draft.advanced?.idleTimeout ?? 300000)) + '" />' +
+              '<input id="draft-advanced-idleTimeout" type="number" min="1" aria-label="Idle timeout milliseconds" value="' + escapeHtml(String(draft.advanced?.idleTimeout ?? 300000)) + '" />' +
             '</label>' +
             '<label class="field">' +
               '<span>Max Connections</span>' +
-              '<input id="draft-advanced-maxConnections" type="number" min="1" value="' + escapeHtml(String(draft.advanced?.maxConnections ?? 10)) + '" />' +
+              '<input id="draft-advanced-maxConnections" type="number" min="1" aria-label="Maximum connections" value="' + escapeHtml(String(draft.advanced?.maxConnections ?? 10)) + '" />' +
             '</label>' +
             '<label class="checkbox field">' +
-              '<input id="draft-advanced-keepAlive" type="checkbox" ' + ((draft.advanced?.keepAlive ?? true) ? 'checked' : '') + ' />' +
+              '<input id="draft-advanced-keepAlive" type="checkbox" aria-label="Enable keep alive" ' + ((draft.advanced?.keepAlive ?? true) ? 'checked' : '') + ' />' +
               '<span>Keep alive</span>' +
             '</label>' +
           '</div>' +
         '</div>' +
         '<div class="actions">' +
-          '<button data-action="save">' + (state.mode === "create" ? 'Create Connection' : 'Save Changes') + '</button>' +
-          '<button class="secondary" data-action="cancel">Cancel</button>' +
+          '<button data-action="save" aria-label="Save connection profile">' + (state.mode === "create" ? 'Create Connection' : 'Save Changes') + '</button>' +
+          '<button class="secondary" data-action="cancel" aria-label="Cancel connection editing">Cancel</button>' +
         '</div>' +
         '<div class="hint">Operator mode requires Admin Key plus Operator ID. Tenant mode requires Tenant ID and User ID.</div>';
     }
