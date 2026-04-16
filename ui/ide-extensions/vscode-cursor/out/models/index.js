@@ -20,4 +20,5 @@ Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./Connection"), exports);
 __exportStar(require("./Schema"), exports);
 __exportStar(require("./QueryResult"), exports);
+__exportStar(require("./TableEditor"), exports);
 //# sourceMappingURL=index.js.map

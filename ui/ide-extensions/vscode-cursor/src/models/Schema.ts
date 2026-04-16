@@ -67,9 +67,9 @@ export interface SchemaRegistry {
  */
 export function parseColumnType(typeStr: string): ColumnType {
   const normalized = typeStr.toUpperCase().trim();
-  if (normalized.includes("INT")) return "INT";
   if (normalized.includes("BIGINT")) return "BIGINT";
   if (normalized.includes("SMALLINT")) return "SMALLINT";
+  if (normalized.includes("INT")) return "INT";
   if (normalized.includes("DECIMAL") || normalized.includes("NUMERIC")) return "DECIMAL";
   if (normalized.includes("FLOAT")) return "FLOAT";
   if (normalized.includes("DOUBLE")) return "DOUBLE";

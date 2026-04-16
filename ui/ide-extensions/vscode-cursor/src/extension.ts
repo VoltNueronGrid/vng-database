@@ -8,6 +8,7 @@ import {
   Connection,
   ConnectionSettings as ManagedConnectionSettings,
   createDefaultConnection,
+  TableEditorTarget,
   validateConnectionSettings,
 } from "./models";
 import {
@@ -16,10 +17,12 @@ import {
   QueryExecutionService,
   QueryStreamOptions,
   SchemaManager,
+  TableEditorService,
   createConnectionManager,
   createHttpClient,
   createQueryExecutionService,
   createSchemaManager,
+  createTableEditorService,
 } from "./services";
 import {
   DatabaseExplorerProvider,
@@ -29,6 +32,8 @@ import {
 } from "./providers";
 import {
   handleCopyName,
+  runAlterTableWizard,
+  runCreateTableWizard,
   handleShowDDL,
   handleSQLTemplate,
   handleGenerateMockData,
@@ -45,12 +50,14 @@ import {
 } from "./ui/ConnectionManagerWebview";
 import { QueryResult, exportAsCSV, exportAsJSON } from "./models";
 import { QueryResultsMessage, QueryResultsState, createQueryResultsPanel } from "./ui/QueryResultsWebview";
+import { TableEditorMessage, TableEditorState, createTableEditorPanel } from "./ui/TableEditorWebview";
 
 // Global service instances
 let connectionManager: ConnectionManager;
 let httpClient: HttpClient;
 let queryExecutionService: QueryExecutionService;
 let schemaManager: SchemaManager;
+let tableEditorService: TableEditorService;
 let databaseExplorerProvider: DatabaseExplorerProvider;
 let queryHistoryProvider: QueryHistoryProvider;
 
@@ -86,6 +93,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   queryExecutionService = createQueryExecutionService(httpClient, context);
   await queryExecutionService.initialize();
   schemaManager = createSchemaManager(httpClient);
+  tableEditorService = createTableEditorService(httpClient, schemaManager);
 
   // Initialize database explorer
   databaseExplorerProvider = createDatabaseExplorerProvider(schemaManager);
@@ -96,6 +104,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let latestQueryResult: QueryResult | undefined;
   let latestQueryResultState: QueryResultsState | undefined;
   let queryResultsPanel: ReturnType<typeof createQueryResultsPanel> | undefined;
+  let tableEditorState: TableEditorState | undefined;
+  let tableEditorPanel: ReturnType<typeof createTableEditorPanel> | undefined;
 
   const buildDefaultQueryResultState = (): QueryResultsState => ({
     operation: "Query Results",
@@ -168,6 +178,190 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const panel = ensureQueryResultsPanel();
     await panel.updateState(latestQueryResultState);
     panel.reveal();
+  };
+
+  const syncTableEditorPanel = async () => {
+    if (tableEditorPanel && tableEditorState) {
+      await tableEditorPanel.updateState(tableEditorState);
+    }
+  };
+
+  const resolveTableEditorConnection = (): Connection | undefined =>
+    connectionManager.getConnection(tableEditorState?.connectionId ?? "") ?? undefined;
+
+  const handleTableEditorMessage = async (message: TableEditorMessage): Promise<void> => {
+    if (!tableEditorState) {
+      return;
+    }
+
+    try {
+      switch (message.type) {
+        case "ready":
+          await syncTableEditorPanel();
+          return;
+        case "updateCell":
+          tableEditorState = {
+            ...tableEditorState,
+            session: tableEditorService.updateCell(tableEditorState.session, message.rowId, message.columnName, message.value),
+          };
+          await syncTableEditorPanel();
+          return;
+        case "addRow":
+          tableEditorState = {
+            ...tableEditorState,
+            session: tableEditorService.addDraftRow(tableEditorState.session),
+          };
+          await syncTableEditorPanel();
+          return;
+        case "toggleDeleteRow":
+          tableEditorState = {
+            ...tableEditorState,
+            session: tableEditorService.toggleDeleteRow(tableEditorState.session, message.rowId),
+          };
+          await syncTableEditorPanel();
+          return;
+        case "discard": {
+          const connection = resolveTableEditorConnection();
+          if (!connection) {
+            vscode.window.showWarningMessage("The table editor connection is no longer available.");
+            return;
+          }
+          tableEditorState = {
+            ...tableEditorState,
+            session: await tableEditorService.discardChanges(connection, tableEditorState.session),
+          };
+          await syncTableEditorPanel();
+          return;
+        }
+        case "refresh": {
+          const connection = resolveTableEditorConnection();
+          if (!connection) {
+            vscode.window.showWarningMessage("The table editor connection is no longer available.");
+            return;
+          }
+          tableEditorState = {
+            ...tableEditorState,
+            session: await tableEditorService.openSession(
+              connection,
+              tableEditorState.session.target,
+              tableEditorState.session.page,
+              tableEditorState.session.pageSize,
+              "Rows refreshed."
+            ),
+          };
+          await syncTableEditorPanel();
+          return;
+        }
+        case "changePage": {
+          if (tableEditorState.session.dirty) {
+            vscode.window.showWarningMessage("Save or discard changes before navigating pages.");
+            return;
+          }
+          const connection = resolveTableEditorConnection();
+          if (!connection) {
+            vscode.window.showWarningMessage("The table editor connection is no longer available.");
+            return;
+          }
+          tableEditorState = {
+            ...tableEditorState,
+            session: await tableEditorService.changePage(connection, tableEditorState.session, message.direction),
+          };
+          await syncTableEditorPanel();
+          return;
+        }
+        case "save": {
+          const connection = resolveTableEditorConnection();
+          if (!connection) {
+            vscode.window.showWarningMessage("The table editor connection is no longer available.");
+            return;
+          }
+          tableEditorState = {
+            ...tableEditorState,
+            session: await tableEditorService.saveSession(connection, tableEditorState.session),
+          };
+          schemaManager.invalidateCache(connection.id);
+          databaseExplorerProvider.refresh();
+          await syncTableEditorPanel();
+          return;
+        }
+        case "copyPendingSql": {
+          const pendingSql = tableEditorState.session.pendingSaveSql;
+          if (!pendingSql || pendingSql.length === 0) {
+            vscode.window.showInformationMessage("No pending SQL is available.");
+            return;
+          }
+          const document = await vscode.workspace.openTextDocument({
+            language: "sql",
+            content: pendingSql.join("\n\n"),
+          });
+          await vscode.window.showTextDocument(document, vscode.ViewColumn.Beside);
+          return;
+        }
+        default:
+          return;
+      }
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      tableEditorState = {
+        ...tableEditorState,
+        session: {
+          ...tableEditorState.session,
+          errorMessage: messageText,
+          infoMessage: undefined,
+        },
+      };
+      await syncTableEditorPanel();
+    }
+  };
+
+  const openTableEditorForTarget = async (activeConnection: Connection, target: TableEditorTarget): Promise<void> => {
+    tableEditorState = {
+      connectionId: activeConnection.id,
+      connectionName: activeConnection.settings.name,
+      session: await tableEditorService.openSession(activeConnection, target),
+    };
+
+    const panel = ensureTableEditorPanel();
+    await panel.updateState(tableEditorState);
+    panel.reveal();
+  };
+
+  const ensureTableEditorPanel = (): ReturnType<typeof createTableEditorPanel> => {
+    if (tableEditorPanel && tableEditorState) {
+      return tableEditorPanel;
+    }
+
+    const initialState =
+      tableEditorState ?? {
+        connectionId: connectionManager.getActiveConnection()?.id ?? "",
+        connectionName: connectionManager.getActiveConnection()?.settings.name ?? "No active connection",
+        session: {
+          target: { database: "", schema: "", tableName: "" },
+          table: { name: "", schema: "", columns: [], indexes: [] },
+          columns: [],
+          capabilities: {
+            canInsert: false,
+            canUpdate: false,
+            canDelete: false,
+            keyColumns: [],
+          },
+          rows: [],
+          page: 1,
+          pageSize: 50,
+          hasNextPage: false,
+          dirty: false,
+          infoMessage: "Open a table from the Database Explorer to start editing.",
+        },
+      };
+
+    tableEditorPanel = createTableEditorPanel(context, initialState, handleTableEditorMessage);
+
+    tableEditorPanel.panel.onDidDispose(() => {
+      tableEditorPanel = undefined;
+    });
+
+    context.subscriptions.push(tableEditorPanel.panel);
+    return tableEditorPanel;
   };
 
   // Create tree views
@@ -742,6 +936,130 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await handleDropTable(element);
   });
 
+  const openTableEditor = vscode.commands.registerCommand("vng.openTableEditor", async (element: SchemaTreeItem) => {
+    if (element.type !== "table") {
+      vscode.window.showWarningMessage("Select a table to open the inline editor.");
+      return;
+    }
+
+    const activeConnection = connectionManager.getActiveConnection();
+    if (!activeConnection) {
+      vscode.window.showWarningMessage("Activate a managed connection before opening the table editor.");
+      return;
+    }
+
+    const payload = element.data as { database: string; schema: string; table: { name: string } };
+    const target: TableEditorTarget = {
+      database: payload.database,
+      schema: payload.schema,
+      tableName: payload.table.name,
+    };
+
+    try {
+      await openTableEditorForTarget(activeConnection, target);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Failed to open table editor: ${message}`);
+    }
+  });
+
+  const openTableEditorPicker = vscode.commands.registerCommand("vng.openTableEditorPicker", async () => {
+    const activeConnection = connectionManager.getActiveConnection();
+    if (!activeConnection) {
+      vscode.window.showWarningMessage("Activate a managed connection before opening the table editor.");
+      return;
+    }
+
+    const registry = await schemaManager.getSchemaRegistry(activeConnection, false);
+    const tablePicks = registry.databases.flatMap((database) =>
+      database.schemas.flatMap((schema) =>
+        schema.tables
+          .filter((table) => !table.isSystem)
+          .map((table) => ({
+            label: table.name,
+            description: schema.name,
+            detail: database.name,
+            target: {
+              database: database.name,
+              schema: schema.name,
+              tableName: table.name,
+            } as TableEditorTarget,
+          }))
+      )
+    );
+
+    if (tablePicks.length === 0) {
+      vscode.window.showWarningMessage("No tables are available in the schema registry.");
+      return;
+    }
+
+    const picked = await vscode.window.showQuickPick(tablePicks, {
+      title: "Open Table Editor",
+      placeHolder: "Choose table",
+      canPickMany: false,
+    });
+
+    if (!picked) {
+      return;
+    }
+
+    await openTableEditorForTarget(activeConnection, picked.target);
+  });
+
+  const createTableWizard = vscode.commands.registerCommand("vng.createTableWizard", async (element?: SchemaTreeItem) => {
+    const activeConnection = connectionManager.getActiveConnection();
+    if (!activeConnection) {
+      vscode.window.showWarningMessage("Activate a managed connection before using schema wizard.");
+      return;
+    }
+
+    await runCreateTableWizard(
+      activeConnection,
+      schemaManager,
+      async (sql, operation) => {
+        await executeManagedSqlWithProgress(activeConnection, sql, operation, { stopOnError: true });
+        schemaManager.invalidateCache(activeConnection.id);
+        databaseExplorerProvider.refresh();
+      },
+      element
+    );
+  });
+
+  const alterTableWizard = vscode.commands.registerCommand("vng.alterTableWizard", async (element?: SchemaTreeItem) => {
+    const activeConnection = connectionManager.getActiveConnection();
+    if (!activeConnection) {
+      vscode.window.showWarningMessage("Activate a managed connection before using schema wizard.");
+      return;
+    }
+
+    await runAlterTableWizard(
+      activeConnection,
+      schemaManager,
+      async (sql, operation) => {
+        await executeManagedSqlWithProgress(activeConnection, sql, operation, { stopOnError: true });
+        schemaManager.invalidateCache(activeConnection.id);
+        databaseExplorerProvider.refresh();
+      },
+      element
+    );
+  });
+
+  const tableEditorSave = vscode.commands.registerCommand("vng.tableEditor.save", async () => {
+    await handleTableEditorMessage({ type: "save" });
+  });
+
+  const tableEditorAddRow = vscode.commands.registerCommand("vng.tableEditor.addRow", async () => {
+    await handleTableEditorMessage({ type: "addRow" });
+  });
+
+  const tableEditorDiscard = vscode.commands.registerCommand("vng.tableEditor.discard", async () => {
+    await handleTableEditorMessage({ type: "discard" });
+  });
+
+  const tableEditorRefresh = vscode.commands.registerCommand("vng.tableEditor.refresh", async () => {
+    await handleTableEditorMessage({ type: "refresh" });
+  });
+
   const sqlDisposables = registerSqlEditorFeatures({
     context,
     output,
@@ -821,6 +1139,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     generateMockData,
     dumpTableStruct,
     dropTable,
+    openTableEditor,
+    openTableEditorPicker,
+    createTableWizard,
+    alterTableWizard,
+    tableEditorSave,
+    tableEditorAddRow,
+    tableEditorDiscard,
+    tableEditorRefresh,
     ...sqlDisposables,
     actionsView,
     databaseView,

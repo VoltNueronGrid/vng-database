@@ -1,7 +1,7 @@
 # Sub-Tasks Plan — Completion Roadmap
 
 **Project:** VoltNueronGrid DB (`polap-db`)  
-**Last updated:** 2026-04-15  
+**Last updated:** 2026-04-16  
 **Program sign-off:** Approved by requester (governance intent), with technical gates still source-of-truth for release JSON states.
 
 ---
@@ -55,14 +55,24 @@
 
 ### Phase 6: Advanced Features [EST: 3-4 days]
 
+Execution order: **Active now (current implementation phase)**.
+
 | ID | Task | Status | Owner | Target |
 |---|---|---|---|---|
-| IDE-6.1 | Build inline table editor (edit cells, add/delete rows, save to database) | ⏳ Not Started | Dev | 2026-05-01 |
+| IDE-6.1 | Build inline table editor (edit cells, add/delete rows, save to database) | 🟨 In Progress | Dev | 2026-05-01 |
 | IDE-6.2 | Create schema management UI (create/alter table wizard, DDL preview) | ⏳ Not Started | Dev | 2026-05-02 |
 | IDE-6.3 | Implement comprehensive settings panel (editor, results, connection, keybindings) | ⏳ Not Started | Dev | 2026-05-02 |
 | IDE-6.4 | Define and register keyboard shortcuts (Ctrl+Enter, Ctrl+Shift+F, Ctrl+Alt+C, etc.) | ⏳ Not Started | Dev | 2026-05-03 |
 
+**Phase 6 exit criteria (switch gate to Phase 7)**
+- All Phase 6 tasks (IDE-6.1 to IDE-6.4) are marked complete with no open critical defects.
+- Core workflow validation passes for inline editing, schema management, settings, and registered shortcuts.
+
+Progress note (2026-04-16): IDE-6.1 implementation has started with a dedicated table editor panel/service path from the database explorer, including load/edit/save/delete plumbing and unit coverage for the SQL builder layer.
+
 ### Phase 7: UI Polish & Accessibility [EST: 2-3 days]
+
+Execution order: **Next (starts immediately after Phase 6 exit criteria are met)**.
 
 | ID | Task | Status | Owner | Target |
 |---|---|---|---|---|
@@ -209,6 +219,43 @@ IDE-005 progress note (2026-04-15): VSCode/Cursor extension has local smoke scri
 IDE-005 env blocker note (2026-04-15): local package attempt is blocked by npm authentication (401); publish remains pending until registry credentials are refreshed.
 IDE-005 closeout evidence (2026-04-15): VSIX artifact produced at `ui/ide-extensions/vscode-cursor/voltnuerongrid-vscode-cursor-0.1.0.vsix`; private-feed publish remains blocked pending feed endpoint details, PAT source, and Azure DevOps CLI extension readiness.
 IDE-006 progress note (2026-04-15): Added Windsor contract and Phase 2 adapter scaffolds for AntiGravity, Windsor, Eclipse, and Jetbrains with implementation plans and connection samples.
+
+### 4.2.1 IDE UX parity correction plan (requested)
+
+Reported mismatch: expected rich "new/edit connection" form + database list tree behavior, but current extension shows action-only commands and runtime-target picker instead of connection-centric UX.
+
+| ID | Task | Status | Owner | Target | Dependencies | Acceptance criteria |
+|---|---|---|---|---|---|---|
+| IDE-UX-001 | Rework **Create New Connection** flow to open a dedicated connection editor webview/panel (not command-only/runtime-target dialog) | 🟨 In Progress | Dev | 2026-04-18 | IDE-3.1/IDE-3.2 | Clicking "Create New Connection" opens form with host, port, username, password, database, SSL, advanced options; supports Save and Connect |
+| IDE-UX-002 | Ensure **Edit Connection** opens the same rich editor with values prefilled from selected saved connection | ⏳ Not Started | Dev | 2026-04-18 | IDE-UX-001 | Editing any connection shows full pre-populated form and persists updates |
+| IDE-UX-003 | Replace/augment left sidebar root with **Connections -> Databases** tree for active connection | ⏳ Not Started | Dev | 2026-04-19 | IDE-2.1/IDE-3.2 | Sidebar lists saved connections and, when connected, shows expandable databases/schemas/tables/columns |
+| IDE-UX-004 | Add per-connection actions in tree/context menu: Connect, Disconnect, Edit, Delete, Refresh | ⏳ Not Started | Dev | 2026-04-19 | IDE-UX-003 | User can disconnect directly from sidebar and tree updates immediately |
+| IDE-UX-005 | Implement empty-state view in sidebar: "No connections available. Please create a new one." with CTA button | ⏳ Not Started | Dev/UX | 2026-04-20 | IDE-UX-001 | When no saved connections exist, message + action are visible and keyboard accessible |
+| IDE-UX-006 | Wire empty-state CTA to open connection editor in split/adjacent panel | ⏳ Not Started | Dev | 2026-04-20 | IDE-UX-005 | Clicking CTA opens the create connection page beside explorer and allows immediate data entry |
+| IDE-UX-007 | Add state transitions and telemetry-safe notifications for connect/disconnect/create/edit failures | ⏳ Not Started | Dev | 2026-04-21 | IDE-UX-001..006 | Clear non-blocking messages on success/failure; no secrets in logs |
+| IDE-UX-008 | Add integration tests for: empty state -> create -> connect -> expand db tree -> disconnect | ⏳ Not Started | QA/Dev | 2026-04-22 | IDE-UX-001..007 | Test suite validates end-to-end UX parity and prevents regression |
+
+Implementation note: this correction block is prioritized ahead of multi-IDE adapters to avoid propagating incorrect UX patterns to Phase 2 extension targets.
+
+**Daily execution order (stand-up checklist)**
+
+- [ ] **Day 1 (2026-04-18):** Complete IDE-UX-001 and start IDE-UX-002; demo create/edit form parity in-panel.
+- [ ] **Day 2 (2026-04-19):** Complete IDE-UX-003 and IDE-UX-004; verify left tree expand/collapse and disconnect action.
+- [ ] **Day 3 (2026-04-20):** Complete IDE-UX-005 and IDE-UX-006; validate empty-state copy and CTA open-in-adjacent-panel behavior.
+- [ ] **Day 4 (2026-04-21):** Complete IDE-UX-007; confirm user-facing notifications and secret-safe logging on failures.
+- [ ] **Day 5 (2026-04-22):** Complete IDE-UX-008 and run end-to-end regression pass for empty state -> create -> connect -> explore -> disconnect.
+- [ ] **Daily closeout:** Update task statuses in this table and record blockers/owner handoffs before end-of-day.
+
+**Definition of Done for this week**
+
+- UX parity is achieved for create/edit connection, and no runtime-target-only flow blocks connection entry.
+- Sidebar supports connection lifecycle (connect/disconnect) plus expandable database exploration from active connections.
+- Integration coverage passes for empty-state -> create -> connect -> expand tree -> disconnect with no critical regressions.
+
+**Next execution kickoff (immediate)**
+
+- Start with **Phase 6: Advanced Features [EST: 3-4 days]** after IDE-UX closure.
+- Then run **Phase 7: UI Polish & Accessibility [EST: 2-3 days]** as the direct follow-up.
 
 ### 4.3 MCP track — production-ready server capability
 

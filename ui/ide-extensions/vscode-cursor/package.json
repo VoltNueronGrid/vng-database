@@ -111,6 +111,21 @@
           "group": "1_modification@1"
         },
         {
+          "command": "vng.createTableWizard",
+          "when": "view == vngDatabaseExplorer && viewItem == schema",
+          "group": "1_modification@2"
+        },
+        {
+          "command": "vng.openTableEditor",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "1_modification@3"
+        },
+        {
+          "command": "vng.alterTableWizard",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "2_queries@0"
+        },
+        {
           "command": "vng.showTableDDL",
           "when": "view == vngDatabaseExplorer && viewItem == table",
           "group": "2_queries@1"
@@ -218,6 +233,46 @@
         "category": "VoltNueronGrid"
       },
       {
+        "command": "vng.openTableEditor",
+        "title": "Open Table Editor",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.openTableEditorPicker",
+        "title": "Open Table Editor (Pick Table)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.createTableWizard",
+        "title": "Create Table Wizard",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.alterTableWizard",
+        "title": "Alter Table Wizard",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.tableEditor.save",
+        "title": "Table Editor: Save",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.tableEditor.addRow",
+        "title": "Table Editor: Add Row",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.tableEditor.discard",
+        "title": "Table Editor: Discard Changes",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.tableEditor.refresh",
+        "title": "Table Editor: Refresh",
+        "category": "VoltNueronGrid"
+      },
+      {
         "command": "vng.showTableDDL",
         "title": "Show DDL",
         "category": "VoltNueronGrid"
@@ -268,6 +323,36 @@
         "command": "vng.quickSwitchConnection",
         "key": "ctrl+shift+d",
         "when": "editorTextFocus || explorerViewletVisible"
+      },
+      {
+        "command": "vng.openTableEditorPicker",
+        "key": "ctrl+shift+f",
+        "when": "focusedView == vngDatabaseExplorer"
+      },
+      {
+        "command": "vng.createTableWizard",
+        "key": "ctrl+alt+c",
+        "when": "focusedView == vngDatabaseExplorer"
+      },
+      {
+        "command": "vng.tableEditor.save",
+        "key": "ctrl+s",
+        "when": "activeWebviewPanelId == vngTableEditor"
+      },
+      {
+        "command": "vng.tableEditor.addRow",
+        "key": "ctrl+shift+n",
+        "when": "activeWebviewPanelId == vngTableEditor"
+      },
+      {
+        "command": "vng.tableEditor.refresh",
+        "key": "ctrl+r",
+        "when": "activeWebviewPanelId == vngTableEditor"
+      },
+      {
+        "command": "vng.tableEditor.discard",
+        "key": "escape",
+        "when": "activeWebviewPanelId == vngTableEditor"
       }
     ],
     "configuration": {
@@ -314,6 +399,7 @@
   },
   "scripts": {
     "build": "tsc -p ./",
+    "test": "npm run build && node --test out/test/**/*.test.js",
     "watch": "tsc -watch -p ./",
     "package": "vsce package --allow-missing-repository"
   },

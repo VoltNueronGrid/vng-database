@@ -11,3 +11,4 @@ export {
 	createQueryExecutionService,
 } from "./QueryExecutionService";
 export { SchemaManager, createSchemaManager } from "./SchemaManager";
+export { TableEditorService, createTableEditorService } from "./TableEditorService";

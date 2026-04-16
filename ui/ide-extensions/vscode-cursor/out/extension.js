@@ -49,11 +49,13 @@ const sql_1 = require("./sql");
 const ConnectionManagerWebview_1 = require("./ui/ConnectionManagerWebview");
 const models_2 = require("./models");
 const QueryResultsWebview_1 = require("./ui/QueryResultsWebview");
+const TableEditorWebview_1 = require("./ui/TableEditorWebview");
 // Global service instances
 let connectionManager;
 let httpClient;
 let queryExecutionService;
 let schemaManager;
+let tableEditorService;
 let databaseExplorerProvider;
 let queryHistoryProvider;
 async function activate(context) {
@@ -84,6 +86,7 @@ async function activate(context) {
     queryExecutionService = (0, services_1.createQueryExecutionService)(httpClient, context);
     await queryExecutionService.initialize();
     schemaManager = (0, services_1.createSchemaManager)(httpClient);
+    tableEditorService = (0, services_1.createTableEditorService)(httpClient, schemaManager);
     // Initialize database explorer
     databaseExplorerProvider = (0, providers_1.createDatabaseExplorerProvider)(schemaManager);
     queryHistoryProvider = (0, providers_1.createQueryHistoryProvider)(queryExecutionService);
@@ -91,6 +94,8 @@ async function activate(context) {
     let latestQueryResult;
     let latestQueryResultState;
     let queryResultsPanel;
+    let tableEditorState;
+    let tableEditorPanel;
     const buildDefaultQueryResultState = () => ({
         operation: "Query Results",
         connectionName: connectionManager.getActiveConnection()?.settings.name ?? "No active connection",
@@ -151,6 +156,148 @@ async function activate(context) {
         const panel = ensureQueryResultsPanel();
         await panel.updateState(latestQueryResultState);
         panel.reveal();
+    };
+    const ensureTableEditorPanel = () => {
+        if (tableEditorPanel && tableEditorState) {
+            return tableEditorPanel;
+        }
+        const initialState = tableEditorState ?? {
+            connectionId: connectionManager.getActiveConnection()?.id ?? "",
+            connectionName: connectionManager.getActiveConnection()?.settings.name ?? "No active connection",
+            session: {
+                target: { database: "", schema: "", tableName: "" },
+                table: { name: "", schema: "", columns: [], indexes: [] },
+                columns: [],
+                capabilities: {
+                    canInsert: false,
+                    canUpdate: false,
+                    canDelete: false,
+                    keyColumns: [],
+                },
+                rows: [],
+                page: 1,
+                pageSize: 50,
+                hasNextPage: false,
+                dirty: false,
+                infoMessage: "Open a table from the Database Explorer to start editing.",
+            },
+        };
+        tableEditorPanel = (0, TableEditorWebview_1.createTableEditorPanel)(context, initialState, async (message) => {
+            if (!tableEditorState) {
+                return;
+            }
+            const resolveConnection = () => connectionManager.getConnection(tableEditorState?.connectionId ?? "") ?? undefined;
+            const syncPanel = async () => {
+                if (tableEditorPanel && tableEditorState) {
+                    await tableEditorPanel.updateState(tableEditorState);
+                }
+            };
+            try {
+                switch (message.type) {
+                    case "ready":
+                        await syncPanel();
+                        return;
+                    case "updateCell":
+                        tableEditorState = {
+                            ...tableEditorState,
+                            session: tableEditorService.updateCell(tableEditorState.session, message.rowId, message.columnName, message.value),
+                        };
+                        await syncPanel();
+                        return;
+                    case "addRow":
+                        tableEditorState = {
+                            ...tableEditorState,
+                            session: tableEditorService.addDraftRow(tableEditorState.session),
+                        };
+                        await syncPanel();
+                        return;
+                    case "toggleDeleteRow":
+                        tableEditorState = {
+                            ...tableEditorState,
+                            session: tableEditorService.toggleDeleteRow(tableEditorState.session, message.rowId),
+                        };
+                        await syncPanel();
+                        return;
+                    case "discard": {
+                        const connection = resolveConnection();
+                        if (!connection) {
+                            vscode.window.showWarningMessage("The table editor connection is no longer available.");
+                            return;
+                        }
+                        tableEditorState = {
+                            ...tableEditorState,
+                            session: await tableEditorService.discardChanges(connection, tableEditorState.session),
+                        };
+                        await syncPanel();
+                        return;
+                    }
+                    case "refresh": {
+                        const connection = resolveConnection();
+                        if (!connection) {
+                            vscode.window.showWarningMessage("The table editor connection is no longer available.");
+                            return;
+                        }
+                        tableEditorState = {
+                            ...tableEditorState,
+                            session: await tableEditorService.openSession(connection, tableEditorState.session.target, tableEditorState.session.page, tableEditorState.session.pageSize, "Rows refreshed."),
+                        };
+                        await syncPanel();
+                        return;
+                    }
+                    case "changePage": {
+                        if (tableEditorState.session.dirty) {
+                            vscode.window.showWarningMessage("Save or discard changes before navigating pages.");
+                            return;
+                        }
+                        const connection = resolveConnection();
+                        if (!connection) {
+                            vscode.window.showWarningMessage("The table editor connection is no longer available.");
+                            return;
+                        }
+                        tableEditorState = {
+                            ...tableEditorState,
+                            session: await tableEditorService.changePage(connection, tableEditorState.session, message.direction),
+                        };
+                        await syncPanel();
+                        return;
+                    }
+                    case "save": {
+                        const connection = resolveConnection();
+                        if (!connection) {
+                            vscode.window.showWarningMessage("The table editor connection is no longer available.");
+                            return;
+                        }
+                        tableEditorState = {
+                            ...tableEditorState,
+                            session: await tableEditorService.saveSession(connection, tableEditorState.session),
+                        };
+                        schemaManager.invalidateCache(connection.id);
+                        databaseExplorerProvider.refresh();
+                        await syncPanel();
+                        return;
+                    }
+                    default:
+                        return;
+                }
+            }
+            catch (error) {
+                const messageText = error instanceof Error ? error.message : String(error);
+                tableEditorState = {
+                    ...tableEditorState,
+                    session: {
+                        ...tableEditorState.session,
+                        errorMessage: messageText,
+                        infoMessage: undefined,
+                    },
+                };
+                await syncPanel();
+            }
+        });
+        tableEditorPanel.panel.onDidDispose(() => {
+            tableEditorPanel = undefined;
+        });
+        context.subscriptions.push(tableEditorPanel.panel);
+        return tableEditorPanel;
     };
     // Create tree views
     const actionsProvider = new activityView_1.VngActionsProvider();
@@ -634,6 +781,37 @@ async function activate(context) {
     const dropTable = vscode.commands.registerCommand("vng.dropTable", async (element) => {
         await (0, commands_1.handleDropTable)(element);
     });
+    const openTableEditor = vscode.commands.registerCommand("vng.openTableEditor", async (element) => {
+        if (element.type !== "table") {
+            vscode.window.showWarningMessage("Select a table to open the inline editor.");
+            return;
+        }
+        const activeConnection = connectionManager.getActiveConnection();
+        if (!activeConnection) {
+            vscode.window.showWarningMessage("Activate a managed connection before opening the table editor.");
+            return;
+        }
+        const payload = element.data;
+        const target = {
+            database: payload.database,
+            schema: payload.schema,
+            tableName: payload.table.name,
+        };
+        try {
+            tableEditorState = {
+                connectionId: activeConnection.id,
+                connectionName: activeConnection.settings.name,
+                session: await tableEditorService.openSession(activeConnection, target),
+            };
+            const panel = ensureTableEditorPanel();
+            await panel.updateState(tableEditorState);
+            panel.reveal();
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Failed to open table editor: ${message}`);
+        }
+    });
     const sqlDisposables = (0, sql_1.registerSqlEditorFeatures)({
         context,
         output,
@@ -678,7 +856,7 @@ async function activate(context) {
             });
         });
     };
-    context.subscriptions.push(connect, manageConnections, quickSwitchConnection, test, queryRunner, showQueryResults, refreshQueryHistory, clearQueryHistory, searchQueryHistory, reRunHistoryQuery, cancelActiveQuery, diagnostics, schema, focusPanel, refreshSchema, copyName, showTableDDL, showSQLTemplate, generateMockData, dumpTableStruct, dropTable, ...sqlDisposables, actionsView, databaseView, queryHistoryView, connectionStatusBar, output);
+    context.subscriptions.push(connect, manageConnections, quickSwitchConnection, test, queryRunner, showQueryResults, refreshQueryHistory, clearQueryHistory, searchQueryHistory, reRunHistoryQuery, cancelActiveQuery, diagnostics, schema, focusPanel, refreshSchema, copyName, showTableDDL, showSQLTemplate, generateMockData, dumpTableStruct, dropTable, openTableEditor, ...sqlDisposables, actionsView, databaseView, queryHistoryView, connectionStatusBar, output);
 }
 function deactivate() {
     // Clean up service resources if needed
