@@ -306,6 +306,11 @@
         "command": "vng.sql.analyzeSelectionOrFile",
         "title": "VoltNueronGrid: Analyze SQL (Selection/File)",
         "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.openSettings",
+        "title": "VoltNueronGrid: Settings",
+        "category": "VoltNueronGrid"
       }
     ],
     "keybindings": [
@@ -353,6 +358,11 @@
         "command": "vng.tableEditor.discard",
         "key": "escape",
         "when": "activeWebviewPanelId == vngTableEditor"
+      },
+      {
+        "command": "vng.openSettings",
+        "key": "ctrl+,",
+        "when": "focusedView == vngDatabaseExplorer || editorTextFocus"
       }
     ],
     "configuration": {

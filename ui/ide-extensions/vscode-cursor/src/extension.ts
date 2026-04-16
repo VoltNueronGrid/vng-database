@@ -39,6 +39,7 @@ import {
   handleGenerateMockData,
   handleDumpStruct,
   handleDropTable,
+  registerSettingsCommands,
 } from "./commands";
 import { SchemaTreeItem } from "./providers/DatabaseExplorerProvider";
 import { registerSqlEditorFeatures } from "./sql";
@@ -1059,6 +1060,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const tableEditorRefresh = vscode.commands.registerCommand("vng.tableEditor.refresh", async () => {
     await handleTableEditorMessage({ type: "refresh" });
   });
+
+  // Register settings panel command
+  registerSettingsCommands(context, context.extensionUri);
 
   const sqlDisposables = registerSqlEditorFeatures({
     context,

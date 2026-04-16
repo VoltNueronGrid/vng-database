@@ -898,6 +898,8 @@ async function activate(context) {
     const tableEditorRefresh = vscode.commands.registerCommand("vng.tableEditor.refresh", async () => {
         await handleTableEditorMessage({ type: "refresh" });
     });
+    // Register settings panel command
+    (0, commands_1.registerSettingsCommands)(context, context.extensionUri);
     const sqlDisposables = (0, sql_1.registerSqlEditorFeatures)({
         context,
         output,

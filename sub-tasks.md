@@ -59,16 +59,16 @@ Execution order: **Active now (current implementation phase)**.
 
 | ID | Task | Status | Owner | Target |
 |---|---|---|---|---|
-| IDE-6.1 | Build inline table editor (edit cells, add/delete rows, save to database) | 🟨 In Progress | Dev | 2026-05-01 |
-| IDE-6.2 | Create schema management UI (create/alter table wizard, DDL preview) | ⏳ Not Started | Dev | 2026-05-02 |
-| IDE-6.3 | Implement comprehensive settings panel (editor, results, connection, keybindings) | ⏳ Not Started | Dev | 2026-05-02 |
-| IDE-6.4 | Define and register keyboard shortcuts (Ctrl+Enter, Ctrl+Shift+F, Ctrl+Alt+C, etc.) | ⏳ Not Started | Dev | 2026-05-03 |
+| IDE-6.1 | Build inline table editor (edit cells, add/delete rows, save to database) | ✅ Complete | Dev | 2026-05-01 |
+| IDE-6.2 | Create schema management UI (create/alter table wizard, DDL preview) | ✅ Complete | Dev | 2026-05-02 |
+| IDE-6.3 | Implement comprehensive settings panel (editor, results, connection, keybindings) | ✅ Complete | Dev | 2026-05-02 |
+| IDE-6.4 | Define and register keyboard shortcuts (Ctrl+Enter, Ctrl+Shift+F, Ctrl+Alt+C, etc.) | ✅ Complete | Dev | 2026-05-03 |
 
 **Phase 6 exit criteria (switch gate to Phase 7)**
 - All Phase 6 tasks (IDE-6.1 to IDE-6.4) are marked complete with no open critical defects.
 - Core workflow validation passes for inline editing, schema management, settings, and registered shortcuts.
 
-Progress note (2026-04-16): IDE-6.1 now includes stronger type-aware validation with cell-level error surfacing plus partial-save recovery metadata/export; IDE-6.2 has started with create/alter table wizards that generate DDL previews and optional execution; IDE-6.4 has started with new table-editor and schema-wizard keyboard shortcut wiring.
+Progress note (2026-04-16): **PHASE 6 COMPLETE** — IDE-6.1 includes stronger type-aware validation with cell-level error surfacing plus partial-save recovery metadata/export; IDE-6.2 has create/alter table wizards that generate DDL previews and optional execution; IDE-6.3 has a comprehensive settings panel (editor, SQL, results, connection) with persistent configuration; IDE-6.4 has all table-editor and schema-wizard keyboard shortcuts wired. All Phase 6 tasks complete with 11/11 unit tests passing and clean build. **Phase 6 exit criteria met — ready for Phase 7: UI Polish & Accessibility.**
 
 ### Phase 7: UI Polish & Accessibility [EST: 2-3 days]
 
