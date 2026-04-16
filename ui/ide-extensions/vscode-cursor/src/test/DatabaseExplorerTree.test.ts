@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { describeConnectionNode, getEmptyConnectionMessage } from "../providers/DatabaseExplorerTree";
+import {
+  describeConnectionNode,
+  getConnectionFlowSnapshot,
+  getEmptyConnectionMessage,
+  shouldExpandConnectionToDatabases,
+} from "../providers/DatabaseExplorerTree";
 import { createDefaultConnection } from "../models/Connection";
 
 test("describeConnectionNode marks active connection state", () => {
@@ -33,4 +38,33 @@ test("describeConnectionNode guides inactive browsing flow", () => {
 
 test("getEmptyConnectionMessage exposes create CTA copy", () => {
   assert.equal(getEmptyConnectionMessage(), "No connections available. Create New Connection.");
+});
+
+test("connection flow covers empty -> create -> connect -> expand -> disconnect", () => {
+  const createdConnection = {
+    id: "conn-flow",
+    settings: createDefaultConnection({ name: "Flow Connection" }),
+    isActive: false,
+    isConnected: false,
+  };
+
+  const emptySnapshot = getConnectionFlowSnapshot([]);
+  assert.equal(emptySnapshot.rootKind, "empty");
+  assert.equal(emptySnapshot.canExpand, false);
+
+  const afterCreateSnapshot = getConnectionFlowSnapshot([createdConnection], createdConnection);
+  assert.equal(afterCreateSnapshot.rootKind, "connections");
+  assert.equal(afterCreateSnapshot.canExpand, false);
+
+  const connected = { ...createdConnection, isActive: true, isConnected: true };
+  const afterConnectSnapshot = getConnectionFlowSnapshot([connected], connected);
+  assert.equal(afterConnectSnapshot.rootKind, "connections");
+  assert.equal(afterConnectSnapshot.canExpand, true);
+  assert.equal(shouldExpandConnectionToDatabases(connected), true);
+
+  const disconnected = { ...connected, isActive: false, isConnected: false };
+  const afterDisconnectSnapshot = getConnectionFlowSnapshot([disconnected], disconnected);
+  assert.equal(afterDisconnectSnapshot.rootKind, "connections");
+  assert.equal(afterDisconnectSnapshot.canExpand, false);
+  assert.equal(shouldExpandConnectionToDatabases(disconnected), false);
 });

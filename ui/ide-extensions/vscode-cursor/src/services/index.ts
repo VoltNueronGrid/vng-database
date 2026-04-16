@@ -11,4 +11,5 @@ export {
 	createQueryExecutionService,
 } from "./QueryExecutionService";
 export { SchemaManager, createSchemaManager } from "./SchemaManager";
+export { redactSecrets, toSafeErrorMessage } from "./SecretSafeErrors";
 export { TableEditorService, createTableEditorService } from "./TableEditorService";

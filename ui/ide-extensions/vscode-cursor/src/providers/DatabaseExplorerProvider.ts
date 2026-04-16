@@ -7,7 +7,7 @@ import * as vscode from "vscode";
 import { Database, Schema, Table, Column, getColumnTypeDisplay } from "../models/Schema";
 import { Connection } from "../models/Connection";
 import { SchemaManager } from "../services/SchemaManager";
-import { describeConnectionNode, getEmptyConnectionMessage } from "./DatabaseExplorerTree";
+import { describeConnectionNode, getEmptyConnectionMessage, shouldExpandConnectionToDatabases } from "./DatabaseExplorerTree";
 
 export interface SchemaTreeTableData {
   database: string;
@@ -156,7 +156,7 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
 
       if (element.type === "connection") {
         const connection = element.data as Connection;
-        if (!connection.isActive) {
+        if (!shouldExpandConnectionToDatabases(connection)) {
           return [
             {
               type: "message",

@@ -164,7 +164,7 @@ class DatabaseExplorerProvider {
             }
             if (element.type === "connection") {
                 const connection = element.data;
-                if (!connection.isActive) {
+                if (!(0, DatabaseExplorerTree_1.shouldExpandConnectionToDatabases)(connection)) {
                     return [
                         {
                             type: "message",

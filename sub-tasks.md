@@ -78,7 +78,7 @@ Execution order: **Next (starts immediately after Phase 6 exit criteria are met)
 |---|---|---|---|---|
 | IDE-7.1 | Create professional icon set (database, schema, table, execute, etc.) with light/dark theme support | ⏳ Not Started | Design/Dev | 2026-05-04 |
 | IDE-7.2 | Add accessibility features (ARIA labels, keyboard navigation, screen reader support, color contrast) | ⏳ Not Started | Dev/QA | 2026-05-05 |
-| IDE-7.3 | Implement status messages and notifications (connecting, query running, errors, success) | ⏳ Not Started | Dev | 2026-05-05 |
+| IDE-7.3 | Implement status messages and notifications (connecting, query running, errors, success) | 🟨 In Progress | Dev | 2026-05-05 |
 
 ### Phase 8: Testing & Documentation [EST: 2-3 days]
 
@@ -232,8 +232,8 @@ Reported mismatch: expected rich "new/edit connection" form + database list tree
 | IDE-UX-004 | Add per-connection actions in tree/context menu: Connect, Disconnect, Edit, Delete, Refresh | ✅ Complete | Dev | 2026-04-19 | IDE-UX-003 | User can disconnect directly from sidebar and tree updates immediately |
 | IDE-UX-005 | Implement empty-state view in sidebar: "No connections available. Please create a new one." with CTA button | ✅ Complete | Dev/UX | 2026-04-20 | IDE-UX-001 | When no saved connections exist, message + action are visible and keyboard accessible |
 | IDE-UX-006 | Wire empty-state CTA to open connection editor in split/adjacent panel | ✅ Complete | Dev | 2026-04-20 | IDE-UX-005 | Clicking CTA opens the create connection page beside explorer and allows immediate data entry |
-| IDE-UX-007 | Add state transitions and telemetry-safe notifications for connect/disconnect/create/edit failures | ⏳ Not Started | Dev | 2026-04-21 | IDE-UX-001..006 | Clear non-blocking messages on success/failure; no secrets in logs |
-| IDE-UX-008 | Add integration tests for: empty state -> create -> connect -> expand db tree -> disconnect | ⏳ Not Started | QA/Dev | 2026-04-22 | IDE-UX-001..007 | Test suite validates end-to-end UX parity and prevents regression |
+| IDE-UX-007 | Add state transitions and telemetry-safe notifications for connect/disconnect/create/edit failures | ✅ Complete | Dev | 2026-04-21 | IDE-UX-001..006 | Clear non-blocking messages on success/failure; no secrets in logs |
+| IDE-UX-008 | Add integration tests for: empty state -> create -> connect -> expand db tree -> disconnect | ✅ Complete | QA/Dev | 2026-04-22 | IDE-UX-001..007 | Test suite validates end-to-end UX parity and prevents regression |
 
 Implementation note: this correction block is prioritized ahead of multi-IDE adapters to avoid propagating incorrect UX patterns to Phase 2 extension targets.
 
@@ -252,7 +252,7 @@ Implementation note: this correction block is prioritized ahead of multi-IDE ada
 - Sidebar supports connection lifecycle (connect/disconnect) plus expandable database exploration from active connections.
 - Integration coverage passes for empty-state -> create -> connect -> expand tree -> disconnect with no critical regressions.
 
-IDE-UX progress note (2026-04-16): The connection flow now opens a dedicated create/edit panel with the full advanced form, and the Database Explorer now roots on saved connections with inline connect/disconnect/edit/delete actions plus an empty-state CTA that opens the editor beside the explorer. Remaining IDE-UX work is notifications/telemetry-safe failure handling and integration coverage.
+IDE-UX progress note (2026-04-16): Connection workflows now include telemetry-safe failure notifications and secret-redacted error messaging for create/edit/connect/disconnect/test flows. Added integration coverage for empty -> create -> connect -> expand -> disconnect via the connection explorer flow helpers. Phase 7 polish is now started with status/progress notifications on connection lifecycle actions.
 
 **Next execution kickoff (immediate)**
 

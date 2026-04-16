@@ -6,6 +6,11 @@ export interface ConnectionNodePresentation {
   browseMessage: string;
 }
 
+export interface ConnectionFlowSnapshot {
+  rootKind: "empty" | "connections";
+  canExpand: boolean;
+}
+
 export function describeConnectionNode(connection: Connection): ConnectionNodePresentation {
   const badges: string[] = [];
 
@@ -26,4 +31,15 @@ export function describeConnectionNode(connection: Connection): ConnectionNodePr
 
 export function getEmptyConnectionMessage(): string {
   return "No connections available. Create New Connection.";
+}
+
+export function shouldExpandConnectionToDatabases(connection: Connection): boolean {
+  return connection.isActive;
+}
+
+export function getConnectionFlowSnapshot(connections: Connection[], selected?: Connection): ConnectionFlowSnapshot {
+  return {
+    rootKind: connections.length === 0 ? "empty" : "connections",
+    canExpand: selected ? shouldExpandConnectionToDatabases(selected) : false,
+  };
 }

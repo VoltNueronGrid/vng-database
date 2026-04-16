@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.describeConnectionNode = describeConnectionNode;
 exports.getEmptyConnectionMessage = getEmptyConnectionMessage;
+exports.shouldExpandConnectionToDatabases = shouldExpandConnectionToDatabases;
+exports.getConnectionFlowSnapshot = getConnectionFlowSnapshot;
 function describeConnectionNode(connection) {
     const badges = [];
     if (connection.isActive) {
@@ -18,5 +20,14 @@ function describeConnectionNode(connection) {
 }
 function getEmptyConnectionMessage() {
     return "No connections available. Create New Connection.";
+}
+function shouldExpandConnectionToDatabases(connection) {
+    return connection.isActive;
+}
+function getConnectionFlowSnapshot(connections, selected) {
+    return {
+        rootKind: connections.length === 0 ? "empty" : "connections",
+        canExpand: selected ? shouldExpandConnectionToDatabases(selected) : false,
+    };
 }
 //# sourceMappingURL=DatabaseExplorerTree.js.map
