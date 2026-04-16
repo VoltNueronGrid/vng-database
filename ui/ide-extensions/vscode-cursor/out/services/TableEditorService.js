@@ -17,7 +17,8 @@ class TableEditorService {
         return this.loadPage(connection, target, table, page, pageSize, infoMessage);
     }
     updateCell(session, rowId, columnName, value) {
-        return this.withRows(session, session.rows.map((row) => (row.rowId === rowId ? { ...row, values: { ...row.values, [columnName]: value } } : row)));
+        const updatedRows = session.rows.map((row) => (row.rowId === rowId ? { ...row, values: { ...row.values, [columnName]: value } } : row));
+        return this.withRows(session, updatedRows);
     }
     addDraftRow(session) {
         const values = Object.fromEntries(session.columns.map((column) => [column.name, ""]));
@@ -54,18 +55,39 @@ class TableEditorService {
         return this.openSession(connection, session.target, nextPage, session.pageSize);
     }
     async saveSession(connection, session) {
-        const statements = this.buildStatements(session);
-        if (statements.length === 0) {
-            return { ...session, infoMessage: "No changes to save.", errorMessage: undefined };
+        const preflightSession = this.withRows(session, session.rows);
+        if (this.hasCellErrors(preflightSession)) {
+            return {
+                ...preflightSession,
+                errorMessage: "Fix validation errors before saving changes.",
+                infoMessage: undefined,
+            };
         }
-        for (const statement of statements) {
+        const statements = this.buildStatements(preflightSession);
+        if (statements.length === 0) {
+            return {
+                ...preflightSession,
+                pendingSaveSql: undefined,
+                partialSave: undefined,
+                infoMessage: "No changes to save.",
+                errorMessage: undefined,
+            };
+        }
+        for (let index = 0; index < statements.length; index += 1) {
+            const statement = statements[index];
             const result = await this.executeStatement(connection, statement);
             if (result.status !== "success") {
                 const message = result.error?.message ?? "Save failed.";
                 return {
-                    ...session,
-                    errorMessage: `${message} Some changes may have been applied already. Refresh before retrying if needed.`,
+                    ...preflightSession,
+                    errorMessage: `${message} ${index} of ${statements.length} change(s) were applied before failure.`,
                     infoMessage: undefined,
+                    pendingSaveSql: statements.slice(index),
+                    partialSave: {
+                        applied: index,
+                        total: statements.length,
+                        failedAt: index + 1,
+                    },
                 };
             }
         }
@@ -90,6 +112,9 @@ class TableEditorService {
             dirty: false,
             infoMessage,
             errorMessage: undefined,
+            cellErrors: undefined,
+            pendingSaveSql: undefined,
+            partialSave: undefined,
         };
     }
     buildStatements(session) {
@@ -164,13 +189,65 @@ class TableEditorService {
         };
     }
     withRows(session, rows, infoMessage) {
+        const cellErrors = this.collectCellErrors(session, rows);
         return {
             ...session,
             rows,
             dirty: (0, TableEditorSql_1.countPendingChanges)(rows, session.capabilities) > 0,
+            cellErrors: Object.keys(cellErrors).length > 0 ? cellErrors : undefined,
+            pendingSaveSql: undefined,
+            partialSave: undefined,
             infoMessage,
             errorMessage: undefined,
         };
+    }
+    collectCellErrors(session, rows) {
+        const errorsByRow = {};
+        for (const row of rows) {
+            if (row.isDeleted) {
+                continue;
+            }
+            for (const column of session.columns) {
+                const isKeyColumn = session.capabilities.keyColumns.includes(column.name);
+                const skipValidation = row.kind === "existing" && isKeyColumn;
+                if (skipValidation) {
+                    continue;
+                }
+                const rawValue = row.values[column.name] ?? "";
+                const message = (0, TableEditorSql_1.validateColumnInput)(column, rawValue);
+                if (!message) {
+                    continue;
+                }
+                if (!errorsByRow[row.rowId]) {
+                    errorsByRow[row.rowId] = {};
+                }
+                errorsByRow[row.rowId][column.name] = message;
+            }
+        }
+        for (const row of rows) {
+            if (row.kind !== "draft" || row.isDeleted || !(0, TableEditorSql_1.hasAnyRowValue)(row)) {
+                continue;
+            }
+            const draftErrors = (0, TableEditorSql_1.validateDraftRow)(session.table, row);
+            for (const draftError of draftErrors) {
+                const match = /^Column '([^']+)':\s*(.+)$/.exec(draftError);
+                if (!match) {
+                    continue;
+                }
+                const [, columnName, message] = match;
+                if (!errorsByRow[row.rowId]) {
+                    errorsByRow[row.rowId] = {};
+                }
+                errorsByRow[row.rowId][columnName] = message;
+            }
+        }
+        return errorsByRow;
+    }
+    hasCellErrors(session) {
+        if (!session.cellErrors) {
+            return false;
+        }
+        return Object.values(session.cellErrors).some((rowErrors) => Object.keys(rowErrors).length > 0);
     }
 }
 exports.TableEditorService = TableEditorService;

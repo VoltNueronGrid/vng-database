@@ -91,6 +91,11 @@ function getTableEditorHtml(initialState) {
       align-items: center;
       margin-bottom: 12px;
     }
+    .shortcut-hint {
+      margin-left: auto;
+      font-size: 11px;
+      opacity: 0.75;
+    }
     button {
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
@@ -158,6 +163,10 @@ function getTableEditorHtml(initialState) {
       color: var(--vscode-input-foreground);
       font: inherit;
     }
+    td input.invalid {
+      border-color: var(--vscode-inputValidation-errorBorder, #b73a3a);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-inputValidation-errorBorder, #b73a3a) 45%, transparent);
+    }
     tr.deleted {
       opacity: 0.6;
     }
@@ -204,6 +213,7 @@ function getTableEditorHtml(initialState) {
     <button id="save">Save Changes</button>
     <button id="discard" class="secondary">Discard</button>
     <button id="refresh" class="secondary">Refresh</button>
+    <span class="shortcut-hint">Table Editor shortcuts: Ctrl+Shift+F open, Ctrl+S save, Ctrl+Shift+N add row</span>
   </div>
 
   <div id="noticeBox"></div>
@@ -260,7 +270,22 @@ function getTableEditorHtml(initialState) {
       if (session.dirty) {
         notices += '<div class="notice">Unsaved changes are present. Save or discard before navigating pages or refreshing.</div>';
       }
+      if (session.partialSave && session.pendingSaveSql && session.pendingSaveSql.length > 0) {
+        notices +=
+          '<div class="notice error">Partial save detected. Applied ' +
+          escapeHtml(String(session.partialSave.applied)) +
+          ' of ' +
+          escapeHtml(String(session.partialSave.total)) +
+          ' changes. <button id="copyPendingSql" class="secondary">Copy Pending SQL</button></div>';
+      }
       noticeBox.innerHTML = notices;
+
+      const copyPendingSqlButton = document.getElementById("copyPendingSql");
+      if (copyPendingSqlButton) {
+        copyPendingSqlButton.addEventListener("click", () => {
+          vscode.postMessage({ type: "copyPendingSql" });
+        });
+      }
 
       if (!session.columns.length) {
         tableContainer.innerHTML = '<div class="empty">No columns were returned for this table.</div>';
@@ -300,6 +325,9 @@ function getTableEditorHtml(initialState) {
               const draftReadOnly = row.kind === "draft" && (!session.capabilities.canInsert || isBinary || row.isDeleted);
               const disabled = readOnly || draftReadOnly ? "disabled" : "";
               const value = row.values[column.name] || "";
+              const cellError = session.cellErrors && session.cellErrors[row.rowId] ? session.cellErrors[row.rowId][column.name] : "";
+              const invalidClass = cellError ? "invalid" : "";
+              const title = cellError ? ' title="' + escapeHtml(cellError) + '"' : "";
               return (
                 '<td><input data-row-id="' +
                 escapeHtml(row.rowId) +
@@ -307,7 +335,11 @@ function getTableEditorHtml(initialState) {
                 escapeHtml(column.name) +
                 '" value="' +
                 escapeHtml(value) +
-                '" ' +
+                '" class="' +
+                invalidClass +
+                '"' +
+                title +
+                " " +
                 disabled +
                 " /></td>"
               );

@@ -68,7 +68,7 @@ Execution order: **Active now (current implementation phase)**.
 - All Phase 6 tasks (IDE-6.1 to IDE-6.4) are marked complete with no open critical defects.
 - Core workflow validation passes for inline editing, schema management, settings, and registered shortcuts.
 
-Progress note (2026-04-16): IDE-6.1 implementation has started with a dedicated table editor panel/service path from the database explorer, including load/edit/save/delete plumbing and unit coverage for the SQL builder layer.
+Progress note (2026-04-16): IDE-6.1 now includes stronger type-aware validation with cell-level error surfacing plus partial-save recovery metadata/export; IDE-6.2 has started with create/alter table wizards that generate DDL previews and optional execution; IDE-6.4 has started with new table-editor and schema-wizard keyboard shortcut wiring.
 
 ### Phase 7: UI Polish & Accessibility [EST: 2-3 days]
 

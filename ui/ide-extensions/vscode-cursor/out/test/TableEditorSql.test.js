@@ -75,4 +75,22 @@ const target = {
     const sql = (0, TableEditorSql_1.buildDeleteStatement)(target, table, row, capabilities);
     strict_1.default.equal(sql, 'DELETE FROM "public"."users" WHERE "id" = 99;');
 });
+(0, node_test_1.default)("validateColumnInput detects invalid boolean values", () => {
+    const activeColumn = columns.find((column) => column.name === "active");
+    strict_1.default.ok(activeColumn);
+    const message = (0, TableEditorSql_1.validateColumnInput)(activeColumn, "enabled");
+    strict_1.default.equal(message, "must be true/false");
+});
+(0, node_test_1.default)("validateColumnInput accepts nullable empty values", () => {
+    const metadataColumn = columns.find((column) => column.name === "metadata");
+    strict_1.default.ok(metadataColumn);
+    const message = (0, TableEditorSql_1.validateColumnInput)(metadataColumn, "");
+    strict_1.default.equal(message, undefined);
+});
+(0, node_test_1.default)("validateColumnInput rejects malformed JSON values", () => {
+    const metadataColumn = columns.find((column) => column.name === "metadata");
+    strict_1.default.ok(metadataColumn);
+    const message = (0, TableEditorSql_1.validateColumnInput)(metadataColumn, "{bad json}");
+    strict_1.default.equal(message, "must be valid JSON");
+});
 //# sourceMappingURL=TableEditorSql.test.js.map

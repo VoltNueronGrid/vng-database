@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAlterTableDDL, buildCreateTableDDL } from "../commands/SchemaWizardCommands";
+import { buildAlterTableDDL, buildCreateTableDDL } from "../commands/SchemaWizardSql";
 import { parseColumnType } from "../models/Schema";
 
 test("parseColumnType keeps bigint and smallint fidelity", () => {

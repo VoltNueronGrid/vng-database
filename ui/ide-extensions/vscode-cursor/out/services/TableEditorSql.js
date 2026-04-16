@@ -11,6 +11,8 @@ exports.buildInsertStatement = buildInsertStatement;
 exports.buildUpdateStatement = buildUpdateStatement;
 exports.buildDeleteStatement = buildDeleteStatement;
 exports.validateDraftRow = validateDraftRow;
+exports.validateColumnInput = validateColumnInput;
+exports.encodeSqlValue = encodeSqlValue;
 const BINARY_TYPES = new Set(["BYTEA"]);
 function quoteIdentifier(identifier) {
     return `"${identifier.replace(/"/g, '""')}"`;
@@ -111,15 +113,21 @@ function validateDraftRow(table, row) {
             errors.push(`Column '${column.name}' is required.`);
             continue;
         }
-        try {
-            encodeSqlValue(column, rawValue);
-        }
-        catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            errors.push(`Column '${column.name}': ${message}`);
+        const validationError = validateColumnInput(column, rawValue);
+        if (validationError) {
+            errors.push(`Column '${column.name}': ${validationError}`);
         }
     }
     return errors;
+}
+function validateColumnInput(column, rawValue) {
+    try {
+        encodeSqlValue(column, rawValue);
+        return undefined;
+    }
+    catch (error) {
+        return error instanceof Error ? error.message : String(error);
+    }
 }
 function buildChangedColumnNames(row, capabilities) {
     const originalValues = row.originalValues ?? {};

@@ -10,12 +10,12 @@ exports.getColumnTypeDisplay = getColumnTypeDisplay;
  */
 function parseColumnType(typeStr) {
     const normalized = typeStr.toUpperCase().trim();
-    if (normalized.includes("INT"))
-        return "INT";
     if (normalized.includes("BIGINT"))
         return "BIGINT";
     if (normalized.includes("SMALLINT"))
         return "SMALLINT";
+    if (normalized.includes("INT"))
+        return "INT";
     if (normalized.includes("DECIMAL") || normalized.includes("NUMERIC"))
         return "DECIMAL";
     if (normalized.includes("FLOAT"))
