@@ -1,0 +1,16 @@
+{
+  "name": "@voltnuerongrid/driver-typescript",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VoltNueronGrid TypeScript driver scaffold (Sprint V3-S1)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p ./",
+    "test": "npm run build && node --test dist/test/**/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "typescript": "5.5.4"
+  }
+}

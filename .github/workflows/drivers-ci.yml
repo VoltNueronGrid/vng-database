@@ -1,0 +1,101 @@
+name: voltnuerongrid-drivers-ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "drivers/**"
+      - ".github/workflows/drivers-ci.yml"
+      - "services/voltnuerongridd/reference/driver-core-contract-v1.md"
+  pull_request:
+    paths:
+      - "drivers/**"
+      - ".github/workflows/drivers-ci.yml"
+      - "services/voltnuerongridd/reference/driver-core-contract-v1.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voltnuerongrid-drivers-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rust-driver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build and test Rust driver
+        run: cargo test -p voltnuerongrid-driver-rust
+
+  typescript-driver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: drivers/voltnuerongrid-driver-typescript/package-lock.json
+      - name: Install deps (strict deterministic)
+        run: npm ci --no-audit --no-fund
+        working-directory: drivers/voltnuerongrid-driver-typescript
+      - name: Build TypeScript driver
+        run: npm run build
+        working-directory: drivers/voltnuerongrid-driver-typescript
+      - name: Run TypeScript driver tests
+        run: npm test
+        working-directory: drivers/voltnuerongrid-driver-typescript
+      - name: Validate shared conformance fixtures (Node)
+        run: |
+          node -e "const fs=require('fs');const files=['../conformance/fixtures/config-validation-cases.json','../conformance/fixtures/request-building-cases.json'];for(const f of files){const p=require('path').resolve(process.cwd(),f);const d=JSON.parse(fs.readFileSync(p,'utf8'));if(!d||typeof d!=='object'){throw new Error('Invalid fixture: '+f);}console.log('validated',f);}"
+        working-directory: drivers/voltnuerongrid-driver-typescript
+
+  python-driver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip setuptools wheel
+      - name: Install package
+        run: python -m pip install -e .
+        working-directory: drivers/voltnuerongrid-driver-python
+      - name: Run Python driver tests
+        run: python -m unittest discover -s tests
+        working-directory: drivers/voltnuerongrid-driver-python
+      - name: Validate shared conformance fixtures (Python)
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          fixture_dir = Path("drivers/conformance/fixtures")
+          files = [
+              fixture_dir / "config-validation-cases.json",
+              fixture_dir / "request-building-cases.json",
+          ]
+          for path in files:
+              data = json.loads(path.read_text(encoding="utf-8"))
+              if not isinstance(data, dict):
+                  raise SystemExit(f"Invalid fixture root object: {path}")
+              print(f"validated {path}")
+          PY
+
