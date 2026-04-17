@@ -458,4 +458,5 @@ Add fields:
 - 2026-04-17: Added `sql.route` native COMMAND framing + socket roundtrip helper/tests and expanded shared native execution helper coverage to health/execute/analyze/route.
 - 2026-04-17: Consolidated native command execution through one shared helper path (`execute_native_command_roundtrip`) for health/sql.execute/sql.analyze/sql.route before persistent-session handshake/auth layering.
 - 2026-04-17: Introduced persistent socket session layer (`PersistentNativeSession`) with HELLO/AUTH bootstrap and multi-command reuse over a single connection; routed health/execute/analyze/route through `*_in_session` command helpers.
+- 2026-04-17: Added optional-session reuse wrappers for socket roundtrip helpers so callers can reuse an existing `PersistentNativeSession` (or fallback to one-shot socket execution) for health/sql.execute/sql.analyze/sql.route.
 

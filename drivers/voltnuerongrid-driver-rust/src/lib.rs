@@ -1011,6 +1011,24 @@ impl VoltNueronGridDriver {
         self.execute_native_health_roundtrip(transport_mode, &transport, request_id)
     }
 
+    pub fn execute_native_health_roundtrip_with_optional_session(
+        &self,
+        transport_mode: DriverTransportMode,
+        connect_timeout_ms: u64,
+        session: Option<&mut PersistentNativeSession>,
+        request_id: &str,
+    ) -> DriverResult<NativeFrame> {
+        if let Some(active_session) = session {
+            self.execute_native_health_roundtrip_in_session(active_session, request_id)
+        } else {
+            self.execute_native_health_roundtrip_socket(
+                transport_mode,
+                connect_timeout_ms,
+                request_id,
+            )
+        }
+    }
+
     pub fn execute_native_sql_execute_roundtrip_socket(
         &self,
         transport_mode: DriverTransportMode,
@@ -1029,6 +1047,33 @@ impl VoltNueronGridDriver {
         )
     }
 
+    pub fn execute_native_sql_execute_roundtrip_with_optional_session(
+        &self,
+        transport_mode: DriverTransportMode,
+        connect_timeout_ms: u64,
+        session: Option<&mut PersistentNativeSession>,
+        request_id: &str,
+        sql_batch: &str,
+        max_rows: Option<usize>,
+    ) -> DriverResult<NativeFrame> {
+        if let Some(active_session) = session {
+            self.execute_native_sql_execute_roundtrip_in_session(
+                active_session,
+                request_id,
+                sql_batch,
+                max_rows,
+            )
+        } else {
+            self.execute_native_sql_execute_roundtrip_socket(
+                transport_mode,
+                connect_timeout_ms,
+                request_id,
+                sql_batch,
+                max_rows,
+            )
+        }
+    }
+
     pub fn execute_native_sql_analyze_roundtrip_socket(
         &self,
         transport_mode: DriverTransportMode,
@@ -1045,6 +1090,30 @@ impl VoltNueronGridDriver {
         )
     }
 
+    pub fn execute_native_sql_analyze_roundtrip_with_optional_session(
+        &self,
+        transport_mode: DriverTransportMode,
+        connect_timeout_ms: u64,
+        session: Option<&mut PersistentNativeSession>,
+        request_id: &str,
+        sql_batch: &str,
+    ) -> DriverResult<NativeFrame> {
+        if let Some(active_session) = session {
+            self.execute_native_sql_analyze_roundtrip_in_session(
+                active_session,
+                request_id,
+                sql_batch,
+            )
+        } else {
+            self.execute_native_sql_analyze_roundtrip_socket(
+                transport_mode,
+                connect_timeout_ms,
+                request_id,
+                sql_batch,
+            )
+        }
+    }
+
     pub fn execute_native_sql_route_roundtrip_socket(
         &self,
         transport_mode: DriverTransportMode,
@@ -1059,6 +1128,30 @@ impl VoltNueronGridDriver {
             request_id,
             sql_batch,
         )
+    }
+
+    pub fn execute_native_sql_route_roundtrip_with_optional_session(
+        &self,
+        transport_mode: DriverTransportMode,
+        connect_timeout_ms: u64,
+        session: Option<&mut PersistentNativeSession>,
+        request_id: &str,
+        sql_batch: &str,
+    ) -> DriverResult<NativeFrame> {
+        if let Some(active_session) = session {
+            self.execute_native_sql_route_roundtrip_in_session(
+                active_session,
+                request_id,
+                sql_batch,
+            )
+        } else {
+            self.execute_native_sql_route_roundtrip_socket(
+                transport_mode,
+                connect_timeout_ms,
+                request_id,
+                sql_batch,
+            )
+        }
     }
 
     pub fn open_persistent_native_session(
@@ -3225,5 +3318,202 @@ request_timeout_ms: 2500
             .expect_err("non-native mode should be rejected");
         assert_eq!(err.kind, DriverErrorKind::Validation);
         assert!(err.message.contains("transportMode=native"));
+    }
+
+    #[test]
+    fn optional_session_helpers_fallback_to_socket_when_session_not_provided() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind optional-session fallback listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept client");
+            let mut len_buf = [0u8; 4];
+            socket.read_exact(&mut len_buf).expect("read request len");
+            let req_len = u32::from_be_bytes(len_buf) as usize;
+            let mut req_payload = vec![0u8; req_len];
+            socket.read_exact(&mut req_payload).expect("read request payload");
+            let request = NativeFrameCodec::decode(&req_payload).expect("decode request");
+            assert_eq!(
+                request.payload.get("command").and_then(|v| v.as_str()),
+                Some("health")
+            );
+            let response = NativeFrame {
+                frame_type: NativeFrameType::Result,
+                protocol_version: VoltNueronGridDriver::NATIVE_PROTOCOL_VERSION.to_string(),
+                request_id: request.request_id,
+                session_id: request.session_id,
+                payload: serde_json::json!({ "status": "ok" }),
+            };
+            let encoded = NativeFrameCodec::encode(&response).expect("encode response");
+            socket
+                .write_all(&(encoded.len() as u32).to_be_bytes())
+                .expect("write len");
+            socket.write_all(&encoded).expect("write payload");
+        });
+
+        let driver = VoltNueronGridDriver::new(DriverConfig {
+            base_url: format!("vng://{}", addr),
+            session_id: "sess-optional-fallback-1".to_string(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: Some("secret".to_string()),
+            operator_id: None,
+            route_hint: None,
+        })
+        .expect("driver");
+
+        let response = driver
+            .execute_native_health_roundtrip_with_optional_session(
+                DriverTransportMode::Native,
+                5000,
+                None,
+                "optional-fallback-health-1",
+            )
+            .expect("health via socket fallback");
+        assert_eq!(response.frame_type, NativeFrameType::Result);
+        assert_eq!(
+            response.payload.get("status").and_then(|v| v.as_str()),
+            Some("ok")
+        );
+
+        server.join().expect("server join");
+    }
+
+    #[test]
+    fn optional_session_helpers_reuse_provided_persistent_session() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind optional-session reuse listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept client");
+
+            let mut len_buf = [0u8; 4];
+
+            // HELLO
+            socket.read_exact(&mut len_buf).expect("read hello len");
+            let hello_len = u32::from_be_bytes(len_buf) as usize;
+            let mut hello_payload = vec![0u8; hello_len];
+            socket.read_exact(&mut hello_payload).expect("read hello payload");
+            let hello = NativeFrameCodec::decode(&hello_payload).expect("decode hello");
+            let hello_ack = NativeFrame {
+                frame_type: NativeFrameType::HelloAck,
+                protocol_version: VoltNueronGridDriver::NATIVE_PROTOCOL_VERSION.to_string(),
+                request_id: hello.request_id,
+                session_id: hello.payload.get("session_id").and_then(|v| v.as_str()).map(str::to_string),
+                payload: serde_json::json!({ "accepted": true, "version": VoltNueronGridDriver::NATIVE_PROTOCOL_VERSION }),
+            };
+            let hello_ack_bytes = NativeFrameCodec::encode(&hello_ack).expect("encode hello ack");
+            socket.write_all(&(hello_ack_bytes.len() as u32).to_be_bytes()).expect("write hello ack len");
+            socket.write_all(&hello_ack_bytes).expect("write hello ack payload");
+
+            // AUTH
+            socket.read_exact(&mut len_buf).expect("read auth len");
+            let auth_len = u32::from_be_bytes(len_buf) as usize;
+            let mut auth_payload = vec![0u8; auth_len];
+            socket.read_exact(&mut auth_payload).expect("read auth payload");
+            let auth = NativeFrameCodec::decode(&auth_payload).expect("decode auth");
+            let auth_ack = NativeFrame {
+                frame_type: NativeFrameType::AuthAck,
+                protocol_version: VoltNueronGridDriver::NATIVE_PROTOCOL_VERSION.to_string(),
+                request_id: auth.request_id,
+                session_id: auth.session_id.clone(),
+                payload: serde_json::json!({ "accepted": true }),
+            };
+            let auth_ack_bytes = NativeFrameCodec::encode(&auth_ack).expect("encode auth ack");
+            socket.write_all(&(auth_ack_bytes.len() as u32).to_be_bytes()).expect("write auth ack len");
+            socket.write_all(&auth_ack_bytes).expect("write auth ack payload");
+
+            // COMMAND #1 sql.analyze
+            socket.read_exact(&mut len_buf).expect("read analyze len");
+            let analyze_len = u32::from_be_bytes(len_buf) as usize;
+            let mut analyze_payload = vec![0u8; analyze_len];
+            socket.read_exact(&mut analyze_payload).expect("read analyze payload");
+            let analyze = NativeFrameCodec::decode(&analyze_payload).expect("decode analyze");
+            assert_eq!(analyze.payload.get("command").and_then(|v| v.as_str()), Some("sql.analyze"));
+            let analyze_res = NativeFrame {
+                frame_type: NativeFrameType::Result,
+                protocol_version: VoltNueronGridDriver::NATIVE_PROTOCOL_VERSION.to_string(),
+                request_id: analyze.request_id,
+                session_id: analyze.session_id.clone(),
+                payload: serde_json::json!({ "status": "ok", "total_statements": 1 }),
+            };
+            let analyze_res_bytes = NativeFrameCodec::encode(&analyze_res).expect("encode analyze res");
+            socket.write_all(&(analyze_res_bytes.len() as u32).to_be_bytes()).expect("write analyze len");
+            socket.write_all(&analyze_res_bytes).expect("write analyze payload");
+
+            // COMMAND #2 sql.route
+            socket.read_exact(&mut len_buf).expect("read route len");
+            let route_len = u32::from_be_bytes(len_buf) as usize;
+            let mut route_payload = vec![0u8; route_len];
+            socket.read_exact(&mut route_payload).expect("read route payload");
+            let route = NativeFrameCodec::decode(&route_payload).expect("decode route");
+            assert_eq!(route.payload.get("command").and_then(|v| v.as_str()), Some("sql.route"));
+            let route_res = NativeFrame {
+                frame_type: NativeFrameType::Result,
+                protocol_version: VoltNueronGridDriver::NATIVE_PROTOCOL_VERSION.to_string(),
+                request_id: route.request_id,
+                session_id: route.session_id.clone(),
+                payload: serde_json::json!({ "status": "ok", "route_path": "olap" }),
+            };
+            let route_res_bytes = NativeFrameCodec::encode(&route_res).expect("encode route res");
+            socket.write_all(&(route_res_bytes.len() as u32).to_be_bytes()).expect("write route len");
+            socket.write_all(&route_res_bytes).expect("write route payload");
+        });
+
+        let driver = VoltNueronGridDriver::new(DriverConfig {
+            base_url: format!("vng://{}", addr),
+            session_id: "sess-optional-reuse-1".to_string(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: Some("secret".to_string()),
+            operator_id: Some("ops-1".to_string()),
+            route_hint: None,
+        })
+        .expect("driver");
+
+        let mut session = driver
+            .open_persistent_native_session(
+                DriverTransportMode::Native,
+                5000,
+                "hello-optional-reuse-1",
+                "auth-optional-reuse-1",
+            )
+            .expect("open session");
+
+        let analyze = driver
+            .execute_native_sql_analyze_roundtrip_with_optional_session(
+                DriverTransportMode::Native,
+                5000,
+                Some(&mut session),
+                "analyze-optional-reuse-1",
+                "SELECT 1;",
+            )
+            .expect("analyze via reused session");
+        assert_eq!(analyze.frame_type, NativeFrameType::Result);
+        assert_eq!(
+            analyze.payload.get("status").and_then(|v| v.as_str()),
+            Some("ok")
+        );
+
+        let route = driver
+            .execute_native_sql_route_roundtrip_with_optional_session(
+                DriverTransportMode::Native,
+                5000,
+                Some(&mut session),
+                "route-optional-reuse-1",
+                "SELECT * FROM orders;",
+            )
+            .expect("route via reused session");
+        assert_eq!(route.frame_type, NativeFrameType::Result);
+        assert_eq!(
+            route.payload.get("route_path").and_then(|v| v.as_str()),
+            Some("olap")
+        );
+
+        server.join().expect("server join");
     }
 }

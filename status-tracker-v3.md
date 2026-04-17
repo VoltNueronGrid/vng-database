@@ -246,7 +246,7 @@
 | NT-S2-002 | Runtime `db-native-listener` scaffold with feature flag + config wiring | Runtime | In Progress | NT-S2-001 | `VNG_NATIVE_*` config parsing + feature-gated scaffold startup added in runtime main bootstrap; compile check green |
 | NT-S2-003 | Introduce runtime transport abstraction shared by native and HTTP handlers | Runtime | Ready for Validation | NT-S2-002 | `TransportGateway` + `CommandDispatcher` active for HTTP proof paths; native `dispatch_frame` parity matrix now covers success + protocol/serialization error normalization for S2 command set |
 | NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | In Progress (`deferred-for-cloud-validation`) | NT-S2-001 | Local fixture/schema/report scaffolding complete; cloud runner-based artifact evidence deferred to final validation phase |
-| NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | In Progress | NT-S2-001..003 | Native frame/codec + HELLO/AUTH scaffold tests landed; socket execution path pending |
+| NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | In Progress | NT-S2-001..003 | Native frame/codec + HELLO/AUTH scaffold plus socket execution path landed; optional persistent-session reuse helpers now available for core native commands |
 | NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | Not Started | NT-S3-001 | Selector tests and fallback diagnostics pass |
 | NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | Not Started | NT-S2-003 | Endpoint parity tests pass |
 | NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | Not Started | S0-003, NT-S3-002 | Extension compiles and mode can be switched |
@@ -422,6 +422,7 @@ If any of these slip, the “native driver + IDE parity” objective misses.
       - `VoltNueronGridDriver::{build_native_sql_route_command_frame, execute_native_sql_route_roundtrip, execute_native_sql_route_roundtrip_socket}`
       - Shared helper: `VoltNueronGridDriver::execute_native_command_roundtrip` centralizes transportMode gating + RESULT frame validation across health/sql.execute/sql.analyze/sql.route
       - Persistent session layer: `PersistentNativeSession` with single-socket HELLO/AUTH bootstrap and multi-command reuse (`send_command_frame`, `open_persistent_native_session`, and per-command `*_in_session` helpers)
+      - Optional reuse wrappers: `execute_native_{health,sql_execute,sql_analyze,sql_route}_roundtrip_with_optional_session` route via provided `PersistentNativeSession` when present, otherwise fallback to per-call socket execution
     - Rust native scaffold tests:
       - `tests::native_frame_codec_roundtrip_preserves_core_fields`
       - `tests::native_handshake_scaffold_builds_hello_and_auth_frames`
@@ -447,6 +448,8 @@ If any of these slip, the “native driver + IDE parity” objective misses.
       - `tests::native_sql_route_roundtrip_requires_explicit_native_opt_in`
       - `tests::persistent_native_session_handshake_and_multi_command_reuse_single_connection`
       - `tests::persistent_native_session_requires_explicit_native_opt_in`
+      - `tests::optional_session_helpers_fallback_to_socket_when_session_not_provided`
+      - `tests::optional_session_helpers_reuse_provided_persistent_session`
     - Targeted validation:
       - ✅ `cargo test -p voltnuerongrid-driver-rust native_handshake_scaffold` (3 passed)
       - ✅ `cargo test -p voltnuerongrid-driver-rust native_frame_codec_roundtrip_preserves_core_fields` (1 passed)
@@ -461,6 +464,8 @@ If any of these slip, the “native driver + IDE parity” objective misses.
       - ✅ `cargo test -p voltnuerongrid-driver-rust native_sql_route_roundtrip` (2 passed)
       - ✅ `cargo test -p voltnuerongrid-driver-rust native_sql_execute_roundtrip` (2 passed)
       - ✅ `cargo test -p voltnuerongrid-driver-rust persistent_native_session` (2 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust optional_session_helpers -- --nocapture` (2 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust -- --nocapture` (44 passed)
       - ✅ `cargo check -p voltnuerongrid-driver-rust`
   - NT-S2-001 evidence links:
     - Protocol draft: `services/voltnuerongridd/reference/native-protocol-v1.md`
