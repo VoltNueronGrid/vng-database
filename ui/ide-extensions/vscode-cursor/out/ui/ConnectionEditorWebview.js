@@ -36,7 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createConnectionEditorPanel = createConnectionEditorPanel;
 const vscode = __importStar(require("vscode"));
 function createConnectionEditorPanel(context, initialState, onMessage) {
-    const panel = vscode.window.createWebviewPanel("vngConnectionEditor", initialState.mode === "create" ? "Create VoltNueronGrid Connection" : "Edit VoltNueronGrid Connection", vscode.ViewColumn.Beside, {
+    const panel = vscode.window.createWebviewPanel("vngConnectionEditor", initialState.mode === "create" ? "Connect to server" : "Edit connection", vscode.ViewColumn.Beside, {
         enableScripts: true,
         retainContextWhenHidden: true,
     });
@@ -47,7 +47,7 @@ function createConnectionEditorPanel(context, initialState, onMessage) {
     return {
         panel,
         async updateState(state) {
-            panel.title = state.mode === "create" ? "Create VoltNueronGrid Connection" : "Edit VoltNueronGrid Connection";
+            panel.title = state.mode === "create" ? "Connect to server" : "Edit connection";
             await panel.webview.postMessage({ type: "state", state });
         },
     };
@@ -59,30 +59,41 @@ function getConnectionEditorHtml(initialState) {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VoltNueronGrid Connection Editor</title>
+  <title>Connect to server</title>
   <style>
     :root {
       color-scheme: light dark;
     }
     body {
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      font-family: "Segoe UI", sans-serif;
       margin: 0;
-      padding: 18px;
+      padding: 16px;
+      background: var(--vscode-editor-background);
     }
-    h2 {
+    h1 {
       margin: 0 0 8px 0;
-      font-size: 18px;
+      font-size: 22px;
     }
-    p.lede {
+    p {
       margin: 0 0 14px 0;
       opacity: 0.8;
       font-size: 12px;
     }
-    .card {
+    .surface {
       border: 1px solid var(--vscode-panel-border);
-      border-radius: 8px;
-      padding: 14px;
-      background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-sideBar-background));
+      border-radius: 10px;
+      padding: 16px;
+      background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-sideBar-background));
+    }
+    .section {
+      border-top: 1px solid var(--vscode-panel-border);
+      margin-top: 14px;
+      padding-top: 14px;
+    }
+    .section h2 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      font-weight: 600;
     }
     .grid {
       display: grid;
@@ -106,25 +117,33 @@ function getConnectionEditorHtml(initialState) {
       padding: 7px 9px;
       font: inherit;
     }
-    .section {
-      border-top: 1px solid var(--vscode-panel-border);
-      margin-top: 14px;
-      padding-top: 14px;
-    }
-    .section h3 {
-      margin: 0 0 10px 0;
-      font-size: 13px;
-    }
     .checkbox {
       display: flex;
       align-items: center;
       gap: 8px;
       min-height: 32px;
     }
-    .hint {
+    .hint, .inline-help {
       font-size: 12px;
       opacity: 0.8;
       margin-top: 10px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 8px;
+    }
+    details {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 8px;
+      padding: 8px;
+      margin-top: 8px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 600;
+      user-select: none;
     }
     .actions {
       display: flex;
@@ -143,6 +162,34 @@ function getConnectionEditorHtml(initialState) {
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
     }
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal {
+      width: min(720px, calc(100vw - 32px));
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 10px;
+      background: var(--vscode-editor-background);
+      padding: 16px;
+    }
+    .modal h3 {
+      margin: 0 0 10px 0;
+    }
+    .mode-tag {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--vscode-panel-border);
+      font-size: 11px;
+      opacity: 0.9;
+    }
     @media (max-width: 880px) {
       .grid {
         grid-template-columns: 1fr;
@@ -151,10 +198,38 @@ function getConnectionEditorHtml(initialState) {
   </style>
 </head>
 <body>
-  <div class="card" role="main" aria-label="Connection editor">
-    <h2 id="title" aria-live="polite"></h2>
-    <p class="lede">Use the same rich form for create and edit flows. Save persists the profile and keeps secrets in VS Code secret storage.</p>
+  <div class="surface" role="main" aria-label="Connection editor">
+    <h1 id="title" aria-live="polite"></h1>
+    <p>Use a single form for create and edit. Credentials are stored securely in VS Code Secret Storage.</p>
     <div id="editor" role="form" aria-label="Connection details form"></div>
+  </div>
+  <div id="sslModalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="SSL configuration dialog">
+    <div class="modal">
+      <h3>SSL / TLS paths</h3>
+      <div class="grid">
+        <label class="field full">
+          <span>CA Path</span>
+          <input id="modal-ssl-caPath" type="text" aria-label="SSL certificate authority path" />
+        </label>
+        <label class="field full">
+          <span>Certificate Path</span>
+          <input id="modal-ssl-certPath" type="text" aria-label="SSL certificate path" />
+        </label>
+        <label class="field full">
+          <span>Key Path</span>
+          <input id="modal-ssl-keyPath" type="text" aria-label="SSL private key path" />
+        </label>
+        <label class="checkbox field full">
+          <input id="modal-ssl-rejectUnauthorized" type="checkbox" aria-label="Reject unauthorized certificates" />
+          <span>Reject unauthorized certificates</span>
+        </label>
+      </div>
+      <div class="actions">
+        <button data-action="saveSslModal">Apply SSL Paths</button>
+        <button class="secondary" data-action="cancelSslModal">Cancel</button>
+      </div>
+      <p class="hint">Only shown when SSL is enabled. Keep these paths empty if your runtime uses default trust.</p>
+    </div>
   </div>
   <script>
     const vscode = acquireVsCodeApi();
@@ -182,30 +257,63 @@ function getConnectionEditorHtml(initialState) {
         .replaceAll("'", "&#39;");
     }
 
+    function byId(id) {
+      return document.getElementById(id);
+    }
+
+    function readTextInput(id) {
+      const element = byId(id);
+      if (!(element instanceof HTMLInputElement)) {
+        return "";
+      }
+      return element.value.trim();
+    }
+
+    function readOptionalTextInput(id) {
+      const value = readTextInput(id);
+      return value.length > 0 ? value : "";
+    }
+
+    function readCheckboxInput(id, fallback = false) {
+      const element = byId(id);
+      if (!(element instanceof HTMLInputElement)) {
+        return fallback;
+      }
+      return element.checked;
+    }
+
+    function readSelectValue(id, fallback) {
+      const element = byId(id);
+      if (!(element instanceof HTMLSelectElement)) {
+        return fallback;
+      }
+      return element.value;
+    }
+
     function readDraftFromDom() {
-      const mode = document.getElementById("draft-mode").value;
-      const sslEnabled = document.getElementById("draft-ssl-enabled").checked;
+      const mode = readSelectValue("draft-mode", "admin");
+      const sslEnabled = readCheckboxInput("draft-ssl-enabled", false);
       return {
         id: state.draft ? state.draft.id : undefined,
-        name: document.getElementById("draft-name").value.trim(),
-        baseUrl: document.getElementById("draft-baseUrl").value.trim(),
+        name: readTextInput("draft-name"),
+        baseUrl: readTextInput("draft-baseUrl"),
         mode,
-        runtimeTarget: document.getElementById("draft-runtimeTarget").value,
-        adminKey: document.getElementById("draft-adminKey").value,
-        operatorId: document.getElementById("draft-operatorId").value.trim(),
-        tenantId: document.getElementById("draft-tenantId").value.trim(),
-        userId: document.getElementById("draft-userId").value.trim(),
+        runtimeTarget: readSelectValue("draft-runtimeTarget", "custom"),
+        adminKey: readOptionalTextInput("draft-adminKey"),
+        operatorId: readOptionalTextInput("draft-operatorId"),
+        tenantId: readOptionalTextInput("draft-tenantId"),
+        userId: readOptionalTextInput("draft-userId"),
         ssl: {
           enabled: sslEnabled,
-          caPath: document.getElementById("draft-ssl-caPath").value.trim(),
-          certPath: document.getElementById("draft-ssl-certPath").value.trim(),
-          keyPath: document.getElementById("draft-ssl-keyPath").value.trim(),
-          rejectUnauthorized: document.getElementById("draft-ssl-rejectUnauthorized").checked,
+          caPath: (state.draft.ssl && state.draft.ssl.caPath) || "",
+          certPath: (state.draft.ssl && state.draft.ssl.certPath) || "",
+          keyPath: (state.draft.ssl && state.draft.ssl.keyPath) || "",
+          rejectUnauthorized: (state.draft.ssl && state.draft.ssl.rejectUnauthorized) ?? true,
         },
         advanced: {
           connectionTimeout: readNumberInput("draft-advanced-connectionTimeout", 5000),
           idleTimeout: readNumberInput("draft-advanced-idleTimeout", 300000),
-          keepAlive: document.getElementById("draft-advanced-keepAlive").checked,
+          keepAlive: readCheckboxInput("draft-advanced-keepAlive", true),
           maxConnections: readNumberInput("draft-advanced-maxConnections", 10),
         },
       };
@@ -215,16 +323,81 @@ function getConnectionEditorHtml(initialState) {
       state.draft = readDraftFromDom();
     }
 
+    function openSslModal() {
+      const backdrop = byId("sslModalBackdrop");
+      if (!backdrop) {
+        return;
+      }
+      byId("modal-ssl-caPath").value = state.draft.ssl?.caPath || "";
+      byId("modal-ssl-certPath").value = state.draft.ssl?.certPath || "";
+      byId("modal-ssl-keyPath").value = state.draft.ssl?.keyPath || "";
+      byId("modal-ssl-rejectUnauthorized").checked = state.draft.ssl?.rejectUnauthorized ?? true;
+      backdrop.style.display = "flex";
+    }
+
+    function closeSslModal() {
+      const backdrop = byId("sslModalBackdrop");
+      if (!backdrop) {
+        return;
+      }
+      backdrop.style.display = "none";
+    }
+
+    function saveSslModal() {
+      state.draft.ssl = {
+        enabled: true,
+        caPath: readOptionalTextInput("modal-ssl-caPath"),
+        certPath: readOptionalTextInput("modal-ssl-certPath"),
+        keyPath: readOptionalTextInput("modal-ssl-keyPath"),
+        rejectUnauthorized: readCheckboxInput("modal-ssl-rejectUnauthorized", true),
+      };
+      closeSslModal();
+      render();
+    }
+
+    function renderModeFields(draft) {
+      if (draft.mode === "admin") {
+        return '' +
+          '<label class="field full">' +
+            '<span>Admin Key</span>' +
+            '<input id="draft-adminKey" type="password" aria-label="Admin API key" value="' + escapeHtml(draft.adminKey || "") + '" placeholder="' + (state.mode === "edit" ? "Leave blank to keep existing key on edit" : "Required for admin mode") + '" />' +
+          '</label>';
+      }
+
+      if (draft.mode === "operator") {
+        return '' +
+          '<label class="field full">' +
+            '<span>Admin Key</span>' +
+            '<input id="draft-adminKey" type="password" aria-label="Admin API key" value="' + escapeHtml(draft.adminKey || "") + '" placeholder="' + (state.mode === "edit" ? "Leave blank to keep existing key on edit" : "Required for operator mode") + '" />' +
+          '</label>' +
+          '<label class="field full">' +
+            '<span>Operator ID</span>' +
+            '<input id="draft-operatorId" type="text" aria-label="Operator ID" value="' + escapeHtml(draft.operatorId || "") + '" placeholder="Required for operator mode" />' +
+          '</label>';
+      }
+
+      return '' +
+        '<label class="field full">' +
+          '<span>Tenant ID</span>' +
+          '<input id="draft-tenantId" type="text" aria-label="Tenant ID" value="' + escapeHtml(draft.tenantId || "") + '" placeholder="Required for tenant mode" />' +
+        '</label>' +
+        '<label class="field full">' +
+          '<span>User ID (optional)</span>' +
+          '<input id="draft-userId" type="text" aria-label="User ID" value="' + escapeHtml(draft.userId || "") + '" placeholder="Optional - use when tenant requests user-level audit headers" />' +
+        '</label>' +
+        '<div class="field full inline-help">User ID is optional. Leave it empty unless your tenant-level authorization policy requires x-vng-user-id.</div>';
+    }
+
     function render() {
       const title = document.getElementById("title");
       const editor = document.getElementById("editor");
       const draft = state.draft;
-      const isOperator = draft.mode === "operator";
-      const isTenant = draft.mode === "tenant";
-      const sslEnabled = !!(draft.ssl && draft.ssl.enabled);
-      title.textContent = state.mode === "create" ? "Create Connection" : "Edit Connection";
+      const sslEnabled = Boolean(draft.ssl && draft.ssl.enabled);
+      title.textContent = state.mode === "create" ? "Connect to server" : "Edit connection";
+      const modeLabel = draft.mode.charAt(0).toUpperCase() + draft.mode.slice(1);
 
       editor.innerHTML =
+        '<div class="row"><strong>Connection mode</strong><span class="mode-tag">' + escapeHtml(modeLabel) + '</span></div>' +
         '<div class="grid">' +
           '<label class="field full">' +
             '<span>Name</span>' +
@@ -251,74 +424,47 @@ function getConnectionEditorHtml(initialState) {
               '<option value="custom"' + (draft.runtimeTarget === "custom" ? ' selected' : '') + '>custom</option>' +
             '</select>' +
           '</label>' +
-          '<label class="field full">' +
-            '<span>Admin Key</span>' +
-            '<input id="draft-adminKey" type="password" aria-label="Admin API key" value="' + escapeHtml(draft.adminKey || "") + '" placeholder="Leave blank to keep existing key on edit" />' +
-          '</label>' +
-          '<label class="field' + (isOperator ? '' : ' full') + '">' +
-            '<span>Operator ID</span>' +
-            '<input id="draft-operatorId" type="text" aria-label="Operator ID" value="' + escapeHtml(draft.operatorId || "") + '" ' + (isOperator ? '' : 'disabled') + ' />' +
-          '</label>' +
-          '<label class="field' + (isTenant ? '' : ' full') + '">' +
-            '<span>Tenant ID</span>' +
-            '<input id="draft-tenantId" type="text" aria-label="Tenant ID" value="' + escapeHtml(draft.tenantId || "") + '" ' + (isTenant ? '' : 'disabled') + ' />' +
-          '</label>' +
-          '<label class="field' + (isTenant ? '' : ' full') + '">' +
-            '<span>User ID</span>' +
-            '<input id="draft-userId" type="text" aria-label="User ID" value="' + escapeHtml(draft.userId || "") + '" ' + (isTenant ? '' : 'disabled') + ' />' +
-          '</label>' +
+          renderModeFields(draft) +
         '</div>' +
         '<div class="section">' +
-          '<h3>SSL / TLS</h3>' +
+          '<h2>SSL / TLS</h2>' +
           '<label class="checkbox">' +
             '<input id="draft-ssl-enabled" type="checkbox" aria-label="Enable SSL or TLS metadata" ' + (sslEnabled ? 'checked' : '') + ' />' +
             '<span>Enable SSL / TLS metadata</span>' +
           '</label>' +
-          '<div class="grid">' +
-            '<label class="field full">' +
-              '<span>CA Path</span>' +
-              '<input id="draft-ssl-caPath" type="text" aria-label="SSL certificate authority path" value="' + escapeHtml(draft.ssl?.caPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
-            '</label>' +
-            '<label class="field full">' +
-              '<span>Certificate Path</span>' +
-              '<input id="draft-ssl-certPath" type="text" aria-label="SSL certificate path" value="' + escapeHtml(draft.ssl?.certPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
-            '</label>' +
-            '<label class="field full">' +
-              '<span>Key Path</span>' +
-              '<input id="draft-ssl-keyPath" type="text" aria-label="SSL private key path" value="' + escapeHtml(draft.ssl?.keyPath || "") + '" ' + (sslEnabled ? '' : 'disabled') + ' />' +
-            '</label>' +
-            '<label class="checkbox field full">' +
-              '<input id="draft-ssl-rejectUnauthorized" type="checkbox" aria-label="Reject unauthorized certificates" ' + ((draft.ssl?.rejectUnauthorized ?? true) ? 'checked' : '') + ' ' + (sslEnabled ? '' : 'disabled') + ' />' +
-              '<span>Reject unauthorized certificates</span>' +
-            '</label>' +
+          '<div class="row">' +
+            '<button class="secondary" data-action="openSslModal" ' + (sslEnabled ? '' : 'disabled') + '>Configure SSL paths</button>' +
+            '<span class="inline-help">' + (sslEnabled ? 'CA/Certificate/Key paths are configured in the popup.' : 'Enable SSL first to configure certificate paths.') + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="section">' +
-          '<h3>Advanced Options</h3>' +
-          '<div class="grid">' +
-            '<label class="field">' +
-              '<span>Connection Timeout (ms)</span>' +
-              '<input id="draft-advanced-connectionTimeout" type="number" min="1" aria-label="Connection timeout milliseconds" value="' + escapeHtml(String(draft.advanced?.connectionTimeout ?? 5000)) + '" />' +
-            '</label>' +
-            '<label class="field">' +
-              '<span>Idle Timeout (ms)</span>' +
-              '<input id="draft-advanced-idleTimeout" type="number" min="1" aria-label="Idle timeout milliseconds" value="' + escapeHtml(String(draft.advanced?.idleTimeout ?? 300000)) + '" />' +
-            '</label>' +
-            '<label class="field">' +
-              '<span>Max Connections</span>' +
-              '<input id="draft-advanced-maxConnections" type="number" min="1" aria-label="Maximum connections" value="' + escapeHtml(String(draft.advanced?.maxConnections ?? 10)) + '" />' +
-            '</label>' +
-            '<label class="checkbox field">' +
-              '<input id="draft-advanced-keepAlive" type="checkbox" aria-label="Enable keep alive" ' + ((draft.advanced?.keepAlive ?? true) ? 'checked' : '') + ' />' +
-              '<span>Keep alive</span>' +
-            '</label>' +
-          '</div>' +
+          '<details>' +
+            '<summary>Advanced Options</summary>' +
+            '<div class="grid">' +
+              '<label class="field">' +
+                '<span>Connection Timeout (ms)</span>' +
+                '<input id="draft-advanced-connectionTimeout" type="number" min="1" aria-label="Connection timeout milliseconds" value="' + escapeHtml(String(draft.advanced?.connectionTimeout ?? 5000)) + '" />' +
+              '</label>' +
+              '<label class="field">' +
+                '<span>Idle Timeout (ms)</span>' +
+                '<input id="draft-advanced-idleTimeout" type="number" min="1" aria-label="Idle timeout milliseconds" value="' + escapeHtml(String(draft.advanced?.idleTimeout ?? 300000)) + '" />' +
+              '</label>' +
+              '<label class="field">' +
+                '<span>Max Connections</span>' +
+                '<input id="draft-advanced-maxConnections" type="number" min="1" aria-label="Maximum connections" value="' + escapeHtml(String(draft.advanced?.maxConnections ?? 10)) + '" />' +
+              '</label>' +
+              '<label class="checkbox field">' +
+                '<input id="draft-advanced-keepAlive" type="checkbox" aria-label="Enable keep alive" ' + ((draft.advanced?.keepAlive ?? true) ? 'checked' : '') + ' />' +
+                '<span>Keep alive</span>' +
+              '</label>' +
+            '</div>' +
+          '</details>' +
         '</div>' +
         '<div class="actions">' +
           '<button data-action="save" aria-label="Save connection profile">' + (state.mode === "create" ? 'Create Connection' : 'Save Changes') + '</button>' +
           '<button class="secondary" data-action="cancel" aria-label="Cancel connection editing">Cancel</button>' +
         '</div>' +
-        '<div class="hint">Operator mode requires Admin Key plus Operator ID. Tenant mode requires Tenant ID and User ID.</div>';
+        '<div class="hint">Admin mode: Admin Key required. Operator mode: Admin Key + Operator ID required. Tenant mode: Tenant ID required, User ID optional.</div>';
     }
 
     window.addEventListener("message", (event) => {
@@ -335,6 +481,18 @@ function getConnectionEditorHtml(initialState) {
       }
       const action = target.dataset.action;
       if (!action) {
+        return;
+      }
+      if (action === "openSslModal") {
+        openSslModal();
+        return;
+      }
+      if (action === "saveSslModal") {
+        saveSslModal();
+        return;
+      }
+      if (action === "cancelSslModal") {
+        closeSslModal();
         return;
       }
       if (action === "save") {

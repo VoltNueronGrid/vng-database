@@ -87,8 +87,8 @@ export function validateConnectionSettings(settings: Partial<ConnectionSettings>
   if (settings.mode === "operator" && !settings.operatorId) {
     return "Operator ID required for operator mode";
   }
-  if (settings.mode === "tenant" && (!settings.tenantId || !settings.userId)) {
-    return "Tenant ID and User ID required for tenant mode";
+  if (settings.mode === "tenant" && !settings.tenantId) {
+    return "Tenant ID required for tenant mode";
   }
   if (settings.ssl?.enabled) {
     const sslPaths = [settings.ssl.caPath, settings.ssl.certPath, settings.ssl.keyPath];

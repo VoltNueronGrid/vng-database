@@ -381,8 +381,8 @@ Add fields:
 
 - [x] Fixture schema updated and documented.
 - [x] At least one driver consumes transport-aware fixtures.
-- [x] CI lane executes and reports transport-specific outcomes.
-- [x] Parity report generated for core commands. *(Initial baseline + CI-generated per-language run artifacts.)*
+- [ ] CI lane executes and reports transport-specific outcomes. *(Deferred for cloud validation due to runner policy on current repo.)*
+- [x] Parity report generated for core commands. *(Initial local/baseline artifact committed; CI-generated per-language artifacts deferred to final cloud validation.)*
 
 ### 4.6 NT-S2-004 Progress Evidence (Current)
 
@@ -403,6 +403,12 @@ Add fields:
   - Python lane uploads `python-transport-conformance` artifact:
     - `drivers/conformance/reports/python-transport-outcomes.json`
     - `drivers/conformance/reports/python-parity-report.md`
+- Remote run verification:
+  - Workflow run URL: `https://github.com/Pavan-Pvj_ghub/polap-db/actions/runs/24568429948`
+  - Status: `failure` before lane step execution
+  - Root cause annotation: `GitHub Actions hosted runners are disabled for this repository`
+  - Consequence: no transport artifacts available to download from this run
+  - Resolution mode: `deferred-for-cloud-validation` (continue local execution; re-run CI artifact collection at final cloud-validation phase)
 
 ---
 
@@ -440,4 +446,16 @@ Add fields:
 - 2026-04-17: Added NT-S2-003 native sql.route dispatch roundtrip and invalid-payload error-path tests.
 - 2026-04-17: Added NT-S2-003 native sql.execute route-decision dispatch roundtrip and invalid-payload error-path tests.
 - 2026-04-17: Added NT-S2-004 CI transport outcome/parity artifact generation (`transport_ci_report.py`) and workflow uploads for Rust/TS/Python lanes.
+- 2026-04-17: Triggered remote `voltnuerongrid-drivers-ci` run and captured runner-policy blocker (`hosted runners disabled`), preventing artifact production.
+- 2026-04-17: Marked NT-S2-004 cloud artifact collection as `deferred-for-cloud-validation` per local-first execution decision.
+- 2026-04-17: Started NT-S3-001 Rust native driver scaffold with frame codec + HELLO/AUTH handshake helpers and compile-backed unit tests.
+- 2026-04-17: Added NT-S3-001.3 mock native transport health COMMAND/RESULT roundtrip with explicit `transportMode=native` opt-in gate and validation tests.
+- 2026-04-17: Added first pluggable non-network loopback native transport adapter skeleton (`NativeFrameResponder` + `LoopbackNativeTransport`) to exercise encode/decode boundaries before socket transport implementation.
+- 2026-04-17: Added socket-backed native transport stub (`SocketNativeTransport`) with `vng://` endpoint parsing and typed transport errors to prepare NT-S3 socket/codec implementation seam.
+- 2026-04-17: Upgraded `SocketNativeTransport` to real TCP connect/send/recv using length-prefixed framed codec and added local loopback TCP roundtrip tests; kept explicit `transportMode=native` opt-in gate.
+- 2026-04-17: Added socket failure error-kind mapping (`timeout/refused/reset/interrupted`) into structured driver errors and introduced initial `sql.execute` native COMMAND framing + socket roundtrip helper/tests.
+- 2026-04-17: Added `sql.analyze` native COMMAND framing + socket roundtrip helper/tests and introduced shared driver helper for native command execution (`transportMode` gate + RESULT validation) across health/execute/analyze.
+- 2026-04-17: Added `sql.route` native COMMAND framing + socket roundtrip helper/tests and expanded shared native execution helper coverage to health/execute/analyze/route.
+- 2026-04-17: Consolidated native command execution through one shared helper path (`execute_native_command_roundtrip`) for health/sql.execute/sql.analyze/sql.route before persistent-session handshake/auth layering.
+- 2026-04-17: Introduced persistent socket session layer (`PersistentNativeSession`) with HELLO/AUTH bootstrap and multi-command reuse over a single connection; routed health/execute/analyze/route through `*_in_session` command helpers.
 

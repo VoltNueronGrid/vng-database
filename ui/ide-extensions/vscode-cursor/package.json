@@ -2,7 +2,7 @@
   "name": "voltnuerongrid-vscode-cursor",
   "displayName": "VoltNueronGrid Tools (VSCode/Cursor)",
   "description": "Professional database client for VoltNueronGrid DB with connection management, SQL editor, and database explorer",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "publisher": "voltnuerongrid",
   "repository": {
     "type": "git",
@@ -40,12 +40,8 @@
     "views": {
       "vngExplorer": [
         {
-          "id": "vngActions",
-          "name": "Actions"
-        },
-        {
           "id": "vngDatabaseExplorer",
-          "name": "Database Explorer",
+          "name": "Database",
           "icon": "media/database.svg"
         },
         {
@@ -54,32 +50,33 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "vngDatabaseExplorer",
+        "contents": "You have not created any connections yet.\n\n[Create Connection](command:vng.newConnection)\n\n[Manage Connections](command:vng.manageConnections) lists, tests, and edits saved profiles."
+      }
+    ],
     "menus": {
       "view/title": [
         {
-          "command": "vng.connectWizard",
-          "when": "view == vngActions",
+          "command": "vng.newConnection",
+          "when": "view == vngDatabaseExplorer",
           "group": "navigation@1"
-        },
-        {
-          "command": "vng.testConnection",
-          "when": "view == vngActions",
-          "group": "navigation@2"
-        },
-        {
-          "command": "vng.manageConnections",
-          "when": "view == vngActions",
-          "group": "navigation@3"
         },
         {
           "command": "vng.refreshSchema",
           "when": "view == vngDatabaseExplorer",
-          "group": "navigation@1"
+          "group": "navigation@2"
         },
         {
-          "command": "vng.newConnection",
+          "command": "vng.manageConnections",
           "when": "view == vngDatabaseExplorer",
-          "group": "navigation@2"
+          "group": "navigation@3"
+        },
+        {
+          "command": "vng.testConnection",
+          "when": "view == vngDatabaseExplorer",
+          "group": "navigation@4"
         },
         {
           "command": "vng.refreshQueryHistory",
@@ -136,11 +133,6 @@
           "group": "0_connection@4"
         },
         {
-          "command": "vng.newConnection",
-          "when": "view == vngDatabaseExplorer && viewItem == emptyState",
-          "group": "0_connection@1"
-        },
-        {
           "command": "vng.copyName",
           "when": "view == vngDatabaseExplorer && (viewItem == table || viewItem == column)",
           "group": "1_modification@1"
@@ -194,20 +186,21 @@
     },
     "commands": [
       {
-        "command": "vng.connectWizard",
-        "title": "VoltNueronGrid: Connection Wizard"
-      },
-      {
         "command": "vng.testConnection",
-        "title": "VoltNueronGrid: Test Connection"
+        "title": "VoltNueronGrid: Test Connection",
+        "icon": "$(vm-running)",
+        "category": "VoltNueronGrid"
       },
       {
         "command": "vng.manageConnections",
-        "title": "VoltNueronGrid: Manage Connections"
+        "title": "VoltNueronGrid: Manage Connections",
+        "icon": "$(list-unordered)",
+        "category": "VoltNueronGrid"
       },
       {
         "command": "vng.newConnection",
         "title": "VoltNueronGrid: Create New Connection",
+        "icon": "$(add)",
         "category": "VoltNueronGrid"
       },
       {

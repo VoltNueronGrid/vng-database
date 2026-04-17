@@ -141,7 +141,7 @@ export class HttpClient {
   private buildHeaders(connection: Connection, method: string): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "User-Agent": "VoltNueronGrid-VSCode/0.3.0",
+      "User-Agent": "VoltNueronGrid-VSCode/0.3.2",
     };
 
     const { mode, adminKey, operatorId, tenantId, userId } = connection.settings;

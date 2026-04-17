@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.describeConnectionNode = describeConnectionNode;
-exports.getEmptyConnectionMessage = getEmptyConnectionMessage;
 exports.shouldExpandConnectionToDatabases = shouldExpandConnectionToDatabases;
 exports.getConnectionFlowSnapshot = getConnectionFlowSnapshot;
 function describeConnectionNode(connection) {
@@ -9,20 +8,19 @@ function describeConnectionNode(connection) {
     if (connection.isActive) {
         badges.push("Active");
     }
-    badges.push(connection.isConnected ? "Connected" : "Not verified");
+    badges.push(connection.isConnected ? "Verified" : "Not verified");
     return {
         description: badges.join(" • "),
         contextValue: connection.isActive ? "connectionActive" : "connectionInactive",
         browseMessage: connection.isActive
-            ? `Browsing ${connection.settings.name}`
+            ? connection.isConnected
+                ? `Browsing ${connection.settings.name}`
+                : `Connection is active but not verified. Run Connect/Test to browse databases.`
             : `Activate ${connection.settings.name} to browse databases.`,
     };
 }
-function getEmptyConnectionMessage() {
-    return "No connections available. Create New Connection.";
-}
 function shouldExpandConnectionToDatabases(connection) {
-    return connection.isActive;
+    return connection.isActive && connection.isConnected;
 }
 function getConnectionFlowSnapshot(connections, selected) {
     return {

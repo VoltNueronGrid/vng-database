@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "transport-mode-fixtures/v1",
+  "defaults": {
+    "fallbackPolicy": "native_primary_http_fallback",
+    "transportAutoOrder": [
+      "native",
+      "http"
+    ]
+  },
+  "cases": [
+    {
+      "id": "tm-http-execute-operator",
+      "name": "operator execute over http transport",
+      "transportMode": "http",
+      "operation": "sql.execute",
+      "config": {
+        "baseUrl": "http://127.0.0.1:8080",
+        "sessionId": "tm-s-http-1",
+        "mode": "operator",
+        "adminApiKey": "secret",
+        "operatorId": "ops-1"
+      },
+      "request": {
+        "sqlBatch": "SELECT 1;",
+        "maxRows": 100
+      },
+      "expect": {
+        "activeTransport": "http",
+        "fallbackTriggered": false,
+        "requestShapeRef": "request-building-cases.json#/operatorExecuteCase"
+      }
+    },
+    {
+      "id": "tm-native-execute-operator",
+      "name": "operator execute over native transport",
+      "transportMode": "native",
+      "operation": "sql.execute",
+      "config": {
+        "baseUrl": "vng://127.0.0.1:7542",
+        "sessionId": "tm-s-native-1",
+        "mode": "operator",
+        "adminApiKey": "secret",
+        "operatorId": "ops-1"
+      },
+      "request": {
+        "sqlBatch": "SELECT 1;",
+        "maxRows": 100
+      },
+      "expect": {
+        "activeTransport": "native",
+        "fallbackTriggered": false,
+        "nativeFrameType": "COMMAND",
+        "nativeCommandName": "sql.execute"
+      }
+    },
+    {
+      "id": "tm-auto-prefers-native",
+      "name": "auto mode prefers native when runtime advertises native capability",
+      "transportMode": "auto",
+      "operation": "health",
+      "config": {
+        "baseUrl": "vng://127.0.0.1:7542",
+        "sessionId": "tm-s-auto-1",
+        "mode": "admin",
+        "adminApiKey": "secret"
+      },
+      "runtimeCapabilities": {
+        "nativeAvailable": true,
+        "httpAvailable": true
+      },
+      "expect": {
+        "activeTransport": "native",
+        "fallbackTriggered": false
+      }
+    },
+    {
+      "id": "tm-auto-fallback-http",
+      "name": "auto mode falls back to http when native unavailable",
+      "transportMode": "auto",
+      "operation": "health",
+      "config": {
+        "baseUrl": "http://127.0.0.1:8080",
+        "sessionId": "tm-s-auto-2",
+        "mode": "admin",
+        "adminApiKey": "secret"
+      },
+      "runtimeCapabilities": {
+        "nativeAvailable": false,
+        "httpAvailable": true
+      },
+      "expect": {
+        "activeTransport": "http",
+        "fallbackTriggered": true,
+        "fallbackReason": "native_unavailable"
+      }
+    },
+    {
+      "id": "tm-auto-no-transports",
+      "name": "auto mode errors when neither native nor http is available",
+      "transportMode": "auto",
+      "operation": "sql.execute",
+      "config": {
+        "baseUrl": "vng://127.0.0.1:7542",
+        "sessionId": "tm-s-auto-3",
+        "mode": "operator",
+        "adminApiKey": "secret",
+        "operatorId": "ops-1"
+      },
+      "runtimeCapabilities": {
+        "nativeAvailable": false,
+        "httpAvailable": false
+      },
+      "expectError": {
+        "kind": "transport",
+        "message": "no available transport: native and http are unavailable"
+      }
+    }
+  ]
+}

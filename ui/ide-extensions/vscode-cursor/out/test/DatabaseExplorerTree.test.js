@@ -17,7 +17,7 @@ const Connection_1 = require("../models/Connection");
     const presentation = (0, DatabaseExplorerTree_1.describeConnectionNode)(connection);
     strict_1.default.equal(presentation.contextValue, "connectionActive");
     strict_1.default.match(presentation.description, /Active/);
-    strict_1.default.match(presentation.description, /Connected/);
+    strict_1.default.match(presentation.description, /Verified/);
 });
 (0, node_test_1.default)("describeConnectionNode guides inactive browsing flow", () => {
     const connection = {
@@ -30,9 +30,6 @@ const Connection_1 = require("../models/Connection");
     strict_1.default.equal(presentation.contextValue, "connectionInactive");
     strict_1.default.match(presentation.description, /Not verified/);
     strict_1.default.equal(presentation.browseMessage, "Activate Staging to browse databases.");
-});
-(0, node_test_1.default)("getEmptyConnectionMessage exposes create CTA copy", () => {
-    strict_1.default.equal((0, DatabaseExplorerTree_1.getEmptyConnectionMessage)(), "No connections available. Create New Connection.");
 });
 (0, node_test_1.default)("connection flow covers empty -> create -> connect -> expand -> disconnect", () => {
     const createdConnection = {

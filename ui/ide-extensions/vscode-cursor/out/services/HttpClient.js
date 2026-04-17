@@ -110,7 +110,7 @@ class HttpClient {
     buildHeaders(connection, method) {
         const headers = {
             "Content-Type": "application/json",
-            "User-Agent": "VoltNueronGrid-VSCode/0.3.0",
+            "User-Agent": "VoltNueronGrid-VSCode/0.3.2",
         };
         const { mode, adminKey, operatorId, tenantId, userId } = connection.settings;
         // Admin or operator mode: include admin key

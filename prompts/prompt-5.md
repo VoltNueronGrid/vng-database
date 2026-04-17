@@ -1,0 +1,3 @@
+I see a VERY BIG GAP here. Please refer to #@prompts/prompt-1.md where I have my initial requirements. I have mentioned that we need native driver in all programming languages  and you are saying above that its all API driven ? Where are the database drivers then (We can prioritize RUST, Typescript and Python drivers for now and use these drivers to connect from VSCode) ? I see few other requirements also missing here.
+
+Can you please go through the #@prompts/prompt-1.md file again and check all the requirements and find all the gaps in the code and create a gap-analyis-v3.md and status-tracker-v3.md with very comprehensive sprint-wise, task-wise plan?

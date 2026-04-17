@@ -34,6 +34,23 @@ code --install-extension .\voltnuerongrid-vscode-cursor-0.1.0.vsix --force
 pwsh .\smoke-test.ps1 -BaseUrl "http://127.0.0.1:8080" -AdminKey "secret"
 ```
 
+## Install into a VS Code profile (e.g. **Rust**)
+
+Use a named profile so Rust tooling and this extension stay isolated from other setups.
+
+1. Create or select the profile: **File → Preferences → Profiles → Create Profile…** (name it `Rust` if you want parity with common setups).
+2. From a shell, install the packaged extension into that profile (replace the `.vsix` name with the file you built):
+
+```powershell
+Set-Location "D:\by\polap-db\ui\ide-extensions\vscode-cursor"
+npm run package
+code --profile "Rust" --install-extension .\voltnuerongrid-vscode-cursor-0.3.1.vsix --force
+```
+
+3. Restart VS Code with that profile and open **VoltNueronGrid → Database**. With no saved connections you should see the empty-state welcome and **Create Connection** opening the **Connect to server** editor.
+
+To remove an older side-loaded build first: **Extensions** → find **VoltNueronGrid** → **Uninstall**, then install the new `.vsix` as above.
+
 ## Publish to private feed
 
 Use your private feed process with the produced .vsix package.

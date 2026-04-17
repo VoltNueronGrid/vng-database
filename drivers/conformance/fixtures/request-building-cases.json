@@ -1,0 +1,21 @@
+{
+  "operatorExecuteCase": {
+    "config": {
+      "baseUrl": "http://127.0.0.1:8080",
+      "sessionId": "session-1",
+      "mode": "operator",
+      "adminApiKey": "secret",
+      "operatorId": "ops-1"
+    },
+    "sqlBatch": "SELECT 1;",
+    "maxRows": 100,
+    "expect": {
+      "method": "POST",
+      "url": "http://127.0.0.1:8080/api/v1/sql/execute",
+      "headers": {
+        "x-vng-admin-key": "secret",
+        "x-vng-operator-id": "ops-1"
+      }
+    }
+  }
+}

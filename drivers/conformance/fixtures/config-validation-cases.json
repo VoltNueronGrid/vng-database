@@ -1,0 +1,32 @@
+{
+  "cases": [
+    {
+      "name": "admin mode requires admin key",
+      "config": {
+        "baseUrl": "http://127.0.0.1:8080",
+        "sessionId": "s1",
+        "mode": "admin"
+      },
+      "expectError": "admin mode requires adminApiKey"
+    },
+    {
+      "name": "operator mode requires admin key and operator id",
+      "config": {
+        "baseUrl": "http://127.0.0.1:8080",
+        "sessionId": "s2",
+        "mode": "operator",
+        "adminApiKey": "secret"
+      },
+      "expectError": "operator mode requires adminApiKey and operatorId"
+    },
+    {
+      "name": "tenant mode requires tenant id",
+      "config": {
+        "baseUrl": "http://127.0.0.1:8080",
+        "sessionId": "s3",
+        "mode": "tenant"
+      },
+      "expectError": "tenant mode requires tenantId"
+    }
+  ]
+}

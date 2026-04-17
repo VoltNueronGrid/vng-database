@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://voltnuerongrid.dev/schemas/native-frame-schema-v1.sample.json",
+  "title": "VoltNueronGrid Native Frame Envelope v1 (Sample)",
+  "description": "Sample schema for NT-S2-001 protocol envelope; implementation may move to compact binary framing while preserving semantic fields.",
+  "type": "object",
+  "required": [
+    "frameType",
+    "protocol",
+    "protocolVersion",
+    "requestId",
+    "flags",
+    "payloadLength",
+    "payload"
+  ],
+  "properties": {
+    "frameType": {
+      "type": "string",
+      "enum": [
+        "HELLO",
+        "HELLO_ACK",
+        "AUTH",
+        "AUTH_ACK",
+        "COMMAND",
+        "RESULT",
+        "ERROR",
+        "PING",
+        "PONG",
+        "STREAM_CHUNK",
+        "STREAM_END",
+        "CANCEL",
+        "GOODBYE"
+      ]
+    },
+    "protocol": {
+      "type": "string",
+      "const": "vng-native"
+    },
+    "protocolVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sessionId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Null/omitted prior to successful auth; present for post-auth frames."
+    },
+    "flags": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "Bitfield for protocol options (compression, fragmentation, tracing, etc.)."
+    },
+    "payloadEncoding": {
+      "type": "string",
+      "enum": [
+        "json",
+        "msgpack",
+        "binary"
+      ],
+      "default": "json"
+    },
+    "payloadLength": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload": {
+      "description": "Frame body (object for json mode, base64 string for binary payload in sample JSON schema).",
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "checksum": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional checksum for frame integrity in plaintext sample representation."
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spanId": {
+          "type": "string"
+        },
+        "parentSpanId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "frameType": {
+            "const": "ERROR"
+          }
+        },
+        "required": [
+          "frameType"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "kind",
+              "message"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "validation",
+                  "transport",
+                  "http_status",
+                  "serialization",
+                  "timeout",
+                  "cancelled",
+                  "auth",
+                  "protocol"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "statusCode": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

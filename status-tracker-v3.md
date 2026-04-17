@@ -245,8 +245,8 @@
 | NT-S2-001 | Draft and approve `native-protocol-v1.md` spec (frame, handshake, auth, errors, streaming) | Arch + Runtime | In Progress | S0-001 | Spec committed + review sign-off; decision closure update landed in protocol draft |
 | NT-S2-002 | Runtime `db-native-listener` scaffold with feature flag + config wiring | Runtime | In Progress | NT-S2-001 | `VNG_NATIVE_*` config parsing + feature-gated scaffold startup added in runtime main bootstrap; compile check green |
 | NT-S2-003 | Introduce runtime transport abstraction shared by native and HTTP handlers | Runtime | Ready for Validation | NT-S2-002 | `TransportGateway` + `CommandDispatcher` active for HTTP proof paths; native `dispatch_frame` parity matrix now covers success + protocol/serialization error normalization for S2 command set |
-| NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | In Progress | NT-S2-001 | Fixture schema consumed by Rust/TS/Python tests; CI now emits per-language transport outcome/parity artifacts for NT-S2-004 |
-| NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | Not Started | NT-S2-001..003 | Rust native smoke tests pass |
+| NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | In Progress (`deferred-for-cloud-validation`) | NT-S2-001 | Local fixture/schema/report scaffolding complete; cloud runner-based artifact evidence deferred to final validation phase |
+| NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | In Progress | NT-S2-001..003 | Native frame/codec + HELLO/AUTH scaffold tests landed; socket execution path pending |
 | NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | Not Started | NT-S3-001 | Selector tests and fallback diagnostics pass |
 | NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | Not Started | NT-S2-003 | Endpoint parity tests pass |
 | NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | Not Started | S0-003, NT-S3-002 | Extension compiles and mode can be switched |
@@ -401,6 +401,67 @@ If any of these slip, the “native driver + IDE parity” objective misses.
       - Rust artifact: `rust-transport-conformance` (`rust-transport-outcomes.json`, `rust-parity-report.md`)
       - TS artifact: `typescript-transport-conformance` (`typescript-transport-outcomes.json`, `typescript-parity-report.md`)
       - Python artifact: `python-transport-conformance` (`python-transport-outcomes.json`, `python-parity-report.md`)
+    - Remote workflow run evidence (manual dispatch):
+      - Run: `https://github.com/Pavan-Pvj_ghub/polap-db/actions/runs/24568429948`
+      - Conclusion: `failure` (all lanes failed before step execution)
+      - Annotation root cause: `GitHub Actions hosted runners are disabled for this repository`
+      - Artifact outcome: `0 artifacts uploaded` (runner-level block prevented job step execution)
+    - Decision: `deferred-for-cloud-validation`
+      - Local-first execution mode approved; CI artifact collection will be retried at final cloud-validation phase.
+  - NT-S3-001 evidence links:
+    - Rust native scaffold code: `drivers/voltnuerongrid-driver-rust/src/lib.rs`
+      - `NativeFrameType`, `NativeAuthMode`, `NativeFrame`, `NativeFrameCodec`, `NativeHandshakeState`
+      - `DriverTransportMode`, `NativeTransport` (mockable transport boundary)
+      - `NativeFrameResponder`, `LoopbackNativeTransport`, `DefaultNativeLoopbackResponder` (first pluggable non-network adapter skeleton)
+      - `SocketNativeTransport` real TCP scaffold (`new`, endpoint parsing, length-prefixed framed `send_frame` with connect/read/write timeouts)
+      - `VoltNueronGridDriver::{derive_native_socket_endpoint, build_socket_native_transport, execute_native_health_roundtrip_socket}`
+      - `SocketNativeTransport::map_socket_error` maps timeout/refused/reset/interrupted into structured `DriverErrorKind::{Timeout, Transport, Cancelled}` with retry-safety hints
+      - `VoltNueronGridDriver::{build_native_hello_frame, build_native_auth_frame, complete_native_handshake, build_native_health_command_frame, execute_native_health_roundtrip}`
+      - `VoltNueronGridDriver::{build_native_sql_execute_command_frame, execute_native_sql_execute_roundtrip, execute_native_sql_execute_roundtrip_socket}`
+      - `VoltNueronGridDriver::{build_native_sql_analyze_command_frame, execute_native_sql_analyze_roundtrip, execute_native_sql_analyze_roundtrip_socket}`
+      - `VoltNueronGridDriver::{build_native_sql_route_command_frame, execute_native_sql_route_roundtrip, execute_native_sql_route_roundtrip_socket}`
+      - Shared helper: `VoltNueronGridDriver::execute_native_command_roundtrip` centralizes transportMode gating + RESULT frame validation across health/sql.execute/sql.analyze/sql.route
+      - Persistent session layer: `PersistentNativeSession` with single-socket HELLO/AUTH bootstrap and multi-command reuse (`send_command_frame`, `open_persistent_native_session`, and per-command `*_in_session` helpers)
+    - Rust native scaffold tests:
+      - `tests::native_frame_codec_roundtrip_preserves_core_fields`
+      - `tests::native_handshake_scaffold_builds_hello_and_auth_frames`
+      - `tests::native_handshake_scaffold_accepts_hello_ack_and_auth_ack`
+      - `tests::native_handshake_scaffold_rejects_invalid_ack_types`
+      - `tests::native_health_roundtrip_mock_transport_returns_result_frame`
+      - `tests::native_health_roundtrip_requires_explicit_native_opt_in`
+      - `tests::native_health_roundtrip_rejects_non_result_frame_from_transport`
+      - `tests::loopback_native_transport_default_responder_health_roundtrip`
+      - `tests::loopback_native_transport_propagates_responder_failures`
+      - `tests::socket_native_transport_builder_parses_vng_endpoint`
+      - `tests::socket_native_transport_builder_rejects_non_native_url`
+      - `tests::socket_native_transport_send_frame_returns_typed_stub_error`
+      - `tests::socket_native_transport_roundtrip_with_local_tcp_server`
+      - `tests::native_health_roundtrip_socket_requires_explicit_native_opt_in`
+      - `tests::socket_native_transport_error_mapping_timeout_refused_reset`
+      - `tests::socket_native_transport_error_mapping_interrupted_is_cancelled`
+      - `tests::native_sql_execute_roundtrip_socket_with_local_tcp_server`
+      - `tests::native_sql_execute_roundtrip_requires_explicit_native_opt_in`
+      - `tests::native_sql_analyze_roundtrip_socket_with_local_tcp_server`
+      - `tests::native_sql_analyze_roundtrip_requires_explicit_native_opt_in`
+      - `tests::native_sql_route_roundtrip_socket_with_local_tcp_server`
+      - `tests::native_sql_route_roundtrip_requires_explicit_native_opt_in`
+      - `tests::persistent_native_session_handshake_and_multi_command_reuse_single_connection`
+      - `tests::persistent_native_session_requires_explicit_native_opt_in`
+    - Targeted validation:
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_handshake_scaffold` (3 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_frame_codec_roundtrip_preserves_core_fields` (1 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_health_roundtrip` (3 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust loopback_native_transport` (2 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust socket_native_transport` (4 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_health_roundtrip_socket_requires_explicit_native_opt_in` (1 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust socket_native_transport_error_mapping` (2 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_sql_execute_roundtrip` (2 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_sql_analyze_roundtrip` (2 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_health_roundtrip` (4 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_sql_route_roundtrip` (2 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust native_sql_execute_roundtrip` (2 passed)
+      - ✅ `cargo test -p voltnuerongrid-driver-rust persistent_native_session` (2 passed)
+      - ✅ `cargo check -p voltnuerongrid-driver-rust`
   - NT-S2-001 evidence links:
     - Protocol draft: `services/voltnuerongridd/reference/native-protocol-v1.md`
     - Frame schema sample: `services/voltnuerongridd/reference/native-frame-schema-v1.sample.json`

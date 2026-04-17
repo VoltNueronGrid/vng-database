@@ -7,7 +7,7 @@ import * as vscode from "vscode";
 import { Database, Schema, Table, Column, getColumnTypeDisplay } from "../models/Schema";
 import { Connection } from "../models/Connection";
 import { SchemaManager } from "../services/SchemaManager";
-import { describeConnectionNode, getEmptyConnectionMessage, shouldExpandConnectionToDatabases } from "./DatabaseExplorerTree";
+import { describeConnectionNode, shouldExpandConnectionToDatabases } from "./DatabaseExplorerTree";
 
 export interface SchemaTreeTableData {
   database: string;
@@ -23,7 +23,7 @@ export interface SchemaTreeColumnData {
 }
 
 export type SchemaTreeItem = {
-  type: "connection" | "database" | "schema" | "table" | "column" | "loading" | "error" | "emptyState" | "message";
+  type: "connection" | "database" | "schema" | "table" | "column" | "loading" | "error" | "message";
   label: string;
   icon?: string;
   contextValue?: string;
@@ -104,15 +104,12 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
       const typeDisplay = getColumnTypeDisplay(column.type);
       treeItem.iconPath = this.getMediaIcon("column");
       treeItem.description = `${typeDisplay.label}${column.nullable ? " (null)" : ""}${column.isPrimaryKey ? " (PK)" : ""}`;
-    } else if (element.type === "emptyState") {
-      treeItem.iconPath = new vscode.ThemeIcon("add");
-      treeItem.tooltip = "Create a new VoltNueronGrid connection";
     } else if (element.type === "message") {
       treeItem.iconPath = new vscode.ThemeIcon("info");
     }
 
     // Collapsible state
-    if (element.type === "loading" || element.type === "error" || element.type === "emptyState" || element.type === "message") {
+    if (element.type === "loading" || element.type === "error" || element.type === "message") {
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
     } else if (element.type === "connection") {
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
@@ -136,17 +133,8 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
     try {
       if (!element) {
         if (this.connections.length === 0) {
-          return [
-            {
-              type: "emptyState",
-              label: getEmptyConnectionMessage(),
-              contextValue: "emptyState",
-              command: {
-                command: "vng.newConnection",
-                title: "Create New Connection",
-              },
-            },
-          ];
+          // Empty children so `viewsWelcome` in package.json shows (Screenshot-2 style).
+          return [];
         }
         return this.connections.map((connection) => {
           const presentation = describeConnectionNode(connection);
@@ -331,9 +319,6 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
     if (element.type === "column") {
       const column = (element.data as SchemaTreeColumnData).column;
       return `Column ${column.name}, type ${getColumnTypeDisplay(column.type).label}${column.isPrimaryKey ? ", primary key" : ""}${column.nullable ? ", nullable" : ""}`;
-    }
-    if (element.type === "emptyState") {
-      return "No connections available. Activate create new connection.";
     }
     return element.label;
   }

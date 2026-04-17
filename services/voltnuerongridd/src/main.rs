@@ -1190,14 +1190,564 @@ struct HealthResponse {
     cluster_mode: String,
 }
 
-#[derive(Deserialize)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportKind {
+    Http,
+    Native,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonicalCommandName {
+    Health,
+    SqlAnalyze,
+    SqlRoute,
+    SqlExecute,
+    SqlTransaction,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct CanonicalCommandEnvelope<TPayload> {
+    request_id: String,
+    transport: TransportKind,
+    command: CanonicalCommandName,
+    session_context: Option<String>,
+    transport_metadata: std::collections::HashMap<String, String>,
+    payload: TPayload,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct CanonicalSuccess<TPayload> {
+    payload: TPayload,
+    request_id: String,
+    transport: TransportKind,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct CanonicalError {
+    request_id: String,
+    transport: TransportKind,
+    kind: &'static str,
+    message: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeFrameType {
+    Hello,
+    HelloAck,
+    Auth,
+    AuthAck,
+    Command,
+    Result,
+    Error,
+    Ping,
+    Pong,
+    StreamChunk,
+    StreamEnd,
+    Cancel,
+    Goodbye,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeCommandKind {
+    Health,
+    SqlAnalyze,
+    SqlRoute,
+    SqlExecute,
+    SqlTransaction,
+    Unknown,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct NativeFrame {
+    frame_type: NativeFrameType,
+    request_id: String,
+    session_id: Option<String>,
+    command: Option<NativeCommandKind>,
+    payload_json: Option<serde_json::Value>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct NativeAdapter;
+
+impl NativeAdapter {
+    #[allow(dead_code)]
+    fn from_command_frame<TPayload>(
+        frame: &NativeFrame,
+        command: CanonicalCommandName,
+        payload: TPayload,
+    ) -> Result<CanonicalCommandEnvelope<TPayload>, CanonicalError> {
+        if frame.frame_type != NativeFrameType::Command {
+            return Err(CanonicalError {
+                request_id: frame.request_id.clone(),
+                transport: TransportKind::Native,
+                kind: "protocol",
+                message: "expected COMMAND frame for canonical dispatch".to_string(),
+            });
+        }
+        let mut transport_metadata = std::collections::HashMap::new();
+        transport_metadata.insert("protocol".to_string(), "native".to_string());
+        transport_metadata.insert("frame_type".to_string(), "COMMAND".to_string());
+        if let Some(cmd) = frame.command {
+            transport_metadata.insert("native_command".to_string(), format!("{cmd:?}"));
+        }
+        Ok(CanonicalCommandEnvelope {
+            request_id: frame.request_id.clone(),
+            transport: TransportKind::Native,
+            command,
+            session_context: frame.session_id.clone(),
+            transport_metadata,
+            payload,
+        })
+    }
+
+    #[allow(dead_code)]
+    fn success_to_result_frame<TPayload: Serialize>(
+        success: &CanonicalSuccess<TPayload>,
+    ) -> NativeFrame {
+        let payload_json = serde_json::to_value(&success.payload).ok();
+        NativeFrame {
+            frame_type: NativeFrameType::Result,
+            request_id: success.request_id.clone(),
+            session_id: None,
+            command: None,
+            payload_json,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn error_to_error_frame(error: &CanonicalError) -> NativeFrame {
+        NativeFrame {
+            frame_type: NativeFrameType::Error,
+            request_id: error.request_id.clone(),
+            session_id: None,
+            command: None,
+            payload_json: Some(json!({
+                "kind": error.kind,
+                "message": error.message,
+            })),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SqlTransactionGatewayContext {
+    statements: Vec<String>,
+    isolation_level: Option<String>,
+}
+
+fn extract_request_id(headers: &HeaderMap, fallback: &str) -> String {
+    headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn build_http_envelope<TPayload>(
+    headers: &HeaderMap,
+    command: CanonicalCommandName,
+    payload: TPayload,
+    fallback_request_id: &str,
+) -> CanonicalCommandEnvelope<TPayload> {
+    let request_id = extract_request_id(headers, fallback_request_id);
+    let session_context = headers
+        .get("x-vng-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let mut transport_metadata = std::collections::HashMap::new();
+    transport_metadata.insert("protocol".to_string(), "http".to_string());
+    if let Some(session_id) = session_context.clone() {
+        transport_metadata.insert("session_id".to_string(), session_id);
+    }
+    CanonicalCommandEnvelope {
+        request_id,
+        transport: TransportKind::Http,
+        command,
+        session_context,
+        transport_metadata,
+        payload,
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct TransportGateway;
+
+impl TransportGateway {
+    fn new() -> Self {
+        Self
+    }
+
+    fn health_response(&self, _transport: TransportKind, state: &AppState) -> HealthResponse {
+        HealthResponse {
+            status: "ok",
+            node_id: state.node_id.clone(),
+            cluster_mode: state.cluster_mode.clone(),
+        }
+    }
+
+    fn sql_analyze_response(
+        &self,
+        envelope: &CanonicalCommandEnvelope<SqlAnalyzeRequest>,
+    ) -> CanonicalSuccess<SqlAnalyzeResponse> {
+        let parsed = SqlAnalyzer::parse_batch(&envelope.payload.sql_batch);
+        let mut rejected = 0usize;
+        let mut statements = Vec::with_capacity(parsed.len());
+        for statement in parsed {
+            let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
+            let accepted = analysis.kind != SqlStatementKind::Unknown;
+            if !accepted {
+                rejected += 1;
+            }
+            statements.push(AnalyzedStatement {
+                statement: statement.raw,
+                kind: format!("{:?}", analysis.kind),
+                requires_transaction: analysis.requires_transaction,
+                touches_catalog: analysis.touches_catalog,
+                accepted,
+            });
+        }
+
+        CanonicalSuccess {
+            payload: SqlAnalyzeResponse {
+                status: "ok",
+                total_statements: statements.len(),
+                rejected_statements: rejected,
+                statements,
+            },
+            request_id: envelope.request_id.clone(),
+            transport: envelope.transport,
+        }
+    }
+
+    fn sql_route_response(
+        &self,
+        envelope: &CanonicalCommandEnvelope<SqlRouteRequest>,
+    ) -> CanonicalSuccess<SqlRouteResponse> {
+        let decision = HtapQueryRouter::route_batch(&envelope.payload.sql_batch);
+        // S3-WS1-05: augment each routed statement with cost-model hints from QueryPlanner
+        use voltnuerongrid_exec::{QueryPath, QueryPlanner};
+        use voltnuerongrid_sql::parse_one;
+        let mut batch_estimated_rows: u64 = 0;
+        let mut batch_relative_cost: f64 = 0.0;
+        let statements: Vec<RoutedStatementResponse> = decision
+            .statements
+            .into_iter()
+            .map(|s| {
+                let (planner_path, estimated_rows, relative_cost) = match parse_one(&s.statement) {
+                    Ok(stmt) => {
+                        let plan = QueryPlanner::plan(&stmt);
+                        let cost = QueryPlanner::estimate_cost(&plan);
+                        let pp = match cost.recommended_path {
+                            QueryPath::Oltp => "oltp",
+                            QueryPath::Olap => "olap",
+                            QueryPath::Hybrid => "hybrid",
+                            QueryPath::Unknown => "unknown",
+                        };
+                        (pp.to_string(), cost.estimated_rows, cost.relative_cost)
+                    }
+                    Err(_) => ("unknown".to_string(), 0u64, 0.0f64),
+                };
+                batch_estimated_rows += estimated_rows;
+                batch_relative_cost += relative_cost;
+                RoutedStatementResponse {
+                    statement: s.statement,
+                    path: route_path_name(s.path).to_string(),
+                    planner_path,
+                    estimated_rows,
+                    relative_cost,
+                }
+            })
+            .collect();
+        CanonicalSuccess {
+            payload: SqlRouteResponse {
+                status: "ok",
+                route_path: route_path_name(decision.path).to_string(),
+                reason: decision.reason,
+                statements,
+                batch_estimated_rows,
+                batch_relative_cost,
+            },
+            request_id: envelope.request_id.clone(),
+            transport: envelope.transport,
+        }
+    }
+
+    fn sql_execute_route_decision(
+        &self,
+        envelope: &CanonicalCommandEnvelope<SqlExecuteRequest>,
+    ) -> CanonicalSuccess<voltnuerongrid_exec::BatchRouteDecision> {
+        CanonicalSuccess {
+            payload: HtapQueryRouter::route_batch(&envelope.payload.sql_batch),
+            request_id: envelope.request_id.clone(),
+            transport: envelope.transport,
+        }
+    }
+
+    fn sql_transaction_context(
+        &self,
+        envelope: &CanonicalCommandEnvelope<SqlTransactionRequest>,
+    ) -> CanonicalSuccess<SqlTransactionGatewayContext> {
+        CanonicalSuccess {
+            payload: SqlTransactionGatewayContext {
+                statements: envelope.payload.statements.clone(),
+                isolation_level: envelope.payload.isolation_level.clone(),
+            },
+            request_id: envelope.request_id.clone(),
+            transport: envelope.transport,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct CommandDispatcher {
+    gateway: TransportGateway,
+}
+
+impl CommandDispatcher {
+    fn new() -> Self {
+        Self {
+            gateway: TransportGateway::new(),
+        }
+    }
+
+    fn dispatch_health(&self, state: &AppState) -> HealthResponse {
+        self.gateway.health_response(TransportKind::Http, state)
+    }
+
+    fn dispatch_health_for_transport(
+        &self,
+        state: &AppState,
+        transport: TransportKind,
+    ) -> HealthResponse {
+        self.gateway.health_response(transport, state)
+    }
+
+    fn dispatch_sql_analyze(
+        &self,
+        envelope: &CanonicalCommandEnvelope<SqlAnalyzeRequest>,
+    ) -> CanonicalSuccess<SqlAnalyzeResponse> {
+        self.gateway.sql_analyze_response(envelope)
+    }
+
+    fn dispatch_sql_route(
+        &self,
+        envelope: &CanonicalCommandEnvelope<SqlRouteRequest>,
+    ) -> CanonicalSuccess<SqlRouteResponse> {
+        self.gateway.sql_route_response(envelope)
+    }
+
+    fn dispatch_sql_execute_route_decision(
+        &self,
+        envelope: &CanonicalCommandEnvelope<SqlExecuteRequest>,
+    ) -> CanonicalSuccess<voltnuerongrid_exec::BatchRouteDecision> {
+        self.gateway.sql_execute_route_decision(envelope)
+    }
+
+    fn dispatch_sql_transaction_context(
+        &self,
+        envelope: &CanonicalCommandEnvelope<SqlTransactionRequest>,
+    ) -> CanonicalSuccess<SqlTransactionGatewayContext> {
+        self.gateway.sql_transaction_context(envelope)
+    }
+}
+
+impl NativeAdapter {
+    fn dispatch_frame(
+        frame: &NativeFrame,
+        state: &AppState,
+        dispatcher: &CommandDispatcher,
+    ) -> NativeFrame {
+        let dispatched = if frame.frame_type != NativeFrameType::Command {
+            Err(CanonicalError {
+                request_id: frame.request_id.clone(),
+                transport: TransportKind::Native,
+                kind: "protocol",
+                message: "expected COMMAND frame for native dispatch".to_string(),
+            })
+        } else {
+            match frame.command {
+                Some(NativeCommandKind::Health) => {
+                    Self::dispatch_health_frame(frame, state, dispatcher)
+                }
+                Some(NativeCommandKind::SqlAnalyze) => {
+                    Self::dispatch_sql_analyze_frame(frame, dispatcher)
+                }
+                Some(NativeCommandKind::SqlRoute) => Self::dispatch_sql_route_frame(frame, dispatcher),
+                Some(NativeCommandKind::SqlExecute) => {
+                    Self::dispatch_sql_execute_route_decision_frame(frame, dispatcher)
+                }
+                Some(NativeCommandKind::SqlTransaction) => {
+                    Self::dispatch_sql_transaction_context_frame(frame, dispatcher)
+                }
+                Some(NativeCommandKind::Unknown) => Err(CanonicalError {
+                    request_id: frame.request_id.clone(),
+                    transport: TransportKind::Native,
+                    kind: "protocol",
+                    message: "unsupported native command: unknown".to_string(),
+                }),
+                None => Err(CanonicalError {
+                    request_id: frame.request_id.clone(),
+                    transport: TransportKind::Native,
+                    kind: "protocol",
+                    message: "missing command for COMMAND frame".to_string(),
+                }),
+            }
+        };
+
+        match dispatched {
+            Ok(frame) => frame,
+            Err(error) => Self::error_to_error_frame(&error),
+        }
+    }
+
+    fn dispatch_health_frame(
+        frame: &NativeFrame,
+        state: &AppState,
+        dispatcher: &CommandDispatcher,
+    ) -> Result<NativeFrame, CanonicalError> {
+        let envelope = Self::from_command_frame(frame, CanonicalCommandName::Health, ())?;
+        let payload = dispatcher.dispatch_health_for_transport(state, envelope.transport);
+        let success = CanonicalSuccess {
+            payload,
+            request_id: envelope.request_id,
+            transport: envelope.transport,
+        };
+        Ok(Self::success_to_result_frame(&success))
+    }
+
+    fn dispatch_sql_analyze_frame(
+        frame: &NativeFrame,
+        dispatcher: &CommandDispatcher,
+    ) -> Result<NativeFrame, CanonicalError> {
+        let payload_json = frame.payload_json.clone().ok_or_else(|| CanonicalError {
+            request_id: frame.request_id.clone(),
+            transport: TransportKind::Native,
+            kind: "protocol",
+            message: "missing payload for sql.analyze frame".to_string(),
+        })?;
+        let payload: SqlAnalyzeRequest =
+            serde_json::from_value(payload_json).map_err(|err| CanonicalError {
+                request_id: frame.request_id.clone(),
+                transport: TransportKind::Native,
+                kind: "serialization",
+                message: format!("invalid sql.analyze payload: {err}"),
+            })?;
+        let envelope = Self::from_command_frame(frame, CanonicalCommandName::SqlAnalyze, payload)?;
+        let success = dispatcher.dispatch_sql_analyze(&envelope);
+        Ok(Self::success_to_result_frame(&success))
+    }
+
+    fn dispatch_sql_route_frame(
+        frame: &NativeFrame,
+        dispatcher: &CommandDispatcher,
+    ) -> Result<NativeFrame, CanonicalError> {
+        let payload_json = frame.payload_json.clone().ok_or_else(|| CanonicalError {
+            request_id: frame.request_id.clone(),
+            transport: TransportKind::Native,
+            kind: "protocol",
+            message: "missing payload for sql.route frame".to_string(),
+        })?;
+        let payload: SqlRouteRequest =
+            serde_json::from_value(payload_json).map_err(|err| CanonicalError {
+                request_id: frame.request_id.clone(),
+                transport: TransportKind::Native,
+                kind: "serialization",
+                message: format!("invalid sql.route payload: {err}"),
+            })?;
+        let envelope = Self::from_command_frame(frame, CanonicalCommandName::SqlRoute, payload)?;
+        let success = dispatcher.dispatch_sql_route(&envelope);
+        Ok(Self::success_to_result_frame(&success))
+    }
+
+    fn dispatch_sql_execute_route_decision_frame(
+        frame: &NativeFrame,
+        dispatcher: &CommandDispatcher,
+    ) -> Result<NativeFrame, CanonicalError> {
+        let payload_json = frame.payload_json.clone().ok_or_else(|| CanonicalError {
+            request_id: frame.request_id.clone(),
+            transport: TransportKind::Native,
+            kind: "protocol",
+            message: "missing payload for sql.execute frame".to_string(),
+        })?;
+        let payload: SqlExecuteRequest =
+            serde_json::from_value(payload_json).map_err(|err| CanonicalError {
+                request_id: frame.request_id.clone(),
+                transport: TransportKind::Native,
+                kind: "serialization",
+                message: format!("invalid sql.execute payload: {err}"),
+            })?;
+        let envelope = Self::from_command_frame(frame, CanonicalCommandName::SqlExecute, payload)?;
+        let success = dispatcher.dispatch_sql_execute_route_decision(&envelope);
+        Ok(NativeFrame {
+            frame_type: NativeFrameType::Result,
+            request_id: success.request_id,
+            session_id: None,
+            command: None,
+            payload_json: Some(json!({
+                "path": route_path_name(success.payload.path),
+                "reason": success.payload.reason,
+                "statements": success.payload.statements.iter().map(|s| {
+                    json!({
+                        "statement": s.statement,
+                        "path": route_path_name(s.path),
+                    })
+                }).collect::<Vec<_>>(),
+            })),
+        })
+    }
+
+    fn dispatch_sql_transaction_context_frame(
+        frame: &NativeFrame,
+        dispatcher: &CommandDispatcher,
+    ) -> Result<NativeFrame, CanonicalError> {
+        let payload_json = frame.payload_json.clone().ok_or_else(|| CanonicalError {
+            request_id: frame.request_id.clone(),
+            transport: TransportKind::Native,
+            kind: "protocol",
+            message: "missing payload for sql.transaction frame".to_string(),
+        })?;
+        let payload: SqlTransactionRequest =
+            serde_json::from_value(payload_json).map_err(|err| CanonicalError {
+                request_id: frame.request_id.clone(),
+                transport: TransportKind::Native,
+                kind: "serialization",
+                message: format!("invalid sql.transaction payload: {err}"),
+            })?;
+        let envelope =
+            Self::from_command_frame(frame, CanonicalCommandName::SqlTransaction, payload)?;
+        let success = dispatcher.dispatch_sql_transaction_context(&envelope);
+        Ok(NativeFrame {
+            frame_type: NativeFrameType::Result,
+            request_id: success.request_id,
+            session_id: None,
+            command: None,
+            payload_json: Some(json!({
+                "statement_count": success.payload.statements.len(),
+                "isolation_level": success.payload.isolation_level,
+            })),
+        })
+    }
+}
+
+#[derive(Clone, Deserialize)]
 struct SqlTransactionRequest {
     statements: Vec<String>,
     /// Requested isolation level: "read_committed" (default), "repeatable_read", "serializable"
     isolation_level: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct SqlAnalyzeRequest {
     sql_batch: String,
 }
@@ -1219,7 +1769,7 @@ struct SqlAnalyzeResponse {
     statements: Vec<AnalyzedStatement>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct SqlRouteRequest {
     sql_batch: String,
 }
@@ -1246,7 +1796,7 @@ struct SqlRouteResponse {
     batch_relative_cost: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct SqlExecuteRequest {
     sql_batch: String,
     max_rows: Option<usize>,
@@ -4791,6 +5341,115 @@ struct SignedProvenanceRegistrationResponse {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct NativeListenerConfig {
+    enabled: bool,
+    bind: String,
+    tls_enabled: bool,
+    max_connections: usize,
+    idle_timeout_ms: u64,
+    handshake_timeout_ms: u64,
+    heartbeat_interval_ms: u64,
+    max_frame_bytes: usize,
+    compression_enabled: bool,
+    compression_threshold_bytes: usize,
+}
+
+impl NativeListenerConfig {
+    fn from_env() -> Self {
+        let enabled = read_env_bool("VNG_NATIVE_LISTENER_ENABLED", false);
+        let bind = env::var("VNG_NATIVE_BIND")
+            .unwrap_or_else(|_| "127.0.0.1:7542".to_string())
+            .trim()
+            .to_string();
+        let tls_enabled = read_env_bool("VNG_NATIVE_TLS_ENABLED", false);
+        let max_connections = read_env_usize("VNG_NATIVE_MAX_CONNECTIONS", 2048);
+        let idle_timeout_ms = read_env_u64("VNG_NATIVE_IDLE_TIMEOUT_MS", 60000);
+        let handshake_timeout_ms = read_env_u64("VNG_NATIVE_HANDSHAKE_TIMEOUT_MS", 5000);
+        let heartbeat_interval_ms = read_env_u64("VNG_NATIVE_HEARTBEAT_INTERVAL_MS", 15000);
+        let max_frame_bytes = read_env_usize("VNG_NATIVE_MAX_FRAME_BYTES", 1_048_576);
+        let compression_enabled = read_env_bool("VNG_NATIVE_COMPRESSION_ENABLED", false);
+        let compression_threshold_bytes =
+            read_env_usize("VNG_NATIVE_COMPRESSION_THRESHOLD_BYTES", 4096);
+
+        Self {
+            enabled,
+            bind,
+            tls_enabled,
+            max_connections,
+            idle_timeout_ms,
+            handshake_timeout_ms,
+            heartbeat_interval_ms,
+            max_frame_bytes,
+            compression_enabled,
+            compression_threshold_bytes,
+        }
+    }
+
+    fn validate(self) -> Self {
+        if self.max_connections == 0 {
+            eprintln!(
+                "Invalid VNG_NATIVE_MAX_CONNECTIONS=0; defaulting to 2048 for scaffold safety"
+            );
+            return Self {
+                max_connections: 2048,
+                ..self
+            };
+        }
+        if self.compression_threshold_bytes > self.max_frame_bytes {
+            eprintln!(
+                "Invalid native compression threshold > max frame size; defaulting threshold to 4096"
+            );
+            return Self {
+                compression_threshold_bytes: 4096,
+                ..self
+            };
+        }
+        self
+    }
+}
+
+fn read_env_bool(name: &str, default: bool) -> bool {
+    match env::var(name) {
+        Ok(value) => value.trim().eq_ignore_ascii_case("true"),
+        Err(_) => default,
+    }
+}
+
+fn read_env_usize(name: &str, default: usize) -> usize {
+    match env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        Some(value) => match value.parse::<usize>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!("Invalid {name}={value}; using default {default}");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+fn read_env_u64(name: &str, default: u64) -> u64 {
+    match env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        Some(value) => match value.parse::<u64>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!("Invalid {name}={value}; using default {default}");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let node_id = env::var("VNG_NODE_ID")
@@ -4805,6 +5464,7 @@ async fn main() {
         .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
         .trim()
         .to_string();
+    let native_listener_config = NativeListenerConfig::from_env().validate();
     let autonomous_mode = AutonomousMode::from_env(
         &env::var("VNG_AUTONOMOUS_MODE").unwrap_or_else(|_| "supervised".to_string()),
     );
@@ -5379,6 +6039,26 @@ async fn main() {
         .route("/api/v1/benchmark/query", post(benchmark_query))
         .with_state(state);
 
+    if native_listener_config.enabled {
+        println!(
+            "native listener scaffold enabled on {} (tls_enabled={}, max_connections={}, max_frame_bytes={}, compression_enabled={}, compression_threshold_bytes={}, idle_timeout_ms={}, handshake_timeout_ms={}, heartbeat_interval_ms={})",
+            native_listener_config.bind,
+            native_listener_config.tls_enabled,
+            native_listener_config.max_connections,
+            native_listener_config.max_frame_bytes,
+            native_listener_config.compression_enabled,
+            native_listener_config.compression_threshold_bytes,
+            native_listener_config.idle_timeout_ms,
+            native_listener_config.handshake_timeout_ms,
+            native_listener_config.heartbeat_interval_ms
+        );
+        tokio::spawn(run_native_listener_scaffold(
+            native_listener_config.clone(),
+        ));
+    } else {
+        println!("native listener scaffold disabled (set VNG_NATIVE_LISTENER_ENABLED=true to enable)");
+    }
+
     println!("voltnuerongridd listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -5386,12 +6066,48 @@ async fn main() {
     axum::serve(listener, app).await.expect("server failed");
 }
 
+async fn run_native_listener_scaffold(config: NativeListenerConfig) {
+    let bind_addr: SocketAddr = match config.bind.parse() {
+        Ok(addr) => addr,
+        Err(err) => {
+            eprintln!(
+                "native listener scaffold parse failed for bind '{}': {err}",
+                config.bind
+            );
+            return;
+        }
+    };
+
+    let listener = match tokio::net::TcpListener::bind(bind_addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!(
+                "native listener scaffold failed to bind on {}: {err}",
+                bind_addr
+            );
+            return;
+        }
+    };
+
+    loop {
+        match listener.accept().await {
+            Ok((_, peer_addr)) => {
+                println!(
+                    "native listener scaffold accepted connection from {}",
+                    peer_addr
+                );
+            }
+            Err(err) => {
+                eprintln!("native listener scaffold accept failure: {err}");
+                break;
+            }
+        }
+    }
+}
+
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok",
-        node_id: state.node_id,
-        cluster_mode: state.cluster_mode,
-    })
+    let dispatcher = CommandDispatcher::new();
+    Json(dispatcher.dispatch_health(&state))
 }
 
 /// Parse a SQL DELETE statement and return the row key to tombstone.
@@ -5508,6 +6224,16 @@ async fn sql_transaction(
         PrivilegeAction::Execute,
         "sql/transaction",
     )?;
+    let dispatcher = CommandDispatcher::new();
+    let envelope = build_http_envelope(
+        &headers,
+        CanonicalCommandName::SqlTransaction,
+        req.clone(),
+        "http-sql-transaction",
+    );
+    let tx_context = dispatcher.dispatch_sql_transaction_context(&envelope);
+    let statements = tx_context.payload.statements;
+    let requested_isolation_level = tx_context.payload.isolation_level;
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/transaction")?;
     // REQ-23: ACID transaction state machine tracking
     {
@@ -5519,16 +6245,16 @@ async fn sql_transaction(
             };
             format!("tx-{}-{}", identity, now_ms)
         };
-        let has_begin = req.statements.iter().any(|s| {
+        let has_begin = statements.iter().any(|s| {
             matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Begin)
         });
-        let has_commit = req.statements.iter().any(|s| {
+        let has_commit = statements.iter().any(|s| {
             matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Commit)
         });
-        let has_rollback = req.statements.iter().any(|s| {
+        let has_rollback = statements.iter().any(|s| {
             matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Rollback)
         });
-        let iso_level = req.isolation_level
+        let iso_level = requested_isolation_level
             .as_deref()
             .unwrap_or("read_committed")
             .to_string();
@@ -5536,7 +6262,7 @@ async fn sql_transaction(
         if has_begin {
             acid.begin(&tx_id, &state.node_id, &iso_level, now_ms);
         }
-        for stmt in &req.statements {
+        for stmt in &statements {
             let upper = stmt.to_ascii_uppercase();
             let kind = SqlAnalyzer::classify_statement(stmt);
             // REQ-23: wire SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT
@@ -5604,7 +6330,7 @@ async fn sql_transaction(
             // Collect keys about to be written and check for concurrent modifications.
             {
                 let mut write_keys: Vec<String> = Vec::new();
-                for stmt in &req.statements {
+                for stmt in &statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
                         if let Some((k, _)) = extract_insert_row_from_sql(stmt) {
@@ -5631,11 +6357,17 @@ async fn sql_transaction(
                             drop(acid);
                             let locale = locale_from_headers(&headers);
                             let localized = I18nCatalog::message(locale, "unauthorized");
+                            let canonical_error = CanonicalError {
+                                request_id: tx_context.request_id.clone(),
+                                transport: tx_context.transport,
+                                kind: "conflict",
+                                message: format!("write_write_conflict:{key}"),
+                            };
                             return Err((
                                 StatusCode::CONFLICT,
                                 Json(AuthErrorResponse {
                                     status: "error",
-                                    reason: format!("write_write_conflict:{key}"),
+                                    reason: canonical_error.message,
                                     locale: locale.as_str().to_string(),
                                     localized_message: localized.message.to_string(),
                                 }),
@@ -5654,7 +6386,7 @@ async fn sql_transaction(
                 let snapshot_xid = rs.current_xid();
                 acid.set_row_store_snapshot(&tx_id, snapshot_xid);
                 let xid = rs.begin_xid();
-                for stmt in &req.statements {
+                for stmt in &statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
                         if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
@@ -5878,30 +6610,14 @@ async fn sql_analyze(
     Json(req): Json<SqlAnalyzeRequest>,
 ) -> Result<Json<SqlAnalyzeResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/analyze")?;
-    let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
-    let mut rejected = 0usize;
-    let mut statements = Vec::with_capacity(parsed.len());
-    for statement in parsed {
-        let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
-        let accepted = analysis.kind != SqlStatementKind::Unknown;
-        if !accepted {
-            rejected += 1;
-        }
-        statements.push(AnalyzedStatement {
-            statement: statement.raw,
-            kind: format!("{:?}", analysis.kind),
-            requires_transaction: analysis.requires_transaction,
-            touches_catalog: analysis.touches_catalog,
-            accepted,
-        });
-    }
-
-    let response = SqlAnalyzeResponse {
-        status: "ok",
-        total_statements: statements.len(),
-        rejected_statements: rejected,
-        statements,
-    };
+    let dispatcher = CommandDispatcher::new();
+    let envelope = build_http_envelope(
+        &headers,
+        CanonicalCommandName::SqlAnalyze,
+        req.clone(),
+        "http-sql-analyze",
+    );
+    let response = dispatcher.dispatch_sql_analyze(&envelope);
     append_runtime_audit_event(
         &state,
         AuditEventKind::Sql,
@@ -5910,11 +6626,12 @@ async fn sql_analyze(
         "ok",
         json!({
             "route_scope": "sql/analyze",
-            "total_statements": response.total_statements,
-            "rejected_statements": response.rejected_statements,
+            "total_statements": response.payload.total_statements,
+            "rejected_statements": response.payload.rejected_statements,
+            "request_id": response.request_id,
         }),
     );
-    Ok(Json(response))
+    Ok(Json(response.payload))
 }
 
 async fn sql_route(
@@ -5924,50 +6641,14 @@ async fn sql_route(
 ) -> Result<Json<SqlRouteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/route")?;
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/route")?;
-    let decision = HtapQueryRouter::route_batch(&req.sql_batch);
-    // S3-WS1-05: augment each routed statement with cost-model hints from QueryPlanner
-    use voltnuerongrid_exec::{QueryPlanner, QueryPath};
-    use voltnuerongrid_sql::parse_one;
-    let mut batch_estimated_rows: u64 = 0;
-    let mut batch_relative_cost: f64 = 0.0;
-    let statements: Vec<RoutedStatementResponse> = decision
-        .statements
-        .into_iter()
-        .map(|s| {
-            let (planner_path, estimated_rows, relative_cost) =
-                match parse_one(&s.statement) {
-                    Ok(stmt) => {
-                        let plan = QueryPlanner::plan(&stmt);
-                        let cost = QueryPlanner::estimate_cost(&plan);
-                        let pp = match cost.recommended_path {
-                            QueryPath::Oltp => "oltp",
-                            QueryPath::Olap => "olap",
-                            QueryPath::Hybrid => "hybrid",
-                            QueryPath::Unknown => "unknown",
-                        };
-                        (pp.to_string(), cost.estimated_rows, cost.relative_cost)
-                    }
-                    Err(_) => ("unknown".to_string(), 0u64, 0.0f64),
-                };
-            batch_estimated_rows += estimated_rows;
-            batch_relative_cost += relative_cost;
-            RoutedStatementResponse {
-                statement: s.statement,
-                path: route_path_name(s.path).to_string(),
-                planner_path,
-                estimated_rows,
-                relative_cost,
-            }
-        })
-        .collect();
-    let response = SqlRouteResponse {
-        status: "ok",
-        route_path: route_path_name(decision.path).to_string(),
-        reason: decision.reason,
-        statements,
-        batch_estimated_rows,
-        batch_relative_cost,
-    };
+    let dispatcher = CommandDispatcher::new();
+    let envelope = build_http_envelope(
+        &headers,
+        CanonicalCommandName::SqlRoute,
+        req.clone(),
+        "http-sql-route",
+    );
+    let response = dispatcher.dispatch_sql_route(&envelope);
     append_runtime_audit_event(
         &state,
         AuditEventKind::Sql,
@@ -5976,13 +6657,14 @@ async fn sql_route(
         "ok",
         json!({
             "route_scope": "sql/route",
-            "route_path": response.route_path,
-            "statement_count": response.statements.len(),
-            "reason": response.reason,
+            "route_path": response.payload.route_path,
+            "statement_count": response.payload.statements.len(),
+            "reason": response.payload.reason,
+            "request_id": response.request_id,
         }),
     );
     release_sql_data_plane_connection(&state, &connection_id);
-    Ok(Json(response))
+    Ok(Json(response.payload))
 }
 
 async fn sql_execute(
@@ -5997,7 +6679,14 @@ async fn sql_execute(
         "sql/execute",
     )?;
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/execute")?;
-    let decision = HtapQueryRouter::route_batch(&req.sql_batch);
+    let dispatcher = CommandDispatcher::new();
+    let envelope = build_http_envelope(
+        &headers,
+        CanonicalCommandName::SqlExecute,
+        req.clone(),
+        "http-sql-execute",
+    );
+    let decision = dispatcher.dispatch_sql_execute_route_decision(&envelope);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
     let udf_function_catalog = udf_function_catalog_contract();
     let udf_guard_policies = udf_guard_policy_contract();
@@ -6007,6 +6696,12 @@ async fn sql_execute(
     let udf_results = match udf_execution {
         Ok(results) => results,
         Err(reason) => {
+            let canonical_error = CanonicalError {
+                request_id: envelope.request_id.clone(),
+                transport: envelope.transport,
+                kind: "validation",
+                message: reason.clone(),
+            };
             append_runtime_audit_event(
                 &state,
                 AuditEventKind::Sql,
@@ -6015,8 +6710,10 @@ async fn sql_execute(
                 "blocked",
                 json!({
                     "route_scope": "sql/execute",
-                    "route_path": route_path_name(decision.path),
-                    "reason": reason,
+                    "route_path": route_path_name(decision.payload.path),
+                    "reason": canonical_error.message,
+                    "error_kind": canonical_error.kind,
+                    "request_id": canonical_error.request_id,
                     "rejected_statement_count": parsed.len(),
                     "udf_guardrail_status": "blocked",
                 }),
@@ -6025,8 +6722,8 @@ async fn sql_execute(
                 StatusCode::BAD_REQUEST,
                 Json(SqlExecuteResponse {
                     status: "error",
-                    route_path: route_path_name(decision.path).to_string(),
-                    reason,
+                    route_path: route_path_name(decision.payload.path).to_string(),
+                    reason: canonical_error.message,
                     transaction: None,
                     olap: None,
                     rejected_statement_count: parsed.len(),
@@ -6046,7 +6743,7 @@ async fn sql_execute(
         }
     };
 
-    if matches!(decision.path, QueryPath::Unknown) {
+    if matches!(decision.payload.path, QueryPath::Unknown) {
         append_runtime_audit_event(
             &state,
             AuditEventKind::Sql,
@@ -6056,7 +6753,7 @@ async fn sql_execute(
             json!({
                 "route_scope": "sql/execute",
                 "route_path": "unknown",
-                "reason": decision.reason,
+                "reason": decision.payload.reason,
                 "rejected_statement_count": parsed.len(),
             }),
         );
@@ -6065,7 +6762,7 @@ async fn sql_execute(
             Json(SqlExecuteResponse {
                 status: "error",
                 route_path: "unknown".to_string(),
-                reason: decision.reason,
+                reason: decision.payload.reason,
                 transaction: None,
                 olap: None,
                 rejected_statement_count: parsed.len(),
@@ -6113,8 +6810,8 @@ async fn sql_execute(
                 "error",
                 json!({
                     "route_scope": "sql/execute",
-                    "route_path": route_path_name(decision.path),
-                    "reason": decision.reason,
+                    "route_path": route_path_name(decision.payload.path),
+                    "reason": decision.payload.reason,
                     "rejected_statement_count": rejected_statement_count,
                     "transaction_status": response.status,
                 }),
@@ -6123,8 +6820,8 @@ async fn sql_execute(
                 status,
                 Json(SqlExecuteResponse {
                     status: "error",
-                    route_path: route_path_name(decision.path).to_string(),
-                    reason: decision.reason,
+                    route_path: route_path_name(decision.payload.path).to_string(),
+                    reason: decision.payload.reason,
                     transaction: Some(response),
                     olap: None,
                     rejected_statement_count,
@@ -6322,8 +7019,8 @@ async fn sql_execute(
         };
     let response = SqlExecuteResponse {
         status: "ok",
-        route_path: route_path_name(decision.path).to_string(),
-        reason: decision.reason,
+        route_path: route_path_name(decision.payload.path).to_string(),
+        reason: decision.payload.reason,
         transaction,
         olap,
         rejected_statement_count,
@@ -21431,6 +22128,40 @@ mod tests {
     }
 
     #[test]
+    fn nt_s2_003_sql_analyze_gateway_wrapper_preserves_http_payload() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let req = SqlAnalyzeRequest {
+            sql_batch: "SELECT 1; UPDATE t SET x = 2;".to_string(),
+        };
+
+        let handler_response = runtime
+            .block_on(sql_analyze(State(state.clone()), headers.clone(), Json(req.clone())))
+            .expect("sql analyze response");
+
+        let dispatcher = CommandDispatcher::new();
+        let envelope = build_http_envelope(
+            &headers,
+            CanonicalCommandName::SqlAnalyze,
+            req,
+            "http-sql-analyze-test",
+        );
+        let canonical = dispatcher.dispatch_sql_analyze(&envelope);
+
+        assert_eq!(canonical.payload.status, handler_response.status);
+        assert_eq!(canonical.payload.total_statements, handler_response.total_statements);
+        assert_eq!(
+            canonical.payload.rejected_statements,
+            handler_response.rejected_statements
+        );
+        assert_eq!(
+            canonical.payload.statements.len(),
+            handler_response.statements.len()
+        );
+    }
+
+    #[test]
     fn ws3_routing_policy_distributes_concurrent_queries() {
         let state = state_with_key(None);
         let headers1 = tenant_user_headers("analyst-acme", "acme");
@@ -21468,6 +22199,657 @@ mod tests {
         let result = handle1.join().expect("thread join").expect("thread route call");
         assert_eq!(result.status, "ok");
         assert_eq!(result.route_path, "oltp");
+    }
+
+    #[test]
+    fn nt_s2_003_sql_route_gateway_wrapper_preserves_http_payload() {
+        let state = state_with_key(None);
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let req = SqlRouteRequest {
+            sql_batch: "SELECT * FROM orders;".to_string(),
+        };
+
+        let handler_response = runtime
+            .block_on(sql_route(State(state.clone()), headers.clone(), Json(req.clone())))
+            .expect("sql route response");
+
+        let dispatcher = CommandDispatcher::new();
+        let envelope = build_http_envelope(
+            &headers,
+            CanonicalCommandName::SqlRoute,
+            req,
+            "http-sql-route-test",
+        );
+        let canonical = dispatcher.dispatch_sql_route(&envelope);
+
+        assert_eq!(canonical.payload.status, handler_response.status);
+        assert_eq!(canonical.payload.route_path, handler_response.route_path);
+        assert_eq!(canonical.payload.reason, handler_response.reason);
+        assert_eq!(
+            canonical.payload.statements.len(),
+            handler_response.statements.len()
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_sql_execute_route_decision_wrapper_preserves_routing_result() {
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlExecuteRequest {
+            sql_batch: "SELECT * FROM orders WHERE id = '1';".to_string(),
+            max_rows: Some(25),
+        };
+
+        let envelope = build_http_envelope(
+            &headers,
+            CanonicalCommandName::SqlExecute,
+            req.clone(),
+            "http-sql-execute-test",
+        );
+        let dispatcher = CommandDispatcher::new();
+        let wrapped_decision = dispatcher.dispatch_sql_execute_route_decision(&envelope);
+        let direct_decision = HtapQueryRouter::route_batch(&req.sql_batch);
+
+        assert_eq!(wrapped_decision.payload.path, direct_decision.path);
+        assert_eq!(wrapped_decision.payload.reason, direct_decision.reason);
+        assert_eq!(
+            wrapped_decision.payload.statements.len(),
+            direct_decision.statements.len()
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_sql_transaction_context_wrapper_preserves_payload() {
+        let headers = tenant_user_headers("analyst-acme", "acme");
+        let req = SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO orders VALUES (1)".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: Some("serializable".to_string()),
+        };
+
+        let envelope = build_http_envelope(
+            &headers,
+            CanonicalCommandName::SqlTransaction,
+            req.clone(),
+            "http-sql-transaction-test",
+        );
+        let dispatcher = CommandDispatcher::new();
+        let wrapped_context = dispatcher.dispatch_sql_transaction_context(&envelope);
+
+        assert_eq!(wrapped_context.payload.statements, req.statements);
+        assert_eq!(
+            wrapped_context.payload.isolation_level.as_deref(),
+            Some("serializable")
+        );
+        assert_eq!(wrapped_context.request_id, "http-sql-transaction-test");
+    }
+
+    #[test]
+    fn nt_s2_003_native_adapter_maps_command_frame_to_canonical_envelope() {
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-req-1".to_string(),
+            session_id: Some("sess-native-1".to_string()),
+            command: Some(NativeCommandKind::SqlAnalyze),
+            payload_json: None,
+        };
+        let payload = SqlAnalyzeRequest {
+            sql_batch: "SELECT 1;".to_string(),
+        };
+
+        let canonical =
+            NativeAdapter::from_command_frame(&frame, CanonicalCommandName::SqlAnalyze, payload)
+                .expect("native command frame should map to canonical envelope");
+
+        assert_eq!(canonical.request_id, "native-req-1");
+        assert_eq!(canonical.transport, TransportKind::Native);
+        assert_eq!(canonical.command, CanonicalCommandName::SqlAnalyze);
+        assert_eq!(canonical.session_context.as_deref(), Some("sess-native-1"));
+        assert_eq!(
+            canonical
+                .transport_metadata
+                .get("protocol")
+                .map(String::as_str),
+            Some("native")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_adapter_maps_canonical_error_to_error_frame() {
+        let error = CanonicalError {
+            request_id: "native-req-err-1".to_string(),
+            transport: TransportKind::Native,
+            kind: "protocol",
+            message: "bad frame".to_string(),
+        };
+
+        let frame = NativeAdapter::error_to_error_frame(&error);
+        assert_eq!(frame.frame_type, NativeFrameType::Error);
+        assert_eq!(frame.request_id, "native-req-err-1");
+        let payload = frame.payload_json.expect("error payload expected");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("protocol"));
+        assert_eq!(payload.get("message").and_then(|v| v.as_str()), Some("bad frame"));
+    }
+
+    #[test]
+    fn nt_s2_003_native_health_dispatch_roundtrip_produces_result_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-health-1".to_string(),
+            session_id: Some("native-session-1".to_string()),
+            command: Some(NativeCommandKind::Health),
+            payload_json: None,
+        };
+
+        let result_frame = NativeAdapter::dispatch_health_frame(&frame, &state, &dispatcher)
+            .expect("native health dispatch should succeed");
+
+        assert_eq!(result_frame.frame_type, NativeFrameType::Result);
+        assert_eq!(result_frame.request_id, "native-health-1");
+        let payload = result_frame.payload_json.expect("result payload expected");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+        assert_eq!(
+            payload.get("node_id").and_then(|v| v.as_str()),
+            Some(state.node_id.as_str())
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_sql_analyze_dispatch_roundtrip_produces_result_frame() {
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-analyze-1".to_string(),
+            session_id: Some("native-session-2".to_string()),
+            command: Some(NativeCommandKind::SqlAnalyze),
+            payload_json: Some(json!({
+                "sql_batch": "SELECT 1; UPDATE t SET x = 2;"
+            })),
+        };
+
+        let result_frame =
+            NativeAdapter::dispatch_sql_analyze_frame(&frame, &dispatcher)
+                .expect("native sql.analyze dispatch should succeed");
+
+        assert_eq!(result_frame.frame_type, NativeFrameType::Result);
+        assert_eq!(result_frame.request_id, "native-analyze-1");
+        let payload = result_frame.payload_json.expect("result payload expected");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+        assert_eq!(
+            payload
+                .get("total_statements")
+                .and_then(|v| v.as_u64()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_sql_analyze_dispatch_rejects_missing_payload() {
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-analyze-err-1".to_string(),
+            session_id: Some("native-session-err".to_string()),
+            command: Some(NativeCommandKind::SqlAnalyze),
+            payload_json: None,
+        };
+
+        let err = NativeAdapter::dispatch_sql_analyze_frame(&frame, &dispatcher)
+            .expect_err("missing payload should error");
+        assert_eq!(err.kind, "protocol");
+        assert!(err.message.contains("missing payload"));
+    }
+
+    #[test]
+    fn nt_s2_003_native_sql_route_dispatch_roundtrip_produces_result_frame() {
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-route-1".to_string(),
+            session_id: Some("native-session-route".to_string()),
+            command: Some(NativeCommandKind::SqlRoute),
+            payload_json: Some(json!({
+                "sql_batch": "SELECT * FROM orders;"
+            })),
+        };
+
+        let result_frame = NativeAdapter::dispatch_sql_route_frame(&frame, &dispatcher)
+            .expect("native sql.route dispatch should succeed");
+
+        assert_eq!(result_frame.frame_type, NativeFrameType::Result);
+        assert_eq!(result_frame.request_id, "native-route-1");
+        let payload = result_frame.payload_json.expect("result payload expected");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+        assert!(payload.get("route_path").and_then(|v| v.as_str()).is_some());
+    }
+
+    #[test]
+    fn nt_s2_003_native_sql_route_dispatch_rejects_invalid_payload() {
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-route-err-1".to_string(),
+            session_id: Some("native-session-route-err".to_string()),
+            command: Some(NativeCommandKind::SqlRoute),
+            payload_json: Some(json!({
+                "unexpected": "shape"
+            })),
+        };
+
+        let err = NativeAdapter::dispatch_sql_route_frame(&frame, &dispatcher)
+            .expect_err("invalid payload should error");
+        assert_eq!(err.kind, "serialization");
+        assert!(err.message.contains("invalid sql.route payload"));
+    }
+
+    #[test]
+    fn nt_s2_003_native_sql_execute_route_decision_dispatch_roundtrip_produces_result_frame() {
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-execute-1".to_string(),
+            session_id: Some("native-session-execute".to_string()),
+            command: Some(NativeCommandKind::SqlExecute),
+            payload_json: Some(json!({
+                "sql_batch": "SELECT * FROM orders WHERE id = '1';",
+                "max_rows": 50
+            })),
+        };
+
+        let result_frame =
+            NativeAdapter::dispatch_sql_execute_route_decision_frame(&frame, &dispatcher)
+                .expect("native sql.execute route decision dispatch should succeed");
+
+        assert_eq!(result_frame.frame_type, NativeFrameType::Result);
+        assert_eq!(result_frame.request_id, "native-execute-1");
+        let payload = result_frame.payload_json.expect("result payload expected");
+        assert!(payload.get("path").is_some());
+        assert!(payload.get("reason").is_some());
+        assert!(payload.get("statements").is_some());
+    }
+
+    #[test]
+    fn nt_s2_003_native_sql_execute_route_decision_dispatch_rejects_invalid_payload() {
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-execute-err-1".to_string(),
+            session_id: Some("native-session-execute-err".to_string()),
+            command: Some(NativeCommandKind::SqlExecute),
+            payload_json: Some(json!({
+                "invalid": "shape"
+            })),
+        };
+
+        let err =
+            NativeAdapter::dispatch_sql_execute_route_decision_frame(&frame, &dispatcher)
+                .expect_err("invalid payload should error");
+        assert_eq!(err.kind, "serialization");
+        assert!(err.message.contains("invalid sql.execute payload"));
+    }
+
+    #[test]
+    fn nt_s2_003_native_sql_transaction_context_dispatch_roundtrip_produces_result_frame() {
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-tx-1".to_string(),
+            session_id: Some("native-session-tx".to_string()),
+            command: Some(NativeCommandKind::SqlTransaction),
+            payload_json: Some(json!({
+                "statements": ["BEGIN", "UPDATE t SET x = 1", "COMMIT"],
+                "isolation_level": "serializable"
+            })),
+        };
+
+        let result_frame =
+            NativeAdapter::dispatch_sql_transaction_context_frame(&frame, &dispatcher)
+                .expect("native sql.transaction context dispatch should succeed");
+
+        assert_eq!(result_frame.frame_type, NativeFrameType::Result);
+        assert_eq!(result_frame.request_id, "native-tx-1");
+        let payload = result_frame.payload_json.expect("result payload expected");
+        assert_eq!(
+            payload
+                .get("statement_count")
+                .and_then(|v| v.as_u64()),
+            Some(3)
+        );
+        assert_eq!(
+            payload
+                .get("isolation_level")
+                .and_then(|v| v.as_str()),
+            Some("serializable")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_sql_transaction_context_dispatch_rejects_invalid_payload() {
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-tx-err-1".to_string(),
+            session_id: Some("native-session-tx-err".to_string()),
+            command: Some(NativeCommandKind::SqlTransaction),
+            payload_json: Some(json!({
+                "invalid": "shape"
+            })),
+        };
+
+        let err =
+            NativeAdapter::dispatch_sql_transaction_context_frame(&frame, &dispatcher)
+                .expect_err("invalid payload should error");
+        assert_eq!(err.kind, "serialization");
+        assert!(err.message.contains("invalid sql.transaction payload"));
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_rejects_missing_command_with_error_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-missing-command-1".to_string(),
+            session_id: Some("native-session-missing-command".to_string()),
+            command: None,
+            payload_json: Some(json!({ "sql_batch": "SELECT 1;" })),
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+
+        assert_eq!(result.frame_type, NativeFrameType::Error);
+        assert_eq!(result.request_id, "native-missing-command-1");
+        let payload = result.payload_json.expect("error payload expected");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("protocol"));
+        assert!(
+            payload
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("missing command")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_rejects_unknown_command_with_error_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-unknown-command-1".to_string(),
+            session_id: Some("native-session-unknown-command".to_string()),
+            command: Some(NativeCommandKind::Unknown),
+            payload_json: Some(json!({ "noop": true })),
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+
+        assert_eq!(result.frame_type, NativeFrameType::Error);
+        assert_eq!(result.request_id, "native-unknown-command-1");
+        let payload = result.payload_json.expect("error payload expected");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("protocol"));
+        assert_eq!(
+            payload.get("message").and_then(|v| v.as_str()),
+            Some("unsupported native command: unknown")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_rejects_non_command_frame_with_error_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Ping,
+            request_id: "native-non-command-1".to_string(),
+            session_id: Some("native-session-non-command".to_string()),
+            command: Some(NativeCommandKind::Health),
+            payload_json: None,
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+
+        assert_eq!(result.frame_type, NativeFrameType::Error);
+        assert_eq!(result.request_id, "native-non-command-1");
+        let payload = result.payload_json.expect("error payload expected");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("protocol"));
+        assert_eq!(
+            payload.get("message").and_then(|v| v.as_str()),
+            Some("expected COMMAND frame for native dispatch")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_routes_health_to_result_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-health-1".to_string(),
+            session_id: Some("native-session-dispatch-health".to_string()),
+            command: Some(NativeCommandKind::Health),
+            payload_json: None,
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+
+        assert_eq!(result.frame_type, NativeFrameType::Result);
+        assert_eq!(result.request_id, "native-dispatch-health-1");
+        let payload = result.payload_json.expect("result payload expected");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_routes_sql_analyze_to_result_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-analyze-1".to_string(),
+            session_id: Some("native-session-dispatch-analyze".to_string()),
+            command: Some(NativeCommandKind::SqlAnalyze),
+            payload_json: Some(json!({
+                "sql_batch": "SELECT 1; SELECT 2;"
+            })),
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+
+        assert_eq!(result.frame_type, NativeFrameType::Result);
+        assert_eq!(result.request_id, "native-dispatch-analyze-1");
+        let payload = result.payload_json.expect("result payload expected");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+        assert_eq!(
+            payload.get("total_statements").and_then(|v| v.as_u64()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_normalizes_handler_serialization_error() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-serialization-1".to_string(),
+            session_id: Some("native-session-dispatch-serialization".to_string()),
+            command: Some(NativeCommandKind::SqlAnalyze),
+            payload_json: Some(json!({
+                "invalid": "shape"
+            })),
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+
+        assert_eq!(result.frame_type, NativeFrameType::Error);
+        assert_eq!(result.request_id, "native-dispatch-serialization-1");
+        let payload = result.payload_json.expect("error payload expected");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("serialization"));
+        assert!(
+            payload
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("invalid sql.analyze payload")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_routes_sql_route_to_result_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-route-1".to_string(),
+            session_id: Some("native-session-dispatch-route".to_string()),
+            command: Some(NativeCommandKind::SqlRoute),
+            payload_json: Some(json!({
+                "sql_batch": "SELECT * FROM t;"
+            })),
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+        assert_eq!(result.frame_type, NativeFrameType::Result);
+        assert_eq!(result.request_id, "native-dispatch-route-1");
+        let payload = result.payload_json.expect("result payload expected");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+        assert!(payload.get("route_path").is_some());
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_routes_sql_execute_to_result_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-execute-1".to_string(),
+            session_id: Some("native-session-dispatch-execute".to_string()),
+            command: Some(NativeCommandKind::SqlExecute),
+            payload_json: Some(json!({
+                "sql_batch": "SELECT 1;",
+                "max_rows": 10
+            })),
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+        assert_eq!(result.frame_type, NativeFrameType::Result);
+        assert_eq!(result.request_id, "native-dispatch-execute-1");
+        let payload = result.payload_json.expect("result payload expected");
+        assert!(payload.get("path").is_some());
+        assert!(payload.get("reason").is_some());
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_routes_sql_transaction_to_result_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-tx-1".to_string(),
+            session_id: Some("native-session-dispatch-tx".to_string()),
+            command: Some(NativeCommandKind::SqlTransaction),
+            payload_json: Some(json!({
+                "statements": ["BEGIN", "SELECT 1", "COMMIT"],
+                "isolation_level": "read_committed"
+            })),
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+        assert_eq!(result.frame_type, NativeFrameType::Result);
+        assert_eq!(result.request_id, "native-dispatch-tx-1");
+        let payload = result.payload_json.expect("result payload expected");
+        assert_eq!(
+            payload.get("statement_count").and_then(|v| v.as_u64()),
+            Some(3)
+        );
+        assert_eq!(
+            payload.get("isolation_level").and_then(|v| v.as_str()),
+            Some("read_committed")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_normalizes_sql_route_protocol_error() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-route-protocol-1".to_string(),
+            session_id: Some("native-session-dispatch-route-protocol".to_string()),
+            command: Some(NativeCommandKind::SqlRoute),
+            payload_json: None,
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+        assert_eq!(result.frame_type, NativeFrameType::Error);
+        assert_eq!(result.request_id, "native-dispatch-route-protocol-1");
+        let payload = result.payload_json.expect("error payload expected");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("protocol"));
+        assert!(
+            payload
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("missing payload for sql.route frame")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_normalizes_sql_execute_serialization_error() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-execute-serialization-1".to_string(),
+            session_id: Some("native-session-dispatch-execute-serialization".to_string()),
+            command: Some(NativeCommandKind::SqlExecute),
+            payload_json: Some(json!({
+                "invalid": true
+            })),
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+        assert_eq!(result.frame_type, NativeFrameType::Error);
+        assert_eq!(result.request_id, "native-dispatch-execute-serialization-1");
+        let payload = result.payload_json.expect("error payload expected");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("serialization"));
+        assert!(
+            payload
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("invalid sql.execute payload")
+        );
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_normalizes_sql_transaction_protocol_error() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-dispatch-tx-protocol-1".to_string(),
+            session_id: Some("native-session-dispatch-tx-protocol".to_string()),
+            command: Some(NativeCommandKind::SqlTransaction),
+            payload_json: None,
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+        assert_eq!(result.frame_type, NativeFrameType::Error);
+        assert_eq!(result.request_id, "native-dispatch-tx-protocol-1");
+        let payload = result.payload_json.expect("error payload expected");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("protocol"));
+        assert!(
+            payload
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("missing payload for sql.transaction frame")
+        );
     }
 
     // â”€â”€ REQ-07: parallel / chunked ingest loading KPI tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

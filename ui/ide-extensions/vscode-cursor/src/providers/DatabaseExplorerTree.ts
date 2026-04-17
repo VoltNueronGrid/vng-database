@@ -18,23 +18,21 @@ export function describeConnectionNode(connection: Connection): ConnectionNodePr
     badges.push("Active");
   }
 
-  badges.push(connection.isConnected ? "Connected" : "Not verified");
+  badges.push(connection.isConnected ? "Verified" : "Not verified");
 
   return {
     description: badges.join(" • "),
     contextValue: connection.isActive ? "connectionActive" : "connectionInactive",
     browseMessage: connection.isActive
-      ? `Browsing ${connection.settings.name}`
+      ? connection.isConnected
+        ? `Browsing ${connection.settings.name}`
+        : `Connection is active but not verified. Run Connect/Test to browse databases.`
       : `Activate ${connection.settings.name} to browse databases.`,
   };
 }
 
-export function getEmptyConnectionMessage(): string {
-  return "No connections available. Create New Connection.";
-}
-
 export function shouldExpandConnectionToDatabases(connection: Connection): boolean {
-  return connection.isActive;
+  return connection.isActive && connection.isConnected;
 }
 
 export function getConnectionFlowSnapshot(connections: Connection[], selected?: Connection): ConnectionFlowSnapshot {
