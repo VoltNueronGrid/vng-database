@@ -178,6 +178,114 @@
 
 ---
 
+## 2.1) Dual-Transport Addendum (Native + HTTP in Parallel)
+
+**Directive:** Keep both transport modes as first-class capabilities.
+
+- **Native transport:** high-performance, long-lived connection protocol for core data-plane operations.
+- **HTTP transport:** stable compatibility transport for existing clients, admin/ops APIs, and staged fallback.
+- **Non-removal rule:** HTTP data-plane endpoints are not deleted during v3; they are maintained until explicit post-v3 governance approval.
+- **Parity rule:** For covered operations, native and HTTP must pass the same conformance semantics.
+
+---
+
+## 2.2) Dual-Transport Phases (Comprehensive)
+
+### Phase DT-P1 — Contract and Runtime Foundations
+**Target Sprints:** `S2-S3`
+
+1. Publish `native-protocol-v1.md` with frame format, handshake/auth, request/response, streaming, error envelopes, and versioning.
+2. Define dual-transport contract boundaries (`data-plane` via native+HTTP, `admin-plane` via HTTP).
+3. Scaffold runtime `db-native-listener` with feature gate and isolated config.
+4. Add runtime transport abstraction (`TransportGateway`) so SQL/metadata handlers are shared across protocols.
+5. Add connection/session lifecycle model for native channels (open/auth/ready/in-tx/closed).
+
+### Phase DT-P2 — Rust Native Transport First
+**Target Sprints:** `S3-S4`
+
+1. Implement Rust driver socket transport + protocol encoder/decoder.
+2. Add native auth handshake and session bootstrap.
+3. Implement native commands for health, analyze, route, execute, transaction, schema registry.
+4. Add Rust native transport retry/timeout/cancel semantics.
+5. Keep existing HTTP driver path intact and selectable per config.
+
+### Phase DT-P3 — TS/Python Native Transport
+**Target Sprints:** `S4-S5`
+
+1. Implement TS native socket transport and protocol codec.
+2. Implement Python native socket transport and protocol codec.
+3. Align error mapping across Rust/TS/Python for both transports.
+4. Add per-driver transport selector (`native | http | auto`) with deterministic precedence.
+5. Add fallback policy controls (`native_primary_http_fallback`, circuit open thresholds).
+
+### Phase DT-P4 — Conformance + VSCode Native Adoption
+**Target Sprints:** `S5-S7`
+
+1. Extend conformance fixtures to include transport mode and expected parity behavior.
+2. Execute two-lane conformance in CI (HTTP lane + native lane) for Rust/TS/Python.
+3. Update VSCode extension adapter to support dual transport and runtime capability detection.
+4. Make VSCode default to `auto` mode (prefer native; fallback HTTP with diagnostics).
+5. Add user-facing transport diagnostics in IDE (active transport, fallback reason, remediation hints).
+
+### Phase DT-P5 — Hardening, Performance, and Long-Term Governance
+**Target Sprints:** `S8-S11`
+
+1. Benchmark native vs HTTP throughput/latency and publish comparative evidence.
+2. Add soak/failure-injection tests for native transport reliability under concurrency.
+3. Freeze HTTP compatibility policy (support horizon, SLA, and deprecation criteria).
+4. Retain HTTP admin/ops endpoints regardless of native data-plane maturity.
+5. Create post-v3 decision gate: keep-dual, deprecate-subset, or evolve protocol v2.
+
+---
+
+## 2.3) Sprint-Wise Native Workstream Tasks (Additive; Existing S0-S11 preserved)
+
+| ID | Task | Owner | Status | Depends on | Acceptance |
+|---|---|---|---|---|---|
+| NT-S2-001 | Draft and approve `native-protocol-v1.md` spec (frame, handshake, auth, errors, streaming) | Arch + Runtime | In Progress | S0-001 | Spec committed + review sign-off; decision closure update landed in protocol draft |
+| NT-S2-002 | Runtime `db-native-listener` scaffold with feature flag + config wiring | Runtime | In Progress | NT-S2-001 | `VNG_NATIVE_*` config parsing + feature-gated scaffold startup added in runtime main bootstrap; compile check green |
+| NT-S2-003 | Introduce runtime transport abstraction shared by native and HTTP handlers | Runtime | Ready for Validation | NT-S2-002 | `TransportGateway` + `CommandDispatcher` active for HTTP proof paths; native `dispatch_frame` parity matrix now covers success + protocol/serialization error normalization for S2 command set |
+| NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | In Progress | NT-S2-001 | Fixture schema consumed by Rust/TS/Python tests; CI now emits per-language transport outcome/parity artifacts for NT-S2-004 |
+| NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | Not Started | NT-S2-001..003 | Rust native smoke tests pass |
+| NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | Not Started | NT-S3-001 | Selector tests and fallback diagnostics pass |
+| NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | Not Started | NT-S2-003 | Endpoint parity tests pass |
+| NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | Not Started | S0-003, NT-S3-002 | Extension compiles and mode can be switched |
+| NT-S4-001 | TypeScript native transport implementation + parity tests | Driver Team | Not Started | NT-S2-001..003 | TS native lane test suite green |
+| NT-S4-002 | Python native transport implementation + parity tests | Driver Team | Not Started | NT-S2-001..003 | Python native lane test suite green |
+| NT-S4-003 | CI matrix: Rust/TS/Python each run HTTP and native conformance lanes | Platform + QA | Not Started | NT-S2-004, NT-S4-001..002 | CI report shows 2x transport lanes |
+| NT-S5-001 | VSCode default `auto` transport (prefer native + fallback to HTTP) | DX | Not Started | NT-S4-001, S3-001 | E2E scenario with fallback diagnostics passes |
+| NT-S5-002 | IDE transport observability panel (active transport, fallback cause, RTT) | DX | Not Started | NT-S5-001 | UX acceptance screenshots + test evidence |
+| NT-S6-001 | Native transport security hardening (TLS/mTLS options, auth token flow) | Security + Runtime | Not Started | NT-S3-003 | Security checklist and integration tests pass |
+| NT-S7-001 | Data-plane parity certification pack (native vs HTTP semantics) | QA | Not Started | NT-S4-003, NT-S6-001 | Formal parity report committed |
+| NT-S8-001 | Native vs HTTP benchmark suite publication | Perf | Not Started | NT-S7-001 | Reproducible benchmark artifacts |
+| NT-S9-001 | Native transport soak + failure-injection resilience run | SRE + Runtime | Not Started | NT-S8-001 | Soak/resilience report with thresholds met |
+| NT-S10-001 | Extend Java/JS/C++ roadmap to dual-transport contract model | Arch + Driver | Not Started | NT-S2-001 | Updated multi-language driver plan committed |
+| NT-S11-001 | Governance decision checkpoint: long-term dual transport policy | PM + Arch + Security | Not Started | NT-S7-001..NT-S10-001 | Approved policy note in release docs |
+
+---
+
+## 2.4) Transport Mode Definition of Done (Cross-Driver)
+
+Each driver (Rust, TS, Python) is only `Done` for dual-transport when all are true:
+
+1. Supports `native`, `http`, and `auto` modes in config.
+2. Passes shared conformance suite for both transports.
+3. Emits standardized `DriverError` mapping for both transports.
+4. Supports timeout/cancel/retry semantics consistently across transports.
+5. Produces redaction-safe diagnostics that include active transport and fallback reason.
+
+---
+
+## 2.5) Compatibility and Governance Rules (No Deletion Policy)
+
+1. Existing HTTP capability remains supported through v3.
+2. New features may launch native-first, but HTTP parity must be planned with explicit sprint target.
+3. No HTTP endpoint is removed without a separate, approved governance decision.
+4. Admin/ops APIs remain HTTP-based unless explicitly re-scoped later.
+5. Release notes must state transport coverage per feature (`HTTP-only`, `Native-only`, `Dual`).
+
+---
+
 ## 3) Requirement Coverage Tracker (Prompt-aligned)
 
 | Req | Requirement (prompt) | Target Sprint for major closure | Current v3 Status |
@@ -267,13 +375,89 @@ If any of these slip, the “native driver + IDE parity” objective misses.
 - Added shared conformance fixtures:
   - `drivers/conformance/fixtures/config-validation-cases.json`
   - `drivers/conformance/fixtures/request-building-cases.json`
+  - `drivers/conformance/fixtures/transport-mode-cases.json` (dual-transport gate baseline)
 - Wired shared conformance fixtures into:
   - Rust tests: `drivers/voltnuerongrid-driver-rust/src/lib.rs`
   - TypeScript tests: `drivers/voltnuerongrid-driver-typescript/src/test/driver.test.ts`
   - Python tests: `drivers/voltnuerongrid-driver-python/tests/test_driver.py`
+- Added native protocol execution artifacts:
+  - `services/voltnuerongridd/reference/native-protocol-v1.md`
+  - `services/voltnuerongridd/reference/native-frame-schema-v1.sample.json`
+  - `services/voltnuerongridd/reference/runtime-native-listener-checklist-nt-s2-002-003.md`
+  - `services/voltnuerongridd/reference/native-listener-config-contract-v1.md`
 - Local validation:
-  - Rust driver tests: ✅ `cargo test` in `drivers/voltnuerongrid-driver-rust` (17/17 passed, including fixture-driven conformance tests).
+  - Rust driver tests: ✅ `cargo test` in `drivers/voltnuerongrid-driver-rust` (18/18 passed, including transport-mode conformance gate).
+  - TypeScript driver tests: ✅ `npm test` in `drivers/voltnuerongrid-driver-typescript` (3/3 passed, including transport-mode conformance gate).
   - CI hardening: ✅ workflow YAML updated with strict `npm ci` strategy and fixture validation gates; TS lockfile generated from clean install.
-  - TypeScript scaffold tests: ⚠️ blocked locally by npm auth (`E401`) while installing dev dependencies.
   - Python scaffold tests: ⚠️ blocked locally because Python is unavailable in this host shell environment.
+  - NT-S2-004 evidence links:
+    - Fixture schema: `drivers/conformance/fixtures/transport-mode-cases.json`
+    - Rust gate: `drivers/voltnuerongrid-driver-rust/src/lib.rs` (`conformance_transport_mode_fixture_is_enforced`)
+    - TS gate: `drivers/voltnuerongrid-driver-typescript/src/test/driver.test.ts` (`transport mode fixture is consumed for dual-transport conformance gate`)
+    - Python gate: `drivers/voltnuerongrid-driver-python/tests/test_driver.py` (`test_transport_mode_fixture_is_consumed_for_dual_transport_gate`)
+    - CI report generator: `drivers/conformance/scripts/transport_ci_report.py`
+    - Baseline parity artifact (committed): `drivers/conformance/reports/nt-s2-004-parity-report-baseline.md`
+    - CI workflow reporting hooks: `.github/workflows/drivers-ci.yml`
+      - Rust artifact: `rust-transport-conformance` (`rust-transport-outcomes.json`, `rust-parity-report.md`)
+      - TS artifact: `typescript-transport-conformance` (`typescript-transport-outcomes.json`, `typescript-parity-report.md`)
+      - Python artifact: `python-transport-conformance` (`python-transport-outcomes.json`, `python-parity-report.md`)
+  - NT-S2-001 evidence links:
+    - Protocol draft: `services/voltnuerongridd/reference/native-protocol-v1.md`
+    - Frame schema sample: `services/voltnuerongridd/reference/native-frame-schema-v1.sample.json`
+    - v1 defaults closure: Section `1.13 Decision Closure Log (S2 v1 Defaults)` in `native-protocol-v1.md`
+  - NT-S2-002 evidence links:
+    - Runtime scaffold code: `services/voltnuerongridd/src/main.rs` (`NativeListenerConfig`, `run_native_listener_scaffold`, `VNG_NATIVE_*` parsing)
+    - Config contract: `services/voltnuerongridd/reference/native-listener-config-contract-v1.md`
+    - Validation: ✅ `cargo check -p voltnuerongridd`
+  - NT-S2-003 evidence links:
+    - Transport scaffold code: `services/voltnuerongridd/src/main.rs` (`TransportKind`, `TransportGateway`)
+    - Dispatcher scaffold code: `services/voltnuerongridd/src/main.rs` (`CommandDispatcher` delegates to `TransportGateway` for health/analyze/route/execute-route-decision)
+    - Native command router entrypoint: `services/voltnuerongridd/src/main.rs` (`NativeAdapter::dispatch_frame` routes by `NativeCommandKind` and normalizes failures through canonical/native error frame mapping)
+    - Proof-of-path endpoint wiring: `/health` now resolves through `TransportGateway::health_response(...)`
+    - Canonical envelope proof path: `sql_analyze` now uses `CanonicalCommandEnvelope<SqlAnalyzeRequest>` and `TransportGateway::sql_analyze_response(...)`
+    - Canonical envelope proof path: `sql_route` now uses `CanonicalCommandEnvelope<SqlRouteRequest>` and `TransportGateway::sql_route_response(...)`
+    - Thin canonical wrapper path: `sql_execute` now uses `CanonicalCommandEnvelope<SqlExecuteRequest>` and `TransportGateway::sql_execute_route_decision(...)` before existing execution logic
+    - Shared envelope helper path: `build_http_envelope(...)` + `extract_request_id(...)` now standardize `request_id`, `session_context`, and `transport_metadata` across analyze/route/execute handlers
+    - Envelope hook/delegate path: `sql_transaction` now builds `CanonicalCommandEnvelope<SqlTransactionRequest>` and reads statements/isolation via `TransportGateway` delegate methods before existing transaction flow
+    - Canonical response wrapper path: `sql_analyze` now returns `CanonicalSuccess<SqlAnalyzeResponse>` from `TransportGateway` and maps to unchanged HTTP payload at handler boundary
+    - Canonical response wrapper path: `sql_route` now returns `CanonicalSuccess<SqlRouteResponse>` from `TransportGateway` and maps to unchanged HTTP payload at handler boundary
+    - Canonical success wrapper path: `sql_execute` route decision now returns `CanonicalSuccess<BatchRouteDecision>` from dispatcher/gateway and maps via existing execution flow
+    - Canonical error wrapper usage: blocked UDF branch in `sql_execute` now instantiates `CanonicalError` for internal error-shape normalization before mapping to unchanged HTTP error response
+    - Canonical transaction context wrapper path: `sql_transaction` now dispatches `CanonicalSuccess<SqlTransactionGatewayContext>` and uses it for statement/isolation extraction while preserving existing transaction semantics
+    - Canonical error wrapper usage: write-write conflict branch in `sql_transaction` now normalizes through `CanonicalError` before mapping to unchanged HTTP error response
+    - Runtime parity tests added for canonical wrapper boundaries:
+      - `tests::nt_s2_003_sql_analyze_gateway_wrapper_preserves_http_payload`
+      - `tests::nt_s2_003_sql_route_gateway_wrapper_preserves_http_payload`
+      - `tests::nt_s2_003_sql_execute_route_decision_wrapper_preserves_routing_result`
+      - `tests::nt_s2_003_sql_transaction_context_wrapper_preserves_payload`
+    - Native adapter scaffold tests added:
+      - `tests::nt_s2_003_native_adapter_maps_command_frame_to_canonical_envelope`
+      - `tests::nt_s2_003_native_adapter_maps_canonical_error_to_error_frame`
+      - `tests::nt_s2_003_native_health_dispatch_roundtrip_produces_result_frame`
+      - `tests::nt_s2_003_native_sql_analyze_dispatch_roundtrip_produces_result_frame`
+      - `tests::nt_s2_003_native_sql_analyze_dispatch_rejects_missing_payload`
+      - `tests::nt_s2_003_native_sql_route_dispatch_roundtrip_produces_result_frame`
+      - `tests::nt_s2_003_native_sql_route_dispatch_rejects_invalid_payload`
+      - `tests::nt_s2_003_native_sql_execute_route_decision_dispatch_roundtrip_produces_result_frame`
+      - `tests::nt_s2_003_native_sql_execute_route_decision_dispatch_rejects_invalid_payload`
+      - `tests::nt_s2_003_native_sql_transaction_context_dispatch_roundtrip_produces_result_frame`
+      - `tests::nt_s2_003_native_sql_transaction_context_dispatch_rejects_invalid_payload`
+      - `tests::nt_s2_003_native_dispatch_frame_rejects_missing_command_with_error_frame`
+      - `tests::nt_s2_003_native_dispatch_frame_rejects_unknown_command_with_error_frame`
+      - `tests::nt_s2_003_native_dispatch_frame_rejects_non_command_frame_with_error_frame`
+      - `tests::nt_s2_003_native_dispatch_frame_routes_health_to_result_frame`
+      - `tests::nt_s2_003_native_dispatch_frame_routes_sql_analyze_to_result_frame`
+      - `tests::nt_s2_003_native_dispatch_frame_normalizes_handler_serialization_error`
+      - `tests::nt_s2_003_native_dispatch_frame_routes_sql_route_to_result_frame`
+      - `tests::nt_s2_003_native_dispatch_frame_routes_sql_execute_to_result_frame`
+      - `tests::nt_s2_003_native_dispatch_frame_routes_sql_transaction_to_result_frame`
+      - `tests::nt_s2_003_native_dispatch_frame_normalizes_sql_route_protocol_error`
+      - `tests::nt_s2_003_native_dispatch_frame_normalizes_sql_execute_serialization_error`
+      - `tests::nt_s2_003_native_dispatch_frame_normalizes_sql_transaction_protocol_error`
+    - Targeted validation:
+      - ✅ `cargo test -p voltnuerongridd nt_s2_003_` (27 passed)
+      - ✅ `cargo test -p voltnuerongridd nt_s2_003_native_` (23 passed)
+    - Validation: ✅ `cargo check -p voltnuerongridd`
+    - Readiness evaluation:
+      - NT-S2-003 moved to **Ready for Validation** for S2 scope: shared canonical gateway/dispatcher abstraction is active, native router entrypoint (`dispatch_frame`) covers success routes for all S2 commands, and protocol/serialization errors normalize through native `ERROR` frames.
 

@@ -35,7 +35,42 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
       - name: Build and test Rust driver
+        id: rust_tests
         run: cargo test -p voltnuerongrid-driver-rust
+      - name: Validate shared conformance fixtures (Rust lane)
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          fixture_dir = Path("drivers/conformance/fixtures")
+          files = [
+              fixture_dir / "config-validation-cases.json",
+              fixture_dir / "request-building-cases.json",
+              fixture_dir / "transport-mode-cases.json",
+          ]
+          for path in files:
+              data = json.loads(path.read_text(encoding="utf-8"))
+              if not isinstance(data, dict):
+                  raise SystemExit(f"Invalid fixture root object: {path}")
+              print(f"validated {path}")
+          PY
+      - name: Generate transport conformance report (Rust)
+        if: always()
+        run: |
+          python drivers/conformance/scripts/transport_ci_report.py \
+            --fixture drivers/conformance/fixtures/transport-mode-cases.json \
+            --language rust \
+            --suite-status "${{ steps.rust_tests.outcome }}" \
+            --output-json drivers/conformance/reports/rust-transport-outcomes.json \
+            --output-md drivers/conformance/reports/rust-parity-report.md
+      - name: Upload transport conformance artifact (Rust)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-transport-conformance
+          path: |
+            drivers/conformance/reports/rust-transport-outcomes.json
+            drivers/conformance/reports/rust-parity-report.md
 
   typescript-driver:
     runs-on: ubuntu-latest
@@ -56,12 +91,30 @@ jobs:
         run: npm run build
         working-directory: drivers/voltnuerongrid-driver-typescript
       - name: Run TypeScript driver tests
+        id: ts_tests
         run: npm test
         working-directory: drivers/voltnuerongrid-driver-typescript
       - name: Validate shared conformance fixtures (Node)
         run: |
-          node -e "const fs=require('fs');const files=['../conformance/fixtures/config-validation-cases.json','../conformance/fixtures/request-building-cases.json'];for(const f of files){const p=require('path').resolve(process.cwd(),f);const d=JSON.parse(fs.readFileSync(p,'utf8'));if(!d||typeof d!=='object'){throw new Error('Invalid fixture: '+f);}console.log('validated',f);}"
+          node -e "const fs=require('fs');const files=['../conformance/fixtures/config-validation-cases.json','../conformance/fixtures/request-building-cases.json','../conformance/fixtures/transport-mode-cases.json'];for(const f of files){const p=require('path').resolve(process.cwd(),f);const d=JSON.parse(fs.readFileSync(p,'utf8'));if(!d||typeof d!=='object'){throw new Error('Invalid fixture: '+f);}console.log('validated',f);}"
         working-directory: drivers/voltnuerongrid-driver-typescript
+      - name: Generate transport conformance report (TypeScript)
+        if: always()
+        run: |
+          python drivers/conformance/scripts/transport_ci_report.py \
+            --fixture drivers/conformance/fixtures/transport-mode-cases.json \
+            --language typescript \
+            --suite-status "${{ steps.ts_tests.outcome }}" \
+            --output-json drivers/conformance/reports/typescript-transport-outcomes.json \
+            --output-md drivers/conformance/reports/typescript-parity-report.md
+      - name: Upload transport conformance artifact (TypeScript)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-transport-conformance
+          path: |
+            drivers/conformance/reports/typescript-transport-outcomes.json
+            drivers/conformance/reports/typescript-parity-report.md
 
   python-driver:
     runs-on: ubuntu-latest
@@ -80,6 +133,7 @@ jobs:
         run: python -m pip install -e .
         working-directory: drivers/voltnuerongrid-driver-python
       - name: Run Python driver tests
+        id: py_tests
         run: python -m unittest discover -s tests
         working-directory: drivers/voltnuerongrid-driver-python
       - name: Validate shared conformance fixtures (Python)
@@ -91,6 +145,7 @@ jobs:
           files = [
               fixture_dir / "config-validation-cases.json",
               fixture_dir / "request-building-cases.json",
+              fixture_dir / "transport-mode-cases.json",
           ]
           for path in files:
               data = json.loads(path.read_text(encoding="utf-8"))
@@ -98,4 +153,21 @@ jobs:
                   raise SystemExit(f"Invalid fixture root object: {path}")
               print(f"validated {path}")
           PY
+      - name: Generate transport conformance report (Python)
+        if: always()
+        run: |
+          python drivers/conformance/scripts/transport_ci_report.py \
+            --fixture drivers/conformance/fixtures/transport-mode-cases.json \
+            --language python \
+            --suite-status "${{ steps.py_tests.outcome }}" \
+            --output-json drivers/conformance/reports/python-transport-outcomes.json \
+            --output-md drivers/conformance/reports/python-parity-report.md
+      - name: Upload transport conformance artifact (Python)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-transport-conformance
+          path: |
+            drivers/conformance/reports/python-transport-outcomes.json
+            drivers/conformance/reports/python-parity-report.md
 
