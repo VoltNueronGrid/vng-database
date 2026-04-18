@@ -52,6 +52,7 @@ const QueryResultsWebview_1 = require("./ui/QueryResultsWebview");
 const QueryResultsState_1 = require("./ui/QueryResultsState");
 const TableEditorWebview_1 = require("./ui/TableEditorWebview");
 const transportConfig_1 = require("./transportConfig");
+const transportLog_1 = require("./transportLog");
 // Global service instances
 let connectionManager;
 let httpClient;
@@ -97,6 +98,9 @@ async function activate(context) {
     const transportInject = (0, transportConfig_1.readTransportInjectionFromConfig)();
     output.appendLine(`[VoltNueronGrid] Extension activated (v0.3.2) — transportMode=${transportInject.transportMode}` +
         (transportInject.nativeEndpoint ? ` nativeEndpoint=${transportInject.nativeEndpoint}` : ""));
+    (0, transportLog_1.appendTransportLogLine)(`activated transportMode=${transportInject.transportMode}` +
+        (transportInject.nativeEndpoint ? ` nativeEndpoint=${transportInject.nativeEndpoint}` : "") +
+        " (query data-plane remains HTTP until native execution is integrated)");
     let latestQueryResult;
     let latestQueryResultState;
     let queryResultsPanel;

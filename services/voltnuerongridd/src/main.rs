@@ -1207,6 +1207,7 @@ enum CanonicalCommandName {
     SqlRoute,
     SqlExecute,
     SqlTransaction,
+    IngestSchemaRegistry,
 }
 
 #[allow(dead_code)]
@@ -1263,6 +1264,7 @@ enum NativeCommandKind {
     SqlRoute,
     SqlExecute,
     SqlTransaction,
+    IngestSchemaRegistry,
     Unknown,
 }
 
@@ -1562,6 +1564,19 @@ impl CommandDispatcher {
     ) -> CanonicalSuccess<SqlTransactionGatewayContext> {
         self.gateway.sql_transaction_context(envelope)
     }
+
+    fn dispatch_ingest_schema_registry(
+        &self,
+        state: &AppState,
+        envelope: &CanonicalCommandEnvelope<()>,
+    ) -> CanonicalSuccess<IngestSchemaRegistryResponse> {
+        let payload = collect_ingest_schema_registry_response(state);
+        CanonicalSuccess {
+            payload,
+            request_id: envelope.request_id.clone(),
+            transport: envelope.transport,
+        }
+    }
 }
 
 impl NativeAdapter {
@@ -1591,6 +1606,9 @@ impl NativeAdapter {
                 }
                 Some(NativeCommandKind::SqlTransaction) => {
                     Self::dispatch_sql_transaction_context_frame(frame, dispatcher)
+                }
+                Some(NativeCommandKind::IngestSchemaRegistry) => {
+                    Self::dispatch_ingest_schema_registry_frame(frame, state, dispatcher)
                 }
                 Some(NativeCommandKind::Unknown) => Err(CanonicalError {
                     request_id: frame.request_id.clone(),
@@ -1625,6 +1643,17 @@ impl NativeAdapter {
             request_id: envelope.request_id,
             transport: envelope.transport,
         };
+        Ok(Self::success_to_result_frame(&success))
+    }
+
+    fn dispatch_ingest_schema_registry_frame(
+        frame: &NativeFrame,
+        state: &AppState,
+        dispatcher: &CommandDispatcher,
+    ) -> Result<NativeFrame, CanonicalError> {
+        let envelope =
+            Self::from_command_frame(frame, CanonicalCommandName::IngestSchemaRegistry, ())?;
+        let success = dispatcher.dispatch_ingest_schema_registry(state, &envelope);
         Ok(Self::success_to_result_frame(&success))
     }
 
@@ -4538,6 +4567,38 @@ struct IngestSchemaRegistryResponse {
     entries: Vec<IngestSchemaEntry>,
 }
 
+fn collect_ingest_schema_registry_response(state: &AppState) -> IngestSchemaRegistryResponse {
+    let csv_map = state.ingest_csv_records.lock().expect("csv schema lock");
+    let json_map = state.ingest_json_records.lock().expect("json schema lock");
+    let mut entries: Vec<IngestSchemaEntry> = Vec::new();
+    for (connector_id, records) in csv_map.iter() {
+        let columns = ingest_infer_columns(records);
+        entries.push(IngestSchemaEntry {
+            connector_id: connector_id.clone(),
+            format: "csv".to_string(),
+            row_count: records.len(),
+            columns,
+        });
+    }
+    for (connector_id, records) in json_map.iter() {
+        let columns = ingest_infer_columns(records);
+        entries.push(IngestSchemaEntry {
+            connector_id: connector_id.clone(),
+            format: "json".to_string(),
+            row_count: records.len(),
+            columns,
+        });
+    }
+    let connector_count = entries.len();
+    drop(csv_map);
+    drop(json_map);
+    IngestSchemaRegistryResponse {
+        status: "ok",
+        connector_count,
+        entries,
+    }
+}
+
 // ─── S5-WS4-03: Ingest schema list (format-filtered) structs ─────────────────
 
 #[derive(Debug, Deserialize, Default)]
@@ -5350,6 +5411,8 @@ struct NativeListenerConfig {
     tls_enabled: bool,
     tls_cert_path: Option<String>,
     tls_key_path: Option<String>,
+    /// When set, requires a valid client certificate (mTLS) issued by this CA (PEM).
+    tls_client_ca_path: Option<String>,
     max_connections: usize,
     idle_timeout_ms: u64,
     handshake_timeout_ms: u64,
@@ -5375,6 +5438,10 @@ impl NativeListenerConfig {
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
+        let tls_client_ca_path = env::var("VNG_NATIVE_TLS_CLIENT_CA_PATH")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
         let max_connections = read_env_usize("VNG_NATIVE_MAX_CONNECTIONS", 2048);
         let idle_timeout_ms = read_env_u64("VNG_NATIVE_IDLE_TIMEOUT_MS", 60000);
         let handshake_timeout_ms = read_env_u64("VNG_NATIVE_HANDSHAKE_TIMEOUT_MS", 5000);
@@ -5390,6 +5457,7 @@ impl NativeListenerConfig {
             tls_enabled,
             tls_cert_path,
             tls_key_path,
+            tls_client_ca_path,
             max_connections,
             idle_timeout_ms,
             handshake_timeout_ms,
@@ -5423,9 +5491,15 @@ impl NativeListenerConfig {
     }
 }
 
-fn load_native_tls_acceptor(cert_path: &str, key_path: &str) -> Result<Arc<tokio_rustls::TlsAcceptor>, String> {
+fn load_native_tls_acceptor(
+    cert_path: &str,
+    key_path: &str,
+    client_ca_path: Option<&str>,
+) -> Result<Arc<tokio_rustls::TlsAcceptor>, String> {
+    use rustls::RootCertStore;
     use rustls::ServerConfig;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use rustls::server::WebPkiClientVerifier;
     use rustls_pemfile::{certs, private_key};
     use std::fs::File;
     use std::io::BufReader;
@@ -5447,10 +5521,34 @@ fn load_native_tls_acceptor(cert_path: &str, key_path: &str) -> Result<Arc<tokio
         .map_err(|e| format!("parse key PEM: {e}"))?
         .ok_or_else(|| "no private keys in PEM file".to_string())?;
 
-    let cfg = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)
-        .map_err(|e| format!("rustls server config: {e}"))?;
+    let cfg = if let Some(ca_path) = client_ca_path {
+        let mut ca_r = BufReader::new(
+            File::open(ca_path).map_err(|e| format!("open client CA {ca_path}: {e}"))?,
+        );
+        let ca_certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut ca_r)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("parse client CA PEM: {e}"))?;
+        if ca_certs.is_empty() {
+            return Err("no certificates in client CA PEM file".to_string());
+        }
+        let mut root_store = RootCertStore::empty();
+        let (added, _ignored) = root_store.add_parsable_certificates(ca_certs);
+        if added == 0 {
+            return Err("no valid client CA trust anchors parsed".to_string());
+        }
+        let verifier = WebPkiClientVerifier::builder(Arc::new(root_store))
+            .build()
+            .map_err(|e| format!("client cert verifier: {e}"))?;
+        ServerConfig::builder()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(cert_chain, key)
+            .map_err(|e| format!("rustls server config: {e}"))?
+    } else {
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, key)
+            .map_err(|e| format!("rustls server config: {e}"))?
+    };
 
     Ok(Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(cfg))))
 }
@@ -6086,17 +6184,20 @@ async fn main() {
         .with_state(state.clone());
 
     if native_listener_config.enabled {
-        println!(
-            "native listener enabled on {} (tls_enabled={}, max_connections={}, max_frame_bytes={}, compression_enabled={}, compression_threshold_bytes={}, idle_timeout_ms={}, handshake_timeout_ms={}, heartbeat_interval_ms={})",
-            native_listener_config.bind,
-            native_listener_config.tls_enabled,
-            native_listener_config.max_connections,
-            native_listener_config.max_frame_bytes,
-            native_listener_config.compression_enabled,
-            native_listener_config.compression_threshold_bytes,
-            native_listener_config.idle_timeout_ms,
-            native_listener_config.handshake_timeout_ms,
-            native_listener_config.heartbeat_interval_ms
+        vng_native_listener_log(
+            "listener_config",
+            json!({
+                "bind": native_listener_config.bind,
+                "tls_enabled": native_listener_config.tls_enabled,
+                "tls_client_ca_configured": native_listener_config.tls_client_ca_path.is_some(),
+                "max_connections": native_listener_config.max_connections,
+                "max_frame_bytes": native_listener_config.max_frame_bytes,
+                "compression_enabled": native_listener_config.compression_enabled,
+                "compression_threshold_bytes": native_listener_config.compression_threshold_bytes,
+                "idle_timeout_ms": native_listener_config.idle_timeout_ms,
+                "handshake_timeout_ms": native_listener_config.handshake_timeout_ms,
+                "heartbeat_interval_ms": native_listener_config.heartbeat_interval_ms,
+            }),
         );
         let nl_state = state.clone();
         let nl_cfg = native_listener_config.clone();
@@ -6192,10 +6293,11 @@ fn wire_json_to_native_dispatch_frame(body: &serde_json::Value) -> Result<Native
         "sql.route" => NativeCommandKind::SqlRoute,
         "sql.execute" => NativeCommandKind::SqlExecute,
         "sql.transaction" => NativeCommandKind::SqlTransaction,
+        "ingest.schema.registry" => NativeCommandKind::IngestSchemaRegistry,
         _ => NativeCommandKind::Unknown,
     };
     let payload_json = match command {
-        NativeCommandKind::Health => None,
+        NativeCommandKind::Health | NativeCommandKind::IngestSchemaRegistry => None,
         _ => Some(strip_command_field(&payload)),
     };
     Ok(NativeFrame {
@@ -6247,6 +6349,19 @@ fn native_auth_payload_matches_runtime(
         return false;
     };
     key == expected.as_str()
+}
+
+/// One JSON object per line on stderr (`component` = `vng_native_listener`) for log aggregation.
+fn vng_native_listener_log(event: &str, detail: serde_json::Value) {
+    let mut m = serde_json::Map::new();
+    m.insert("component".to_string(), json!("vng_native_listener"));
+    m.insert("event".to_string(), json!(event));
+    if let Some(delta) = detail.as_object() {
+        for (k, v) in delta {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+    eprintln!("{}", serde_json::Value::Object(m));
 }
 
 async fn native_read_framed<S: AsyncRead + Unpin>(
@@ -6301,10 +6416,16 @@ async fn run_native_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(
             Ok(Ok(b)) => b,
             Ok(Err(err)) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Ok(Err(err)) => {
-                eprintln!("native listener read failed: {err}");
+                vng_native_listener_log(
+                    "read_error",
+                    json!({ "message": err.to_string(), "kind": format!("{:?}", err.kind()) }),
+                );
                 break;
             }
-            Err(_) => break,
+            Err(_) => {
+                vng_native_listener_log("read_idle_timeout", json!({ "idle_timeout_ms": config.idle_timeout_ms }));
+                break;
+            }
         };
         let value: serde_json::Value = match serde_json::from_slice(&frame_bytes) {
             Ok(v) => v,
@@ -6382,16 +6503,24 @@ async fn run_native_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(
 async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
     let tls_acceptor: Option<Arc<tokio_rustls::TlsAcceptor>> = if config.tls_enabled {
         match (&config.tls_cert_path, &config.tls_key_path) {
-            (Some(cert_path), Some(key_path)) => match load_native_tls_acceptor(cert_path, key_path) {
+            (Some(cert_path), Some(key_path)) => match load_native_tls_acceptor(
+                cert_path,
+                key_path,
+                config.tls_client_ca_path.as_deref(),
+            ) {
                 Ok(a) => Some(a),
                 Err(e) => {
-                    eprintln!("native listener: TLS enabled but certificate load failed: {e}");
+                    vng_native_listener_log(
+                        "tls_cert_load_failed",
+                        json!({ "message": e.to_string() }),
+                    );
                     return;
                 }
             },
             _ => {
-                eprintln!(
-                    "native listener: VNG_NATIVE_TLS_ENABLED=true requires VNG_NATIVE_TLS_CERT_PATH and VNG_NATIVE_TLS_KEY_PATH"
+                vng_native_listener_log(
+                    "tls_config_invalid",
+                    json!({ "message": "VNG_NATIVE_TLS_ENABLED=true requires VNG_NATIVE_TLS_CERT_PATH and VNG_NATIVE_TLS_KEY_PATH" }),
                 );
                 return;
             }
@@ -6403,9 +6532,9 @@ async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
     let bind_addr: SocketAddr = match config.bind.parse() {
         Ok(addr) => addr,
         Err(err) => {
-            eprintln!(
-                "native listener parse failed for bind '{}': {err}",
-                config.bind
+            vng_native_listener_log(
+                "bind_parse_failed",
+                json!({ "bind": config.bind, "message": err.to_string() }),
             );
             return;
         }
@@ -6414,7 +6543,10 @@ async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
     let listener = match tokio::net::TcpListener::bind(bind_addr).await {
         Ok(listener) => listener,
         Err(err) => {
-            eprintln!("native listener failed to bind on {bind_addr}: {err}");
+            vng_native_listener_log(
+                "bind_failed",
+                json!({ "bind_addr": bind_addr.to_string(), "message": err.to_string() }),
+            );
             return;
         }
     };
@@ -6428,15 +6560,22 @@ async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
                 let permit = match sem.clone().try_acquire_owned() {
                     Ok(p) => p,
                     Err(_) => {
-                        eprintln!(
-                            "native listener: max_connections ({}) reached; rejecting {peer_addr}",
-                            config.max_connections
+                        vng_native_listener_log(
+                            "connection_rejected",
+                            json!({
+                                "reason": "max_connections",
+                                "max_connections": config.max_connections,
+                                "peer": peer_addr.to_string(),
+                            }),
                         );
                         let _ = socket.shutdown().await;
                         continue;
                     }
                 };
-                println!("native listener accepted connection from {peer_addr}");
+                vng_native_listener_log(
+                    "accepted",
+                    json!({ "peer": peer_addr.to_string(), "tls": tls_acceptor.is_some() }),
+                );
                 let st = state.clone();
                 let cfg = config.clone();
                 if let Some(ref acc) = tls_acceptor {
@@ -6446,11 +6585,17 @@ async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
                         let tls_stream = match tokio::time::timeout(handshake, acc.accept(socket)).await {
                             Ok(Ok(s)) => s,
                             Ok(Err(e)) => {
-                                eprintln!("native listener TLS handshake failed: {e}");
+                                vng_native_listener_log(
+                                    "tls_handshake_failed",
+                                    json!({ "peer": peer_addr.to_string(), "message": e.to_string() }),
+                                );
                                 return;
                             }
                             Err(_) => {
-                                eprintln!("native listener TLS handshake timed out (peer {peer_addr})");
+                                vng_native_listener_log(
+                                    "tls_handshake_timeout",
+                                    json!({ "peer": peer_addr.to_string(), "handshake_timeout_ms": config.handshake_timeout_ms }),
+                                );
                                 return;
                             }
                         };
@@ -6464,7 +6609,7 @@ async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
                 }
             }
             Err(err) => {
-                eprintln!("native listener accept failure: {err}");
+                vng_native_listener_log("accept_failed", json!({ "message": err.to_string() }));
                 break;
             }
         }
@@ -14851,31 +14996,7 @@ async fn ingest_schema_registry(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<IngestSchemaRegistryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_ingest_runtime_privilege(&headers, &state, PrivilegeAction::Read, "ingest/schema")?;
-    let csv_map = state.ingest_csv_records.lock().expect("csv schema lock");
-    let json_map = state.ingest_json_records.lock().expect("json schema lock");
-    let mut entries: Vec<IngestSchemaEntry> = Vec::new();
-    for (connector_id, records) in csv_map.iter() {
-        let columns = ingest_infer_columns(records);
-        entries.push(IngestSchemaEntry {
-            connector_id: connector_id.clone(),
-            format: "csv".to_string(),
-            row_count: records.len(),
-            columns,
-        });
-    }
-    for (connector_id, records) in json_map.iter() {
-        let columns = ingest_infer_columns(records);
-        entries.push(IngestSchemaEntry {
-            connector_id: connector_id.clone(),
-            format: "json".to_string(),
-            row_count: records.len(),
-            columns,
-        });
-    }
-    let connector_count = entries.len();
-    drop(csv_map);
-    drop(json_map);
-    Ok((StatusCode::OK, Json(IngestSchemaRegistryResponse { status: "ok", connector_count, entries })))
+    Ok((StatusCode::OK, Json(collect_ingest_schema_registry_response(&state))))
 }
 
 fn ingest_infer_columns(
@@ -23007,6 +23128,27 @@ mod tests {
         assert_eq!(result.request_id, "native-dispatch-health-1");
         let payload = result.payload_json.expect("result payload expected");
         assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+    }
+
+    #[test]
+    fn nt_s2_003_native_dispatch_frame_routes_ingest_schema_registry_to_result_frame() {
+        let state = state_with_key(None);
+        let dispatcher = CommandDispatcher::new();
+        let frame = NativeFrame {
+            frame_type: NativeFrameType::Command,
+            request_id: "native-ingest-schema-1".to_string(),
+            session_id: Some("native-session-ingest-schema".to_string()),
+            command: Some(NativeCommandKind::IngestSchemaRegistry),
+            payload_json: None,
+        };
+
+        let result = NativeAdapter::dispatch_frame(&frame, &state, &dispatcher);
+
+        assert_eq!(result.frame_type, NativeFrameType::Result);
+        assert_eq!(result.request_id, "native-ingest-schema-1");
+        let payload = result.payload_json.expect("result payload expected");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+        assert!(payload.get("connector_count").is_some());
     }
 
     #[test]

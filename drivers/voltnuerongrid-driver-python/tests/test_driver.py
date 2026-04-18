@@ -8,6 +8,7 @@ from voltnuerongrid_driver_python import (
     TransportCapabilities,
     VoltNueronGridDriver,
     infer_http_base_url_from_vng_url,
+    parse_discovery_http_port_str,
     resolve_auto_transport,
     resolve_auto_transport_with_discovery,
     validate_config,
@@ -136,6 +137,11 @@ class DriverTests(unittest.TestCase):
                 dual, TransportCapabilities(native_available=False, http_available=False)
             )
         self.assertIn("no available transport", str(ctx.exception))
+
+    def test_parse_discovery_http_port_str(self) -> None:
+        self.assertEqual(parse_discovery_http_port_str("8080"), 8080)
+        self.assertIsNone(parse_discovery_http_port_str("0"))
+        self.assertIsNone(parse_discovery_http_port_str(""))
 
     def test_infer_http_and_resolve_auto_with_discovery(self) -> None:
         self.assertEqual(

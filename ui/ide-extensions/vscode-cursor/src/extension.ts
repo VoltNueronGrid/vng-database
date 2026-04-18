@@ -56,6 +56,7 @@ import { QueryResultsMessage, createQueryResultsPanel } from "./ui/QueryResultsW
 import { QueryResultsState, createDefaultQueryResultsState, createQueryResultsState } from "./ui/QueryResultsState";
 import { TableEditorMessage, TableEditorState, createTableEditorPanel } from "./ui/TableEditorWebview";
 import { readTransportInjectionFromConfig } from "./transportConfig";
+import { appendTransportLogLine } from "./transportLog";
 
 // Global service instances
 let connectionManager: ConnectionManager;
@@ -112,6 +113,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   output.appendLine(
     `[VoltNueronGrid] Extension activated (v0.3.2) — transportMode=${transportInject.transportMode}` +
       (transportInject.nativeEndpoint ? ` nativeEndpoint=${transportInject.nativeEndpoint}` : "")
+  );
+  appendTransportLogLine(
+    `activated transportMode=${transportInject.transportMode}` +
+      (transportInject.nativeEndpoint ? ` nativeEndpoint=${transportInject.nativeEndpoint}` : "") +
+      " (query data-plane remains HTTP until native execution is integrated)"
   );
 
   let latestQueryResult: QueryResult | undefined;

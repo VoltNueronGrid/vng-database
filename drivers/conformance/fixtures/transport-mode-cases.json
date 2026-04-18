@@ -95,6 +95,27 @@
       }
     },
     {
+      "id": "tm-auto-discovery-implicit-dual",
+      "name": "auto with vng:// only plus implicit HTTP discovery port resolves like dual-endpoint (native-first when both available)",
+      "transportMode": "auto",
+      "operation": "health",
+      "config": {
+        "baseUrl": "vng://127.0.0.1:7542",
+        "sessionId": "tm-s-auto-discovery-1",
+        "mode": "admin",
+        "adminApiKey": "secret"
+      },
+      "implicitHttpDiscoveryPort": 8080,
+      "runtimeCapabilities": {
+        "nativeAvailable": true,
+        "httpAvailable": true
+      },
+      "expect": {
+        "activeTransport": "native",
+        "fallbackTriggered": false
+      }
+    },
+    {
       "id": "tm-auto-no-transports",
       "name": "auto mode errors when neither native nor http is available",
       "transportMode": "auto",

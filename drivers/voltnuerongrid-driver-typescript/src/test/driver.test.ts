@@ -8,6 +8,8 @@ import {
   resolveAutoTransport,
   resolveAutoTransportWithDiscovery,
   inferHttpBaseUrlFromVngUrl,
+  parseDiscoveryHttpPortStr,
+  parseHostPort,
 } from "../index.js";
 
 const fixturesDir = path.resolve(process.cwd(), "../conformance/fixtures");
@@ -177,6 +179,14 @@ test("resolveAutoTransport dual-endpoint matches transport-mode fixture semantic
     () => resolveAutoTransport(dual, { nativeAvailable: false, httpAvailable: false }),
     /no available transport/
   );
+});
+
+test("parseDiscoveryHttpPortStr + parseHostPort", () => {
+  assert.equal(parseDiscoveryHttpPortStr("8080"), 8080);
+  assert.equal(parseDiscoveryHttpPortStr("0"), undefined);
+  const hp = parseHostPort("127.0.0.1:65534");
+  assert.equal(hp.host, "127.0.0.1");
+  assert.equal(hp.port, 65534);
 });
 
 test("inferHttpBaseUrlFromVngUrl + resolveAutoTransportWithDiscovery (single-URL discovery port)", () => {

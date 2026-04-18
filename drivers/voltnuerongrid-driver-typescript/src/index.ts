@@ -1,3 +1,5 @@
+import * as net from "node:net";
+
 export type DriverMode = "admin" | "operator" | "tenant";
 
 /** Dual-transport selector (NT-S3-002 / NT-S4-001). */
@@ -70,6 +72,27 @@ export function inferHttpBaseUrlFromVngUrl(vngUrl: string, httpPort: number): st
   return `http://${host}:${httpPort}`;
 }
 
+/** Parses `VNG_HTTP_DISCOVERY_PORT` into `1..65535`, else `undefined`. */
+export function parseDiscoveryHttpPortStr(s: string): number | undefined {
+  const t = s.trim();
+  if (!t) {
+    return undefined;
+  }
+  const n = Number.parseInt(t, 10);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    return undefined;
+  }
+  return n;
+}
+
+export function discoveryHttpPortFromEnv(): number | undefined {
+  const raw = typeof process !== "undefined" && process.env ? process.env.VNG_HTTP_DISCOVERY_PORT : undefined;
+  if (raw === undefined) {
+    return undefined;
+  }
+  return parseDiscoveryHttpPortStr(raw);
+}
+
 /**
  * Like `resolveAutoTransport`, but when `httpFallbackUrl` is unset and `discoveryHttpPort` is set,
  * infers the HTTP base from `baseUrl` so dual-endpoint auto works without a second URL string.
@@ -79,7 +102,8 @@ export function resolveAutoTransportWithDiscovery(
   caps: TransportCapabilities,
   discoveryHttpPort: number | undefined
 ): AutoTransportResolution {
-  if (discoveryHttpPort === undefined) {
+  const port = discoveryHttpPort ?? discoveryHttpPortFromEnv();
+  if (port === undefined) {
     return resolveAutoTransport(config, caps);
   }
   if ((config.httpFallbackUrl ?? "").trim()) {
@@ -89,7 +113,7 @@ export function resolveAutoTransportWithDiscovery(
   if (!base.toLowerCase().startsWith("vng://")) {
     return resolveAutoTransport(config, caps);
   }
-  const inferred = inferHttpBaseUrlFromVngUrl(base, discoveryHttpPort);
+  const inferred = inferHttpBaseUrlFromVngUrl(base, port);
   return resolveAutoTransport({ ...config, httpFallbackUrl: inferred }, caps);
 }
 
@@ -296,4 +320,134 @@ export class VoltNueronGridDriver {
   }
 }
 
+/** Parses `host:port` for TCP probes (bracket IPv6 supported). */
+export function parseHostPort(hostPort: string): { host: string; port: number } {
+  const s = hostPort.trim();
+  if (!s) {
+    throw new Error("empty host:port");
+  }
+  if (s.startsWith("[")) {
+    const end = s.indexOf("]");
+    if (end <= 0) {
+      throw new Error("invalid bracketed host:port");
+    }
+    const host = s.slice(1, end);
+    const rest = s.slice(end + 1);
+    if (!rest.startsWith(":")) {
+      throw new Error("expected ]:port");
+    }
+    const port = Number.parseInt(rest.slice(1), 10);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("invalid port");
+    }
+    return { host, port };
+  }
+  const lastColon = s.lastIndexOf(":");
+  if (lastColon <= 0) {
+    throw new Error("invalid host:port");
+  }
+  const host = s.slice(0, lastColon);
+  const port = Number.parseInt(s.slice(lastColon + 1), 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("invalid port");
+  }
+  return { host, port };
+}
+
+export function probeTcpConnect(hostPort: string, timeoutMs: number): Promise<boolean> {
+  const t = hostPort.trim();
+  if (!t || timeoutMs < 1) {
+    return Promise.resolve(false);
+  }
+  let host: string;
+  let port: number;
+  try {
+    ({ host, port } = parseHostPort(t));
+  } catch {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.end();
+      resolve(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+function httpOriginHostPortForProbe(url: string): string | undefined {
+  const u = url.trim();
+  const rest = u.startsWith("http://")
+    ? u.slice("http://".length)
+    : u.startsWith("https://")
+      ? u.slice("https://".length)
+      : undefined;
+  if (rest === undefined) {
+    return undefined;
+  }
+  const hostport = rest.split("/")[0]?.split("?")[0]?.trim();
+  return hostport && hostport.length > 0 ? hostport : undefined;
+}
+
+function tryHttpRestBaseUrl(config: DriverConfig): string | undefined {
+  const b = config.baseUrl.trim().toLowerCase();
+  if (b.startsWith("vng://")) {
+    const h = config.httpFallbackUrl?.trim();
+    return h ? h.replace(/\/$/, "") : undefined;
+  }
+  return config.baseUrl.trim().replace(/\/$/, "");
+}
+
+/** TCP reachability for native + HTTP origins (Rust `infer_transport_capabilities_tcp` parity). */
+export async function inferTransportCapabilitiesTcp(
+  config: DriverConfig,
+  nativeConnectTimeoutMs: number,
+  httpConnectTimeoutMs: number
+): Promise<TransportCapabilities> {
+  let nativeAvailable = false;
+  const base = config.baseUrl.trim();
+  if (base.toLowerCase().startsWith("vng://")) {
+    const hp = base.slice("vng://".length).split("/")[0]?.split("?")[0]?.trim();
+    if (hp) {
+      nativeAvailable = await probeTcpConnect(hp, nativeConnectTimeoutMs);
+    }
+  }
+  let httpAvailable = false;
+  const httpBase = tryHttpRestBaseUrl(config);
+  if (httpBase) {
+    const hp = httpOriginHostPortForProbe(httpBase);
+    if (hp) {
+      httpAvailable = await probeTcpConnect(hp, httpConnectTimeoutMs);
+    }
+  }
+  return { nativeAvailable, httpAvailable };
+}
+
+/** Like `inferTransportCapabilitiesTcp`, but may infer HTTP from `vng://` + discovery port. */
+export async function inferTransportCapabilitiesTcpWithDiscovery(
+  config: DriverConfig,
+  nativeConnectTimeoutMs: number,
+  httpConnectTimeoutMs: number,
+  discoveryHttpPort: number | undefined
+): Promise<TransportCapabilities> {
+  const port = discoveryHttpPort ?? discoveryHttpPortFromEnv();
+  const effective: DriverConfig =
+    !config.httpFallbackUrl?.trim() &&
+    port !== undefined &&
+    config.baseUrl.trim().toLowerCase().startsWith("vng://")
+      ? { ...config, httpFallbackUrl: inferHttpBaseUrlFromVngUrl(config.baseUrl.trim(), port) }
+      : config;
+  return inferTransportCapabilitiesTcp(effective, nativeConnectTimeoutMs, httpConnectTimeoutMs);
+}
+
 export * from "./nativeWire";
+export * from "./nativeSession";

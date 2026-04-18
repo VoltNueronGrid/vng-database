@@ -302,9 +302,10 @@ pub fn resolve_auto_transport_with_discovery(
     caps: TransportCapabilities,
     discovery_http_port: Option<u16>,
 ) -> DriverResult<AutoTransportResolution> {
-    match discovery_http_port {
+    let port = discovery_http_port.or_else(discovery_http_port_from_env);
+    match port {
         None => resolve_auto_transport(config, caps),
-        Some(_port) if config.http_fallback_url.is_some() => resolve_auto_transport(config, caps),
+        Some(_p) if config.http_fallback_url.is_some() => resolve_auto_transport(config, caps),
         Some(port) => {
             let t = config.base_url.trim();
             if !t.to_ascii_lowercase().starts_with("vng://") {
@@ -344,6 +345,46 @@ pub fn probe_tcp_connect(host_port: &str, timeout_ms: u64) -> bool {
         return false;
     };
     TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
+}
+
+/// Parses `VNG_HTTP_DISCOVERY_PORT` (or any trimmed decimal string) into `1..=65535`, else `None`.
+pub fn parse_discovery_http_port_str(s: &str) -> Option<u16> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    t.parse::<u16>().ok().filter(|&p| p > 0)
+}
+
+/// Reads [`parse_discovery_http_port_str`] from env `VNG_HTTP_DISCOVERY_PORT`.
+pub fn discovery_http_port_from_env() -> Option<u16> {
+    std::env::var("VNG_HTTP_DISCOVERY_PORT")
+        .ok()
+        .as_deref()
+        .and_then(parse_discovery_http_port_str)
+}
+
+/// Like [`infer_transport_capabilities_tcp`], but when `http_fallback_url` is unset and `discovery_http_port`
+/// is `Some` (or [`discovery_http_port_from_env`] returns a port), infers an HTTP origin from `vng://…` for the HTTP probe.
+pub fn infer_transport_capabilities_tcp_with_discovery(
+    config: &DriverConfig,
+    native_connect_timeout_ms: u64,
+    http_connect_timeout_ms: u64,
+    discovery_http_port: Option<u16>,
+) -> TransportCapabilities {
+    let port = discovery_http_port.or_else(discovery_http_port_from_env);
+    let mut effective = config.clone();
+    if effective.http_fallback_url.is_none() {
+        if let Some(p) = port {
+            let base = effective.base_url.trim();
+            if base.to_ascii_lowercase().starts_with("vng://") {
+                if let Ok(u) = infer_http_base_url_from_vng_url(base, p) {
+                    effective.http_fallback_url = Some(u);
+                }
+            }
+        }
+    }
+    infer_transport_capabilities_tcp(&effective, native_connect_timeout_ms, http_connect_timeout_ms)
 }
 
 /// Derives [`TransportCapabilities`] from live TCP reachability (native `vng` host:port + HTTP origin).
@@ -875,6 +916,15 @@ impl VoltNueronGridDriver {
         resolve_auto_transport(&self.config, caps)
     }
 
+    /// Like [`Self::resolve_auto`], with optional HTTP discovery port for implicit dual-endpoint (see [`resolve_auto_transport_with_discovery`]).
+    pub fn resolve_auto_with_discovery(
+        &self,
+        caps: TransportCapabilities,
+        discovery_http_port: Option<u16>,
+    ) -> DriverResult<AutoTransportResolution> {
+        resolve_auto_transport_with_discovery(&self.config, caps, discovery_http_port)
+    }
+
     /// TCP probes `vng://` host:port from `base_url` and the HTTP origin from [`DriverConfig::http_rest_base_url`]
     /// to populate [`TransportCapabilities`] for [`Self::resolve_auto`].
     pub fn probe_transport_capabilities_tcp(
@@ -886,6 +936,21 @@ impl VoltNueronGridDriver {
             &self.config,
             native_connect_timeout_ms,
             http_connect_timeout_ms,
+        )
+    }
+
+    /// Like [`Self::probe_transport_capabilities_tcp`], but may infer HTTP origin from `vng://` + discovery port (env or argument). See [`infer_transport_capabilities_tcp_with_discovery`].
+    pub fn probe_transport_capabilities_tcp_with_discovery(
+        &self,
+        native_connect_timeout_ms: u64,
+        http_connect_timeout_ms: u64,
+        discovery_http_port: Option<u16>,
+    ) -> TransportCapabilities {
+        infer_transport_capabilities_tcp_with_discovery(
+            &self.config,
+            native_connect_timeout_ms,
+            http_connect_timeout_ms,
+            discovery_http_port,
         )
     }
 
@@ -2582,6 +2647,46 @@ request_timeout_ms: 2500
                 .map(|err| err.message.as_str()),
             Some("no available transport: native and http are unavailable")
         );
+
+        let discovery_case = fixture
+            .cases
+            .iter()
+            .find(|entry| entry.id == "tm-auto-discovery-implicit-dual")
+            .expect("discovery implicit dual case exists");
+        assert_eq!(discovery_case.transport_mode, "auto");
+        let caps = discovery_case
+            .runtime_capabilities
+            .as_ref()
+            .expect("discovery case has runtime caps");
+        let cfg = DriverConfig {
+            base_url: discovery_case.config.base_url.clone(),
+            session_id: discovery_case.config.session_id.clone(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: discovery_case.config.admin_api_key.clone(),
+            operator_id: None,
+            http_fallback_url: None,
+            route_hint: None,
+        };
+        cfg.validate().expect("discovery case config valid");
+        let r = resolve_auto_transport_with_discovery(
+            &cfg,
+            TransportCapabilities {
+                native_available: caps.native_available,
+                http_available: caps.http_available,
+            },
+            Some(8080),
+        )
+        .expect("discovery resolution");
+        assert_eq!(r.active, DriverTransportMode::Native);
+        assert!(!r.fallback_triggered);
+        assert_eq!(
+            discovery_case
+                .expect
+                .as_ref()
+                .map(|e| e.active_transport.as_str()),
+            Some("native")
+        );
     }
 
     #[test]
@@ -3979,6 +4084,14 @@ request_timeout_ms: 2500
         .expect_err("fixture tm-auto-no-transports");
         assert_eq!(err.kind, DriverErrorKind::Transport);
         assert!(err.message.contains("no available transport"));
+    }
+
+    #[test]
+    fn parse_discovery_http_port_str_accepts_valid_ports() {
+        assert_eq!(parse_discovery_http_port_str("8080"), Some(8080));
+        assert_eq!(parse_discovery_http_port_str(" 443 "), Some(443));
+        assert_eq!(parse_discovery_http_port_str("0"), None);
+        assert_eq!(parse_discovery_http_port_str(""), None);
     }
 
     #[test]

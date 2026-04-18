@@ -7,6 +7,7 @@ exports.QueryExecutionService = void 0;
 exports.createQueryExecutionService = createQueryExecutionService;
 const QueryResult_1 = require("../models/QueryResult");
 const QueryHistory_1 = require("./QueryHistory");
+const transportLog_1 = require("../transportLog");
 class QueryExecutionService {
     constructor(httpClient, context) {
         this.context = context;
@@ -86,6 +87,11 @@ class QueryExecutionService {
                 await this.addToHistory(connection.id, resultId, query, cachedResult);
                 return cachedResult;
             }
+            const tm = connection.settings.transportMode ?? "(workspace default)";
+            const ne = connection.settings.nativeEndpoint
+                ? ` nativeEndpoint=${connection.settings.nativeEndpoint}`
+                : "";
+            (0, transportLog_1.appendTransportLogLine)(`executeQuery id=${resultId} transportMode=${tm} baseUrl=${connection.settings.baseUrl}${ne} dataPlane=http`);
             // Execute query
             const response = await this.httpClient.executeQuery(connection, query, {
                 timeoutMs,

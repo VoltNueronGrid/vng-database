@@ -7,6 +7,7 @@ import { Connection } from "../models/Connection";
 import { QueryResult, QueryHistoryEntry, parseQueryResult } from "../models/QueryResult";
 import { HttpClient } from "./HttpClient";
 import { createQueryHistoryEntry, findOldestHistoryEntryId } from "./QueryHistory";
+import { appendTransportLogLine } from "../transportLog";
 
 export interface QueryExecutionOptions {
   timeoutMs?: number;
@@ -122,6 +123,14 @@ export class QueryExecutionService {
         await this.addToHistory(connection.id, resultId, query, cachedResult);
         return cachedResult;
       }
+
+      const tm = connection.settings.transportMode ?? "(workspace default)";
+      const ne = connection.settings.nativeEndpoint
+        ? ` nativeEndpoint=${connection.settings.nativeEndpoint}`
+        : "";
+      appendTransportLogLine(
+        `executeQuery id=${resultId} transportMode=${tm} baseUrl=${connection.settings.baseUrl}${ne} dataPlane=http`
+      );
 
       // Execute query
       const response = await this.httpClient.executeQuery(connection, query, {

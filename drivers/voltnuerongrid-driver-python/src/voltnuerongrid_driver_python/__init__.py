@@ -7,14 +7,20 @@ from .driver import (
     TransportCapabilities,
     TransportResolution,
     VoltNueronGridDriver,
+    discovery_http_port_from_env,
     http_rest_base_url,
     infer_http_base_url_from_vng_url,
+    infer_transport_capabilities_tcp,
+    infer_transport_capabilities_tcp_with_discovery,
+    parse_discovery_http_port_str,
     parse_vng_host_for_discovery,
+    probe_tcp_connect,
     resolve_auto_transport,
     resolve_auto_transport_with_discovery,
     select_transport_from_base_url,
     validate_config,
 )
+from .native_session import native_health_command_roundtrip
 from .native_wire import encode_framed_json, native_wire_roundtrip, read_framed_json
 
 __all__ = [
@@ -26,11 +32,17 @@ __all__ = [
     "TransportCapabilities",
     "TransportResolution",
     "VoltNueronGridDriver",
+    "discovery_http_port_from_env",
     "encode_framed_json",
     "http_rest_base_url",
     "infer_http_base_url_from_vng_url",
+    "infer_transport_capabilities_tcp",
+    "infer_transport_capabilities_tcp_with_discovery",
+    "native_health_command_roundtrip",
     "native_wire_roundtrip",
+    "parse_discovery_http_port_str",
     "parse_vng_host_for_discovery",
+    "probe_tcp_connect",
     "read_framed_json",
     "resolve_auto_transport",
     "resolve_auto_transport_with_discovery",

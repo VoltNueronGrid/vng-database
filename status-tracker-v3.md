@@ -248,14 +248,14 @@
 | NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | In Progress (`deferred-for-cloud-validation`) | NT-S2-001 | Local fixture/schema/report scaffolding complete; cloud runner-based artifact evidence deferred to final validation phase |
 | NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | In Progress | NT-S2-001..003 | Native frame/codec + HELLO/AUTH scaffold plus socket execution path landed; optional persistent-session reuse helpers now available for core native commands |
 | NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | In Progress | NT-S3-001 | **Dual URL:** `http_fallback_url` on `DriverConfig` + `http_rest_base_url` for REST when `base_url` is `vng://`. **Auto:** `resolve_auto_transport` + `TransportCapabilities` (native-first when dual URL set); TCP probe helper `infer_transport_capabilities_tcp` / `probe_tcp_connect`. TS/Python: `httpFallbackUrl`, `resolveAutoTransport`, `httpRestBaseUrl`. **Single-URL auto (no second URL string):** optional HTTP port discovery via `infer_http_base_url_from_vng_url` + `resolve_auto_transport_with_discovery` (Rust/TS/Python) — caller supplies discovery HTTP port (e.g. env `VNG_HTTP_DISCOVERY_PORT` / `DEFAULT_HTTP_DISCOVERY_PORT`); not magic inference from the native port alone |
-| NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | In Progress | NT-S2-003 | Native COMMAND path covers health + sql.analyze/sql.route/sql.execute (route decision) + sql.transaction (context) via `dispatch_frame`. **Defer:** schema registry as native COMMAND (still HTTP `GET /api/v1/ingest/schema/registry` until command kind added) |
+| NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | In Progress | NT-S2-003 | Native COMMAND path covers health + sql.analyze/sql.route/sql.execute (route decision) + sql.transaction (context) + **`ingest.schema.registry`** (shared body with HTTP via `collect_ingest_schema_registry_response`) via `dispatch_frame`. HTTP remains primary for RBAC-rich ingest list/detail routes |
 | NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | In Progress | S0-003, NT-S3-002 | Workspace settings `voltnuerongrid.transportMode` + `voltnuerongrid.nativeEndpoint`; status bar + activation log; connection model fields reserved — data-plane still HTTP until TS native client |
-| NT-S4-001 | TypeScript native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | Transport types + `resolveTransportMode` / `selectTransportFromBaseUrl` + tests; `nativeWire.ts` framed JSON helpers + discovery APIs (`inferHttpBaseUrlFromVngUrl`, `resolveAutoTransportWithDiscovery`); full native client parity still pending |
-| NT-S4-002 | Python native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | `DriverTransportMode`, `resolve_transport_mode`, `select_transport_from_base_url` + test; `native_wire.py` + discovery APIs (`infer_http_base_url_from_vng_url`, `resolve_auto_transport_with_discovery`); full native client parity still pending |
+| NT-S4-001 | TypeScript native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | + `nativeSession.ts` (`nativeHealthCommandRoundtrip`) for Hello/Auth/health; TCP probes + discovery; SQL/ingest native COMMAND parity still pending |
+| NT-S4-002 | Python native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | + `native_session.native_health_command_roundtrip`; TCP probes + discovery; SQL/ingest native COMMAND parity still pending |
 | NT-S4-003 | CI matrix: Rust/TS/Python each run HTTP and native conformance lanes | Platform + QA | In Progress (`deferred-for-cloud-validation`) | NT-S2-004 | Matrix `transport_lane: [http, native]` + `DRIVER_TRANSPORT_LANE` env; lane-specific report filenames. Cloud evidence still deferred per org runner policy |
 | NT-S5-001 | VSCode default `auto` transport (prefer native + fallback to HTTP) | DX | In Progress | NT-S4-001, S3-001 | Workspace default `transportMode: auto`; E2E scenario with fallback diagnostics still pending |
-| NT-S5-002 | IDE transport observability panel (active transport, fallback cause, RTT) | DX | Not Started | NT-S5-001 | UX acceptance screenshots + test evidence |
-| NT-S6-001 | Native transport security hardening (TLS/mTLS options, auth token flow) | Security + Runtime | Not Started | NT-S3-003 | Listener TLS accept path (rustls) + env cert paths landed; mTLS/policy/tests + full hardening still open — security checklist and integration tests pass |
+| NT-S5-002 | IDE transport observability panel (active transport, fallback cause, RTT) | DX | In Progress | NT-S5-001 | Output channel **VoltNueronGrid Transport** logs activation + per-query `transportMode` / `baseUrl` / `dataPlane`; full panel + RTT + fallback cause still open |
+| NT-S6-001 | Native transport security hardening (TLS/mTLS options, auth token flow) | Security + Runtime | In Progress | NT-S3-003 | TLS + **optional mTLS**: `VNG_NATIVE_TLS_CLIENT_CA_PATH` (PEM) enables client cert verification (rustls `WebPkiClientVerifier`); rotation/policy/tests + auth token flow still open |
 | NT-S7-001 | Data-plane parity certification pack (native vs HTTP semantics) | QA | Not Started | NT-S4-003, NT-S6-001 | Formal parity report committed |
 | NT-S8-001 | Native vs HTTP benchmark suite publication | Perf | Not Started | NT-S7-001 | Reproducible benchmark artifacts |
 | NT-S9-001 | Native transport soak + failure-injection resilience run | SRE + Runtime | Not Started | NT-S8-001 | Soak/resilience report with thresholds met |
@@ -274,7 +274,7 @@ These items were deferred in earlier increments to keep each delivery reviewable
 | **TS/Python native wire I/O** | **Partial:** `nativeWire.ts` + `native_wire.py` (length-prefixed JSON encode/decode + `nativeWireRoundtrip` / `native_wire_roundtrip`). **Follow-on:** full COMMAND/session parity with Rust driver. |
 | **NT-S5+ product work** | Depends on stable transport, parity, and often IDE/runtime behavior (default auto, observability UI, certs, certification, benchmarks, governance). It is downstream of driver + runtime maturity. |
 
-### 2.3.1) NT-S5+ backlog (unchanged scope; not started in this pass)
+### 2.3.1) NT-S5+ backlog (product milestones; evidence-oriented)
 
 | ID | Theme | Notes |
 |---|---|---|
@@ -285,6 +285,8 @@ These items were deferred in earlier increments to keep each delivery reviewable
 | NT-S9-001 | Soak / failure injection | After benchmarks |
 | NT-S10-001 | Additional language drivers | Roadmap only |
 | NT-S11-001 | Governance checkpoint | After certification + ops evidence |
+
+**Dual-endpoint / probe (this increment):** `VNG_HTTP_DISCOVERY_PORT` + `parse_discovery_http_port_str` / `discovery_http_port_from_env` (Rust/TS/Python); `infer_transport_capabilities_tcp_with_discovery` + `resolve_auto_transport_with_discovery` now merge env when the explicit port argument is unset; conformance fixture `tm-auto-discovery-implicit-dual`; native listener logs structured JSON lines (`component=vng_native_listener`, `event=…`) on stderr.
 
 ---
 
