@@ -1,6 +1,25 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Dict, List, Optional
 import json
+
+
+class DriverTransportMode(str, Enum):
+    HTTP = "http"
+    NATIVE = "native"
+    AUTO = "auto"
+
+
+@dataclass
+class TransportResolution:
+    active: DriverTransportMode
+    used_auto_resolution: bool
+    notes: Optional[str] = None
+
+
+def select_transport_from_base_url(base_url: str) -> DriverTransportMode:
+    b = base_url.strip().lower()
+    return DriverTransportMode.NATIVE if b.startswith("vng://") else DriverTransportMode.HTTP
 
 
 @dataclass
@@ -69,6 +88,16 @@ class VoltNueronGridDriver:
         if error:
             raise ValueError(error)
         self._config = config
+
+    def resolve_transport_mode(self, mode: DriverTransportMode) -> TransportResolution:
+        if mode in (DriverTransportMode.HTTP, DriverTransportMode.NATIVE):
+            return TransportResolution(active=mode, used_auto_resolution=False)
+        active = select_transport_from_base_url(self._config.base_url)
+        return TransportResolution(
+            active=active,
+            used_auto_resolution=True,
+            notes=f"auto: selected {active.value} from base_url scheme",
+        )
 
     def _build_post(self, path: str, payload: dict) -> DriverRequest:
         return DriverRequest(

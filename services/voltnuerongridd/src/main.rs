@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use base64::Engine;
@@ -6037,11 +6038,11 @@ async fn main() {
         // REQ-10/19: benchmark endpoints
         .route("/api/v1/benchmark/ingest", post(benchmark_ingest))
         .route("/api/v1/benchmark/query", post(benchmark_query))
-        .with_state(state);
+        .with_state(state.clone());
 
     if native_listener_config.enabled {
         println!(
-            "native listener scaffold enabled on {} (tls_enabled={}, max_connections={}, max_frame_bytes={}, compression_enabled={}, compression_threshold_bytes={}, idle_timeout_ms={}, handshake_timeout_ms={}, heartbeat_interval_ms={})",
+            "native listener enabled on {} (tls_enabled={}, max_connections={}, max_frame_bytes={}, compression_enabled={}, compression_threshold_bytes={}, idle_timeout_ms={}, handshake_timeout_ms={}, heartbeat_interval_ms={})",
             native_listener_config.bind,
             native_listener_config.tls_enabled,
             native_listener_config.max_connections,
@@ -6052,11 +6053,11 @@ async fn main() {
             native_listener_config.handshake_timeout_ms,
             native_listener_config.heartbeat_interval_ms
         );
-        tokio::spawn(run_native_listener_scaffold(
-            native_listener_config.clone(),
-        ));
+        let nl_state = state.clone();
+        let nl_cfg = native_listener_config.clone();
+        tokio::spawn(run_native_listener(nl_cfg, nl_state));
     } else {
-        println!("native listener scaffold disabled (set VNG_NATIVE_LISTENER_ENABLED=true to enable)");
+        println!("native listener disabled (set VNG_NATIVE_LISTENER_ENABLED=true to enable)");
     }
 
     println!("voltnuerongridd listening on {}", addr);
@@ -6066,12 +6067,276 @@ async fn main() {
     axum::serve(listener, app).await.expect("server failed");
 }
 
-async fn run_native_listener_scaffold(config: NativeListenerConfig) {
+/// Driver-compatible JSON wire shape (`native-protocol-v1` / Rust driver codec).
+fn internal_native_frame_to_driver_wire_json(
+    frame: &NativeFrame,
+    protocol_version: &str,
+) -> serde_json::Value {
+    let ft = native_frame_type_wire_name(frame.frame_type);
+    json!({
+        "frame_type": ft,
+        "protocol_version": protocol_version,
+        "request_id": frame.request_id,
+        "session_id": frame.session_id,
+        "payload": frame.payload_json.clone().unwrap_or(json!({})),
+    })
+}
+
+fn native_frame_type_wire_name(t: NativeFrameType) -> &'static str {
+    match t {
+        NativeFrameType::Hello => "Hello",
+        NativeFrameType::HelloAck => "HelloAck",
+        NativeFrameType::Auth => "Auth",
+        NativeFrameType::AuthAck => "AuthAck",
+        NativeFrameType::Command => "Command",
+        NativeFrameType::Result => "Result",
+        NativeFrameType::Error => "Error",
+        NativeFrameType::Ping => "Ping",
+        NativeFrameType::Pong => "Pong",
+        NativeFrameType::StreamChunk => "StreamChunk",
+        NativeFrameType::StreamEnd => "StreamEnd",
+        NativeFrameType::Cancel => "Cancel",
+        NativeFrameType::Goodbye => "Goodbye",
+    }
+}
+
+fn wire_protocol_error_frame(request_id: &str, message: &str) -> serde_json::Value {
+    json!({
+        "frame_type": "Error",
+        "protocol_version": "v1",
+        "request_id": request_id,
+        "session_id": null,
+        "payload": { "kind": "protocol", "message": message }
+    })
+}
+
+fn strip_command_field(payload: &serde_json::Value) -> serde_json::Value {
+    let mut obj = payload
+        .as_object()
+        .cloned()
+        .unwrap_or_else(|| serde_json::Map::new());
+    obj.remove("command");
+    serde_json::Value::Object(obj)
+}
+
+fn wire_json_to_native_dispatch_frame(body: &serde_json::Value) -> Result<NativeFrame, String> {
+    let frame_type = body
+        .get("frame_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing frame_type".to_string())?;
+    if frame_type != "Command" {
+        return Err(format!("expected Command frame for dispatch, got {frame_type}"));
+    }
+    let request_id = body
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let payload = body.get("payload").cloned().unwrap_or(json!({}));
+    let cmd_str = payload
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing payload.command".to_string())?;
+    let command = match cmd_str {
+        "health" => NativeCommandKind::Health,
+        "sql.analyze" => NativeCommandKind::SqlAnalyze,
+        "sql.route" => NativeCommandKind::SqlRoute,
+        "sql.execute" => NativeCommandKind::SqlExecute,
+        "sql.transaction" => NativeCommandKind::SqlTransaction,
+        _ => NativeCommandKind::Unknown,
+    };
+    let payload_json = match command {
+        NativeCommandKind::Health => None,
+        _ => Some(strip_command_field(&payload)),
+    };
+    Ok(NativeFrame {
+        frame_type: NativeFrameType::Command,
+        request_id,
+        session_id,
+        command: Some(command),
+        payload_json,
+    })
+}
+
+fn native_wire_hello_ack(
+    request_id: &str,
+    session_from_hello: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    json!({
+        "frame_type": "HelloAck",
+        "protocol_version": "v1",
+        "request_id": request_id,
+        "session_id": session_from_hello.cloned(),
+        "payload": {
+            "accepted": true,
+            "version": "v1",
+        }
+    })
+}
+
+fn native_wire_auth_ack(request_id: &str, session_id: Option<&str>, accepted: bool) -> serde_json::Value {
+    json!({
+        "frame_type": "AuthAck",
+        "protocol_version": "v1",
+        "request_id": request_id,
+        "session_id": session_id,
+        "payload": { "accepted": accepted }
+    })
+}
+
+fn native_auth_payload_matches_runtime(
+    state: &AppState,
+    auth_payload: &serde_json::Value,
+) -> bool {
+    let Some(expected) = &state.admin_api_key else {
+        return true;
+    };
+    let Some(key) = auth_payload
+        .get("admin_api_key")
+        .and_then(|v| v.as_str())
+    else {
+        return false;
+    };
+    key == expected.as_str()
+}
+
+async fn native_read_framed(
+    socket: &mut tokio::net::TcpStream,
+    max_payload_bytes: usize,
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut len_buf = [0u8; 4];
+    socket.read_exact(&mut len_buf).await?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > max_payload_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("native frame exceeds max_payload_bytes ({len} > {max_payload_bytes})"),
+        ));
+    }
+    let mut buf = vec![0u8; len];
+    socket.read_exact(&mut buf).await?;
+    Ok(buf)
+}
+
+async fn native_write_framed_json(
+    socket: &mut tokio::net::TcpStream,
+    value: &serde_json::Value,
+) -> Result<(), std::io::Error> {
+    let payload = serde_json::to_vec(value).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("native wire json encode failed: {e}"),
+        )
+    })?;
+    let len_u32 = u32::try_from(payload.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native wire payload length overflow",
+        )
+    })?;
+    socket.write_all(&len_u32.to_be_bytes()).await?;
+    socket.write_all(&payload).await?;
+    Ok(())
+}
+
+async fn run_native_connection(
+    mut socket: tokio::net::TcpStream,
+    state: AppState,
+    config: NativeListenerConfig,
+) {
+    let dispatcher = CommandDispatcher::new();
+    loop {
+        let frame_bytes = match native_read_framed(&mut socket, config.max_frame_bytes).await {
+            Ok(b) => b,
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(err) => {
+                eprintln!("native listener read failed: {err}");
+                break;
+            }
+        };
+        let value: serde_json::Value = match serde_json::from_slice(&frame_bytes) {
+            Ok(v) => v,
+            Err(err) => {
+                let err_frame = wire_protocol_error_frame(
+                    "decode-error",
+                    &format!("invalid json frame: {err}"),
+                );
+                let _ = native_write_framed_json(&mut socket, &err_frame).await;
+                continue;
+            }
+        };
+        let frame_type = value
+            .get("frame_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let request_id = value
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        match frame_type {
+            "Hello" => {
+                let session_hint = value.get("payload").and_then(|p| p.get("session_id"));
+                let ack = native_wire_hello_ack(&request_id, session_hint);
+                if native_write_framed_json(&mut socket, &ack).await.is_err() {
+                    break;
+                }
+            }
+            "Auth" => {
+                let payload = value.get("payload").cloned().unwrap_or(json!({}));
+                let ok = native_auth_payload_matches_runtime(&state, &payload);
+                let sess = value
+                    .get("session_id")
+                    .and_then(|v| v.as_str());
+                let ack = native_wire_auth_ack(&request_id, sess, ok);
+                if native_write_framed_json(&mut socket, &ack).await.is_err() {
+                    break;
+                }
+                if !ok {
+                    break;
+                }
+            }
+            "Command" => {
+                let internal = match wire_json_to_native_dispatch_frame(&value) {
+                    Ok(f) => f,
+                    Err(msg) => {
+                        let err_frame = wire_protocol_error_frame(&request_id, &msg);
+                        if native_write_framed_json(&mut socket, &err_frame).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                let out = NativeAdapter::dispatch_frame(&internal, &state, &dispatcher);
+                let wire = internal_native_frame_to_driver_wire_json(&out, "v1");
+                if native_write_framed_json(&mut socket, &wire).await.is_err() {
+                    break;
+                }
+            }
+            other => {
+                let err_frame = wire_protocol_error_frame(
+                    &request_id,
+                    &format!("unsupported frame_type for data plane: {other}"),
+                );
+                if native_write_framed_json(&mut socket, &err_frame).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
     let bind_addr: SocketAddr = match config.bind.parse() {
         Ok(addr) => addr,
         Err(err) => {
             eprintln!(
-                "native listener scaffold parse failed for bind '{}': {err}",
+                "native listener parse failed for bind '{}': {err}",
                 config.bind
             );
             return;
@@ -6081,24 +6346,23 @@ async fn run_native_listener_scaffold(config: NativeListenerConfig) {
     let listener = match tokio::net::TcpListener::bind(bind_addr).await {
         Ok(listener) => listener,
         Err(err) => {
-            eprintln!(
-                "native listener scaffold failed to bind on {}: {err}",
-                bind_addr
-            );
+            eprintln!("native listener failed to bind on {bind_addr}: {err}");
             return;
         }
     };
 
     loop {
         match listener.accept().await {
-            Ok((_, peer_addr)) => {
-                println!(
-                    "native listener scaffold accepted connection from {}",
-                    peer_addr
-                );
+            Ok((socket, peer_addr)) => {
+                println!("native listener accepted connection from {peer_addr}");
+                let st = state.clone();
+                let cfg = config.clone();
+                tokio::spawn(async move {
+                    run_native_connection(socket, st, cfg).await;
+                });
             }
             Err(err) => {
-                eprintln!("native listener scaffold accept failure: {err}");
+                eprintln!("native listener accept failure: {err}");
                 break;
             }
         }

@@ -1,5 +1,19 @@
 export type DriverMode = "admin" | "operator" | "tenant";
 
+/** Dual-transport selector (NT-S3-002 / NT-S4-001). */
+export type DriverTransportMode = "http" | "native" | "auto";
+
+export interface TransportResolution {
+  active: DriverTransportMode;
+  usedAutoResolution: boolean;
+  notes?: string;
+}
+
+export function selectTransportFromBaseUrl(baseUrl: string): DriverTransportMode {
+  const b = baseUrl.trim().toLowerCase();
+  return b.startsWith("vng://") ? "native" : "http";
+}
+
 export interface DriverConfig {
   baseUrl: string;
   sessionId: string;
@@ -81,6 +95,19 @@ export class VoltNueronGridDriver {
     if (error) {
       throw new Error(error);
     }
+  }
+
+  /** Resolves effective transport; `auto` uses `baseUrl` scheme (`vng://` → native). */
+  resolveTransportMode(mode: DriverTransportMode): TransportResolution {
+    if (mode === "http" || mode === "native") {
+      return { active: mode, usedAutoResolution: false };
+    }
+    const active = selectTransportFromBaseUrl(this.config.baseUrl);
+    return {
+      active,
+      usedAutoResolution: true,
+      notes: `auto: selected ${active} from baseUrl scheme`,
+    };
   }
 
   buildHealthRequest(): DriverRequest {

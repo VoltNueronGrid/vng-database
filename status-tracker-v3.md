@@ -46,10 +46,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S0-001 | Publish Driver Core Contract v1 (auth/session/query/schema/errors) | Arch + DX | In Progress | none | Draft spec committed at `services/voltnuerongridd/reference/driver-core-contract-v1.md`; pending approval |
+| S0-001 | Publish Driver Core Contract v1 (auth/session/query/schema/errors) | Arch + DX | Done | none | Spec committed at `services/voltnuerongridd/reference/driver-core-contract-v1.md`; stakeholder approval recorded (2026-04-18) |
 | S0-002 | Create prompt-to-requirement traceability matrix (R-01..R-18) | PM + Arch | Done | none | Matrix committed at `services/voltnuerongridd/reference/prompt-requirement-traceability-matrix-v3.md` |
 | S0-003 | Define VSCode integration strategy: TS driver adapter layer | DX | Done | S0-001 | ADR committed at `services/voltnuerongridd/reference/vscode-ts-driver-integration-adr-v1.md` |
-| S0-004 | Define non-goals and phased deferrals with stakeholder approval | PM | Ready for Validation | S0-002 | Decision log drafted at `services/voltnuerongridd/reference/non-goals-and-phased-deferrals-v3.md`; pending stakeholder sign-off |
+| S0-004 | Define non-goals and phased deferrals with stakeholder approval | PM | Done | S0-002 | Decision log at `services/voltnuerongridd/reference/non-goals-and-phased-deferrals-v3.md`; stakeholder sign-off recorded (2026-04-18). Cloud/remote validation items deferred: execution is **local-first** until final cloud-validation phase (aligned with `NT-S2-004 deferred-for-cloud-validation`). |
 
 ---
 
@@ -243,16 +243,16 @@
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
 | NT-S2-001 | Draft and approve `native-protocol-v1.md` spec (frame, handshake, auth, errors, streaming) | Arch + Runtime | In Progress | S0-001 | Spec committed + review sign-off; decision closure update landed in protocol draft |
-| NT-S2-002 | Runtime `db-native-listener` scaffold with feature flag + config wiring | Runtime | In Progress | NT-S2-001 | `VNG_NATIVE_*` config parsing + feature-gated scaffold startup added in runtime main bootstrap; compile check green |
+| NT-S2-002 | Runtime `db-native-listener` scaffold with feature flag + config wiring | Runtime | In Progress | NT-S2-001 | Beyond scaffold: length-prefixed JSON frames, HELLO→HelloAck / AUTH→AuthAck (admin key check when `VNG_ADMIN_API_KEY` set), COMMAND→`NativeAdapter::dispatch_frame` for S2 command set; per-connection async handler (`run_native_listener`) |
 | NT-S2-003 | Introduce runtime transport abstraction shared by native and HTTP handlers | Runtime | Ready for Validation | NT-S2-002 | `TransportGateway` + `CommandDispatcher` active for HTTP proof paths; native `dispatch_frame` parity matrix now covers success + protocol/serialization error normalization for S2 command set |
 | NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | In Progress (`deferred-for-cloud-validation`) | NT-S2-001 | Local fixture/schema/report scaffolding complete; cloud runner-based artifact evidence deferred to final validation phase |
 | NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | In Progress | NT-S2-001..003 | Native frame/codec + HELLO/AUTH scaffold plus socket execution path landed; optional persistent-session reuse helpers now available for core native commands |
-| NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | Not Started | NT-S3-001 | Selector tests and fallback diagnostics pass |
-| NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | Not Started | NT-S2-003 | Endpoint parity tests pass |
-| NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | Not Started | S0-003, NT-S3-002 | Extension compiles and mode can be switched |
-| NT-S4-001 | TypeScript native transport implementation + parity tests | Driver Team | Not Started | NT-S2-001..003 | TS native lane test suite green |
-| NT-S4-002 | Python native transport implementation + parity tests | Driver Team | Not Started | NT-S2-001..003 | Python native lane test suite green |
-| NT-S4-003 | CI matrix: Rust/TS/Python each run HTTP and native conformance lanes | Platform + QA | Not Started | NT-S2-004, NT-S4-001..002 | CI report shows 2x transport lanes |
+| NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | In Progress | NT-S3-001 | `resolve_transport_mode` + `select_transport_from_base_url` (auto→scheme: `vng://` native, else HTTP); tests landed. **Defer:** multi-endpoint probe + HTTP fallback until dual URL config exists |
+| NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | In Progress | NT-S2-003 | Native COMMAND path covers health + sql.analyze/sql.route/sql.execute (route decision) + sql.transaction (context) via `dispatch_frame`. **Defer:** schema registry as native COMMAND (still HTTP `GET /api/v1/ingest/schema/registry` until command kind added) |
+| NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | In Progress | S0-003, NT-S3-002 | Workspace settings `voltnuerongrid.transportMode` + `voltnuerongrid.nativeEndpoint`; status bar + activation log; connection model fields reserved — data-plane still HTTP until TS native client |
+| NT-S4-001 | TypeScript native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | Transport types + `resolveTransportMode` / `selectTransportFromBaseUrl` + tests (native wire client still pending) |
+| NT-S4-002 | Python native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | `DriverTransportMode`, `resolve_transport_mode`, `select_transport_from_base_url` + test (native wire client still pending) |
+| NT-S4-003 | CI matrix: Rust/TS/Python each run HTTP and native conformance lanes | Platform + QA | In Progress (`deferred-for-cloud-validation`) | NT-S2-004 | Matrix `transport_lane: [http, native]` + `DRIVER_TRANSPORT_LANE` env; lane-specific report filenames. Cloud evidence still deferred per org runner policy |
 | NT-S5-001 | VSCode default `auto` transport (prefer native + fallback to HTTP) | DX | Not Started | NT-S4-001, S3-001 | E2E scenario with fallback diagnostics passes |
 | NT-S5-002 | IDE transport observability panel (active transport, fallback cause, RTT) | DX | Not Started | NT-S5-001 | UX acceptance screenshots + test evidence |
 | NT-S6-001 | Native transport security hardening (TLS/mTLS options, auth token flow) | Security + Runtime | Not Started | NT-S3-003 | Security checklist and integration tests pass |
@@ -261,6 +261,18 @@
 | NT-S9-001 | Native transport soak + failure-injection resilience run | SRE + Runtime | Not Started | NT-S8-001 | Soak/resilience report with thresholds met |
 | NT-S10-001 | Extend Java/JS/C++ roadmap to dual-transport contract model | Arch + Driver | Not Started | NT-S2-001 | Updated multi-language driver plan committed |
 | NT-S11-001 | Governance decision checkpoint: long-term dual transport policy | PM + Arch + Security | Not Started | NT-S7-001..NT-S10-001 | Approved policy note in release docs |
+
+### 2.3.1) NT-S5+ backlog (unchanged scope; not started in this pass)
+
+| ID | Theme | Notes |
+|---|---|---|
+| NT-S5-001..002 | Default `auto` in IDE + observability UI | Needs TS native data-plane + fallback diagnostics |
+| NT-S6-001 | TLS/mTLS + hardened auth on native listener | Listener scaffold supports `VNG_NATIVE_TLS_ENABLED` flag; wire-up pending |
+| NT-S7-001 | Parity certification pack | Depends on dual transport CI evidence + native HTTP semantic tests |
+| NT-S8-001 | Benchmarks | After parity baseline |
+| NT-S9-001 | Soak / failure injection | After benchmarks |
+| NT-S10-001 | Additional language drivers | Roadmap only |
+| NT-S11-001 | Governance checkpoint | After certification + ops evidence |
 
 ---
 
@@ -313,7 +325,7 @@ Each driver (Rust, TS, Python) is only `Done` for dual-transport when all are tr
 
 ## 4) Critical Path (Cannot Slip)
 
-1. `S0-001` Driver Core Contract v1  
+1. `S0-001` Driver Core Contract v1 (Done — 2026-04-18 approval)  
 2. `S1-002` TypeScript driver + `S1-003` Python driver  
 3. `S3-001` VSCode extension integration via TS driver  
 4. `S4/S5` Explorer + context-menu parity baseline  
@@ -337,7 +349,8 @@ If any of these slip, the “native driver + IDE parity” objective misses.
 
 ## 6) Week-1 Execution Checklist
 
-- [ ] Approve Driver Core Contract v1 (`S0-001`)
+- [x] Approve Driver Core Contract v1 (`S0-001`) — approved 2026-04-18
+- [x] Stakeholder sign-off on non-goals and phased deferrals (`S0-004`) — signed 2026-04-18; cloud validation deferred (local-first)
 - [x] Approve prompt traceability matrix (`S0-002`)
 - [x] Open TS/Python driver package scaffolds (`S1-002`, `S1-003`)
 - [x] Freeze VSCode integration ADR (`S0-003`)
@@ -355,6 +368,8 @@ If any of these slip, the “native driver + IDE parity” objective misses.
 
 ## 8) Execution Notes (2026-04-17)
 
+- **2026-04-18 (stakeholder):** `S0-001` Driver Core Contract v1 approved; `S0-004` non-goals/phased deferrals signed off. Program operating under **local-first testing**; cloud-hosted CI artifact collection and related remote validation remain deferred to final cloud-validation phase (see `NT-S2-004`).
+- **2026-04-18 (engineering):** `NT-S2-002` native listener now serves framed driver JSON (HELLO/AUTH/COMMAND) and dispatches COMMANDs through `NativeAdapter::dispatch_frame`. `NT-S3-002` transport resolution helpers added in Rust + TS + Python with unit tests. `NT-S3-004` VS Code workspace settings for transport mode + native endpoint + status bar/tooltip injection. `NT-S4-003` drivers CI matrix (`http` \| `native` lanes) with per-lane report filenames; remote runner evidence still deferred.
 - Added shared driver contract draft: `services/voltnuerongridd/reference/driver-core-contract-v1.md`.
 - Added prompt requirement traceability matrix: `services/voltnuerongridd/reference/prompt-requirement-traceability-matrix-v3.md`.
 - Added VSCode integration ADR (TS driver adapter): `services/voltnuerongridd/reference/vscode-ts-driver-integration-adr-v1.md`.

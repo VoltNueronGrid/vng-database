@@ -51,6 +51,7 @@ const models_2 = require("./models");
 const QueryResultsWebview_1 = require("./ui/QueryResultsWebview");
 const QueryResultsState_1 = require("./ui/QueryResultsState");
 const TableEditorWebview_1 = require("./ui/TableEditorWebview");
+const transportConfig_1 = require("./transportConfig");
 // Global service instances
 let connectionManager;
 let httpClient;
@@ -69,12 +70,14 @@ async function activate(context) {
             connectionStatusBar.hide();
             return;
         }
+        const transport = (0, transportConfig_1.readTransportInjectionFromConfig)();
         const healthIcon = active.isConnected ? "$(pass-filled)" : "$(circle-large-outline)";
         connectionStatusBar.text = `${healthIcon} $(database) ${active.settings.name}`;
         connectionStatusBar.tooltip = [
             `Active connection: ${active.settings.name}`,
             `Mode: ${active.settings.mode}`,
             `Base URL: ${active.settings.baseUrl}`,
+            `Transport (settings): ${transport.transportMode}${transport.nativeEndpoint ? ` — native ${transport.nativeEndpoint}` : ""}`,
             `Health: ${active.isConnected ? "Connected" : "Not verified"}`,
             "Click to switch connections.",
         ].join("\n");
@@ -91,7 +94,9 @@ async function activate(context) {
     // Initialize database explorer
     databaseExplorerProvider = (0, providers_1.createDatabaseExplorerProvider)(context.extensionUri, schemaManager);
     queryHistoryProvider = (0, providers_1.createQueryHistoryProvider)(queryExecutionService);
-    output.appendLine("[VoltNueronGrid] Extension activated (v0.3.2)");
+    const transportInject = (0, transportConfig_1.readTransportInjectionFromConfig)();
+    output.appendLine(`[VoltNueronGrid] Extension activated (v0.3.2) — transportMode=${transportInject.transportMode}` +
+        (transportInject.nativeEndpoint ? ` nativeEndpoint=${transportInject.nativeEndpoint}` : ""));
     let latestQueryResult;
     let latestQueryResultState;
     let queryResultsPanel;

@@ -459,4 +459,5 @@ Add fields:
 - 2026-04-17: Consolidated native command execution through one shared helper path (`execute_native_command_roundtrip`) for health/sql.execute/sql.analyze/sql.route before persistent-session handshake/auth layering.
 - 2026-04-17: Introduced persistent socket session layer (`PersistentNativeSession`) with HELLO/AUTH bootstrap and multi-command reuse over a single connection; routed health/execute/analyze/route through `*_in_session` command helpers.
 - 2026-04-17: Added optional-session reuse wrappers for socket roundtrip helpers so callers can reuse an existing `PersistentNativeSession` (or fallback to one-shot socket execution) for health/sql.execute/sql.analyze/sql.route.
+- 2026-04-18: Upgraded runtime native listener beyond accept-only scaffold: length-prefixed JSON frames, HELLO/HelloAck + AUTH/AuthAck (admin key gate when configured), COMMAND dispatch via `NativeAdapter::dispatch_frame` for the S2 command set; dual-transport selector (`resolve_transport_mode` / scheme-based auto) in Rust/TS/Python drivers; VS Code workspace settings for transport injection; CI matrix scaffolding for http vs native lanes (cloud evidence still deferred).
 

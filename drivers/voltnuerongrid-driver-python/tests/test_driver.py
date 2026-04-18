@@ -2,7 +2,12 @@ import unittest
 import json
 from pathlib import Path
 
-from voltnuerongrid_driver_python import DriverConfig, VoltNueronGridDriver, validate_config
+from voltnuerongrid_driver_python import (
+    DriverConfig,
+    DriverTransportMode,
+    VoltNueronGridDriver,
+    validate_config,
+)
 
 
 class DriverTests(unittest.TestCase):
@@ -78,6 +83,30 @@ class DriverTests(unittest.TestCase):
 
         no_transport_case = next(case for case in data["cases"] if case["id"] == "tm-auto-no-transports")
         self.assertEqual(no_transport_case["expectError"]["kind"], "transport")
+
+    def test_resolve_transport_mode_auto_uses_base_url_scheme(self) -> None:
+        d1 = VoltNueronGridDriver(
+            DriverConfig(
+                base_url="vng://127.0.0.1:7542",
+                session_id="s",
+                mode="admin",
+                admin_api_key="k",
+            )
+        )
+        r1 = d1.resolve_transport_mode(DriverTransportMode.AUTO)
+        self.assertEqual(r1.active, DriverTransportMode.NATIVE)
+        self.assertTrue(r1.used_auto_resolution)
+
+        d2 = VoltNueronGridDriver(
+            DriverConfig(
+                base_url="http://127.0.0.1:8080",
+                session_id="s",
+                mode="admin",
+                admin_api_key="k",
+            )
+        )
+        r2 = d2.resolve_transport_mode(DriverTransportMode.AUTO)
+        self.assertEqual(r2.active, DriverTransportMode.HTTP)
 
 
 if __name__ == "__main__":

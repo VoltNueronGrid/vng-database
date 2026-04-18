@@ -55,6 +55,7 @@ import { QueryResult, exportAsCSV, exportAsJSON } from "./models";
 import { QueryResultsMessage, createQueryResultsPanel } from "./ui/QueryResultsWebview";
 import { QueryResultsState, createDefaultQueryResultsState, createQueryResultsState } from "./ui/QueryResultsState";
 import { TableEditorMessage, TableEditorState, createTableEditorPanel } from "./ui/TableEditorWebview";
+import { readTransportInjectionFromConfig } from "./transportConfig";
 
 // Global service instances
 let connectionManager: ConnectionManager;
@@ -77,12 +78,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
+    const transport = readTransportInjectionFromConfig();
     const healthIcon = active.isConnected ? "$(pass-filled)" : "$(circle-large-outline)";
     connectionStatusBar.text = `${healthIcon} $(database) ${active.settings.name}`;
     connectionStatusBar.tooltip = [
       `Active connection: ${active.settings.name}`,
       `Mode: ${active.settings.mode}`,
       `Base URL: ${active.settings.baseUrl}`,
+      `Transport (settings): ${transport.transportMode}${
+        transport.nativeEndpoint ? ` — native ${transport.nativeEndpoint}` : ""
+      }`,
       `Health: ${active.isConnected ? "Connected" : "Not verified"}`,
       "Click to switch connections.",
     ].join("\n");
@@ -103,7 +108,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   databaseExplorerProvider = createDatabaseExplorerProvider(context.extensionUri, schemaManager);
   queryHistoryProvider = createQueryHistoryProvider(queryExecutionService);
 
-  output.appendLine("[VoltNueronGrid] Extension activated (v0.3.2)");
+  const transportInject = readTransportInjectionFromConfig();
+  output.appendLine(
+    `[VoltNueronGrid] Extension activated (v0.3.2) — transportMode=${transportInject.transportMode}` +
+      (transportInject.nativeEndpoint ? ` nativeEndpoint=${transportInject.nativeEndpoint}` : "")
+  );
 
   let latestQueryResult: QueryResult | undefined;
   let latestQueryResultState: QueryResultsState | undefined;

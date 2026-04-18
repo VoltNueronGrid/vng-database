@@ -302,6 +302,24 @@ pub enum DriverTransportMode {
     Auto,
 }
 
+/// Result of resolving [`DriverTransportMode::Auto`] (NT-S3-002).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportResolution {
+    pub active: DriverTransportMode,
+    pub used_auto_resolution: bool,
+    pub notes: Option<String>,
+}
+
+/// Picks native vs HTTP from `base_url` scheme (`vng://` → native). Used by [`DriverTransportMode::Auto`].
+pub fn select_transport_from_base_url(base_url: &str) -> DriverTransportMode {
+    let b = base_url.trim().to_ascii_lowercase();
+    if b.starts_with("vng://") {
+        DriverTransportMode::Native
+    } else {
+        DriverTransportMode::Http
+    }
+}
+
 pub trait NativeTransport {
     fn send_frame(&self, frame: &NativeFrame) -> DriverResult<NativeFrame>;
 }
@@ -580,6 +598,28 @@ impl VoltNueronGridDriver {
     pub fn new(config: DriverConfig) -> DriverResult<Self> {
         config.validate()?;
         Ok(Self { config })
+    }
+
+    /// Resolves the effective transport for API calls. `Auto` uses `base_url` scheme (`vng://` → native, else HTTP).
+    /// Future: optional probe + fallback to HTTP when both endpoints are configured.
+    pub fn resolve_transport_mode(&self, mode: DriverTransportMode) -> TransportResolution {
+        match mode {
+            DriverTransportMode::Http | DriverTransportMode::Native => TransportResolution {
+                active: mode,
+                used_auto_resolution: false,
+                notes: None,
+            },
+            DriverTransportMode::Auto => {
+                let active = select_transport_from_base_url(&self.config.base_url);
+                TransportResolution {
+                    active,
+                    used_auto_resolution: true,
+                    notes: Some(format!(
+                        "auto: selected {active:?} from base_url scheme"
+                    )),
+                }
+            }
+        }
     }
 
     pub fn build_sql_execute_request(
@@ -3515,5 +3555,39 @@ request_timeout_ms: 2500
         );
 
         server.join().expect("server join");
+    }
+
+    #[test]
+    fn resolve_transport_auto_selects_native_for_vng_scheme() {
+        let driver = VoltNueronGridDriver::new(DriverConfig {
+            base_url: "vng://127.0.0.1:7542".to_string(),
+            session_id: "s1".to_string(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: Some("k".to_string()),
+            operator_id: None,
+            route_hint: None,
+        })
+        .expect("driver");
+        let r = driver.resolve_transport_mode(DriverTransportMode::Auto);
+        assert!(r.used_auto_resolution);
+        assert_eq!(r.active, DriverTransportMode::Native);
+        assert!(r.notes.is_some());
+    }
+
+    #[test]
+    fn resolve_transport_auto_selects_http_for_http_scheme() {
+        let driver = VoltNueronGridDriver::new(DriverConfig {
+            base_url: "http://127.0.0.1:8080".to_string(),
+            session_id: "s1".to_string(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: Some("k".to_string()),
+            operator_id: None,
+            route_hint: None,
+        })
+        .expect("driver");
+        let r = driver.resolve_transport_mode(DriverTransportMode::Auto);
+        assert_eq!(r.active, DriverTransportMode::Http);
     }
 }

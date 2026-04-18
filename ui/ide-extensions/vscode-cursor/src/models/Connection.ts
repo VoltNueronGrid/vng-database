@@ -28,6 +28,11 @@ export interface ConnectionSettings {
   serverType: ServerType;
   runtimeTarget: RuntimeTarget;
 
+  /** Dual-transport preference (workspace default can override via settings). */
+  transportMode?: "http" | "native" | "auto";
+  /** Optional native endpoint (`vng://...`) when not inferring from baseUrl. */
+  nativeEndpoint?: string;
+
   // Server config
   baseUrl: string;
   host: string;

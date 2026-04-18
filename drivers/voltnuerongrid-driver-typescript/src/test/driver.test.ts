@@ -130,3 +130,24 @@ test("transport mode fixture is consumed for dual-transport conformance gate", (
   assert.ok(noTransportCase);
   assert.equal(noTransportCase?.expectError?.kind, "transport");
 });
+
+test("resolveTransportMode auto uses baseUrl scheme (NT-S3-002)", () => {
+  const d1 = new VoltNueronGridDriver({
+    baseUrl: "vng://127.0.0.1:7542",
+    sessionId: "s",
+    mode: "admin",
+    adminApiKey: "k"
+  });
+  const r1 = d1.resolveTransportMode("auto");
+  assert.equal(r1.active, "native");
+  assert.equal(r1.usedAutoResolution, true);
+
+  const d2 = new VoltNueronGridDriver({
+    baseUrl: "http://127.0.0.1:8080",
+    sessionId: "s",
+    mode: "admin",
+    adminApiKey: "k"
+  });
+  const r2 = d2.resolveTransportMode("auto");
+  assert.equal(r2.active, "http");
+});
