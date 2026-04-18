@@ -104,6 +104,9 @@ pub type DriverResult<T> = Result<T, DriverError>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverConfig {
     pub base_url: String,
+    /// When `base_url` is `vng://...`, set this to the HTTP runtime base (e.g. `http://127.0.0.1:8080`) so REST
+    /// request builders and `DriverTransportMode::Auto` can fall back to HTTP.
+    pub http_fallback_url: Option<String>,
     pub session_id: String,
     pub tenant_id: Option<String>,
     pub user_id: Option<String>,
@@ -123,7 +126,185 @@ impl DriverConfig {
         if self.tenant_id.is_some() != self.user_id.is_some() {
             return Err(DriverError::validation("tenant_id and user_id must be set together"));
         }
+        if let Some(ref h) = self.http_fallback_url {
+            let h = h.trim();
+            if h.is_empty() {
+                return Err(DriverError::validation("http_fallback_url must not be empty when set"));
+            }
+            let hl = h.to_ascii_lowercase();
+            if !hl.starts_with("http://") && !hl.starts_with("https://") {
+                return Err(DriverError::validation(
+                    "http_fallback_url must start with http:// or https://",
+                ));
+            }
+            if !self.base_url.trim().to_ascii_lowercase().starts_with("vng://") {
+                return Err(DriverError::validation(
+                    "http_fallback_url is only valid when base_url uses the vng:// scheme",
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// Base URL for REST (`/api/...`) request building. When `base_url` is native (`vng://`), uses `http_fallback_url`.
+    pub fn http_rest_base_url(&self) -> DriverResult<&str> {
+        let base = self.base_url.trim();
+        if base.to_ascii_lowercase().starts_with("vng://") {
+            self.http_fallback_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    DriverError::validation(
+                        "http_fallback_url is required when base_url uses vng:// (REST APIs need an http(s) endpoint)",
+                    )
+                })
+        } else {
+            Ok(base)
+        }
+    }
+}
+
+/// Injected availability for native vs HTTP when resolving [`DriverTransportMode::Auto`] (dual-endpoint or conformance).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransportCapabilities {
+    pub native_available: bool,
+    pub http_available: bool,
+}
+
+/// Result of dual-endpoint / capability-aware auto resolution (NT-S3-002).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoTransportResolution {
+    pub active: DriverTransportMode,
+    pub fallback_triggered: bool,
+    pub fallback_reason: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// Resolves `Auto` using [`TransportCapabilities`]. Supports dual-endpoint (`vng` + `http_fallback_url`) with
+/// native-first order per `transport-mode-cases.json` defaults.
+pub fn resolve_auto_transport(
+    config: &DriverConfig,
+    caps: TransportCapabilities,
+) -> DriverResult<AutoTransportResolution> {
+    let dual = config
+        .http_fallback_url
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        == Some(true);
+
+    if dual {
+        if caps.native_available {
+            return Ok(AutoTransportResolution {
+                active: DriverTransportMode::Native,
+                fallback_triggered: false,
+                fallback_reason: None,
+                notes: Some("auto: dual-endpoint; native available (native-first)".to_string()),
+            });
+        }
+        if caps.http_available {
+            return Ok(AutoTransportResolution {
+                active: DriverTransportMode::Http,
+                fallback_triggered: true,
+                fallback_reason: Some("native_unavailable".to_string()),
+                notes: Some("auto: dual-endpoint; fell back to http_fallback_url".to_string()),
+            });
+        }
+        return Err(DriverError::transport(
+            "no available transport: native and http are unavailable",
+        ));
+    }
+
+    let base = config.base_url.trim();
+    let is_vng = base.to_ascii_lowercase().starts_with("vng://");
+
+    if is_vng {
+        if caps.native_available {
+            return Ok(AutoTransportResolution {
+                active: DriverTransportMode::Native,
+                fallback_triggered: false,
+                fallback_reason: None,
+                notes: Some("auto: single vng URL; native available".to_string()),
+            });
+        }
+        if caps.http_available {
+            return Err(DriverError::transport(
+                "native unavailable and no http_fallback_url is configured for HTTP fallback",
+            ));
+        }
+        return Err(DriverError::transport(
+            "no available transport: native and http are unavailable",
+        ));
+    }
+
+    if caps.http_available {
+        return Ok(AutoTransportResolution {
+            active: DriverTransportMode::Http,
+            fallback_triggered: false,
+            fallback_reason: None,
+            notes: Some("auto: single http(s) URL".to_string()),
+        });
+    }
+
+    Err(DriverError::transport(
+        "no available transport: native and http are unavailable",
+    ))
+}
+
+fn http_origin_host_port_for_probe(url: &str) -> Option<String> {
+    let u = url.trim();
+    let rest = u
+        .strip_prefix("http://")
+        .or_else(|| u.strip_prefix("https://"))?;
+    let hostport = rest.split('/').next()?.split('?').next()?.trim();
+    if hostport.is_empty() {
+        return None;
+    }
+    Some(hostport.to_string())
+}
+
+/// Best-effort TCP connect probe for `host:port` (e.g. `127.0.0.1:7542`).
+pub fn probe_tcp_connect(host_port: &str, timeout_ms: u64) -> bool {
+    let host_port = host_port.trim();
+    if host_port.is_empty() || timeout_ms == 0 {
+        return false;
+    }
+    let mut addrs = match host_port.to_socket_addrs() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let Some(addr) = addrs.next() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
+}
+
+/// Derives [`TransportCapabilities`] from live TCP reachability (native `vng` host:port + HTTP origin).
+pub fn infer_transport_capabilities_tcp(
+    config: &DriverConfig,
+    native_connect_timeout_ms: u64,
+    http_connect_timeout_ms: u64,
+) -> TransportCapabilities {
+    let mut native_available = false;
+    let base = config.base_url.trim();
+    if base.to_ascii_lowercase().starts_with("vng://") {
+        if let Some(hp) = base.strip_prefix("vng://").map(str::trim) {
+            if !hp.is_empty() {
+                native_available = probe_tcp_connect(hp, native_connect_timeout_ms);
+            }
+        }
+    }
+
+    let mut http_available = false;
+    if let Ok(http_base) = config.http_rest_base_url() {
+        if let Some(hp) = http_origin_host_port_for_probe(http_base) {
+            http_available = probe_tcp_connect(&hp, http_connect_timeout_ms);
+        }
+    }
+
+    TransportCapabilities {
+        native_available,
+        http_available,
     }
 }
 
@@ -601,7 +782,7 @@ impl VoltNueronGridDriver {
     }
 
     /// Resolves the effective transport for API calls. `Auto` uses `base_url` scheme (`vng://` → native, else HTTP).
-    /// Future: optional probe + fallback to HTTP when both endpoints are configured.
+    /// For capability-aware auto (dual-endpoint, conformance), use [`Self::resolve_auto`].
     pub fn resolve_transport_mode(&self, mode: DriverTransportMode) -> TransportResolution {
         match mode {
             DriverTransportMode::Http | DriverTransportMode::Native => TransportResolution {
@@ -622,6 +803,25 @@ impl VoltNueronGridDriver {
         }
     }
 
+    /// Capability-aware `Auto` resolution (native-first when `http_fallback_url` is set). See `resolve_auto_transport`.
+    pub fn resolve_auto(&self, caps: TransportCapabilities) -> DriverResult<AutoTransportResolution> {
+        resolve_auto_transport(&self.config, caps)
+    }
+
+    /// TCP probes `vng://` host:port from `base_url` and the HTTP origin from [`DriverConfig::http_rest_base_url`]
+    /// to populate [`TransportCapabilities`] for [`Self::resolve_auto`].
+    pub fn probe_transport_capabilities_tcp(
+        &self,
+        native_connect_timeout_ms: u64,
+        http_connect_timeout_ms: u64,
+    ) -> TransportCapabilities {
+        infer_transport_capabilities_tcp(
+            &self.config,
+            native_connect_timeout_ms,
+            http_connect_timeout_ms,
+        )
+    }
+
     pub fn build_sql_execute_request(
         &self,
         sql_batch: &str,
@@ -634,7 +834,7 @@ impl VoltNueronGridDriver {
             "sql_batch": sql_batch,
             "max_rows": max_rows,
         });
-        Ok(self.build_json_post("/api/v1/sql/execute", body))
+        self.build_json_post("/api/v1/sql/execute", body)
     }
 
     pub fn build_sql_analyze_request(&self, sql_batch: &str) -> DriverResult<DriverRequest> {
@@ -644,7 +844,7 @@ impl VoltNueronGridDriver {
         let body = serde_json::json!({
             "sql_batch": sql_batch,
         });
-        Ok(self.build_json_post("/api/v1/sql/analyze", body))
+        self.build_json_post("/api/v1/sql/analyze", body)
     }
 
     pub fn build_sql_route_request(&self, sql_batch: &str) -> DriverResult<DriverRequest> {
@@ -654,7 +854,7 @@ impl VoltNueronGridDriver {
         let body = serde_json::json!({
             "sql_batch": sql_batch,
         });
-        Ok(self.build_json_post("/api/v1/sql/route", body))
+        self.build_json_post("/api/v1/sql/route", body)
     }
 
     pub fn build_sql_transaction_request(&self, statements: &[&str]) -> DriverResult<DriverRequest> {
@@ -664,7 +864,7 @@ impl VoltNueronGridDriver {
         let body = serde_json::json!({
             "statements": statements,
         });
-        Ok(self.build_json_post("/api/v1/sql/transaction", body))
+        self.build_json_post("/api/v1/sql/transaction", body)
     }
 
     pub fn build_authorize_action_request(
@@ -679,10 +879,10 @@ impl VoltNueronGridDriver {
             "action": action,
             "scope": scope,
         });
-        Ok(self.build_json_post("/api/v1/autonomous/actions/authorize", body))
+        self.build_json_post("/api/v1/autonomous/actions/authorize", body)
     }
 
-    fn build_json_post(&self, path: &str, body: serde_json::Value) -> DriverRequest {
+    fn build_json_post(&self, path: &str, body: serde_json::Value) -> DriverResult<DriverRequest> {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
         headers.insert("x-vng-session-id".to_string(), self.config.session_id.clone());
@@ -702,16 +902,17 @@ impl VoltNueronGridDriver {
             headers.insert("x-vng-operator-id".to_string(), operator_id.clone());
         }
 
-        DriverRequest {
+        let base = self.config.http_rest_base_url()?;
+        Ok(DriverRequest {
             method: "POST".to_string(),
             url: format!(
                 "{}{}",
-                self.config.base_url.trim_end_matches('/'),
+                base.trim_end_matches('/'),
                 path
             ),
             headers,
             body_json: body.to_string(),
-        }
+        })
     }
 
     fn native_auth_mode(&self) -> DriverResult<NativeAuthMode> {
@@ -1748,6 +1949,7 @@ mod tests {
     fn config() -> DriverConfig {
         DriverConfig {
             base_url: "http://127.0.0.1:8080".to_string(),
+            http_fallback_url: None,
             session_id: "sess-1".to_string(),
             tenant_id: Some("acme".to_string()),
             user_id: Some("analyst-acme".to_string()),
@@ -2155,6 +2357,7 @@ request_timeout_ms: 2500
                 user_id: tenant_id.as_ref().map(|_| "fixture-user".to_string()),
                 admin_api_key: case.config.admin_api_key,
                 operator_id: case.config.operator_id,
+                http_fallback_url: None,
                 route_hint: None,
             };
 
@@ -2198,6 +2401,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some(use_case.config.admin_api_key),
             operator_id: Some(use_case.config.operator_id),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2247,6 +2451,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: http_case.config.admin_api_key.clone(),
             operator_id: http_case.config.operator_id.clone(),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("http case driver");
@@ -2344,6 +2549,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2380,6 +2586,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2424,6 +2631,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2497,6 +2705,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2527,6 +2736,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2554,6 +2764,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2592,6 +2803,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2645,6 +2857,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2670,6 +2883,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2781,6 +2995,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2891,6 +3106,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2926,6 +3142,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -2998,6 +3215,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3035,6 +3253,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3106,6 +3325,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3140,6 +3360,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3288,6 +3509,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3344,6 +3566,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3400,6 +3623,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3511,6 +3735,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("secret".to_string()),
             operator_id: Some("ops-1".to_string()),
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3566,6 +3791,7 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("k".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
@@ -3584,10 +3810,107 @@ request_timeout_ms: 2500
             user_id: None,
             admin_api_key: Some("k".to_string()),
             operator_id: None,
+            http_fallback_url: None,
             route_hint: None,
         })
         .expect("driver");
         let r = driver.resolve_transport_mode(DriverTransportMode::Auto);
         assert_eq!(r.active, DriverTransportMode::Http);
+    }
+
+    #[test]
+    fn http_rest_base_url_requires_fallback_when_base_is_vng() {
+        let cfg = DriverConfig {
+            base_url: "vng://127.0.0.1:7542".to_string(),
+            http_fallback_url: None,
+            session_id: "s".to_string(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: Some("k".to_string()),
+            operator_id: None,
+            route_hint: None,
+        };
+        assert!(cfg.http_rest_base_url().is_err());
+        let cfg_ok = DriverConfig {
+            http_fallback_url: Some("http://127.0.0.1:8080".to_string()),
+            ..cfg
+        };
+        assert_eq!(
+            cfg_ok.http_rest_base_url().expect("rest base"),
+            "http://127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn resolve_auto_dual_endpoint_matches_transport_mode_fixture() {
+        let dual = DriverConfig {
+            base_url: "vng://127.0.0.1:7542".to_string(),
+            http_fallback_url: Some("http://127.0.0.1:8080".to_string()),
+            session_id: "tm-s-auto-dual".to_string(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: Some("secret".to_string()),
+            operator_id: None,
+            route_hint: None,
+        };
+        dual.validate().expect("valid dual config");
+
+        let r = resolve_auto_transport(
+            &dual,
+            TransportCapabilities {
+                native_available: true,
+                http_available: true,
+            },
+        )
+        .expect("native available");
+        assert_eq!(r.active, DriverTransportMode::Native);
+        assert!(!r.fallback_triggered);
+
+        let r2 = resolve_auto_transport(
+            &dual,
+            TransportCapabilities {
+                native_available: false,
+                http_available: true,
+            },
+        )
+        .expect("fallback http");
+        assert_eq!(r2.active, DriverTransportMode::Http);
+        assert!(r2.fallback_triggered);
+        assert_eq!(r2.fallback_reason.as_deref(), Some("native_unavailable"));
+
+        let err = resolve_auto_transport(
+            &dual,
+            TransportCapabilities {
+                native_available: false,
+                http_available: false,
+            },
+        )
+        .expect_err("both dead");
+        assert_eq!(err.kind, DriverErrorKind::Transport);
+        assert!(err.message.contains("no available transport"));
+    }
+
+    #[test]
+    fn resolve_auto_single_vng_no_transport_matches_fixture_error() {
+        let single = DriverConfig {
+            base_url: "vng://127.0.0.1:7542".to_string(),
+            http_fallback_url: None,
+            session_id: "tm-s-auto-3".to_string(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: Some("secret".to_string()),
+            operator_id: Some("ops-1".to_string()),
+            route_hint: None,
+        };
+        let err = resolve_auto_transport(
+            &single,
+            TransportCapabilities {
+                native_available: false,
+                http_available: false,
+            },
+        )
+        .expect_err("fixture tm-auto-no-transports");
+        assert_eq!(err.kind, DriverErrorKind::Transport);
+        assert!(err.message.contains("no available transport"));
     }
 }

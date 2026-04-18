@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { VoltNueronGridDriver, validateConfig } from "../index.js";
+import {
+  VoltNueronGridDriver,
+  validateConfig,
+  resolveAutoTransport,
+} from "../index.js";
 
 const fixturesDir = path.resolve(process.cwd(), "../conformance/fixtures");
 
@@ -150,4 +154,25 @@ test("resolveTransportMode auto uses baseUrl scheme (NT-S3-002)", () => {
   });
   const r2 = d2.resolveTransportMode("auto");
   assert.equal(r2.active, "http");
+});
+
+test("resolveAutoTransport dual-endpoint matches transport-mode fixture semantics", () => {
+  const dual = {
+    baseUrl: "vng://127.0.0.1:7542",
+    httpFallbackUrl: "http://127.0.0.1:8080",
+    sessionId: "s",
+    mode: "admin" as const,
+    adminApiKey: "secret"
+  };
+  const a = resolveAutoTransport(dual, { nativeAvailable: true, httpAvailable: true });
+  assert.equal(a.active, "native");
+  assert.equal(a.fallbackTriggered, false);
+  const b = resolveAutoTransport(dual, { nativeAvailable: false, httpAvailable: true });
+  assert.equal(b.active, "http");
+  assert.equal(b.fallbackTriggered, true);
+  assert.equal(b.fallbackReason, "native_unavailable");
+  assert.throws(
+    () => resolveAutoTransport(dual, { nativeAvailable: false, httpAvailable: false }),
+    /no available transport/
+  );
 });

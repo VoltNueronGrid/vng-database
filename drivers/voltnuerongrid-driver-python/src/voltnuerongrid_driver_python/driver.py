@@ -17,6 +17,20 @@ class TransportResolution:
     notes: Optional[str] = None
 
 
+@dataclass
+class TransportCapabilities:
+    native_available: bool
+    http_available: bool
+
+
+@dataclass
+class AutoTransportResolution:
+    active: DriverTransportMode
+    fallback_triggered: bool
+    fallback_reason: Optional[str] = None
+    notes: Optional[str] = None
+
+
 def select_transport_from_base_url(base_url: str) -> DriverTransportMode:
     b = base_url.strip().lower()
     return DriverTransportMode.NATIVE if b.startswith("vng://") else DriverTransportMode.HTTP
@@ -32,6 +46,7 @@ class DriverConfig:
     tenant_id: Optional[str] = None
     user_id: Optional[str] = None
     route_hint: Optional[str] = None
+    http_fallback_url: Optional[str] = None
     request_timeout_ms: int = 30000
     max_retries: int = 2
 
@@ -60,7 +75,72 @@ def validate_config(config: DriverConfig) -> Optional[str]:
     if config.mode == "tenant" and not (config.tenant_id or "").strip():
         return "tenant mode requires tenantId"
 
+    if config.http_fallback_url is not None:
+        h = config.http_fallback_url.strip()
+        if not h:
+            return "http_fallback_url must not be empty when set"
+        hl = h.lower()
+        if not (hl.startswith("http://") or hl.startswith("https://")):
+            return "http_fallback_url must start with http:// or https://"
+        if not config.base_url.strip().lower().startswith("vng://"):
+            return "http_fallback_url is only valid when base_url uses the vng:// scheme"
+
     return None
+
+
+def http_rest_base_url(config: DriverConfig) -> str:
+    b = config.base_url.strip().lower()
+    if b.startswith("vng://"):
+        h = (config.http_fallback_url or "").strip()
+        if not h:
+            raise ValueError(
+                "http_fallback_url is required when base_url uses vng:// (REST APIs need an http(s) endpoint)"
+            )
+        return h.rstrip("/")
+    return config.base_url.strip().rstrip("/")
+
+
+def resolve_auto_transport(
+    config: DriverConfig, caps: TransportCapabilities
+) -> AutoTransportResolution:
+    dual = bool((config.http_fallback_url or "").strip())
+    if dual:
+        if caps.native_available:
+            return AutoTransportResolution(
+                active=DriverTransportMode.NATIVE,
+                fallback_triggered=False,
+                notes="auto: dual-endpoint; native available (native-first)",
+            )
+        if caps.http_available:
+            return AutoTransportResolution(
+                active=DriverTransportMode.HTTP,
+                fallback_triggered=True,
+                fallback_reason="native_unavailable",
+                notes="auto: dual-endpoint; fell back to http_fallback_url",
+            )
+        raise ValueError("no available transport: native and http are unavailable")
+
+    base = config.base_url.strip().lower()
+    if base.startswith("vng://"):
+        if caps.native_available:
+            return AutoTransportResolution(
+                active=DriverTransportMode.NATIVE,
+                fallback_triggered=False,
+                notes="auto: single vng URL; native available",
+            )
+        if caps.http_available:
+            raise ValueError(
+                "native unavailable and no http_fallback_url is configured for HTTP fallback"
+            )
+        raise ValueError("no available transport: native and http are unavailable")
+
+    if caps.http_available:
+        return AutoTransportResolution(
+            active=DriverTransportMode.HTTP,
+            fallback_triggered=False,
+            notes="auto: single http(s) URL",
+        )
+    raise ValueError("no available transport: native and http are unavailable")
 
 
 def _build_headers(config: DriverConfig) -> Dict[str, str]:
@@ -100,17 +180,19 @@ class VoltNueronGridDriver:
         )
 
     def _build_post(self, path: str, payload: dict) -> DriverRequest:
+        base = http_rest_base_url(self._config)
         return DriverRequest(
             method="POST",
-            url=f"{self._config.base_url}{path}",
+            url=f"{base}{path}",
             headers=_build_headers(self._config),
             body_json=json.dumps(payload),
         )
 
     def build_health_request(self) -> DriverRequest:
+        base = http_rest_base_url(self._config)
         return DriverRequest(
             method="GET",
-            url=f"{self._config.base_url}/health",
+            url=f"{base}/health",
             headers=_build_headers(self._config),
         )
 
@@ -127,9 +209,10 @@ class VoltNueronGridDriver:
         return self._build_post("/api/v1/sql/transaction", {"statements": statements})
 
     def build_schema_registry_request(self) -> DriverRequest:
+        base = http_rest_base_url(self._config)
         return DriverRequest(
             method="GET",
-            url=f"{self._config.base_url}/api/v1/ingest/schema/registry",
+            url=f"{base}/api/v1/ingest/schema/registry",
             headers=_build_headers(self._config),
         )
 

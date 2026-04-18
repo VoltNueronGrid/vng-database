@@ -247,7 +247,7 @@
 | NT-S2-003 | Introduce runtime transport abstraction shared by native and HTTP handlers | Runtime | Ready for Validation | NT-S2-002 | `TransportGateway` + `CommandDispatcher` active for HTTP proof paths; native `dispatch_frame` parity matrix now covers success + protocol/serialization error normalization for S2 command set |
 | NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | In Progress (`deferred-for-cloud-validation`) | NT-S2-001 | Local fixture/schema/report scaffolding complete; cloud runner-based artifact evidence deferred to final validation phase |
 | NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | In Progress | NT-S2-001..003 | Native frame/codec + HELLO/AUTH scaffold plus socket execution path landed; optional persistent-session reuse helpers now available for core native commands |
-| NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | In Progress | NT-S3-001 | `resolve_transport_mode` + `select_transport_from_base_url` (auto→scheme: `vng://` native, else HTTP); tests landed. **Defer:** multi-endpoint probe + HTTP fallback until dual URL config exists |
+| NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | In Progress | NT-S3-001 | **Dual URL:** `http_fallback_url` on `DriverConfig` + `http_rest_base_url` for REST when `base_url` is `vng://`. **Auto:** `resolve_auto_transport` + `TransportCapabilities` (native-first when dual URL set); TCP probe helper `infer_transport_capabilities_tcp` / `probe_tcp_connect`. TS/Python: `httpFallbackUrl`, `resolveAutoTransport`, `httpRestBaseUrl`. **Remaining:** optional service discovery / single-URL probe without second URL |
 | NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | In Progress | NT-S2-003 | Native COMMAND path covers health + sql.analyze/sql.route/sql.execute (route decision) + sql.transaction (context) via `dispatch_frame`. **Defer:** schema registry as native COMMAND (still HTTP `GET /api/v1/ingest/schema/registry` until command kind added) |
 | NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | In Progress | S0-003, NT-S3-002 | Workspace settings `voltnuerongrid.transportMode` + `voltnuerongrid.nativeEndpoint`; status bar + activation log; connection model fields reserved — data-plane still HTTP until TS native client |
 | NT-S4-001 | TypeScript native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | Transport types + `resolveTransportMode` / `selectTransportFromBaseUrl` + tests (native wire client still pending) |
@@ -261,6 +261,18 @@
 | NT-S9-001 | Native transport soak + failure-injection resilience run | SRE + Runtime | Not Started | NT-S8-001 | Soak/resilience report with thresholds met |
 | NT-S10-001 | Extend Java/JS/C++ roadmap to dual-transport contract model | Arch + Driver | Not Started | NT-S2-001 | Updated multi-language driver plan committed |
 | NT-S11-001 | Governance decision checkpoint: long-term dual transport policy | PM + Arch + Security | Not Started | NT-S7-001..NT-S10-001 | Approved policy note in release docs |
+
+### 2.3.0) Deferred scope rationale (explicit backlog; not “won’t do”)
+
+These items were deferred in earlier increments to keep each delivery reviewable. They remain **planned** and are tracked here with the original rationale.
+
+| Item | Why it was deferred in that pass |
+|------|----------------------------------|
+| **TLS on the native socket** | Needs certificate/key config, handshake flow, error mapping, and tests; often paired with mTLS policy (NT-S6). It is a security-sensitive vertical slice, not a quick add-on to the first framed listener. |
+| **Connection limits / idle timeouts** | Needs clear semantics (reject vs close, per-connection timers, interaction with heartbeat), plus metrics and tests. Easy to get wrong under load without a dedicated pass. |
+| **True auto fallback (native fails → HTTP) without a second URL** | One URL cannot be both `vng://` and `http://`. Fallback implies two endpoints (or a probe that discovers HTTP), retry policy, and diagnostics (`fallbackTriggered`, reason). That is NT-S3-002 completion + product contract, not a one-line fix. **Addressed in part** by `http_fallback_url` / `httpFallbackUrl` + `resolve_auto_transport` / `resolveAutoTransport` when both URLs are configured; dynamic discovery remains future work. |
+| **TS/Python native wire I/O** | Full parity with Rust means the same codec, handshake, COMMANDs, errors, and timeouts — a large surface across three languages. Sequenced after runtime + Rust proved the wire. |
+| **NT-S5+ product work** | Depends on stable transport, parity, and often IDE/runtime behavior (default auto, observability UI, certs, certification, benchmarks, governance). It is downstream of driver + runtime maturity. |
 
 ### 2.3.1) NT-S5+ backlog (unchanged scope; not started in this pass)
 
@@ -370,6 +382,7 @@ If any of these slip, the “native driver + IDE parity” objective misses.
 
 - **2026-04-18 (stakeholder):** `S0-001` Driver Core Contract v1 approved; `S0-004` non-goals/phased deferrals signed off. Program operating under **local-first testing**; cloud-hosted CI artifact collection and related remote validation remain deferred to final cloud-validation phase (see `NT-S2-004`).
 - **2026-04-18 (engineering):** `NT-S2-002` native listener now serves framed driver JSON (HELLO/AUTH/COMMAND) and dispatches COMMANDs through `NativeAdapter::dispatch_frame`. `NT-S3-002` transport resolution helpers added in Rust + TS + Python with unit tests. `NT-S3-004` VS Code workspace settings for transport mode + native endpoint + status bar/tooltip injection. `NT-S4-003` drivers CI matrix (`http` \| `native` lanes) with per-lane report filenames; remote runner evidence still deferred.
+- **2026-04-18 (engineering, NT-S3-002 dual-endpoint):** `http_fallback_url` / `httpFallbackUrl`, `resolve_auto_transport` / `resolveAutoTransport` with `TransportCapabilities`, REST base URL helpers for `vng://` + HTTP, TCP probe utilities (Rust), and §2.3.0 deferred-scope rationale table in `status-tracker-v3.md`.
 - Added shared driver contract draft: `services/voltnuerongridd/reference/driver-core-contract-v1.md`.
 - Added prompt requirement traceability matrix: `services/voltnuerongridd/reference/prompt-requirement-traceability-matrix-v3.md`.
 - Added VSCode integration ADR (TS driver adapter): `services/voltnuerongridd/reference/vscode-ts-driver-integration-adr-v1.md`.

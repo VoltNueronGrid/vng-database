@@ -9,13 +9,82 @@ export interface TransportResolution {
   notes?: string;
 }
 
+/** Matches Rust `TransportCapabilities` / shared `transport-mode-cases.json` runtimeCapabilities. */
+export interface TransportCapabilities {
+  nativeAvailable: boolean;
+  httpAvailable: boolean;
+}
+
+export interface AutoTransportResolution {
+  active: DriverTransportMode;
+  fallbackTriggered: boolean;
+  fallbackReason?: string;
+  notes?: string;
+}
+
 export function selectTransportFromBaseUrl(baseUrl: string): DriverTransportMode {
   const b = baseUrl.trim().toLowerCase();
   return b.startsWith("vng://") ? "native" : "http";
 }
 
+/** Dual-endpoint auto: native-first when `httpFallbackUrl` is set (see `transport-mode-cases.json`). */
+export function resolveAutoTransport(
+  config: DriverConfig,
+  caps: TransportCapabilities
+): AutoTransportResolution {
+  const dual = Boolean(config.httpFallbackUrl?.trim());
+  if (dual) {
+    if (caps.nativeAvailable) {
+      return {
+        active: "native",
+        fallbackTriggered: false,
+        notes: "auto: dual-endpoint; native available (native-first)"
+      };
+    }
+    if (caps.httpAvailable) {
+      return {
+        active: "http",
+        fallbackTriggered: true,
+        fallbackReason: "native_unavailable",
+        notes: "auto: dual-endpoint; fell back to httpFallbackUrl"
+      };
+    }
+    throw new Error("no available transport: native and http are unavailable");
+  }
+
+  const base = config.baseUrl.trim();
+  const isVng = base.toLowerCase().startsWith("vng://");
+  if (isVng) {
+    if (caps.nativeAvailable) {
+      return {
+        active: "native",
+        fallbackTriggered: false,
+        notes: "auto: single vng URL; native available"
+      };
+    }
+    if (caps.httpAvailable) {
+      throw new Error(
+        "native unavailable and no httpFallbackUrl is configured for HTTP fallback"
+      );
+    }
+    throw new Error("no available transport: native and http are unavailable");
+  }
+
+  if (caps.httpAvailable) {
+    return {
+      active: "http",
+      fallbackTriggered: false,
+      notes: "auto: single http(s) URL"
+    };
+  }
+
+  throw new Error("no available transport: native and http are unavailable");
+}
+
 export interface DriverConfig {
   baseUrl: string;
+  /** When `baseUrl` is `vng://...`, set this to the HTTP runtime base for REST and for auto fallback. */
+  httpFallbackUrl?: string;
   sessionId: string;
   mode: DriverMode;
   adminApiKey?: string;
@@ -56,6 +125,21 @@ export function validateConfig(config: DriverConfig): string | null {
   return null;
 }
 
+/** Base URL for REST paths; when `baseUrl` is `vng://`, requires `httpFallbackUrl`. */
+export function httpRestBaseUrl(config: DriverConfig): string {
+  const b = config.baseUrl.trim().toLowerCase();
+  if (b.startsWith("vng://")) {
+    const h = config.httpFallbackUrl?.trim();
+    if (!h) {
+      throw new Error(
+        "httpFallbackUrl is required when baseUrl uses vng:// (REST APIs need an http(s) endpoint)"
+      );
+    }
+    return h.replace(/\/$/, "");
+  }
+  return config.baseUrl.trim().replace(/\/$/, "");
+}
+
 function buildHeaders(config: DriverConfig): Record<string, string> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -81,9 +165,10 @@ function buildHeaders(config: DriverConfig): Record<string, string> {
 }
 
 function buildPost(config: DriverConfig, path: string, payload: unknown): DriverRequest {
+  const base = httpRestBaseUrl(config);
   return {
     method: "POST",
-    url: `${config.baseUrl}${path}`,
+    url: `${base}${path}`,
     headers: buildHeaders(config),
     bodyJson: JSON.stringify(payload),
   };
@@ -111,9 +196,10 @@ export class VoltNueronGridDriver {
   }
 
   buildHealthRequest(): DriverRequest {
+    const base = httpRestBaseUrl(this.config);
     return {
       method: "GET",
-      url: `${this.config.baseUrl}/health`,
+      url: `${base}/health`,
       headers: buildHeaders(this.config),
     };
   }
@@ -135,9 +221,10 @@ export class VoltNueronGridDriver {
   }
 
   buildSchemaRegistryRequest(): DriverRequest {
+    const base = httpRestBaseUrl(this.config);
     return {
       method: "GET",
-      url: `${this.config.baseUrl}/api/v1/ingest/schema/registry`,
+      url: `${base}/api/v1/ingest/schema/registry`,
       headers: buildHeaders(this.config),
     };
   }

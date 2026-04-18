@@ -5,7 +5,9 @@ from pathlib import Path
 from voltnuerongrid_driver_python import (
     DriverConfig,
     DriverTransportMode,
+    TransportCapabilities,
     VoltNueronGridDriver,
+    resolve_auto_transport,
     validate_config,
 )
 
@@ -107,6 +109,31 @@ class DriverTests(unittest.TestCase):
         )
         r2 = d2.resolve_transport_mode(DriverTransportMode.AUTO)
         self.assertEqual(r2.active, DriverTransportMode.HTTP)
+
+    def test_resolve_auto_dual_endpoint_matches_fixture_semantics(self) -> None:
+        dual = DriverConfig(
+            base_url="vng://127.0.0.1:7542",
+            session_id="s",
+            mode="admin",
+            admin_api_key="secret",
+            http_fallback_url="http://127.0.0.1:8080",
+        )
+        a = resolve_auto_transport(
+            dual, TransportCapabilities(native_available=True, http_available=True)
+        )
+        self.assertEqual(a.active, DriverTransportMode.NATIVE)
+        self.assertFalse(a.fallback_triggered)
+        b = resolve_auto_transport(
+            dual, TransportCapabilities(native_available=False, http_available=True)
+        )
+        self.assertEqual(b.active, DriverTransportMode.HTTP)
+        self.assertTrue(b.fallback_triggered)
+        self.assertEqual(b.fallback_reason, "native_unavailable")
+        with self.assertRaises(ValueError) as ctx:
+            resolve_auto_transport(
+                dual, TransportCapabilities(native_available=False, http_available=False)
+            )
+        self.assertIn("no available transport", str(ctx.exception))
 
 
 if __name__ == "__main__":
