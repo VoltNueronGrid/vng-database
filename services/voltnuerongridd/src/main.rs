@@ -5,9 +5,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::Semaphore;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use base64::Engine;
@@ -5347,6 +5348,8 @@ struct NativeListenerConfig {
     enabled: bool,
     bind: String,
     tls_enabled: bool,
+    tls_cert_path: Option<String>,
+    tls_key_path: Option<String>,
     max_connections: usize,
     idle_timeout_ms: u64,
     handshake_timeout_ms: u64,
@@ -5364,6 +5367,14 @@ impl NativeListenerConfig {
             .trim()
             .to_string();
         let tls_enabled = read_env_bool("VNG_NATIVE_TLS_ENABLED", false);
+        let tls_cert_path = env::var("VNG_NATIVE_TLS_CERT_PATH")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let tls_key_path = env::var("VNG_NATIVE_TLS_KEY_PATH")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
         let max_connections = read_env_usize("VNG_NATIVE_MAX_CONNECTIONS", 2048);
         let idle_timeout_ms = read_env_u64("VNG_NATIVE_IDLE_TIMEOUT_MS", 60000);
         let handshake_timeout_ms = read_env_u64("VNG_NATIVE_HANDSHAKE_TIMEOUT_MS", 5000);
@@ -5377,6 +5388,8 @@ impl NativeListenerConfig {
             enabled,
             bind,
             tls_enabled,
+            tls_cert_path,
+            tls_key_path,
             max_connections,
             idle_timeout_ms,
             handshake_timeout_ms,
@@ -5408,6 +5421,38 @@ impl NativeListenerConfig {
         }
         self
     }
+}
+
+fn load_native_tls_acceptor(cert_path: &str, key_path: &str) -> Result<Arc<tokio_rustls::TlsAcceptor>, String> {
+    use rustls::ServerConfig;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use rustls_pemfile::{certs, private_key};
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let mut cert_r = BufReader::new(
+        File::open(cert_path).map_err(|e| format!("open cert {cert_path}: {e}"))?,
+    );
+    let cert_chain: Vec<CertificateDer<'static>> = certs(&mut cert_r)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("parse cert PEM: {e}"))?;
+    if cert_chain.is_empty() {
+        return Err("no certificates found in PEM file".to_string());
+    }
+
+    let mut key_r = BufReader::new(
+        File::open(key_path).map_err(|e| format!("open key {key_path}: {e}"))?,
+    );
+    let key: PrivateKeyDer<'static> = private_key(&mut key_r)
+        .map_err(|e| format!("parse key PEM: {e}"))?
+        .ok_or_else(|| "no private keys in PEM file".to_string())?;
+
+    let cfg = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, key)
+        .map_err(|e| format!("rustls server config: {e}"))?;
+
+    Ok(Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(cfg))))
 }
 
 fn read_env_bool(name: &str, default: bool) -> bool {
@@ -6204,8 +6249,8 @@ fn native_auth_payload_matches_runtime(
     key == expected.as_str()
 }
 
-async fn native_read_framed(
-    socket: &mut tokio::net::TcpStream,
+async fn native_read_framed<S: AsyncRead + Unpin>(
+    socket: &mut S,
     max_payload_bytes: usize,
 ) -> Result<Vec<u8>, std::io::Error> {
     let mut len_buf = [0u8; 4];
@@ -6222,8 +6267,8 @@ async fn native_read_framed(
     Ok(buf)
 }
 
-async fn native_write_framed_json(
-    socket: &mut tokio::net::TcpStream,
+async fn native_write_framed_json<S: AsyncWrite + Unpin>(
+    socket: &mut S,
     value: &serde_json::Value,
 ) -> Result<(), std::io::Error> {
     let payload = serde_json::to_vec(value).map_err(|e| {
@@ -6243,20 +6288,23 @@ async fn native_write_framed_json(
     Ok(())
 }
 
-async fn run_native_connection(
-    mut socket: tokio::net::TcpStream,
+async fn run_native_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(
+    mut socket: S,
     state: AppState,
     config: NativeListenerConfig,
 ) {
     let dispatcher = CommandDispatcher::new();
+    let idle = Duration::from_millis(config.idle_timeout_ms.max(1000));
     loop {
-        let frame_bytes = match native_read_framed(&mut socket, config.max_frame_bytes).await {
-            Ok(b) => b,
-            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(err) => {
+        let frame_bytes = match tokio::time::timeout(idle, native_read_framed(&mut socket, config.max_frame_bytes)).await
+        {
+            Ok(Ok(b)) => b,
+            Ok(Err(err)) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Ok(Err(err)) => {
                 eprintln!("native listener read failed: {err}");
                 break;
             }
+            Err(_) => break,
         };
         let value: serde_json::Value = match serde_json::from_slice(&frame_bytes) {
             Ok(v) => v,
@@ -6332,6 +6380,26 @@ async fn run_native_connection(
 }
 
 async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
+    let tls_acceptor: Option<Arc<tokio_rustls::TlsAcceptor>> = if config.tls_enabled {
+        match (&config.tls_cert_path, &config.tls_key_path) {
+            (Some(cert_path), Some(key_path)) => match load_native_tls_acceptor(cert_path, key_path) {
+                Ok(a) => Some(a),
+                Err(e) => {
+                    eprintln!("native listener: TLS enabled but certificate load failed: {e}");
+                    return;
+                }
+            },
+            _ => {
+                eprintln!(
+                    "native listener: VNG_NATIVE_TLS_ENABLED=true requires VNG_NATIVE_TLS_CERT_PATH and VNG_NATIVE_TLS_KEY_PATH"
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     let bind_addr: SocketAddr = match config.bind.parse() {
         Ok(addr) => addr,
         Err(err) => {
@@ -6351,15 +6419,49 @@ async fn run_native_listener(config: NativeListenerConfig, state: AppState) {
         }
     };
 
+    let sem = Arc::new(Semaphore::new(config.max_connections));
+    let handshake = Duration::from_millis(config.handshake_timeout_ms.max(1000));
+
     loop {
         match listener.accept().await {
-            Ok((socket, peer_addr)) => {
+            Ok((mut socket, peer_addr)) => {
+                let permit = match sem.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        eprintln!(
+                            "native listener: max_connections ({}) reached; rejecting {peer_addr}",
+                            config.max_connections
+                        );
+                        let _ = socket.shutdown().await;
+                        continue;
+                    }
+                };
                 println!("native listener accepted connection from {peer_addr}");
                 let st = state.clone();
                 let cfg = config.clone();
-                tokio::spawn(async move {
-                    run_native_connection(socket, st, cfg).await;
-                });
+                if let Some(ref acc) = tls_acceptor {
+                    let acc = acc.clone();
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        let tls_stream = match tokio::time::timeout(handshake, acc.accept(socket)).await {
+                            Ok(Ok(s)) => s,
+                            Ok(Err(e)) => {
+                                eprintln!("native listener TLS handshake failed: {e}");
+                                return;
+                            }
+                            Err(_) => {
+                                eprintln!("native listener TLS handshake timed out (peer {peer_addr})");
+                                return;
+                            }
+                        };
+                        run_native_connection(tls_stream, st, cfg).await;
+                    });
+                } else {
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        run_native_connection(socket, st, cfg).await;
+                    });
+                }
             }
             Err(err) => {
                 eprintln!("native listener accept failure: {err}");

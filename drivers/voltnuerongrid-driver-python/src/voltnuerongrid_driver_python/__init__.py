@@ -1,4 +1,5 @@
 from .driver import (
+    DEFAULT_HTTP_DISCOVERY_PORT,
     AutoTransportResolution,
     DriverConfig,
     DriverRequest,
@@ -7,12 +8,17 @@ from .driver import (
     TransportResolution,
     VoltNueronGridDriver,
     http_rest_base_url,
+    infer_http_base_url_from_vng_url,
+    parse_vng_host_for_discovery,
     resolve_auto_transport,
+    resolve_auto_transport_with_discovery,
     select_transport_from_base_url,
     validate_config,
 )
+from .native_wire import encode_framed_json, native_wire_roundtrip, read_framed_json
 
 __all__ = [
+    "DEFAULT_HTTP_DISCOVERY_PORT",
     "AutoTransportResolution",
     "DriverConfig",
     "DriverRequest",
@@ -20,8 +26,14 @@ __all__ = [
     "TransportCapabilities",
     "TransportResolution",
     "VoltNueronGridDriver",
+    "encode_framed_json",
     "http_rest_base_url",
+    "infer_http_base_url_from_vng_url",
+    "native_wire_roundtrip",
+    "parse_vng_host_for_discovery",
+    "read_framed_json",
     "resolve_auto_transport",
+    "resolve_auto_transport_with_discovery",
     "select_transport_from_base_url",
     "validate_config",
 ]

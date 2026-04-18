@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Dict, List, Optional
 import json
@@ -34,6 +36,39 @@ class AutoTransportResolution:
 def select_transport_from_base_url(base_url: str) -> DriverTransportMode:
     b = base_url.strip().lower()
     return DriverTransportMode.NATIVE if b.startswith("vng://") else DriverTransportMode.HTTP
+
+
+DEFAULT_HTTP_DISCOVERY_PORT = 8080
+
+
+def parse_vng_host_for_discovery(vng_url: str) -> str:
+    t = vng_url.strip()
+    if not t.lower().startswith("vng://"):
+        raise ValueError("expected vng:// URL")
+    rest = t[6:]
+    host_part = rest.split("/", maxsplit=1)[0].split("?", maxsplit=1)[0].strip()
+    if not host_part:
+        raise ValueError("vng URL host is empty")
+    if host_part.startswith("["):
+        end = host_part.find("]")
+        if end <= 0:
+            raise ValueError("invalid IPv6 bracket in vng URL")
+        return host_part[1:end]
+    last_colon = host_part.rfind(":")
+    if last_colon > 0:
+        maybe_port = host_part[last_colon + 1 :]
+        if maybe_port.isdigit() and ":" not in host_part[:last_colon]:
+            return host_part[:last_colon]
+    return host_part
+
+
+def infer_http_base_url_from_vng_url(vng_url: str, http_port: int) -> str:
+    if http_port < 1 or http_port > 65535:
+        raise ValueError("http discovery port must be 1..65535")
+    host = parse_vng_host_for_discovery(vng_url)
+    if ":" in host:
+        return f"http://[{host}]:{http_port}"
+    return f"http://{host}:{http_port}"
 
 
 @dataclass
@@ -141,6 +176,23 @@ def resolve_auto_transport(
             notes="auto: single http(s) URL",
         )
     raise ValueError("no available transport: native and http are unavailable")
+
+
+def resolve_auto_transport_with_discovery(
+    config: DriverConfig,
+    caps: TransportCapabilities,
+    discovery_http_port: Optional[int],
+) -> AutoTransportResolution:
+    if discovery_http_port is None:
+        return resolve_auto_transport(config, caps)
+    if (config.http_fallback_url or "").strip():
+        return resolve_auto_transport(config, caps)
+    base = config.base_url.strip()
+    if not base.lower().startswith("vng://"):
+        return resolve_auto_transport(config, caps)
+    inferred = infer_http_base_url_from_vng_url(base, discovery_http_port)
+    merged = replace(config, http_fallback_url=inferred)
+    return resolve_auto_transport(merged, caps)
 
 
 def _build_headers(config: DriverConfig) -> Dict[str, str]:

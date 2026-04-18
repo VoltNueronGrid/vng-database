@@ -429,8 +429,8 @@
         "voltnuerongrid.transportMode": {
           "type": "string",
           "enum": ["http", "native", "auto"],
-          "default": "http",
-          "description": "Preferred transport for the extension (HTTP is fully wired; native/auto prepare dual-transport parity). Data-plane calls remain HTTP until the TS native client is integrated."
+          "default": "auto",
+          "description": "Preferred transport for the extension (`auto` follows scheme + dual-endpoint settings; HTTP remains the default data-plane until the TS native client is fully integrated)."
         },
         "voltnuerongrid.nativeEndpoint": {
           "type": "string",

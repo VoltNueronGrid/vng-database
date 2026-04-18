@@ -11,7 +11,7 @@ export interface TransportInjection {
 
 export function readTransportInjectionFromConfig(): TransportInjection {
   const cfg = vscode.workspace.getConfiguration("voltnuerongrid");
-  const raw = (cfg.get<string>("transportMode") ?? "http").toLowerCase();
+  const raw = (cfg.get<string>("transportMode") ?? "auto").toLowerCase();
   const transportMode: InjectedTransportMode =
     raw === "native" || raw === "auto" ? raw : "http";
   const nativeEndpoint = cfg.get<string>("nativeEndpoint")?.trim();

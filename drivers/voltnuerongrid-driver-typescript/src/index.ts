@@ -27,6 +27,72 @@ export function selectTransportFromBaseUrl(baseUrl: string): DriverTransportMode
   return b.startsWith("vng://") ? "native" : "http";
 }
 
+/** Default HTTP port when inferring `http://…` from `vng://…` (matches Rust `DEFAULT_HTTP_DISCOVERY_PORT`). */
+export const DEFAULT_HTTP_DISCOVERY_PORT = 8080;
+
+/** Host part of `vng://host[:nativePort][/…]` for building `http://host:httpPort`. */
+export function parseVngHostForDiscovery(vngUrl: string): string {
+  const t = vngUrl.trim();
+  const rest = t.startsWith("vng://") ? t.slice("vng://".length) : "";
+  if (!rest) {
+    throw new Error("expected vng:// URL");
+  }
+  const hostPart = rest.split(/[/\?]/)[0]?.trim() ?? "";
+  if (!hostPart) {
+    throw new Error("vng URL host is empty");
+  }
+  if (hostPart.startsWith("[")) {
+    const end = hostPart.indexOf("]");
+    if (end <= 0) {
+      throw new Error("invalid IPv6 bracket in vng URL");
+    }
+    return hostPart.slice(1, end);
+  }
+  const lastColon = hostPart.lastIndexOf(":");
+  if (lastColon > 0) {
+    const maybePort = hostPart.slice(lastColon + 1);
+    if (/^\d+$/.test(maybePort) && !hostPart.slice(0, lastColon).includes(":")) {
+      return hostPart.slice(0, lastColon);
+    }
+  }
+  return hostPart;
+}
+
+/** Builds `http://host:httpPort` from a `vng://` URL (HTTP port is not the native wire port). */
+export function inferHttpBaseUrlFromVngUrl(vngUrl: string, httpPort: number): string {
+  if (!Number.isInteger(httpPort) || httpPort < 1 || httpPort > 65535) {
+    throw new Error("http discovery port must be 1..65535");
+  }
+  const host = parseVngHostForDiscovery(vngUrl);
+  if (host.includes(":")) {
+    return `http://[${host}]:${httpPort}`;
+  }
+  return `http://${host}:${httpPort}`;
+}
+
+/**
+ * Like `resolveAutoTransport`, but when `httpFallbackUrl` is unset and `discoveryHttpPort` is set,
+ * infers the HTTP base from `baseUrl` so dual-endpoint auto works without a second URL string.
+ */
+export function resolveAutoTransportWithDiscovery(
+  config: DriverConfig,
+  caps: TransportCapabilities,
+  discoveryHttpPort: number | undefined
+): AutoTransportResolution {
+  if (discoveryHttpPort === undefined) {
+    return resolveAutoTransport(config, caps);
+  }
+  if ((config.httpFallbackUrl ?? "").trim()) {
+    return resolveAutoTransport(config, caps);
+  }
+  const base = config.baseUrl.trim();
+  if (!base.toLowerCase().startsWith("vng://")) {
+    return resolveAutoTransport(config, caps);
+  }
+  const inferred = inferHttpBaseUrlFromVngUrl(base, discoveryHttpPort);
+  return resolveAutoTransport({ ...config, httpFallbackUrl: inferred }, caps);
+}
+
 /** Dual-endpoint auto: native-first when `httpFallbackUrl` is set (see `transport-mode-cases.json`). */
 export function resolveAutoTransport(
   config: DriverConfig,
@@ -229,3 +295,5 @@ export class VoltNueronGridDriver {
     };
   }
 }
+
+export * from "./nativeWire";

@@ -37,7 +37,7 @@ exports.readTransportInjectionFromConfig = readTransportInjectionFromConfig;
 const vscode = __importStar(require("vscode"));
 function readTransportInjectionFromConfig() {
     const cfg = vscode.workspace.getConfiguration("voltnuerongrid");
-    const raw = (cfg.get("transportMode") ?? "http").toLowerCase();
+    const raw = (cfg.get("transportMode") ?? "auto").toLowerCase();
     const transportMode = raw === "native" || raw === "auto" ? raw : "http";
     const nativeEndpoint = cfg.get("nativeEndpoint")?.trim();
     return {

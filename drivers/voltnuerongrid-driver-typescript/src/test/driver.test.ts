@@ -6,6 +6,8 @@ import {
   VoltNueronGridDriver,
   validateConfig,
   resolveAutoTransport,
+  resolveAutoTransportWithDiscovery,
+  inferHttpBaseUrlFromVngUrl,
 } from "../index.js";
 
 const fixturesDir = path.resolve(process.cwd(), "../conformance/fixtures");
@@ -175,4 +177,24 @@ test("resolveAutoTransport dual-endpoint matches transport-mode fixture semantic
     () => resolveAutoTransport(dual, { nativeAvailable: false, httpAvailable: false }),
     /no available transport/
   );
+});
+
+test("inferHttpBaseUrlFromVngUrl + resolveAutoTransportWithDiscovery (single-URL discovery port)", () => {
+  assert.equal(
+    inferHttpBaseUrlFromVngUrl("vng://127.0.0.1:7542", 8080),
+    "http://127.0.0.1:8080"
+  );
+  const cfg = {
+    baseUrl: "vng://127.0.0.1:7542",
+    sessionId: "s",
+    mode: "admin" as const,
+    adminApiKey: "k",
+  };
+  const r = resolveAutoTransportWithDiscovery(
+    cfg,
+    { nativeAvailable: true, httpAvailable: true },
+    8080
+  );
+  assert.equal(r.active, "native");
+  assert.ok((r.notes ?? "").includes("dual-endpoint"));
 });

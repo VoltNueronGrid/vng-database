@@ -251,6 +251,73 @@ pub fn resolve_auto_transport(
     ))
 }
 
+/// Default HTTP port used when inferring `http://…` from a `vng://` URL for discovery (env `VNG_HTTP_DISCOVERY_PORT` overrides in callers).
+pub const DEFAULT_HTTP_DISCOVERY_PORT: u16 = 8080;
+
+/// Parses the host from `vng://host[:nativePort][/…]` for building `http://host:httpPort` (single-URL auto without a second URL string).
+pub fn parse_vng_host_for_discovery(vng_url: &str) -> DriverResult<String> {
+    let t = vng_url.trim();
+    let rest = t
+        .strip_prefix("vng://")
+        .ok_or_else(|| DriverError::validation("expected vng:// URL"))?;
+    let host_part = rest
+        .split(|c| c == '/' || c == '?')
+        .next()
+        .unwrap_or("")
+        .trim();
+    if host_part.is_empty() {
+        return Err(DriverError::validation("vng URL host is empty"));
+    }
+    if host_part.starts_with('[') {
+        let end = host_part
+            .find(']')
+            .ok_or_else(|| DriverError::validation("invalid IPv6 bracket in vng URL"))?;
+        return Ok(host_part[1..end].to_string());
+    }
+    if let Some((a, b)) = host_part.rsplit_once(':') {
+        if b.chars().all(|c| c.is_ascii_digit()) && !a.contains(':') {
+            return Ok(a.to_string());
+        }
+    }
+    Ok(host_part.to_string())
+}
+
+/// Builds `http://host:httpPort` from a `vng://` URL (HTTP port is not implied by the native port).
+pub fn infer_http_base_url_from_vng_url(vng_url: &str, http_port: u16) -> DriverResult<String> {
+    if http_port == 0 {
+        return Err(DriverError::validation("http discovery port must be >= 1"));
+    }
+    let host = parse_vng_host_for_discovery(vng_url)?;
+    if host.contains(':') {
+        Ok(format!("http://[{}]:{}", host, http_port))
+    } else {
+        Ok(format!("http://{}:{}", host, http_port))
+    }
+}
+
+/// Like [`resolve_auto_transport`], but when `http_fallback_url` is unset and `discovery_http_port` is `Some`,
+/// infers `http_fallback_url` from `base_url` (`vng://…`) so dual-endpoint auto works without a second URL string.
+pub fn resolve_auto_transport_with_discovery(
+    config: &DriverConfig,
+    caps: TransportCapabilities,
+    discovery_http_port: Option<u16>,
+) -> DriverResult<AutoTransportResolution> {
+    match discovery_http_port {
+        None => resolve_auto_transport(config, caps),
+        Some(_port) if config.http_fallback_url.is_some() => resolve_auto_transport(config, caps),
+        Some(port) => {
+            let t = config.base_url.trim();
+            if !t.to_ascii_lowercase().starts_with("vng://") {
+                return resolve_auto_transport(config, caps);
+            }
+            let inferred = infer_http_base_url_from_vng_url(t, port)?;
+            let mut c = config.clone();
+            c.http_fallback_url = Some(inferred);
+            resolve_auto_transport(&c, caps)
+        }
+    }
+}
+
 fn http_origin_host_port_for_probe(url: &str) -> Option<String> {
     let u = url.trim();
     let rest = u
@@ -3912,5 +3979,38 @@ request_timeout_ms: 2500
         .expect_err("fixture tm-auto-no-transports");
         assert_eq!(err.kind, DriverErrorKind::Transport);
         assert!(err.message.contains("no available transport"));
+    }
+
+    #[test]
+    fn infer_http_base_url_from_vng_url_ipv4() {
+        assert_eq!(
+            infer_http_base_url_from_vng_url("vng://127.0.0.1:7542", 8080).expect("infer"),
+            "http://127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn resolve_auto_with_discovery_acts_as_dual_endpoint() {
+        let cfg = DriverConfig {
+            base_url: "vng://127.0.0.1:7542".to_string(),
+            http_fallback_url: None,
+            session_id: "s".to_string(),
+            tenant_id: None,
+            user_id: None,
+            admin_api_key: Some("k".to_string()),
+            operator_id: None,
+            route_hint: None,
+        };
+        let r = resolve_auto_transport_with_discovery(
+            &cfg,
+            TransportCapabilities {
+                native_available: true,
+                http_available: true,
+            },
+            Some(8080),
+        )
+        .expect("dual via discovery");
+        assert_eq!(r.active, DriverTransportMode::Native);
+        assert!(r.notes.as_deref().unwrap_or("").contains("dual-endpoint"));
     }
 }

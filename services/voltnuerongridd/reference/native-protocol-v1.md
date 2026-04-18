@@ -2,7 +2,7 @@
 
 **Status:** Draft skeleton (execution-ready for `NT-S2-*`)  
 **Owners:** Architecture + Runtime + Driver Platform + QA  
-**Last updated:** 2026-04-17  
+**Last updated:** 2026-04-18  
 **Related tracker:** `status-tracker-v3.md` (`NT-S2-001`..`NT-S2-004`)
 
 ---
@@ -461,4 +461,5 @@ Add fields:
 - 2026-04-17: Added optional-session reuse wrappers for socket roundtrip helpers so callers can reuse an existing `PersistentNativeSession` (or fallback to one-shot socket execution) for health/sql.execute/sql.analyze/sql.route.
 - 2026-04-18: Upgraded runtime native listener beyond accept-only scaffold: length-prefixed JSON frames, HELLO/HelloAck + AUTH/AuthAck (admin key gate when configured), COMMAND dispatch via `NativeAdapter::dispatch_frame` for the S2 command set; dual-transport selector (`resolve_transport_mode` / scheme-based auto) in Rust/TS/Python drivers; VS Code workspace settings for transport injection; CI matrix scaffolding for http vs native lanes (cloud evidence still deferred).
 - 2026-04-18: Dual-endpoint auto resolution: `http_fallback_url` / `httpFallbackUrl` with `resolve_auto_transport` / `resolveAutoTransport` + `TransportCapabilities` (native-first); REST builders use `http_rest_base_url` / `httpRestBaseUrl` when `base_url` is `vng://`; optional TCP probe helpers in Rust (`probe_tcp_connect`, `infer_transport_capabilities_tcp`).
+- 2026-04-18: Listener hardening: connection cap (`VNG_NATIVE_MAX_CONNECTIONS`) with reject, idle timeout on framed reads (`VNG_NATIVE_IDLE_TIMEOUT_MS`), TLS accept when `VNG_NATIVE_TLS_ENABLED` + `VNG_NATIVE_TLS_CERT_PATH` + `VNG_NATIVE_TLS_KEY_PATH` (handshake bounded by `VNG_NATIVE_HANDSHAKE_TIMEOUT_MS`). Single-URL HTTP discovery helpers: `infer_http_base_url_from_vng_url` + `resolve_auto_transport_with_discovery` in Rust/TS/Python (caller supplies HTTP discovery port). TS `nativeWire.ts` / Python `native_wire.py` minimal framed JSON I/O.
 

@@ -7,7 +7,9 @@ from voltnuerongrid_driver_python import (
     DriverTransportMode,
     TransportCapabilities,
     VoltNueronGridDriver,
+    infer_http_base_url_from_vng_url,
     resolve_auto_transport,
+    resolve_auto_transport_with_discovery,
     validate_config,
 )
 
@@ -134,6 +136,25 @@ class DriverTests(unittest.TestCase):
                 dual, TransportCapabilities(native_available=False, http_available=False)
             )
         self.assertIn("no available transport", str(ctx.exception))
+
+    def test_infer_http_and_resolve_auto_with_discovery(self) -> None:
+        self.assertEqual(
+            infer_http_base_url_from_vng_url("vng://127.0.0.1:7542", 8080),
+            "http://127.0.0.1:8080",
+        )
+        cfg = DriverConfig(
+            base_url="vng://127.0.0.1:7542",
+            session_id="s",
+            mode="admin",
+            admin_api_key="k",
+        )
+        r = resolve_auto_transport_with_discovery(
+            cfg,
+            TransportCapabilities(native_available=True, http_available=True),
+            8080,
+        )
+        self.assertEqual(r.active, DriverTransportMode.NATIVE)
+        self.assertIn("dual-endpoint", r.notes or "")
 
 
 if __name__ == "__main__":
