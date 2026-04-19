@@ -101,6 +101,17 @@ impl std::error::Error for DriverError {}
 
 pub type DriverResult<T> = Result<T, DriverError>;
 
+/// Default HTTP request timeout (`driver-core-contract` v1 `requestTimeoutMs`).
+pub const DEFAULT_HTTP_REQUEST_TIMEOUT_MS: u64 = 30_000;
+
+/// Default max retries for transient HTTP failures (`driver-core-contract` v1 `maxRetries`).
+pub const DEFAULT_HTTP_MAX_RETRIES: u32 = 2;
+
+/// Returns true for HTTP status codes that are commonly transient and worth retrying (shared policy across drivers).
+pub fn is_retryable_http_status(status: u16) -> bool {
+    matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverConfig {
     pub base_url: String,
@@ -999,6 +1010,16 @@ impl VoltNueronGridDriver {
         self.build_json_post("/api/v1/sql/transaction", body)
     }
 
+    /// `GET /health` (REST data-plane health probe; requires [`DriverConfig::http_rest_base_url`]).
+    pub fn build_health_request(&self) -> DriverResult<DriverRequest> {
+        self.build_json_get("/health")
+    }
+
+    /// `GET /api/v1/ingest/schema/registry` (schema discovery).
+    pub fn build_schema_registry_request(&self) -> DriverResult<DriverRequest> {
+        self.build_json_get("/api/v1/ingest/schema/registry")
+    }
+
     pub fn build_authorize_action_request(
         &self,
         action: &str,
@@ -1014,7 +1035,7 @@ impl VoltNueronGridDriver {
         self.build_json_post("/api/v1/autonomous/actions/authorize", body)
     }
 
-    fn build_json_post(&self, path: &str, body: serde_json::Value) -> DriverResult<DriverRequest> {
+    fn rest_headers_map(&self) -> BTreeMap<String, String> {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
         headers.insert("x-vng-session-id".to_string(), self.config.session_id.clone());
@@ -1033,7 +1054,20 @@ impl VoltNueronGridDriver {
         if let Some(operator_id) = &self.config.operator_id {
             headers.insert("x-vng-operator-id".to_string(), operator_id.clone());
         }
+        headers
+    }
 
+    fn build_json_get(&self, path: &str) -> DriverResult<DriverRequest> {
+        let base = self.config.http_rest_base_url()?;
+        Ok(DriverRequest {
+            method: "GET".to_string(),
+            url: format!("{}{}", base.trim_end_matches('/'), path),
+            headers: self.rest_headers_map(),
+            body_json: String::new(),
+        })
+    }
+
+    fn build_json_post(&self, path: &str, body: serde_json::Value) -> DriverResult<DriverRequest> {
         let base = self.config.http_rest_base_url()?;
         Ok(DriverRequest {
             method: "POST".to_string(),
@@ -1042,7 +1076,7 @@ impl VoltNueronGridDriver {
                 base.trim_end_matches('/'),
                 path
             ),
-            headers,
+            headers: self.rest_headers_map(),
             body_json: body.to_string(),
         })
     }
@@ -2089,6 +2123,27 @@ mod tests {
             operator_id: Some("operator-a".to_string()),
             route_hint: Some("oltp".to_string()),
         }
+    }
+
+    #[test]
+    fn is_retryable_http_status_matches_shared_policy() {
+        assert!(is_retryable_http_status(503));
+        assert!(is_retryable_http_status(429));
+        assert!(!is_retryable_http_status(404));
+        assert!(!is_retryable_http_status(200));
+    }
+
+    #[test]
+    fn builds_health_and_schema_registry_requests() {
+        let driver = VoltNueronGridDriver::new(config()).expect("driver");
+        let health = driver.build_health_request().expect("health");
+        assert_eq!(health.method, "GET");
+        assert!(health.url.ends_with("/health"));
+        assert_eq!(health.body_json, "");
+
+        let schema = driver.build_schema_registry_request().expect("schema");
+        assert_eq!(schema.method, "GET");
+        assert!(schema.url.ends_with("/api/v1/ingest/schema/registry"));
     }
 
     #[test]

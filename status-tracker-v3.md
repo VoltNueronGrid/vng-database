@@ -69,11 +69,11 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S2-001 | Query execute/analyze/transaction parity in TS driver | Driver Team | Not Started | S1-002 | API parity checklist |
-| S2-002 | Query execute/analyze/transaction parity in Python driver | Driver Team | Not Started | S1-003 | API parity checklist |
-| S2-003 | Schema discovery + health APIs in all 3 drivers | Driver Team | Not Started | S1-001..003 | tests green |
-| S2-004 | Retry/timeout/cancel semantics in all 3 drivers | Driver Team | Not Started | S2-001..003 | chaos tests pass |
-| S2-005 | Driver docs and examples (local + cloud modes) | DX Docs | Not Started | S2-001..004 | docs reviewed |
+| S2-001 | Query execute/analyze/transaction parity in TS driver | Driver Team | Done | S1-002 | Request builders + shared fixtures: `buildSqlAnalyzeRequest`, `buildSqlRouteRequest`, `buildSqlExecuteRequest`, `buildSqlTransactionRequest`; `npm test` green in `drivers/voltnuerongrid-driver-typescript` |
+| S2-002 | Query execute/analyze/transaction parity in Python driver | Driver Team | Done | S1-003 | Same surface as TS/Rust: `build_sql_*_request` methods; `unittest` green in `drivers/voltnuerongrid-driver-python` |
+| S2-003 | Schema discovery + health APIs in all 3 drivers | Driver Team | Done | S1-001..003 | `GET /health` + `GET /api/v1/ingest/schema/registry` builders on all three; Rust adds `build_health_request` / `build_schema_registry_request` (was TS/Python-only gap); tests assert URLs and methods |
+| S2-004 | Retry/timeout/cancel semantics in all 3 drivers | Driver Team | Done | S2-001..003 | Shared policy: `is_retryable_http_status` (Rust) / `isRetryableHttpStatus` (TS) / `is_retryable_http_status` (Python); TS `performDriverHttpRequest` + Python `perform_driver_http_request` with timeout + retries; config validation (`requestTimeoutMs` / `request_timeout_ms`, `maxRetries` / `max_retries`); unit tests cover retry, timeout, and cancel paths |
+| S2-005 | Driver docs and examples (local + cloud modes) | DX Docs | Done | S2-001..004 | READMEs for Rust, TypeScript, and Python under `drivers/voltnuerongrid-driver-*/README.md` (endpoints, config, HTTP execution helpers, local test commands, cloud/TLS notes) |
 
 ---
 

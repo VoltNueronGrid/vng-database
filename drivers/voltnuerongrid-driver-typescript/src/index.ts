@@ -212,6 +212,16 @@ export function validateConfig(config: DriverConfig): string | null {
   if (config.mode === "tenant" && !config.tenantId?.trim()) {
     return "tenant mode requires tenantId";
   }
+  if (config.requestTimeoutMs !== undefined) {
+    if (!Number.isFinite(config.requestTimeoutMs) || config.requestTimeoutMs < 100) {
+      return "requestTimeoutMs must be >= 100 when set";
+    }
+  }
+  if (config.maxRetries !== undefined) {
+    if (!Number.isInteger(config.maxRetries) || config.maxRetries < 0 || config.maxRetries > 20) {
+      return "maxRetries must be an integer from 0 to 20 when set";
+    }
+  }
   return null;
 }
 
@@ -451,3 +461,4 @@ export async function inferTransportCapabilitiesTcpWithDiscovery(
 
 export * from "./nativeWire";
 export * from "./nativeSession";
+export * from "./httpExecution";

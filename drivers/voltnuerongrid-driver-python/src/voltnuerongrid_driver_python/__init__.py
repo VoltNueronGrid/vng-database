@@ -1,3 +1,10 @@
+from .http_transport import (
+    DEFAULT_HTTP_MAX_RETRIES,
+    DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
+    DriverError,
+    is_retryable_http_status,
+    perform_driver_http_request,
+)
 from .driver import (
     DEFAULT_HTTP_DISCOVERY_PORT,
     AutoTransportResolution,
@@ -24,9 +31,12 @@ from .native_session import native_health_command_roundtrip
 from .native_wire import encode_framed_json, native_wire_roundtrip, read_framed_json
 
 __all__ = [
+    "DEFAULT_HTTP_MAX_RETRIES",
+    "DEFAULT_HTTP_REQUEST_TIMEOUT_MS",
     "DEFAULT_HTTP_DISCOVERY_PORT",
     "AutoTransportResolution",
     "DriverConfig",
+    "DriverError",
     "DriverRequest",
     "DriverTransportMode",
     "TransportCapabilities",
@@ -38,10 +48,12 @@ __all__ = [
     "infer_http_base_url_from_vng_url",
     "infer_transport_capabilities_tcp",
     "infer_transport_capabilities_tcp_with_discovery",
+    "is_retryable_http_status",
     "native_health_command_roundtrip",
     "native_wire_roundtrip",
     "parse_discovery_http_port_str",
     "parse_vng_host_for_discovery",
+    "perform_driver_http_request",
     "probe_tcp_connect",
     "read_framed_json",
     "resolve_auto_transport",

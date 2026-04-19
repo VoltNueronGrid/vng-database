@@ -112,6 +112,12 @@ def validate_config(config: DriverConfig) -> Optional[str]:
     if config.mode == "tenant" and not (config.tenant_id or "").strip():
         return "tenant mode requires tenantId"
 
+    if config.request_timeout_ms < 100:
+        return "request_timeout_ms must be >= 100"
+
+    if config.max_retries < 0 or config.max_retries > 20:
+        return "max_retries must be from 0 to 20"
+
     if config.http_fallback_url is not None:
         h = config.http_fallback_url.strip()
         if not h:
