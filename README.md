@@ -184,7 +184,7 @@ In the current single-process runtime scaffold, node add/remove and workload mig
 
 ## High level architecture diagram
 
-![VoltNueronGrid DB Architecture Diagram](reference/architecture-diagram-v1.png)
+![VoltNueronGrid DB Architecture Diagram](./architecture-diagram-v1.png)
 
 ## Core Capabilities (Planned)
 
