@@ -1,8 +1,14 @@
 /**
- * HttpClient: HTTP communication with auth headers and error handling
+ * HttpClient: HTTP communication backed by the VoltNueronGrid TypeScript driver.
+ *
+ * S3-001: replaced ad-hoc fetch() with VoltNueronGridDriver request builders +
+ * performDriverHttpRequest so auth headers, timeout, and retry logic are owned
+ * by the shared driver package, not duplicated in the extension.
  */
 
 import { Connection } from "../models/Connection";
+import { makeVngDriver, executeDriverRequest, DriverError } from "./DriverAdapter";
+import type { HttpExecutionOptions } from "./DriverAdapter";
 
 export interface HttpResponse<T = any> {
   status: number;
@@ -18,55 +24,77 @@ export interface QueryRequestOptions {
 }
 
 export class HttpClient {
-  private requestTimeout = 30000; // 30 seconds
-
   /**
-   * Execute a query against the server
+   * Execute a query against the server.
+   * Uses VoltNueronGridDriver.buildSqlExecuteRequest so the request format
+   * is owned by the shared driver-core-contract v1.
    */
   async executeQuery(
     connection: Connection,
     query: string,
     options?: QueryRequestOptions
   ): Promise<HttpResponse> {
-    return this.post(
-      connection,
-      "/api/v1/sql/execute",
-      {
-      sql_batch: [query],
-      request_id: options?.requestId ?? `ide-query-${Date.now()}`,
-      },
-      {
-        timeoutMs: options?.timeoutMs,
-        signal: options?.signal,
+    try {
+      const driver = makeVngDriver(connection);
+      const req = driver.buildSqlExecuteRequest(query);
+      const execOpts: HttpExecutionOptions = {};
+      if (options?.timeoutMs !== undefined) {
+        execOpts.timeoutMs = options.timeoutMs;
       }
-    );
+      if (options?.signal !== undefined) {
+        execOpts.abortSignal = options.signal;
+      }
+      const result = await executeDriverRequest(req, execOpts);
+      return this.toHttpResponse(result);
+    } catch (err) {
+      return this.toErrorResponse(err);
+    }
   }
 
   /**
-   * Get schema registry
+   * Get schema registry.
+   * Uses VoltNueronGridDriver.buildSchemaRegistryRequest.
    */
   async getSchemaRegistry(connection: Connection): Promise<HttpResponse> {
-    return this.get(connection, "/api/v1/ingest/schema/registry");
+    try {
+      const driver = makeVngDriver(connection);
+      const req = driver.buildSchemaRegistryRequest();
+      const result = await executeDriverRequest(req);
+      return this.toHttpResponse(result);
+    } catch (err) {
+      return this.toErrorResponse(err);
+    }
   }
 
   /**
-   * Health check
+   * Health check.
+   * Uses VoltNueronGridDriver.buildHealthRequest; retries suppressed (maxRetries=0)
+   * so health probes are fast and deterministic.
    */
   async healthCheck(connection: Connection): Promise<HttpResponse> {
-    return this.get(connection, "/health");
+    try {
+      const driver = makeVngDriver(connection);
+      const req = driver.buildHealthRequest();
+      const result = await executeDriverRequest(req, { maxRetries: 0 });
+      return this.toHttpResponse(result);
+    } catch (err) {
+      return this.toErrorResponse(err);
+    }
   }
 
   /**
-   * Test connection
+   * Test connection: returns structured result for UI display.
    */
   async testConnection(connection: Connection): Promise<{ isHealthy: boolean; message: string }> {
     try {
       const response = await this.healthCheck(connection);
       if (response.status === 200) {
         return { isHealthy: true, message: "Connection successful" };
-      } else {
-        return { isHealthy: false, message: `Server returned status ${response.status}` };
       }
+      if (response.error) {
+        return { isHealthy: false, message: response.error };
+      }
+      return { isHealthy: false, message: `Server returned status ${response.status}` };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       return { isHealthy: false, message };
@@ -74,161 +102,31 @@ export class HttpClient {
   }
 
   /**
-   * Generic GET request
+   * Converts a driver HttpExecutionResult to the extension's HttpResponse shape.
+   * Response headers are not available from the driver layer; callers that need
+   * specific headers should migrate to direct driver calls.
    */
-  private async get(connection: Connection, path: string): Promise<HttpResponse> {
-    const url = `${connection.settings.baseUrl}${path}`;
-    const headers = this.buildHeaders(connection, "GET");
-
-    try {
-      const response = await this.fetchWithTimeout(url, {
-        method: "GET",
-        headers,
-      });
-
-      const data = await this.parseResponse(response);
-      return {
-        status: response.status,
-        data,
-        headers: this.extractHeaders(response),
-      };
-    } catch (error) {
-      return {
-        status: 0,
-        error: error instanceof Error ? error.message : "Unknown error",
-        headers: {},
-      };
-    }
-  }
-
-  /**
-   * Generic POST request
-   */
-  private async post(
-    connection: Connection,
-    path: string,
-    body: any,
-    requestOptions?: { timeoutMs?: number; signal?: AbortSignal }
-  ): Promise<HttpResponse> {
-    const url = `${connection.settings.baseUrl}${path}`;
-    const headers = this.buildHeaders(connection, "POST");
-
-    try {
-      const response = await this.fetchWithTimeout(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      }, requestOptions?.timeoutMs, requestOptions?.signal);
-
-      const data = await this.parseResponse(response);
-      return {
-        status: response.status,
-        data,
-        headers: this.extractHeaders(response),
-      };
-    } catch (error) {
-      return {
-        status: 0,
-        error: error instanceof Error ? error.message : "Unknown error",
-        headers: {},
-      };
-    }
-  }
-
-  /**
-   * Build request headers with auth
-   */
-  private buildHeaders(connection: Connection, method: string): Record<string, string> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "User-Agent": "VoltNueronGrid-VSCode/0.3.2",
-    };
-
-    const { mode, adminKey, operatorId, tenantId, userId } = connection.settings;
-
-    // Admin or operator mode: include admin key
-    if ((mode === "admin" || mode === "operator") && adminKey) {
-      headers["x-vng-admin-key"] = adminKey;
-    }
-
-    // Operator mode: include operator ID
-    if (mode === "operator" && operatorId) {
-      headers["x-vng-operator-id"] = operatorId;
-    }
-
-    // Tenant mode: include tenant and user IDs
-    if (mode === "tenant") {
-      if (tenantId) headers["x-vng-tenant-id"] = tenantId;
-      if (userId) headers["x-vng-user-id"] = userId;
-    }
-
-    return headers;
-  }
-
-  /**
-   * Parse response based on content-type
-   */
-  private async parseResponse(response: Response): Promise<any> {
-    const contentType = response.headers.get("content-type") || "";
-
-    if (contentType.includes("application/json")) {
+  private toHttpResponse(result: { status: number; bodyText: string }): HttpResponse {
+    let data: unknown;
+    if (result.bodyText) {
       try {
-        return await response.json();
+        data = JSON.parse(result.bodyText);
       } catch {
-        return null;
+        data = result.bodyText;
       }
     }
-
-    if (contentType.includes("text/")) {
-      return await response.text();
-    }
-
-    return null;
+    return { status: result.status, data, headers: {} };
   }
 
   /**
-   * Extract response headers
+   * Wraps any thrown error (DriverError or otherwise) into an HttpResponse error shape.
    */
-  private extractHeaders(response: Response): Record<string, string> {
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      headers[key] = value;
-    });
-    return headers;
-  }
-
-  /**
-   * Fetch with timeout
-   */
-  private fetchWithTimeout(
-    url: string,
-    options: RequestInit,
-    timeout: number = this.requestTimeout,
-    upstreamSignal?: AbortSignal
-  ): Promise<Response> {
-    const controller = new AbortController();
-    let upstreamAbortHandler: (() => void) | undefined;
-
-    if (upstreamSignal) {
-      if (upstreamSignal.aborted) {
-        controller.abort();
-      } else {
-        upstreamAbortHandler = () => controller.abort();
-        upstreamSignal.addEventListener("abort", upstreamAbortHandler, { once: true });
-      }
+  private toErrorResponse(err: unknown): HttpResponse {
+    if (err instanceof DriverError) {
+      return { status: err.statusCode ?? 0, error: err.message, headers: {} };
     }
-
-    const timeoutId = setTimeout(() => controller.abort(new Error(`Request timeout after ${timeout}ms`)), timeout);
-
-    return fetch(url, {
-      ...options,
-      signal: controller.signal,
-    }).finally(() => {
-      clearTimeout(timeoutId);
-      if (upstreamSignal && upstreamAbortHandler) {
-        upstreamSignal.removeEventListener("abort", upstreamAbortHandler);
-      }
-    });
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return { status: 0, error: message, headers: {} };
   }
 }
 

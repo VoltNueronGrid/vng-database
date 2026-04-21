@@ -495,6 +495,9 @@
     "watch": "tsc -watch -p ./",
     "package": "vsce package --allow-missing-repository"
   },
+  "dependencies": {
+    "@voltnuerongrid/driver-typescript": "file:../../../drivers/voltnuerongrid-driver-typescript"
+  },
   "devDependencies": {
     "@types/node": "^20.14.10",
     "@types/vscode": "^1.90.0",
