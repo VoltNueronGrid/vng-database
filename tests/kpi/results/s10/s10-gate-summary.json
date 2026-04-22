@@ -1,0 +1,28 @@
+{
+  "gate": "v3-s10",
+  "status": "passed",
+  "generated_at_utc": "2026-04-22T16:14:10.901868Z",
+  "cloud_validation": "deferred",
+  "checks": [
+    {
+      "check": "s10-001-java-driver-baseline",
+      "passed": true
+    },
+    {
+      "check": "s10-002-node-driver-baseline",
+      "passed": true
+    },
+    {
+      "check": "s10-003-cffi-poc",
+      "passed": true
+    },
+    {
+      "check": "s10-004-deno-adapter",
+      "passed": true
+    },
+    {
+      "check": "s10-005-perl-feasibility",
+      "passed": true
+    }
+  ]
+}

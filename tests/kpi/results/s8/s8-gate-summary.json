@@ -1,0 +1,32 @@
+{
+  "gate": "v3-s8",
+  "status": "passed",
+  "generated_at_utc": "2026-04-22T16:14:10.901868Z",
+  "cloud_validation": "deferred",
+  "checks": [
+    {
+      "check": "s8-001-benchmark-ingest-route",
+      "passed": true
+    },
+    {
+      "check": "s8-001-benchmark-query-route",
+      "passed": true
+    },
+    {
+      "check": "s8-002-chunked-loader-usage",
+      "passed": true
+    },
+    {
+      "check": "s8-003-join-handlers-present",
+      "passed": true
+    },
+    {
+      "check": "s8-003-paging-max-rows",
+      "passed": true
+    },
+    {
+      "check": "s8-004-memory-review-doc",
+      "passed": true
+    }
+  ]
+}

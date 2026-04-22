@@ -462,3 +462,4 @@ export async function inferTransportCapabilitiesTcpWithDiscovery(
 export * from "./nativeWire";
 export * from "./nativeSession";
 export * from "./httpExecution";
+export * from "./denoAdapter";

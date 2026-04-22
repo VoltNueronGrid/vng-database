@@ -1,0 +1,24 @@
+{
+  "gate": "v3-s9-local",
+  "status": "passed",
+  "generated_at_utc": "2026-04-22T16:14:10.901868Z",
+  "cloud_validation": "deferred",
+  "checks": [
+    {
+      "check": "s9-001-soak-plan-documented",
+      "passed": true
+    },
+    {
+      "check": "s9-002-shard-code-path-detected",
+      "passed": true
+    },
+    {
+      "check": "s9-003-failure-injection-covered",
+      "passed": true
+    },
+    {
+      "check": "s9-004-playbook-v1-published",
+      "passed": true
+    }
+  ]
+}

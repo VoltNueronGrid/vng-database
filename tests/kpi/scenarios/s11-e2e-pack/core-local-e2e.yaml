@@ -1,0 +1,20 @@
+scenario: s11-core-local-e2e
+description: >
+  Local end-to-end scenario pack for Sprint S11 closure.
+steps:
+  - id: health
+    action: GET /health
+    expect: status ok
+  - id: schema_registry
+    action: GET /api/v1/ingest/schema/registry
+    expect: 200 response
+  - id: sql_analyze
+    action: POST /api/v1/sql/analyze
+    expect: 200 response with plan metadata
+  - id: sql_execute
+    action: POST /api/v1/sql/execute
+    expect: 200 response with rows or acknowledgement
+  - id: sql_transaction_update
+    action: POST /api/v1/sql/transaction
+    expect: update statement applied without error
+cloud_validation: deferred

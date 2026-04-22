@@ -1,0 +1,24 @@
+{
+  "gate": "v3-s11-local",
+  "status": "passed",
+  "generated_at_utc": "2026-04-22T16:14:10.901868Z",
+  "cloud_validation": "deferred",
+  "checks": [
+    {
+      "check": "s11-001-e2e-scenario-pack",
+      "passed": true
+    },
+    {
+      "check": "s11-002-compatibility-matrix",
+      "passed": true
+    },
+    {
+      "check": "s11-003-security-closure",
+      "passed": true
+    },
+    {
+      "check": "s11-004-rc-packaging-guides",
+      "passed": true
+    }
+  ]
+}

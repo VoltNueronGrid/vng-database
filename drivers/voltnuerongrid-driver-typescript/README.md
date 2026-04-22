@@ -9,6 +9,7 @@ First-party driver for VoltNueronGrid DB (Sprint V3-S2 complete). Responsibiliti
 - **Transport selection** — `native` / `http` / `auto`, dual-endpoint resolution, TCP probes, HTTP discovery port (`VNG_HTTP_DISCOVERY_PORT`).
 - **HTTP execution hooks** — `performDriverHttpRequest` applies per-attempt timeout, retries on transient HTTP statuses, and maps `AbortSignal` to typed `DriverError` (`timeout` vs `cancelled`).
 - **Native wire helpers** — `nativeWire` / `nativeSession` modules for framed JSON over TCP (see tests and `DRIVER_TRANSPORT_LANE` in CI).
+- **Deno adapter** — `executeWithDenoFetch` helper in `src/denoAdapter.ts` for Deno-compatible fetch execution.
 
 ## Local usage
 
