@@ -1,40 +1,72 @@
 "use strict";
 /**
- * HttpClient: HTTP communication with auth headers and error handling
+ * HttpClient: HTTP communication backed by the VoltNueronGrid TypeScript driver.
+ *
+ * S3-001: replaced ad-hoc fetch() with VoltNueronGridDriver request builders +
+ * performDriverHttpRequest so auth headers, timeout, and retry logic are owned
+ * by the shared driver package, not duplicated in the extension.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HttpClient = void 0;
 exports.createHttpClient = createHttpClient;
+const DriverAdapter_1 = require("./DriverAdapter");
 class HttpClient {
-    constructor() {
-        this.requestTimeout = 30000; // 30 seconds
-    }
     /**
-     * Execute a query against the server
+     * Execute a query against the server.
+     * Uses VoltNueronGridDriver.buildSqlExecuteRequest so the request format
+     * is owned by the shared driver-core-contract v1.
      */
     async executeQuery(connection, query, options) {
-        return this.post(connection, "/api/v1/sql/execute", {
-            sql_batch: [query],
-            request_id: options?.requestId ?? `ide-query-${Date.now()}`,
-        }, {
-            timeoutMs: options?.timeoutMs,
-            signal: options?.signal,
-        });
+        try {
+            const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
+            const req = driver.buildSqlExecuteRequest(query);
+            const execOpts = {};
+            if (options?.timeoutMs !== undefined) {
+                execOpts.timeoutMs = options.timeoutMs;
+            }
+            if (options?.signal !== undefined) {
+                execOpts.abortSignal = options.signal;
+            }
+            const result = await (0, DriverAdapter_1.executeDriverRequest)(req, execOpts);
+            return this.toHttpResponse(result);
+        }
+        catch (err) {
+            return this.toErrorResponse(err);
+        }
     }
     /**
-     * Get schema registry
+     * Get schema registry.
+     * Uses VoltNueronGridDriver.buildSchemaRegistryRequest.
      */
     async getSchemaRegistry(connection) {
-        return this.get(connection, "/api/v1/ingest/schema/registry");
+        try {
+            const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
+            const req = driver.buildSchemaRegistryRequest();
+            const result = await (0, DriverAdapter_1.executeDriverRequest)(req);
+            return this.toHttpResponse(result);
+        }
+        catch (err) {
+            return this.toErrorResponse(err);
+        }
     }
     /**
-     * Health check
+     * Health check.
+     * Uses VoltNueronGridDriver.buildHealthRequest; retries suppressed (maxRetries=0)
+     * so health probes are fast and deterministic.
      */
     async healthCheck(connection) {
-        return this.get(connection, "/health");
+        try {
+            const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
+            const req = driver.buildHealthRequest();
+            const result = await (0, DriverAdapter_1.executeDriverRequest)(req, { maxRetries: 0 });
+            return this.toHttpResponse(result);
+        }
+        catch (err) {
+            return this.toErrorResponse(err);
+        }
     }
     /**
-     * Test connection
+     * Test connection: returns structured result for UI display.
      */
     async testConnection(connection) {
         try {
@@ -42,9 +74,10 @@ class HttpClient {
             if (response.status === 200) {
                 return { isHealthy: true, message: "Connection successful" };
             }
-            else {
-                return { isHealthy: false, message: `Server returned status ${response.status}` };
+            if (response.error) {
+                return { isHealthy: false, message: response.error };
             }
+            return { isHealthy: false, message: `Server returned status ${response.status}` };
         }
         catch (error) {
             const message = error instanceof Error ? error.message : "Unknown error";
@@ -52,137 +85,31 @@ class HttpClient {
         }
     }
     /**
-     * Generic GET request
+     * Converts a driver HttpExecutionResult to the extension's HttpResponse shape.
+     * Response headers are not available from the driver layer; callers that need
+     * specific headers should migrate to direct driver calls.
      */
-    async get(connection, path) {
-        const url = `${connection.settings.baseUrl}${path}`;
-        const headers = this.buildHeaders(connection, "GET");
-        try {
-            const response = await this.fetchWithTimeout(url, {
-                method: "GET",
-                headers,
-            });
-            const data = await this.parseResponse(response);
-            return {
-                status: response.status,
-                data,
-                headers: this.extractHeaders(response),
-            };
-        }
-        catch (error) {
-            return {
-                status: 0,
-                error: error instanceof Error ? error.message : "Unknown error",
-                headers: {},
-            };
-        }
-    }
-    /**
-     * Generic POST request
-     */
-    async post(connection, path, body, requestOptions) {
-        const url = `${connection.settings.baseUrl}${path}`;
-        const headers = this.buildHeaders(connection, "POST");
-        try {
-            const response = await this.fetchWithTimeout(url, {
-                method: "POST",
-                headers,
-                body: JSON.stringify(body),
-            }, requestOptions?.timeoutMs, requestOptions?.signal);
-            const data = await this.parseResponse(response);
-            return {
-                status: response.status,
-                data,
-                headers: this.extractHeaders(response),
-            };
-        }
-        catch (error) {
-            return {
-                status: 0,
-                error: error instanceof Error ? error.message : "Unknown error",
-                headers: {},
-            };
-        }
-    }
-    /**
-     * Build request headers with auth
-     */
-    buildHeaders(connection, method) {
-        const headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "VoltNueronGrid-VSCode/0.3.2",
-        };
-        const { mode, adminKey, operatorId, tenantId, userId } = connection.settings;
-        // Admin or operator mode: include admin key
-        if ((mode === "admin" || mode === "operator") && adminKey) {
-            headers["x-vng-admin-key"] = adminKey;
-        }
-        // Operator mode: include operator ID
-        if (mode === "operator" && operatorId) {
-            headers["x-vng-operator-id"] = operatorId;
-        }
-        // Tenant mode: include tenant and user IDs
-        if (mode === "tenant") {
-            if (tenantId)
-                headers["x-vng-tenant-id"] = tenantId;
-            if (userId)
-                headers["x-vng-user-id"] = userId;
-        }
-        return headers;
-    }
-    /**
-     * Parse response based on content-type
-     */
-    async parseResponse(response) {
-        const contentType = response.headers.get("content-type") || "";
-        if (contentType.includes("application/json")) {
+    toHttpResponse(result) {
+        let data;
+        if (result.bodyText) {
             try {
-                return await response.json();
+                data = JSON.parse(result.bodyText);
             }
             catch {
-                return null;
+                data = result.bodyText;
             }
         }
-        if (contentType.includes("text/")) {
-            return await response.text();
-        }
-        return null;
+        return { status: result.status, data, headers: {} };
     }
     /**
-     * Extract response headers
+     * Wraps any thrown error (DriverError or otherwise) into an HttpResponse error shape.
      */
-    extractHeaders(response) {
-        const headers = {};
-        response.headers.forEach((value, key) => {
-            headers[key] = value;
-        });
-        return headers;
-    }
-    /**
-     * Fetch with timeout
-     */
-    fetchWithTimeout(url, options, timeout = this.requestTimeout, upstreamSignal) {
-        const controller = new AbortController();
-        let upstreamAbortHandler;
-        if (upstreamSignal) {
-            if (upstreamSignal.aborted) {
-                controller.abort();
-            }
-            else {
-                upstreamAbortHandler = () => controller.abort();
-                upstreamSignal.addEventListener("abort", upstreamAbortHandler, { once: true });
-            }
+    toErrorResponse(err) {
+        if (err instanceof DriverAdapter_1.DriverError) {
+            return { status: err.statusCode ?? 0, error: err.message, headers: {} };
         }
-        const timeoutId = setTimeout(() => controller.abort(new Error(`Request timeout after ${timeout}ms`)), timeout);
-        return fetch(url, {
-            ...options,
-            signal: controller.signal,
-        }).finally(() => {
-            clearTimeout(timeoutId);
-            if (upstreamSignal && upstreamAbortHandler) {
-                upstreamSignal.removeEventListener("abort", upstreamAbortHandler);
-            }
-        });
+        const message = err instanceof Error ? err.message : "Unknown error";
+        return { status: 0, error: message, headers: {} };
     }
 }
 exports.HttpClient = HttpClient;

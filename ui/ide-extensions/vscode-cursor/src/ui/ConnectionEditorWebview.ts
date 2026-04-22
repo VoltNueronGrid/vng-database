@@ -292,6 +292,7 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
       return {
         id: state.draft ? state.draft.id : undefined,
         name: readTextInput("draft-name"),
+        group: readOptionalTextInput("draft-group"),
         baseUrl: readTextInput("draft-baseUrl"),
         mode,
         runtimeTarget: readSelectValue("draft-runtimeTarget", "custom"),
@@ -378,10 +379,10 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
           '<input id="draft-tenantId" type="text" aria-label="Tenant ID" value="' + escapeHtml(draft.tenantId || "") + '" placeholder="Required for tenant mode" />' +
         '</label>' +
         '<label class="field full">' +
-          '<span>User ID (optional)</span>' +
-          '<input id="draft-userId" type="text" aria-label="User ID" value="' + escapeHtml(draft.userId || "") + '" placeholder="Optional - use when tenant requests user-level audit headers" />' +
+          '<span>User ID</span>' +
+          '<input id="draft-userId" type="text" aria-label="User ID" value="' + escapeHtml(draft.userId || "") + '" placeholder="Required for tenant mode" />' +
         '</label>' +
-        '<div class="field full inline-help">User ID is optional. Leave it empty unless your tenant-level authorization policy requires x-vng-user-id.</div>';
+        '<div class="field full inline-help">Tenant mode requires both Tenant ID and User ID headers.</div>';
     }
 
     function render() {
@@ -398,6 +399,10 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
           '<label class="field full">' +
             '<span>Name</span>' +
             '<input id="draft-name" type="text" aria-label="Connection name" value="' + escapeHtml(draft.name || "") + '" />' +
+          '</label>' +
+          '<label class="field full">' +
+            '<span>Group (optional folder)</span>' +
+            '<input id="draft-group" type="text" aria-label="Connection group" value="' + escapeHtml(draft.group || "") + '" placeholder="Examples: localmachine, staging, prod" />' +
           '</label>' +
           '<label class="field full">' +
             '<span>Base URL</span>' +
@@ -460,7 +465,7 @@ function getConnectionEditorHtml(initialState: ConnectionEditorState): string {
           '<button data-action="save" aria-label="Save connection profile">' + (state.mode === "create" ? 'Create Connection' : 'Save Changes') + '</button>' +
           '<button class="secondary" data-action="cancel" aria-label="Cancel connection editing">Cancel</button>' +
         '</div>' +
-        '<div class="hint">Admin mode: Admin Key required. Operator mode: Admin Key + Operator ID required. Tenant mode: Tenant ID required, User ID optional.</div>';
+        '<div class="hint">Admin mode: Admin Key required. Operator mode: Admin Key + Operator ID required. Tenant mode: Tenant ID + User ID required.</div>';
     }
 
     window.addEventListener("message", (event) => {

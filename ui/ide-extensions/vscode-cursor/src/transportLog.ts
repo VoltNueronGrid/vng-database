@@ -1,10 +1,31 @@
-import * as vscode from "vscode";
+interface TransportLogChannel {
+  appendLine(message: string): void;
+}
 
-let channel: vscode.OutputChannel | undefined;
+let channel: TransportLogChannel | undefined;
 
-export function getTransportOutputChannel(): vscode.OutputChannel {
+function loadVscodeModule(): typeof import("vscode") | undefined {
+  try {
+    // Keep runtime compatibility for node --test where the vscode module is not present.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("vscode") as typeof import("vscode");
+  } catch {
+    return undefined;
+  }
+}
+
+function createFallbackChannel(): TransportLogChannel {
+  return {
+    appendLine: () => {
+      // No-op in non-extension runtimes (unit tests).
+    },
+  };
+}
+
+export function getTransportOutputChannel(): TransportLogChannel {
   if (!channel) {
-    channel = vscode.window.createOutputChannel("VoltNueronGrid Transport");
+    const vscode = loadVscodeModule();
+    channel = vscode?.window.createOutputChannel("VoltNueronGrid Transport") ?? createFallbackChannel();
   }
   return channel;
 }

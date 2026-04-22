@@ -108,6 +108,26 @@
       ],
       "view/item/context": [
         {
+          "command": "vng.refreshSchema",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "inline@1"
+        },
+        {
+          "command": "vng.newConnection",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "inline@2"
+        },
+        {
+          "command": "vng.filterConnections",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "inline@3"
+        },
+        {
+          "command": "vng.deleteConnection",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "inline@4"
+        },
+        {
           "command": "vng.connectConnection",
           "when": "view == vngDatabaseExplorer && viewItem == connectionInactive",
           "group": "0_connection@1"
@@ -133,6 +153,31 @@
           "group": "0_connection@4"
         },
         {
+          "command": "vng.copyConnectionHost",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@5"
+        },
+        {
+          "command": "vng.showConnectionStatus",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@6"
+        },
+        {
+          "command": "vng.viewConnectionHistory",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@7"
+        },
+        {
+          "command": "vng.copyConnectionJson",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@8"
+        },
+        {
+          "command": "vng.importConnectionKey",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@9"
+        },
+        {
           "command": "vng.copyName",
           "when": "view == vngDatabaseExplorer && (viewItem == table || viewItem == column)",
           "group": "1_modification@1"
@@ -143,7 +188,7 @@
           "group": "1_modification@2"
         },
         {
-          "command": "vng.openTableEditor",
+          "command": "vng.editTable",
           "when": "view == vngDatabaseExplorer && viewItem == table",
           "group": "1_modification@3"
         },
@@ -176,6 +221,11 @@
           "command": "vng.dropTable",
           "when": "view == vngDatabaseExplorer && viewItem == table",
           "group": "4_danger@1"
+        },
+        {
+          "command": "vng.truncateTable",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "4_danger@0"
         },
         {
           "command": "vng.reRunHistoryQuery",
@@ -221,11 +271,48 @@
       {
         "command": "vng.deleteConnection",
         "title": "VoltNueronGrid: Delete Connection",
+        "icon": "$(trash)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.filterConnections",
+        "title": "VoltNueronGrid: Filter Connections",
+        "icon": "$(filter)",
         "category": "VoltNueronGrid"
       },
       {
         "command": "vng.quickSwitchConnection",
         "title": "VoltNueronGrid: Quick Switch Connection"
+      },
+      {
+        "command": "vng.copyConnectionHost",
+        "title": "VoltNueronGrid: Copy Connection Host",
+        "icon": "$(clippy)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.showConnectionStatus",
+        "title": "VoltNueronGrid: Show Connection Status",
+        "icon": "$(pulse)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.viewConnectionHistory",
+        "title": "VoltNueronGrid: View Connection History",
+        "icon": "$(history)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.copyConnectionJson",
+        "title": "VoltNueronGrid: Copy Connection JSON",
+        "icon": "$(json)",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.importConnectionKey",
+        "title": "VoltNueronGrid: Import Connection Key",
+        "icon": "$(key)",
+        "category": "VoltNueronGrid"
       },
       {
         "command": "vng.runQuery",
@@ -291,6 +378,11 @@
         "category": "VoltNueronGrid"
       },
       {
+        "command": "vng.editTable",
+        "title": "Edit Table",
+        "category": "VoltNueronGrid"
+      },
+      {
         "command": "vng.openTableEditorPicker",
         "title": "Open Table Editor (Pick Table)",
         "category": "VoltNueronGrid"
@@ -348,6 +440,11 @@
       {
         "command": "vng.dropTable",
         "title": "Drop Table",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.truncateTable",
+        "title": "Truncate Table",
         "category": "VoltNueronGrid"
       },
       {

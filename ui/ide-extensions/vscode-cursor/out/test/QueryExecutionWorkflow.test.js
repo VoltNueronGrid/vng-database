@@ -9,7 +9,64 @@ const Connection_1 = require("../models/Connection");
 const QueryExecutionService_1 = require("../services/QueryExecutionService");
 const QueryHistory_1 = require("../services/QueryHistory");
 const QueryHistoryTree_1 = require("../providers/QueryHistoryTree");
+const DatabaseExplorerTree_1 = require("../providers/DatabaseExplorerTree");
 const QueryResultsState_1 = require("../ui/QueryResultsState");
+(0, node_test_1.default)("ws3_connection_lifecycle_create_connect_verify_browse_query_disconnect", async () => {
+    const createdConnection = {
+        id: "conn-e2e",
+        settings: (0, Connection_1.createDefaultConnection)({
+            id: "conn-e2e",
+            name: "Lifecycle Connection",
+            advanced: { connectionTimeout: 5000 },
+        }),
+        isActive: false,
+        isConnected: false,
+        state: "active",
+        diagnostics: {},
+    };
+    strict_1.default.equal(createdConnection.state, "active");
+    strict_1.default.equal((0, DatabaseExplorerTree_1.shouldExpandConnectionToDatabases)(createdConnection), false);
+    const connectedAndVerified = {
+        ...createdConnection,
+        isActive: true,
+        isConnected: true,
+        state: "verified",
+        diagnostics: {
+            lastCheckedAt: Date.now(),
+            reason: "manual_test_ok",
+            detail: "Connection successful",
+        },
+    };
+    strict_1.default.equal(connectedAndVerified.state, "verified");
+    strict_1.default.equal((0, DatabaseExplorerTree_1.shouldExpandConnectionToDatabases)(connectedAndVerified), true);
+    const httpClient = {
+        async executeQuery(_connection, query) {
+            return {
+                status: 200,
+                data: [{ query, ok: true }],
+                headers: {},
+            };
+        },
+    };
+    const service = new QueryExecutionService_1.QueryExecutionService(httpClient);
+    const queryResult = await service.executeQuery(connectedAndVerified, "select 42 as answer;");
+    strict_1.default.equal(queryResult.status, "success");
+    strict_1.default.equal(queryResult.rowCount, 1);
+    strict_1.default.equal(service.getHistory(connectedAndVerified.id).length, 1);
+    const disconnected = {
+        ...connectedAndVerified,
+        isActive: false,
+        isConnected: false,
+        state: "degraded",
+        diagnostics: {
+            lastCheckedAt: Date.now(),
+            reason: "disconnect",
+            detail: "Profile disconnected",
+        },
+    };
+    strict_1.default.equal(disconnected.state, "degraded");
+    strict_1.default.equal((0, DatabaseExplorerTree_1.shouldExpandConnectionToDatabases)(disconnected), false);
+});
 (0, node_test_1.default)("executeStatementsStream drives query results state and connection-scoped history", async () => {
     const connection = {
         id: "conn-workflow",
@@ -20,6 +77,8 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         }),
         isActive: true,
         isConnected: true,
+        state: "verified",
+        diagnostics: {},
     };
     const httpClient = {
         async executeQuery(_connection, query, options) {
@@ -72,12 +131,16 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-a", name: "Conn A" }),
         isActive: true,
         isConnected: true,
+        state: "verified",
+        diagnostics: {},
     };
     const connectionB = {
         id: "conn-b",
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-b", name: "Conn B" }),
         isActive: false,
         isConnected: true,
+        state: "verified",
+        diagnostics: {},
     };
     const httpClient = {
         async executeQuery(_connection, query) {
@@ -153,6 +216,8 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-persisted", name: "Persisted" }),
         isActive: true,
         isConnected: true,
+        state: "verified",
+        diagnostics: {},
     }, ["select 1;", "select 2;"], { executionId: "multi" });
     strict_1.default.equal(results.length, 2);
     strict_1.default.equal(service.getHistory("conn-persisted").length, 3);
@@ -167,6 +232,8 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-cancel", name: "Cancel" }),
         isActive: true,
         isConnected: true,
+        state: "verified",
+        diagnostics: {},
     };
     const httpClient = {
         executeQuery(_connection, _query, options) {
@@ -251,6 +318,8 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-cache", name: "Cache" }),
         isActive: true,
         isConnected: true,
+        state: "verified",
+        diagnostics: {},
     };
     let executeCount = 0;
     const context = {

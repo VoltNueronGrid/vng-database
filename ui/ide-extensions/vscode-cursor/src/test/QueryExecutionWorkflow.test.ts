@@ -4,7 +4,72 @@ import { createDefaultConnection } from "../models/Connection";
 import { QueryExecutionService } from "../services/QueryExecutionService";
 import { createQueryHistoryEntry, findOldestHistoryEntryId, toQueryHistoryStatus } from "../services/QueryHistory";
 import { buildQueryHistoryItems, describeQueryHistoryEntry } from "../providers/QueryHistoryTree";
+import { shouldExpandConnectionToDatabases } from "../providers/DatabaseExplorerTree";
 import { QueryResultsState, createDefaultQueryResultsState, createQueryResultsState } from "../ui/QueryResultsState";
+
+test("ws3_connection_lifecycle_create_connect_verify_browse_query_disconnect", async () => {
+  const createdConnection = {
+    id: "conn-e2e",
+    settings: createDefaultConnection({
+      id: "conn-e2e",
+      name: "Lifecycle Connection",
+      advanced: { connectionTimeout: 5000 },
+    }),
+    isActive: false,
+    isConnected: false,
+    state: "active" as const,
+    diagnostics: {},
+  };
+
+  assert.equal(createdConnection.state, "active");
+  assert.equal(shouldExpandConnectionToDatabases(createdConnection), false);
+
+  const connectedAndVerified = {
+    ...createdConnection,
+    isActive: true,
+    isConnected: true,
+    state: "verified" as const,
+    diagnostics: {
+      lastCheckedAt: Date.now(),
+      reason: "manual_test_ok",
+      detail: "Connection successful",
+    },
+  };
+
+  assert.equal(connectedAndVerified.state, "verified");
+  assert.equal(shouldExpandConnectionToDatabases(connectedAndVerified), true);
+
+  const httpClient = {
+    async executeQuery(_connection: unknown, query: string) {
+      return {
+        status: 200,
+        data: [{ query, ok: true }],
+        headers: {},
+      };
+    },
+  };
+
+  const service = new QueryExecutionService(httpClient as never);
+  const queryResult = await service.executeQuery(connectedAndVerified, "select 42 as answer;");
+  assert.equal(queryResult.status, "success");
+  assert.equal(queryResult.rowCount, 1);
+  assert.equal(service.getHistory(connectedAndVerified.id).length, 1);
+
+  const disconnected = {
+    ...connectedAndVerified,
+    isActive: false,
+    isConnected: false,
+    state: "degraded" as const,
+    diagnostics: {
+      lastCheckedAt: Date.now(),
+      reason: "disconnect",
+      detail: "Profile disconnected",
+    },
+  };
+
+  assert.equal(disconnected.state, "degraded");
+  assert.equal(shouldExpandConnectionToDatabases(disconnected), false);
+});
 
 test("executeStatementsStream drives query results state and connection-scoped history", async () => {
   const connection = {
@@ -16,6 +81,8 @@ test("executeStatementsStream drives query results state and connection-scoped h
     }),
     isActive: true,
     isConnected: true,
+    state: "verified" as const,
+    diagnostics: {},
   };
 
   const httpClient = {
@@ -77,12 +144,16 @@ test("query execution history keeps cancelled state and supports search plus cle
     settings: createDefaultConnection({ id: "conn-a", name: "Conn A" }),
     isActive: true,
     isConnected: true,
+    state: "verified" as const,
+    diagnostics: {},
   };
   const connectionB = {
     id: "conn-b",
     settings: createDefaultConnection({ id: "conn-b", name: "Conn B" }),
     isActive: false,
     isConnected: true,
+    state: "verified" as const,
+    diagnostics: {},
   };
 
   const httpClient = {
@@ -180,6 +251,8 @@ test("query execution service initializes from persisted history, parses stateme
       settings: createDefaultConnection({ id: "conn-persisted", name: "Persisted" }),
       isActive: true,
       isConnected: true,
+      state: "verified" as const,
+      diagnostics: {},
     },
     ["select 1;", "select 2;"],
     { executionId: "multi" }
@@ -200,6 +273,8 @@ test("query execution service tracks active executions and supports cancellation
     settings: createDefaultConnection({ id: "conn-cancel", name: "Cancel" }),
     isActive: true,
     isConnected: true,
+    state: "verified" as const,
+    diagnostics: {},
   };
 
   const httpClient = {
@@ -317,6 +392,8 @@ test("query execution service reuses cached successful query results within TTL"
     settings: createDefaultConnection({ id: "conn-cache", name: "Cache" }),
     isActive: true,
     isConnected: true,
+    state: "verified" as const,
+    diagnostics: {},
   };
 
   let executeCount = 0;

@@ -90,9 +90,26 @@ class DatabaseExplorerProvider {
         else if (element.type === "error") {
             treeItem.iconPath = new vscode.ThemeIcon("error");
         }
+        else if (element.type === "root") {
+            treeItem.iconPath = new vscode.ThemeIcon("folder-library");
+        }
+        else if (element.type === "group") {
+            treeItem.iconPath = new vscode.ThemeIcon("folder");
+        }
         else if (element.type === "connection") {
-            treeItem.iconPath = this.getMediaIcon(element.data.isActive ? "connection-active" : "connection-inactive");
+            const connection = element.data;
+            const color = connection.state === "verified"
+                ? new vscode.ThemeColor("testing.iconPassed")
+                : connection.state === "degraded"
+                    ? new vscode.ThemeColor("testing.iconQueued")
+                    : connection.state === "error"
+                        ? new vscode.ThemeColor("testing.iconFailed")
+                        : new vscode.ThemeColor("disabledForeground");
+            treeItem.iconPath = new vscode.ThemeIcon("circle-filled", color);
             treeItem.tooltip = `${element.data.settings.name}\n${element.data.settings.baseUrl}`;
+        }
+        else if (element.type === "container") {
+            treeItem.iconPath = new vscode.ThemeIcon("folder");
         }
         else if (element.type === "database") {
             treeItem.iconPath = this.getMediaIcon("database");
@@ -103,11 +120,29 @@ class DatabaseExplorerProvider {
         else if (element.type === "table") {
             treeItem.iconPath = this.getMediaIcon("table");
         }
+        else if (element.type === "tableSection") {
+            treeItem.iconPath = new vscode.ThemeIcon("list-tree");
+        }
+        else if (element.type === "type") {
+            treeItem.iconPath = new vscode.ThemeIcon("symbol-struct");
+        }
         else if (element.type === "column") {
             const column = element.data;
             const typeDisplay = (0, Schema_1.getColumnTypeDisplay)(column.type);
             treeItem.iconPath = this.getMediaIcon("column");
             treeItem.description = `${typeDisplay.label}${column.nullable ? " (null)" : ""}${column.isPrimaryKey ? " (PK)" : ""}`;
+        }
+        else if (element.type === "index") {
+            const index = element.data;
+            treeItem.iconPath = new vscode.ThemeIcon("symbol-key");
+            treeItem.description = [index.index.isPrimary ? "PRIMARY" : index.index.isUnique ? "UNIQUE" : "INDEX", index.index.columns.join(", ")]
+                .filter((entry) => entry.length > 0)
+                .join(" • ");
+        }
+        else if (element.type === "trigger") {
+            const trigger = element.data;
+            treeItem.iconPath = new vscode.ThemeIcon("zap");
+            treeItem.description = `${trigger.trigger.timing} ${trigger.trigger.event}${trigger.trigger.enabled === false ? " (disabled)" : ""}`;
         }
         else if (element.type === "message") {
             treeItem.iconPath = new vscode.ThemeIcon("info");
@@ -116,7 +151,16 @@ class DatabaseExplorerProvider {
         if (element.type === "loading" || element.type === "error" || element.type === "message") {
             treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
         }
+        else if (element.type === "root") {
+            treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+        }
+        else if (element.type === "group") {
+            treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+        }
         else if (element.type === "connection") {
+            treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+        }
+        else if (element.type === "container") {
             treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
         }
         else if (element.type === "database") {
@@ -128,7 +172,10 @@ class DatabaseExplorerProvider {
         else if (element.type === "table") {
             treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
         }
-        else if (element.type === "column") {
+        else if (element.type === "tableSection") {
+            treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+        }
+        else if (element.type === "column" || element.type === "type" || element.type === "index" || element.type === "trigger") {
             treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
         }
         return treeItem;
@@ -143,7 +190,31 @@ class DatabaseExplorerProvider {
                     // Empty children so `viewsWelcome` in package.json shows (Screenshot-2 style).
                     return [];
                 }
-                return this.connections.map((connection) => {
+                return [
+                    {
+                        type: "root",
+                        label: "Connections",
+                        contextValue: "connectionsRoot",
+                    },
+                ];
+            }
+            if (element.type === "root") {
+                const groupedConnections = (0, DatabaseExplorerTree_1.groupConnectionsForTree)(this.connections);
+                return groupedConnections.map((bucket) => ({
+                    type: "group",
+                    label: bucket.groupLabel,
+                    contextValue: "connectionGroup",
+                    description: `${bucket.connections.length} connection${bucket.connections.length === 1 ? "" : "s"}`,
+                    data: {
+                        groupLabel: bucket.groupLabel,
+                        connectionIds: bucket.connections.map((connection) => connection.id),
+                    },
+                }));
+            }
+            if (element.type === "group") {
+                const connectionIds = element.data?.connectionIds ?? [];
+                const groupConnections = this.connections.filter((connection) => connectionIds.includes(connection.id));
+                return groupConnections.map((connection) => {
                     const presentation = (0, DatabaseExplorerTree_1.describeConnectionNode)(connection);
                     return {
                         type: "connection",
@@ -196,34 +267,125 @@ class DatabaseExplorerProvider {
             if (element.type === "schema") {
                 const connection = this.resolveConnectionForElement(element) ?? this.connection;
                 const { database, schema } = element.data;
-                const tables = await this.schemaManager.getTables(connection, database, schema.name);
+                return [
+                    {
+                        type: "container",
+                        label: "Query",
+                        contextValue: "queryContainer",
+                        data: { connectionId: connection.id, database, schema: schema.name, kind: "query" },
+                    },
+                    {
+                        type: "container",
+                        label: "Types",
+                        contextValue: "typesContainer",
+                        data: { connectionId: connection.id, database, schema: schema.name, kind: "types" },
+                    },
+                    {
+                        type: "container",
+                        label: "Tables",
+                        contextValue: "tablesContainer",
+                        data: { connectionId: connection.id, database, schema: schema.name, kind: "tables" },
+                    },
+                ];
+            }
+            if (element.type === "container") {
+                const connection = this.resolveConnectionForElement(element) ?? this.connection;
+                const { database, schema, kind } = element.data;
+                if (kind === "query") {
+                    return [{ type: "message", label: "Saved queries are coming in Sprint V3-S4.", contextValue: "message" }];
+                }
+                if (kind === "types") {
+                    const schemas = await this.schemaManager.getSchemas(connection, database);
+                    const schemaInfo = schemas.find((item) => item.name === schema);
+                    const types = (schemaInfo?.types ?? []);
+                    if (types.length === 0) {
+                        return [{ type: "message", label: "No user-defined types", contextValue: "message" }];
+                    }
+                    return types.map((entry) => ({
+                        type: "type",
+                        label: entry.name,
+                        description: entry.kind,
+                        contextValue: "type",
+                        data: entry,
+                    }));
+                }
+                const tables = await this.schemaManager.getTables(connection, database, schema);
                 if (tables.length === 0) {
                     return [{ type: "message", label: "No tables found", contextValue: "message" }];
                 }
                 return tables
-                    .filter((t) => !t.isSystem) // Hide system tables by default
+                    .filter((t) => !t.isSystem)
                     .map((table) => ({
                     type: "table",
                     label: table.name,
-                    data: { connectionId: connection.id, database, schema: schema.name, table },
+                    description: (0, DatabaseExplorerTree_1.describeTableRowCount)(table),
+                    data: { connectionId: connection.id, database, schema, table },
                 }));
             }
-            // Table level: show columns
+            // Table level: show section nodes (Columns, Indexes, Triggers)
             if (element.type === "table") {
-                const connection = this.resolveConnectionForElement(element) ?? this.connection;
                 const { database, schema, table } = element.data;
-                const columns = await this.schemaManager.getColumns(connection, database, schema, table.name);
-                if (columns.length === 0) {
-                    return [{ type: "message", label: "No columns found", contextValue: "message" }];
+                const sections = (0, DatabaseExplorerTree_1.describeTableSections)(table);
+                return sections.map((section) => ({
+                    type: "tableSection",
+                    label: section.label,
+                    description: `${section.count}`,
+                    contextValue: `tableSection.${section.kind}`,
+                    data: {
+                        connectionId: this.unwrapConnectionId(element.data),
+                        database,
+                        schema,
+                        table,
+                        kind: section.kind,
+                    },
+                }));
+            }
+            if (element.type === "tableSection") {
+                const { database, schema, table, kind } = element.data;
+                if (kind === "columns") {
+                    if (table.columns.length === 0) {
+                        return [{ type: "message", label: "No columns found", contextValue: "message" }];
+                    }
+                    return table.columns.map((column) => ({
+                        type: "column",
+                        label: column.name,
+                        data: {
+                            database,
+                            schema,
+                            table: table.name,
+                            column,
+                        },
+                    }));
                 }
-                return columns.map((column) => ({
-                    type: "column",
-                    label: column.name,
+                if (kind === "indexes") {
+                    if (table.indexes.length === 0) {
+                        return [{ type: "message", label: "No indexes found", contextValue: "message" }];
+                    }
+                    return table.indexes.map((index) => ({
+                        type: "index",
+                        label: index.name,
+                        contextValue: "index",
+                        data: {
+                            database,
+                            schema,
+                            table: table.name,
+                            index,
+                        },
+                    }));
+                }
+                const triggers = table.triggers ?? [];
+                if (triggers.length === 0) {
+                    return [{ type: "message", label: "No triggers found", contextValue: "message" }];
+                }
+                return triggers.map((trigger) => ({
+                    type: "trigger",
+                    label: trigger.name,
+                    contextValue: "trigger",
                     data: {
                         database,
                         schema,
                         table: table.name,
-                        column,
+                        trigger,
                     },
                 }));
             }
@@ -263,9 +425,21 @@ class DatabaseExplorerProvider {
             const { connectionId, database, schema, table } = element.data;
             return `table-${connectionId ?? this.connection?.id ?? "default"}-${database}-${schema}-${table.name}`;
         }
+        if (element.type === "tableSection") {
+            const { connectionId, database, schema, table, kind } = element.data;
+            return `table-section-${connectionId ?? this.connection?.id ?? "default"}-${database}-${schema}-${table.name}-${kind}`;
+        }
         if (element.type === "column") {
             const { database, schema, table, column } = element.data;
             return `col-${database}-${schema}-${table}-${column.name}`;
+        }
+        if (element.type === "index") {
+            const { database, schema, table, index } = element.data;
+            return `idx-${database}-${schema}-${table}-${index.name}`;
+        }
+        if (element.type === "trigger") {
+            const { database, schema, table, trigger } = element.data;
+            return `trg-${database}-${schema}-${table}-${trigger.name}`;
         }
         return `${element.type}-${element.label}`;
     }
@@ -294,7 +468,19 @@ class DatabaseExplorerProvider {
     getAccessibilityLabel(element) {
         if (element.type === "connection") {
             const connection = element.data;
-            return `Connection ${connection.settings.name}, ${connection.isActive ? "active" : "inactive"}, ${connection.isConnected ? "connected" : "not verified"}`;
+            return `Connection ${connection.settings.name}, ${connection.isActive ? "active" : "inactive"}, ${connection.state}`;
+        }
+        if (element.type === "root") {
+            return "Connection groups";
+        }
+        if (element.type === "group") {
+            return `Connection group ${element.label}`;
+        }
+        if (element.type === "container") {
+            return `${element.label} container`;
+        }
+        if (element.type === "type") {
+            return `Type ${element.label}`;
         }
         if (element.type === "database") {
             return `Database ${element.label}`;
@@ -303,11 +489,22 @@ class DatabaseExplorerProvider {
             return `Schema ${element.label}`;
         }
         if (element.type === "table") {
-            return `Table ${element.label}`;
+            const { table } = element.data;
+            const rowCount = (0, DatabaseExplorerTree_1.describeTableRowCount)(table);
+            return rowCount ? `Table ${element.label}, ${rowCount}` : `Table ${element.label}`;
+        }
+        if (element.type === "tableSection") {
+            return `${element.label} section`;
         }
         if (element.type === "column") {
             const column = element.data.column;
             return `Column ${column.name}, type ${(0, Schema_1.getColumnTypeDisplay)(column.type).label}${column.isPrimaryKey ? ", primary key" : ""}${column.nullable ? ", nullable" : ""}`;
+        }
+        if (element.type === "index") {
+            return `Index ${element.label}`;
+        }
+        if (element.type === "trigger") {
+            return `Trigger ${element.label}`;
         }
         return element.label;
     }

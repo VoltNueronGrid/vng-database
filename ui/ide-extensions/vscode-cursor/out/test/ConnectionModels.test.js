@@ -18,6 +18,30 @@ const Connection_1 = require("../models/Connection");
     });
     strict_1.default.equal(validationError, "Operator ID required for operator mode");
 });
+(0, node_test_1.default)("validateConnectionSettings requires tenant and user identity for tenant mode", () => {
+    const missingTenant = (0, Connection_1.validateConnectionSettings)({
+        name: "Tenant",
+        host: "127.0.0.1",
+        port: 8080,
+        baseUrl: "http://127.0.0.1:8080",
+        mode: "tenant",
+        userId: "user-a",
+        ssl: { enabled: false },
+        advanced: {},
+    });
+    const missingUser = (0, Connection_1.validateConnectionSettings)({
+        name: "Tenant",
+        host: "127.0.0.1",
+        port: 8080,
+        baseUrl: "http://127.0.0.1:8080",
+        mode: "tenant",
+        tenantId: "tenant-a",
+        ssl: { enabled: false },
+        advanced: {},
+    });
+    strict_1.default.equal(missingTenant, "Tenant ID required for tenant mode");
+    strict_1.default.equal(missingUser, "User ID required for tenant mode");
+});
 (0, node_test_1.default)("validateConnectionSettings rejects empty SSL certificate paths and invalid advanced values", () => {
     const sslValidationError = (0, Connection_1.validateConnectionSettings)({
         name: "TLS",
@@ -48,6 +72,7 @@ const Connection_1 = require("../models/Connection");
 (0, node_test_1.default)("createDefaultConnection applies overrides while preserving database-client defaults", () => {
     const connection = (0, Connection_1.createDefaultConnection)({
         name: "Staging",
+        group: "localmachine",
         runtimeTarget: "cloud",
         mode: "tenant",
         tenantId: "tenant-a",
@@ -66,6 +91,7 @@ const Connection_1 = require("../models/Connection");
     });
     strict_1.default.match(connection.id, /^conn-/);
     strict_1.default.equal(connection.name, "Staging");
+    strict_1.default.equal(connection.group, "localmachine");
     strict_1.default.equal(connection.runtimeTarget, "cloud");
     strict_1.default.equal(connection.mode, "tenant");
     strict_1.default.equal(connection.baseUrl, "http://127.0.0.1:8080");

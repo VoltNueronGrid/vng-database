@@ -17,6 +17,7 @@ export interface ConnectionManagerState {
 export interface WebviewConnectionDraft {
   id?: string;
   name: string;
+  group?: string;
   baseUrl: string;
   mode: "admin" | "operator" | "tenant";
   runtimeTarget: "local" | "docker" | "cloud" | "custom";

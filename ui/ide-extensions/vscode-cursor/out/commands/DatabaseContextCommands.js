@@ -43,13 +43,16 @@ exports.generateUpdateTemplate = generateUpdateTemplate;
 exports.generateDeleteTemplate = generateDeleteTemplate;
 exports.generateMockData = generateMockData;
 exports.exportTableStructure = exportTableStructure;
+exports.generateTruncateTableSql = generateTruncateTableSql;
 exports.handleCopyName = handleCopyName;
 exports.handleShowDDL = handleShowDDL;
 exports.handleSQLTemplate = handleSQLTemplate;
 exports.handleGenerateMockData = handleGenerateMockData;
 exports.handleDumpStruct = handleDumpStruct;
 exports.handleDropTable = handleDropTable;
+exports.handleTruncateTable = handleTruncateTable;
 const vscode = __importStar(require("vscode"));
+const TableContextSql_1 = require("./TableContextSql");
 function getTableFromItem(element) {
     if (element.type !== "table" || !element.data) {
         return undefined;
@@ -99,58 +102,19 @@ function generateInsertTemplate(table) {
  * Generate UPDATE template
  */
 function generateUpdateTemplate(table) {
-    const mutableColumns = table.columns
-        .filter((c) => !c.isPrimaryKey)
-        .map((c) => `"${c.name}" = ?`);
-    if (mutableColumns.length === 0) {
-        return `-- No mutable columns found on "${table.schema}"."${table.name}"\n-- Table appears to contain only primary key columns.`;
-    }
-    const sets = mutableColumns.join(",\n  ");
-    const pk = table.columns.find((c) => c.isPrimaryKey);
-    const whereClause = pk ? `WHERE "${pk.name}" = ?;` : "WHERE 1=1;";
-    return `UPDATE "${table.schema}"."${table.name}"\nSET ${sets}\n${whereClause}`;
+    return (0, TableContextSql_1.generateUpdateTemplate)(table);
 }
 /**
  * Generate DELETE template
  */
 function generateDeleteTemplate(table) {
-    const pk = table.columns.find((c) => c.isPrimaryKey);
-    const whereClause = pk ? `WHERE "${pk.name}" = ?;` : "WHERE 1=1;";
-    return `DELETE FROM "${table.schema}"."${table.name}"\n${whereClause}`;
+    return (0, TableContextSql_1.generateDeleteTemplate)(table);
 }
 /**
  * Generate mock INSERT statements
  */
 function generateMockData(table, rowCount = 5) {
-    const mockValueGetter = (column) => {
-        const type = column.type.toUpperCase();
-        if (type.includes("INT") || type.includes("BIGINT")) {
-            return Math.floor(Math.random() * 10000).toString();
-        }
-        if (type.includes("FLOAT") || type.includes("DOUBLE") || type.includes("DECIMAL")) {
-            return (Math.random() * 100).toFixed(2);
-        }
-        if (type === "BOOLEAN" || type.includes("BOOL")) {
-            return Math.random() > 0.5 ? "true" : "false";
-        }
-        if (type.includes("DATE")) {
-            return `'${new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]}'`;
-        }
-        if (type.includes("TIMESTAMP")) {
-            return `'${new Date().toISOString()}'`;
-        }
-        if (type.includes("VARCHAR") || type === "TEXT") {
-            return `'Sample Data ${Math.random().toString(36).substring(7)}'`;
-        }
-        return "NULL";
-    };
-    const inserts = [];
-    const columns = table.columns.map((c) => `"${c.name}"`).join(", ");
-    for (let i = 0; i < rowCount; i++) {
-        const values = table.columns.map((c) => mockValueGetter(c)).join(", ");
-        inserts.push(`INSERT INTO "${table.schema}"."${table.name}" (${columns}) VALUES (${values});`);
-    }
-    return inserts.join("\n");
+    return (0, TableContextSql_1.generateMockData)(table, rowCount);
 }
 /**
  * Export table structure as JSON
@@ -170,6 +134,12 @@ function exportTableStructure(table) {
         })),
         indexes: table.indexes,
     }, null, 2);
+}
+/**
+ * Generate TRUNCATE statement
+ */
+function generateTruncateTableSql(table) {
+    return (0, TableContextSql_1.generateTruncateTableSql)(table);
 }
 /**
  * Handle "Copy Name" command
@@ -270,6 +240,23 @@ async function handleDropTable(element) {
         if (confirmed === "Drop") {
             const sql = `DROP TABLE "${table.schema}"."${table.name}";`;
             await showInQuickPick("Drop Table SQL", sql);
+        }
+    }
+}
+/**
+ * Handle "Truncate" command
+ */
+async function handleTruncateTable(element) {
+    if (element.type === "table") {
+        const table = getTableFromItem(element);
+        if (!table) {
+            vscode.window.showErrorMessage("Unable to resolve table metadata.");
+            return;
+        }
+        const confirmed = await vscode.window.showWarningMessage(`Are you sure you want to truncate table "${table.schema}"."${table.name}"? This will remove all rows.`, { modal: true }, "Truncate");
+        if (confirmed === "Truncate") {
+            const sql = generateTruncateTableSql(table);
+            await showInQuickPick("Truncate Table SQL", sql);
         }
     }
 }

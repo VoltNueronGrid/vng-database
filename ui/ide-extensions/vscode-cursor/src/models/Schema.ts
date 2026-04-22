@@ -34,6 +34,7 @@ export interface Table {
   schema: string;
   columns: Column[];
   indexes: Index[];
+  triggers?: Trigger[];
   comment?: string;
   rowCount?: number;
   isSystem?: boolean;
@@ -46,10 +47,23 @@ export interface Index {
   isPrimary: boolean;
 }
 
+export interface Trigger {
+  name: string;
+  event: "INSERT" | "UPDATE" | "DELETE" | "TRUNCATE";
+  timing: "BEFORE" | "AFTER";
+  enabled?: boolean;
+}
+
+export interface TypeEntry {
+  name: string;
+  kind: "ENUM" | "COMPOSITE" | "DOMAIN" | "BASE";
+}
+
 export interface Schema {
   name: string;
   database: string;
   tables: Table[];
+  types?: TypeEntry[];
 }
 
 export interface Database {

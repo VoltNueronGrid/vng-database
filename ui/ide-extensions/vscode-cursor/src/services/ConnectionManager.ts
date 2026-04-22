@@ -3,7 +3,13 @@
  */
 
 import * as vscode from "vscode";
-import { Connection, ConnectionSettings, StoredConnection } from "../models/Connection";
+import {
+  Connection,
+  ConnectionDiagnostics,
+  ConnectionSettings,
+  ConnectionState,
+  StoredConnection,
+} from "../models/Connection";
 
 export class ConnectionManager {
   private connections: Map<string, Connection> = new Map();
@@ -32,7 +38,9 @@ export class ConnectionManager {
           id: conn.id,
           settings: settings as ConnectionSettings,
           isActive: false,
-          isConnected: false,
+          isConnected: conn.isConnected ?? false,
+          state: conn.state ?? "active",
+          diagnostics: conn.diagnostics ?? {},
         });
       }
 
@@ -64,6 +72,8 @@ export class ConnectionManager {
       settings: { ...settings },
       isActive: false,
       isConnected: false,
+      state: "active",
+      diagnostics: {},
     };
 
     this.connections.set(id, connection);
@@ -183,11 +193,25 @@ export class ConnectionManager {
   /**
    * Update connection status
    */
-  setConnectionStatus(id: string, isConnected: boolean): void {
+  setConnectionStatus(id: string, isConnected: boolean, diagnostics?: ConnectionDiagnostics): void {
     const conn = this.connections.get(id);
     if (conn) {
       conn.isConnected = isConnected;
+      conn.state = isConnected ? "verified" : "degraded";
+      conn.diagnostics = diagnostics ?? (isConnected ? {} : conn.diagnostics);
+      void this.persist();
     }
+  }
+
+  setConnectionState(id: string, state: ConnectionState, diagnostics?: ConnectionDiagnostics): void {
+    const conn = this.connections.get(id);
+    if (!conn) {
+      return;
+    }
+    conn.state = state;
+    conn.isConnected = state === "verified";
+    conn.diagnostics = diagnostics ?? conn.diagnostics;
+    void this.persist();
   }
 
   /**
@@ -214,6 +238,9 @@ export class ConnectionManager {
         ...conn.settings,
         adminKey: undefined, // Don't store admin key in globalState
       } as any,
+      isConnected: conn.isConnected,
+      state: conn.state,
+      diagnostics: conn.diagnostics,
     }));
 
     await this.context.globalState.update("vng.connections", toStore);

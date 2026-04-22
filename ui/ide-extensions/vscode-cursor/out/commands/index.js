@@ -18,6 +18,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./DatabaseContextCommands"), exports);
+__exportStar(require("./ConnectionContextCommands"), exports);
 __exportStar(require("./SchemaWizardCommands"), exports);
 __exportStar(require("./SettingsCommands"), exports);
 //# sourceMappingURL=index.js.map

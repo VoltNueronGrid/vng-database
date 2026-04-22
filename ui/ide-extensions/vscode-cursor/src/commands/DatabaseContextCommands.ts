@@ -4,7 +4,13 @@
 
 import * as vscode from "vscode";
 import { SchemaTreeItem } from "../providers/DatabaseExplorerProvider";
-import { Table, Column } from "../models/Schema";
+import { Table } from "../models/Schema";
+import {
+  generateDeleteTemplate as buildDeleteTemplate,
+  generateMockData as buildMockData,
+  generateTruncateTableSql as buildTruncateTableSql,
+  generateUpdateTemplate as buildUpdateTemplate,
+} from "./TableContextSql";
 
 interface TableNodeData {
   database: string;
@@ -64,66 +70,21 @@ export function generateInsertTemplate(table: Table): string {
  * Generate UPDATE template
  */
 export function generateUpdateTemplate(table: Table): string {
-  const mutableColumns = table.columns
-    .filter((c) => !c.isPrimaryKey)
-    .map((c) => `"${c.name}" = ?`);
-
-  if (mutableColumns.length === 0) {
-    return `-- No mutable columns found on "${table.schema}"."${table.name}"\n-- Table appears to contain only primary key columns.`;
-  }
-
-  const sets = mutableColumns.join(",\n  ");
-  const pk = table.columns.find((c) => c.isPrimaryKey);
-  const whereClause = pk ? `WHERE "${pk.name}" = ?;` : "WHERE 1=1;";
-  return `UPDATE "${table.schema}"."${table.name}"\nSET ${sets}\n${whereClause}`;
+  return buildUpdateTemplate(table);
 }
 
 /**
  * Generate DELETE template
  */
 export function generateDeleteTemplate(table: Table): string {
-  const pk = table.columns.find((c) => c.isPrimaryKey);
-  const whereClause = pk ? `WHERE "${pk.name}" = ?;` : "WHERE 1=1;";
-  return `DELETE FROM "${table.schema}"."${table.name}"\n${whereClause}`;
+  return buildDeleteTemplate(table);
 }
 
 /**
  * Generate mock INSERT statements
  */
 export function generateMockData(table: Table, rowCount: number = 5): string {
-  const mockValueGetter = (column: Column): string => {
-    const type = column.type.toUpperCase();
-
-    if (type.includes("INT") || type.includes("BIGINT")) {
-      return Math.floor(Math.random() * 10000).toString();
-    }
-    if (type.includes("FLOAT") || type.includes("DOUBLE") || type.includes("DECIMAL")) {
-      return (Math.random() * 100).toFixed(2);
-    }
-    if (type === "BOOLEAN" || type.includes("BOOL")) {
-      return Math.random() > 0.5 ? "true" : "false";
-    }
-    if (type.includes("DATE")) {
-      return `'${new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]}'`;
-    }
-    if (type.includes("TIMESTAMP")) {
-      return `'${new Date().toISOString()}'`;
-    }
-    if (type.includes("VARCHAR") || type === "TEXT") {
-      return `'Sample Data ${Math.random().toString(36).substring(7)}'`;
-    }
-    return "NULL";
-  };
-
-  const inserts: string[] = [];
-  const columns = table.columns.map((c) => `"${c.name}"`).join(", ");
-
-  for (let i = 0; i < rowCount; i++) {
-    const values = table.columns.map((c) => mockValueGetter(c)).join(", ");
-    inserts.push(`INSERT INTO "${table.schema}"."${table.name}" (${columns}) VALUES (${values});`);
-  }
-
-  return inserts.join("\n");
+  return buildMockData(table, rowCount);
 }
 
 /**
@@ -148,6 +109,13 @@ export function exportTableStructure(table: Table): string {
     null,
     2
   );
+}
+
+/**
+ * Generate TRUNCATE statement
+ */
+export function generateTruncateTableSql(table: Table): string {
+  return buildTruncateTableSql(table);
 }
 
 /**
@@ -262,6 +230,29 @@ export async function handleDropTable(element: SchemaTreeItem): Promise<void> {
     if (confirmed === "Drop") {
       const sql = `DROP TABLE "${table.schema}"."${table.name}";`;
       await showInQuickPick("Drop Table SQL", sql);
+    }
+  }
+}
+
+/**
+ * Handle "Truncate" command
+ */
+export async function handleTruncateTable(element: SchemaTreeItem): Promise<void> {
+  if (element.type === "table") {
+    const table = getTableFromItem(element);
+    if (!table) {
+      vscode.window.showErrorMessage("Unable to resolve table metadata.");
+      return;
+    }
+    const confirmed = await vscode.window.showWarningMessage(
+      `Are you sure you want to truncate table "${table.schema}"."${table.name}"? This will remove all rows.`,
+      { modal: true },
+      "Truncate"
+    );
+
+    if (confirmed === "Truncate") {
+      const sql = generateTruncateTableSql(table);
+      await showInQuickPick("Truncate Table SQL", sql);
     }
   }
 }

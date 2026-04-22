@@ -92,10 +92,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S4-001 | Group/folder root + connection status dot + inline indicators | DX | Not Started | S3-002 | visual parity review |
-| S4-002 | Add nodes: Query, Types, Tables containers | DX | Not Started | S4-001 | tree contract tests |
-| S4-003 | Table children: Columns, Indexes, Triggers | DX + Runtime | Not Started | S4-002 | metadata appears |
-| S4-004 | Row estimate/count metadata support | Runtime + DX | Not Started | S4-003 | performance-safe counts |
+| S4-001 | Group/folder root + connection status dot + inline indicators | DX | In Progress | S3-002 | Implemented in extension tree/provider flow; pending tracker-level visual parity review sign-off |
+| S4-002 | Add nodes: Query, Types, Tables containers | DX | In Progress | S4-001 | Container nodes wired under schema tree (`Query`, `Types`, `Tables`); acceptance test expansion still ongoing |
+| S4-003 | Table children: Columns, Indexes, Triggers | DX + Runtime | In Progress | S4-002 | DX tree now renders section nodes plus index/trigger metadata where available; verified by extension test pass (`npm test`, 45/45) |
+| S4-004 | Row estimate/count metadata support | Runtime + DX | In Progress | S4-003 | DX now renders performance-safe table row-count metadata (display-only, no extra count queries); verified by extension test run (`npm test`, 46/46). Runtime-side count fidelity remains follow-on |
 
 ---
 
@@ -103,8 +103,8 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S5-001 | Connection context menu parity (edit/close/copy host/status/history/import key) | DX | Not Started | S4-001 | menu acceptance checklist |
-| S5-002 | Table context menu parity (DDL/template/dump/mock/drop/truncate/edit) | DX + Runtime | Not Started | S4-003 | action tests pass |
+| S5-001 | Connection context menu parity (edit/close/copy host/status/history/import key) | DX | In Progress | S4-001 | DX command/menu set implemented (`copy host`, `show status`, `view history`, `import key`, plus JSON export helper) and verified by extension tests (`npm test`, 49/49); acceptance checklist review remains |
+| S5-002 | Table context menu parity (DDL/template/dump/mock/drop/truncate/edit) | DX + Runtime | In Progress | S4-003 | Added `editTable` + `truncateTable` command/menu wiring, shared table-context SQL helpers, and table-context tests; extension suite green via `npm test` (53/53) while runtime-backed dump-data/export remains S6 scope |
 | S5-003 | Column context menu parity (copy/add/drop/index actions) | DX + Runtime | Not Started | S4-003 | action tests pass |
 | S5-004 | Add command authorization by role + safe confirmations | Security + DX | Not Started | S5-001..003 | RBAC tests pass |
 

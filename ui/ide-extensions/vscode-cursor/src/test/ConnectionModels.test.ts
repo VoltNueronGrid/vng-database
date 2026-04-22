@@ -16,6 +16,33 @@ test("validateConnectionSettings requires operator identity for operator mode", 
   assert.equal(validationError, "Operator ID required for operator mode");
 });
 
+test("validateConnectionSettings requires tenant and user identity for tenant mode", () => {
+  const missingTenant = validateConnectionSettings({
+    name: "Tenant",
+    host: "127.0.0.1",
+    port: 8080,
+    baseUrl: "http://127.0.0.1:8080",
+    mode: "tenant",
+    userId: "user-a",
+    ssl: { enabled: false },
+    advanced: {},
+  });
+
+  const missingUser = validateConnectionSettings({
+    name: "Tenant",
+    host: "127.0.0.1",
+    port: 8080,
+    baseUrl: "http://127.0.0.1:8080",
+    mode: "tenant",
+    tenantId: "tenant-a",
+    ssl: { enabled: false },
+    advanced: {},
+  });
+
+  assert.equal(missingTenant, "Tenant ID required for tenant mode");
+  assert.equal(missingUser, "User ID required for tenant mode");
+});
+
 test("validateConnectionSettings rejects empty SSL certificate paths and invalid advanced values", () => {
   const sslValidationError = validateConnectionSettings({
     name: "TLS",
@@ -49,6 +76,7 @@ test("validateConnectionSettings rejects empty SSL certificate paths and invalid
 test("createDefaultConnection applies overrides while preserving database-client defaults", () => {
   const connection = createDefaultConnection({
     name: "Staging",
+    group: "localmachine",
     runtimeTarget: "cloud",
     mode: "tenant",
     tenantId: "tenant-a",
@@ -68,6 +96,7 @@ test("createDefaultConnection applies overrides while preserving database-client
 
   assert.match(connection.id, /^conn-/);
   assert.equal(connection.name, "Staging");
+  assert.equal(connection.group, "localmachine");
   assert.equal(connection.runtimeTarget, "cloud");
   assert.equal(connection.mode, "tenant");
   assert.equal(connection.baseUrl, "http://127.0.0.1:8080");

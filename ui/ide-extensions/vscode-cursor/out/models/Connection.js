@@ -27,6 +27,9 @@ function validateConnectionSettings(settings) {
     if (settings.mode === "tenant" && !settings.tenantId) {
         return "Tenant ID required for tenant mode";
     }
+    if (settings.mode === "tenant" && !settings.userId) {
+        return "User ID required for tenant mode";
+    }
     if (settings.ssl?.enabled) {
         const sslPaths = [settings.ssl.caPath, settings.ssl.certPath, settings.ssl.keyPath];
         if (sslPaths.some((path) => path !== undefined && path.trim().length === 0)) {
@@ -52,6 +55,7 @@ function createDefaultConnection(overrides) {
     return {
         id: `conn-${now}`,
         name: overrides?.name || "New Connection",
+        group: overrides?.group,
         serverType: overrides?.serverType || "voltnuerongrid",
         runtimeTarget: overrides?.runtimeTarget || "local",
         baseUrl: overrides?.baseUrl || "http://127.0.0.1:8080",

@@ -37,10 +37,10 @@
 
 | ID | Task | Status | Depends on |
 |----|------|--------|------------|
-| V2-2.1 | **Grouped tree**: optional `Group` / folder node (e.g. `localmachine`) above connections | ⏳ Not started | UX spec + persisted field on `ConnectionSettings` |
-| V2-2.2 | **Inline actions** on connection row: refresh, add, delete, filter (as icons) | ⏳ Not started | `TreeItem` API limits; may use contributed menus + title |
-| V2-2.3 | **Status dot** (green = active+verified) using `TreeItem` theme icons / custom SVG | ⏳ Not started | Design assets |
-| V2-2.4 | **Context menu** on connection: Edit, Close, Copy Host, Copy Connection JSON, Server Status, View History, Import SQL, Copy Connection Key | ⏳ Partial | Many need backend (status, history store, import pipeline) |
+| V2-2.1 | **Grouped tree**: optional `Group` / folder node (e.g. `localmachine`) above connections | ✅ Done (v0.3.2) | Group field persisted and rendered as root/group hierarchy in explorer |
+| V2-2.2 | **Inline actions** on connection row: refresh, add, delete, filter (as icons) | ✅ Done (v0.3.2) | Implemented via contributed view item/context actions and filter command wiring |
+| V2-2.3 | **Status dot** (green = active+verified) using `TreeItem` theme icons / custom SVG | ✅ Done (v0.3.2) | Connection state dot rendered with theme color by state (`verified/degraded/error/active`) |
+| V2-2.4 | **Context menu** on connection: Edit, Close, Copy Host, Copy Connection JSON, Server Status, View History, Import SQL, Copy Connection Key | 🔵 In progress | DX side now includes Edit/Close/Copy Host/Copy JSON/Show Status/View History/Import Key; runtime-backed server-status panel + Import SQL remain follow-on |
 
 ---
 
@@ -50,8 +50,8 @@ Reference UX shows: **Query** folder, **Types**, **Tables** with row counts, **C
 
 | ID | Task | Status | Depends on |
 |----|------|--------|------------|
-| V2-3.1 | Extend schema model or adapter: **per-table row estimates**, **table type** buckets | ⏳ Not started | Registry/API must expose counts or approximate |
-| V2-3.2 | Add tree levels: **Tables** container; under table: **Columns**, **Indexes**, **Triggers** | ⏳ Not started | Metadata from registry + optional SQL introspection |
+| V2-3.1 | Extend schema model or adapter: **per-table row estimates**, **table type** buckets | 🔵 In progress | Explorer now displays performance-safe row-count metadata when supplied by schema registry; table-type bucketing/API completeness remains pending |
+| V2-3.2 | Add tree levels: **Tables** container; under table: **Columns**, **Indexes**, **Triggers** | ✅ Done (v0.3.2, DX side) | Schema tree now shows `Tables` plus per-table `Columns/Indexes/Triggers` sections with metadata where present |
 | V2-3.3 | **Query** pseudo-node: list `.sql` files or ad-hoc saved queries | ⏳ Not started | Workspace virtual documents or storage |
 | V2-3.4 | Column icons: PK, FK, indexed — map from `Column` flags in model | ⏳ Partial | Ensure registry populates `isPrimaryKey`, `isForeignKey`, etc. |
 
@@ -71,7 +71,7 @@ Map each requested command to **implementation type**:
 | Edit Connection | A | ✅ |
 | Close / Disconnect | A | ✅ |
 | Show DDL / SQL Template / Mock / Dump struct | A/B | ✅ partial |
-| Drop / Truncate / Add column / Create index | B/C | V2-4.2 |
+| Drop / Truncate / Add column / Create index | B/C | V2-4.2 🔵 In progress (DX now includes Drop + Truncate + Edit/Alter entry points; add-column/create-index runtime flows pending) |
 | Full-text search | C | V2-4.3 |
 | Dump struct **and** data | C | V2-4.4 |
 | Import SQL | B/C | V2-4.5 |

@@ -32,7 +32,10 @@ import {
   createQueryHistoryProvider,
 } from "./providers";
 import {
+  buildConnectionStatusSummary,
+  getConnectionHostLabel,
   handleCopyName,
+  toConnectionExportJson,
   runAlterTableWizard,
   runCreateTableWizard,
   handleShowDDL,
@@ -40,6 +43,7 @@ import {
   handleGenerateMockData,
   handleDumpStruct,
   handleDropTable,
+  handleTruncateTable,
   registerSettingsCommands,
 } from "./commands";
 import { SchemaTreeItem } from "./providers/DatabaseExplorerProvider";
@@ -80,7 +84,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     const transport = readTransportInjectionFromConfig();
-    const healthIcon = active.isConnected ? "$(pass-filled)" : "$(circle-large-outline)";
+    const healthIcon = active.state === "verified" ? "$(pass-filled)" : active.state === "degraded" ? "$(warning)" : "$(circle-large-outline)";
     connectionStatusBar.text = `${healthIcon} $(database) ${active.settings.name}`;
     connectionStatusBar.tooltip = [
       `Active connection: ${active.settings.name}`,
@@ -89,7 +93,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       `Transport (settings): ${transport.transportMode}${
         transport.nativeEndpoint ? ` — native ${transport.nativeEndpoint}` : ""
       }`,
-      `Health: ${active.isConnected ? "Connected" : "Not verified"}`,
+      `Health: ${active.state}`,
       "Click to switch connections.",
     ].join("\n");
     connectionStatusBar.show();
@@ -194,6 +198,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const defaultConnectionDraft = (): WebviewConnectionDraft => ({
     name: "",
+    group: "",
     baseUrl: "http://127.0.0.1:8080",
     mode: "admin",
     runtimeTarget: "custom",
@@ -216,6 +221,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const draftFromConnection = (connection: Connection): WebviewConnectionDraft => ({
     id: connection.id,
     name: connection.settings.name,
+    group: connection.settings.group ?? "",
     baseUrl: connection.settings.baseUrl,
     mode: connection.settings.mode,
     runtimeTarget: connection.settings.runtimeTarget,
@@ -267,21 +273,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const verifyConnectionHealth = async (connection: Connection, options?: { silent?: boolean }): Promise<boolean> => {
     try {
       const result = await httpClient.testConnection(connection);
-      connectionManager.setConnectionStatus(connection.id, result.isHealthy);
+      connectionManager.setConnectionStatus(connection.id, result.isHealthy, {
+        lastCheckedAt: Date.now(),
+        reason: result.isHealthy ? "health_ok" : "health_probe_failed",
+        detail: result.message,
+      });
       if (!result.isHealthy) {
         const detail = redactSecrets(result.message);
         output.appendLine(`[Health] '${connection.settings.name}' not verified: ${detail}`);
         if (!options?.silent) {
-          vscode.window.showWarningMessage(`Could not verify '${connection.settings.name}': ${detail}`);
+          vscode.window.showWarningMessage(formatConnectionFailureMessage(connection, `Could not verify '${connection.settings.name}'`, detail));
         }
       }
       return result.isHealthy;
     } catch (error) {
       connectionManager.setConnectionStatus(connection.id, false);
+      connectionManager.setConnectionState(connection.id, "error", {
+        lastCheckedAt: Date.now(),
+        reason: "health_probe_exception",
+        detail: toSafeErrorMessage(error, "Health check failed."),
+      });
       const detail = toSafeErrorMessage(error, "Health check failed.");
       output.appendLine(`[Health] '${connection.settings.name}' not verified: ${detail}`);
       if (!options?.silent) {
-        vscode.window.showWarningMessage(`Could not verify '${connection.settings.name}': ${detail}`);
+        vscode.window.showWarningMessage(
+          formatConnectionFailureMessage(connection, `Could not verify '${connection.settings.name}'`, redactSecrets(detail))
+        );
       }
       return false;
     }
@@ -340,8 +357,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return false;
       }
 
+      if (draft.mode === "tenant" && !(draft.userId ?? "").trim()) {
+        vscode.window.showWarningMessage("Tenant mode requires User ID.");
+        return false;
+      }
+
       const connectionPatch: Partial<ManagedConnectionSettings> = {
         name: draft.name.trim(),
+        group: (draft.group ?? "").trim() || undefined,
         baseUrl: draft.baseUrl.replace(/\/$/, ""),
         host: parsedUrl.hostname,
         port: parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === "https:" ? 443 : 80,
@@ -446,11 +469,83 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return undefined;
   };
 
-  const notifyConnectionFailure = (operation: string, error: unknown): void => {
+  const resolveConnectionFromInputOrActive = (input?: SchemaTreeItem | string): Connection | undefined => {
+    const connectionId = resolveConnectionId(input);
+    if (connectionId) {
+      return connectionManager.getConnection(connectionId) ?? undefined;
+    }
+    return connectionManager.getActiveConnection() ?? undefined;
+  };
+
+  const buildConnectionRemediationHint = (connection: Connection, rawMessage: string): string | undefined => {
+    const message = rawMessage.toLowerCase();
+
+    if (
+      message.includes("401") ||
+      message.includes("403") ||
+      message.includes("unauthorized") ||
+      message.includes("forbidden")
+    ) {
+      if (connection.settings.mode === "admin" || connection.settings.mode === "operator") {
+        return "Verify Admin Key in the connection profile and confirm it matches VNG_ADMIN_API_KEY.";
+      }
+      return "Verify tenant credentials (Tenant ID and User ID) and make sure they map to a valid role binding.";
+    }
+
+    if (message.includes("operator") || message.includes("x-vng-operator-id")) {
+      return "Set a valid Operator ID for this profile and confirm it has role bindings on the server.";
+    }
+
+    if (
+      message.includes("tenant") ||
+      message.includes("x-vng-tenant-id") ||
+      message.includes("x-vng-user-id")
+    ) {
+      return "Set Tenant ID and User ID in the profile and verify they are scoped to the expected tenant.";
+    }
+
+    if (
+      message.includes("timeout") ||
+      message.includes("timed out") ||
+      message.includes("abort") ||
+      message.includes("etimedout")
+    ) {
+      return "Check network reachability to Base URL and consider increasing Connection Timeout in Advanced settings.";
+    }
+
+    if (
+      message.includes("econnrefused") ||
+      message.includes("fetch failed") ||
+      message.includes("enotfound") ||
+      message.includes("getaddrinfo") ||
+      message.includes("dns")
+    ) {
+      return "Confirm the server is running and Base URL host/port are correct for this runtime target.";
+    }
+
+    if (message.includes("ssl") || message.includes("certificate") || message.includes("tls")) {
+      return "Review TLS settings (CA/cert/key paths) and verify certificate trust for the target endpoint.";
+    }
+
+    return undefined;
+  };
+
+  const formatConnectionFailureMessage = (connection: Connection, operation: string, detail: string): string => {
+    const hint = buildConnectionRemediationHint(connection, detail);
+    return hint
+      ? `${operation} failed: ${detail}\nHint: ${hint}`
+      : `${operation} failed: ${detail}`;
+  };
+
+  const notifyConnectionFailure = (operation: string, error: unknown, connection?: Connection): void => {
     const safeMessage = toSafeErrorMessage(error, "Unexpected connection error.");
     output.appendLine(`[Connection] ${operation} failed: ${safeMessage}`);
     output.show(true);
-    vscode.window.showErrorMessage(`${operation} failed. Check VoltNueronGrid output for details.`);
+    if (!connection) {
+      vscode.window.showErrorMessage(`${operation} failed. Check VoltNueronGrid output for details.`);
+      return;
+    }
+    vscode.window.showErrorMessage(formatConnectionFailureMessage(connection, operation, redactSecrets(safeMessage)));
   };
 
   const resolveTableEditorConnection = (): Connection | undefined =>
@@ -761,7 +856,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             vscode.window.showInformationMessage(`Active connection set to '${active.settings.name}'.`);
           }
         } catch (error) {
-          notifyConnectionFailure("Activate profile", error);
+          notifyConnectionFailure("Activate profile", error, selected);
         }
         await connectionManagerPanel?.updateState(buildConnectionManagerState());
         return;
@@ -770,15 +865,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (message.type === "test") {
         try {
           const result = await httpClient.testConnection(selected);
-          connectionManager.setConnectionStatus(message.id, result.isHealthy);
+          connectionManager.setConnectionStatus(message.id, result.isHealthy, {
+            lastCheckedAt: Date.now(),
+            reason: result.isHealthy ? "manual_test_ok" : "manual_test_failed",
+            detail: result.message,
+          });
           await syncConnectionViews();
           if (result.isHealthy) {
             vscode.window.showInformationMessage(`Connection test succeeded for '${selected.settings.name}'.`);
           } else {
-            vscode.window.showErrorMessage(`Connection test failed: ${redactSecrets(result.message)}`);
+            const detail = redactSecrets(result.message);
+            vscode.window.showErrorMessage(formatConnectionFailureMessage(selected, "Connection test", detail));
           }
         } catch (error) {
-          notifyConnectionFailure("Test connection", error);
+          notifyConnectionFailure("Test connection", error, selected);
         }
         await connectionManagerPanel?.updateState(buildConnectionManagerState());
       }
@@ -837,9 +937,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         },
         async () => {
           const testResult = await httpClient.testConnection(selected);
-          connectionManager.setConnectionStatus(connectionId, testResult.isHealthy);
+          connectionManager.setConnectionStatus(connectionId, testResult.isHealthy, {
+            lastCheckedAt: Date.now(),
+            reason: testResult.isHealthy ? "connect_ok" : "connect_failed",
+            detail: testResult.message,
+          });
           if (!testResult.isHealthy) {
-            vscode.window.showErrorMessage(`Connection test failed: ${redactSecrets(testResult.message)}`);
+            const detail = redactSecrets(testResult.message);
+            vscode.window.showErrorMessage(formatConnectionFailureMessage(selected, "Connection test", detail));
             await syncConnectionViews();
             return;
           }
@@ -852,7 +957,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       );
     } catch (error) {
-      notifyConnectionFailure("Connect profile", error);
+      const selected = connectionManager.getConnection(resolveConnectionId(input) ?? "");
+      notifyConnectionFailure("Connect profile", error, selected ?? undefined);
     }
   });
 
@@ -878,6 +984,98 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (error) {
       notifyConnectionFailure("Disconnect profile", error);
     }
+  });
+
+  const copyConnectionHost = vscode.commands.registerCommand("vng.copyConnectionHost", async (input?: SchemaTreeItem | string) => {
+    const selected = resolveConnectionFromInputOrActive(input);
+    if (!selected) {
+      vscode.window.showWarningMessage("Select a connection to copy host.");
+      return;
+    }
+    const host = getConnectionHostLabel(selected);
+    await vscode.env.clipboard.writeText(host);
+    vscode.window.showInformationMessage(`Copied host '${host}'.`);
+  });
+
+  const copyConnectionJson = vscode.commands.registerCommand("vng.copyConnectionJson", async (input?: SchemaTreeItem | string) => {
+    const selected = resolveConnectionFromInputOrActive(input);
+    if (!selected) {
+      vscode.window.showWarningMessage("Select a connection to copy JSON.");
+      return;
+    }
+    await vscode.env.clipboard.writeText(toConnectionExportJson(selected));
+    vscode.window.showInformationMessage(`Copied connection JSON for '${selected.settings.name}'.`);
+  });
+
+  const showConnectionStatus = vscode.commands.registerCommand("vng.showConnectionStatus", async (input?: SchemaTreeItem | string) => {
+    const selected = resolveConnectionFromInputOrActive(input);
+    if (!selected) {
+      vscode.window.showWarningMessage("Select a connection to inspect status.");
+      return;
+    }
+    const historyCount = queryExecutionService.getHistory(selected.id).length;
+    const lines = buildConnectionStatusSummary(selected, historyCount);
+    output.appendLine("[Connection Status]");
+    for (const line of lines) {
+      output.appendLine(line);
+    }
+    output.appendLine("---");
+    output.show(true);
+    vscode.window.showInformationMessage(lines.join(" | "));
+  });
+
+  const viewConnectionHistory = vscode.commands.registerCommand("vng.viewConnectionHistory", async (input?: SchemaTreeItem | string) => {
+    const selected = resolveConnectionFromInputOrActive(input);
+    if (!selected) {
+      vscode.window.showWarningMessage("Select a connection to view history.");
+      return;
+    }
+
+    const entries = queryExecutionService.getHistory(selected.id);
+    if (entries.length === 0) {
+      vscode.window.showInformationMessage(`No query history for '${selected.settings.name}'.`);
+      return;
+    }
+
+    const pick = await vscode.window.showQuickPick(
+      entries.slice(0, 50).map((entry) => ({
+        label: entry.query.replace(/\s+/g, " ").trim().slice(0, 120),
+        description: `${entry.status} • ${entry.executionTime ?? 0} ms`,
+        detail: new Date(entry.timestamp).toLocaleString(),
+        entryId: entry.id,
+      })),
+      {
+        title: `History: ${selected.settings.name}`,
+        placeHolder: "Select an entry to re-run",
+      }
+    );
+    if (!pick) {
+      return;
+    }
+    await vscode.commands.executeCommand("vng.reRunHistoryQuery", pick.entryId);
+  });
+
+  const importConnectionKey = vscode.commands.registerCommand("vng.importConnectionKey", async (input?: SchemaTreeItem | string) => {
+    const selected = resolveConnectionFromInputOrActive(input);
+    if (!selected) {
+      vscode.window.showWarningMessage("Select a connection to import admin key.");
+      return;
+    }
+
+    const key = await vscode.window.showInputBox({
+      title: `Import Admin Key: ${selected.settings.name}`,
+      prompt: "Paste VNG admin key",
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (value) => (value.trim().length === 0 ? "Admin key is required." : undefined),
+    });
+    if (key === undefined) {
+      return;
+    }
+
+    await connectionManager.updateConnection(selected.id, { adminKey: key.trim() });
+    await syncConnectionViews();
+    vscode.window.showInformationMessage(`Admin key imported for '${selected.settings.name}'.`);
   });
 
   const deleteConnectionCommand = vscode.commands.registerCommand("vng.deleteConnection", async (input?: SchemaTreeItem | string) => {
@@ -927,7 +1125,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           const failed = checks.filter((check) => !check.ok);
 
           if (managedConnection) {
-            connectionManager.setConnectionStatus(managedConnection.id, failed.length === 0);
+            connectionManager.setConnectionStatus(managedConnection.id, failed.length === 0, {
+              lastCheckedAt: Date.now(),
+              reason: failed.length === 0 ? "connectivity_checks_ok" : "connectivity_checks_failed",
+              detail: failed.length === 0 ? "all checks passed" : failed.map((f) => `${f.endpoint}:${f.status}`).join(", "),
+            });
             await syncConnectionViews();
           }
 
@@ -1112,10 +1314,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   // Database Explorer commands
-  const refreshSchema = vscode.commands.registerCommand("vng.refreshSchema", async () => {
+  const refreshSchema = vscode.commands.registerCommand("vng.refreshSchema", async (input?: SchemaTreeItem | string) => {
     try {
-      const activeConnection = connectionManager.getActiveConnection();
-      if (!activeConnection) {
+      const selectedConnectionId = resolveConnectionId(input);
+      const targetConnection = selectedConnectionId
+        ? connectionManager.getConnection(selectedConnectionId)
+        : connectionManager.getActiveConnection();
+      if (!targetConnection) {
         vscode.window.showWarningMessage("No connection active");
         return;
       }
@@ -1126,7 +1331,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           title: "Refreshing database schema...",
         },
         async () => {
-          schemaManager.invalidateCache(activeConnection.id);
+          schemaManager.invalidateCache(targetConnection.id);
           databaseExplorerProvider.refresh();
         }
       );
@@ -1135,6 +1340,63 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       vscode.window.showErrorMessage(`Failed to refresh schema: ${message}`);
+    }
+  });
+
+  const filterConnections = vscode.commands.registerCommand("vng.filterConnections", async () => {
+    const query = await vscode.window.showInputBox({
+      title: "Filter Connections",
+      prompt: "Filter by name, group, mode, or base URL",
+      placeHolder: "Example: localmachine, tenant, 127.0.0.1",
+      ignoreFocusOut: true,
+    });
+    if (query === undefined) {
+      return;
+    }
+
+    const normalizedQuery = query.trim().toLowerCase();
+    const candidates = connectionManager.listConnections().filter((connection) => {
+      if (!normalizedQuery) {
+        return true;
+      }
+      return [
+        connection.settings.name,
+        connection.settings.group ?? "",
+        connection.settings.mode,
+        connection.settings.baseUrl,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery);
+    });
+
+    if (candidates.length === 0) {
+      vscode.window.showInformationMessage("No connections matched the current filter.");
+      return;
+    }
+
+    const pick = await vscode.window.showQuickPick(
+      candidates.map((connection) => ({
+        label: connection.settings.name,
+        description: `${connection.settings.group ?? "localmachine"} • ${connection.settings.mode}`,
+        detail: connection.settings.baseUrl,
+        connectionId: connection.id,
+      })),
+      {
+        title: "Filtered Connections",
+        placeHolder: "Select a connection to activate",
+      }
+    );
+
+    if (!pick) {
+      return;
+    }
+
+    const active = await connectionManager.setActiveConnection(pick.connectionId);
+    await syncConnectionViews();
+    await verifyActiveProfileHealth({ silent: true });
+    if (active) {
+      vscode.window.showInformationMessage(`Active connection set to '${active.settings.name}'.`);
     }
   });
 
@@ -1160,6 +1422,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const dropTable = vscode.commands.registerCommand("vng.dropTable", async (element: SchemaTreeItem) => {
     await handleDropTable(element);
+  });
+
+  const truncateTable = vscode.commands.registerCommand("vng.truncateTable", async (element: SchemaTreeItem) => {
+    await handleTruncateTable(element);
+  });
+
+  const editTable = vscode.commands.registerCommand("vng.editTable", async (element?: SchemaTreeItem) => {
+    if (!element) {
+      await vscode.commands.executeCommand("vng.openTableEditorPicker");
+      return;
+    }
+    await vscode.commands.executeCommand("vng.openTableEditor", element);
   });
 
   const openTableEditor = vscode.commands.registerCommand("vng.openTableEditor", async (element: SchemaTreeItem) => {
@@ -1352,6 +1626,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     connectConnection,
     disconnectConnection,
     deleteConnectionCommand,
+    copyConnectionHost,
+    copyConnectionJson,
+    showConnectionStatus,
+    viewConnectionHistory,
+    importConnectionKey,
     manageConnections,
     quickSwitchConnection,
     test,
@@ -1366,12 +1645,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     schema,
     focusPanel,
     refreshSchema,
+    filterConnections,
     copyName,
     showTableDDL,
     showSQLTemplate,
     generateMockData,
     dumpTableStruct,
     dropTable,
+    truncateTable,
+    editTable,
     openTableEditor,
     openTableEditorPicker,
     createTableWizard,

@@ -3,10 +3,15 @@
  * Services module - export all service classes
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createTableEditorService = exports.TableEditorService = exports.toSafeErrorMessage = exports.redactSecrets = exports.createSchemaManager = exports.SchemaManager = exports.toQueryHistoryStatus = exports.findOldestHistoryEntryId = exports.createQueryHistoryEntry = exports.createQueryExecutionService = exports.QueryExecutionService = exports.createHttpClient = exports.HttpClient = exports.createConnectionManager = exports.ConnectionManager = void 0;
+exports.createTableEditorService = exports.TableEditorService = exports.toSafeErrorMessage = exports.redactSecrets = exports.createSchemaManager = exports.SchemaManager = exports.toQueryHistoryStatus = exports.findOldestHistoryEntryId = exports.createQueryHistoryEntry = exports.createQueryExecutionService = exports.QueryExecutionService = exports.createHttpClient = exports.HttpClient = exports.DriverError = exports.executeDriverRequest = exports.makeVngDriver = exports.connectionToDriverConfig = exports.createConnectionManager = exports.ConnectionManager = void 0;
 var ConnectionManager_1 = require("./ConnectionManager");
 Object.defineProperty(exports, "ConnectionManager", { enumerable: true, get: function () { return ConnectionManager_1.ConnectionManager; } });
 Object.defineProperty(exports, "createConnectionManager", { enumerable: true, get: function () { return ConnectionManager_1.createConnectionManager; } });
+var DriverAdapter_1 = require("./DriverAdapter");
+Object.defineProperty(exports, "connectionToDriverConfig", { enumerable: true, get: function () { return DriverAdapter_1.connectionToDriverConfig; } });
+Object.defineProperty(exports, "makeVngDriver", { enumerable: true, get: function () { return DriverAdapter_1.makeVngDriver; } });
+Object.defineProperty(exports, "executeDriverRequest", { enumerable: true, get: function () { return DriverAdapter_1.executeDriverRequest; } });
+Object.defineProperty(exports, "DriverError", { enumerable: true, get: function () { return DriverAdapter_1.DriverError; } });
 var HttpClient_1 = require("./HttpClient");
 Object.defineProperty(exports, "HttpClient", { enumerable: true, get: function () { return HttpClient_1.HttpClient; } });
 Object.defineProperty(exports, "createHttpClient", { enumerable: true, get: function () { return HttpClient_1.createHttpClient; } });
