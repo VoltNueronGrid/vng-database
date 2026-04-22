@@ -27,7 +27,15 @@ from .driver import (
     select_transport_from_base_url,
     validate_config,
 )
-from .native_session import native_health_command_roundtrip
+from .native_session import (
+    native_command_roundtrip,
+    native_health_command_roundtrip,
+    native_schema_registry_command_roundtrip,
+    native_sql_analyze_command_roundtrip,
+    native_sql_execute_command_roundtrip,
+    native_sql_route_command_roundtrip,
+    native_sql_transaction_command_roundtrip,
+)
 from .native_wire import encode_framed_json, native_wire_roundtrip, read_framed_json
 
 __all__ = [
@@ -49,7 +57,13 @@ __all__ = [
     "infer_transport_capabilities_tcp",
     "infer_transport_capabilities_tcp_with_discovery",
     "is_retryable_http_status",
+    "native_command_roundtrip",
     "native_health_command_roundtrip",
+    "native_schema_registry_command_roundtrip",
+    "native_sql_analyze_command_roundtrip",
+    "native_sql_execute_command_roundtrip",
+    "native_sql_route_command_roundtrip",
+    "native_sql_transaction_command_roundtrip",
     "native_wire_roundtrip",
     "parse_discovery_http_port_str",
     "parse_vng_host_for_discovery",

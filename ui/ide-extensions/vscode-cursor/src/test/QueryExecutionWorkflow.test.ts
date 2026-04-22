@@ -16,6 +16,7 @@ test("executeStatementsStream drives query results state and connection-scoped h
     }),
     isActive: true,
     isConnected: true,
+    diagnostic: { state: "verified" as const },
   };
 
   const httpClient = {
@@ -77,12 +78,14 @@ test("query execution history keeps cancelled state and supports search plus cle
     settings: createDefaultConnection({ id: "conn-a", name: "Conn A" }),
     isActive: true,
     isConnected: true,
+    diagnostic: { state: "verified" as const },
   };
   const connectionB = {
     id: "conn-b",
     settings: createDefaultConnection({ id: "conn-b", name: "Conn B" }),
     isActive: false,
     isConnected: true,
+    diagnostic: { state: "verified" as const },
   };
 
   const httpClient = {
@@ -180,6 +183,7 @@ test("query execution service initializes from persisted history, parses stateme
       settings: createDefaultConnection({ id: "conn-persisted", name: "Persisted" }),
       isActive: true,
       isConnected: true,
+      diagnostic: { state: "verified" as const },
     },
     ["select 1;", "select 2;"],
     { executionId: "multi" }
@@ -200,6 +204,7 @@ test("query execution service tracks active executions and supports cancellation
     settings: createDefaultConnection({ id: "conn-cancel", name: "Cancel" }),
     isActive: true,
     isConnected: true,
+    diagnostic: { state: "verified" as const },
   };
 
   const httpClient = {
@@ -317,6 +322,7 @@ test("query execution service reuses cached successful query results within TTL"
     settings: createDefaultConnection({ id: "conn-cache", name: "Cache" }),
     isActive: true,
     isConnected: true,
+    diagnostic: { state: "verified" as const },
   };
 
   let executeCount = 0;

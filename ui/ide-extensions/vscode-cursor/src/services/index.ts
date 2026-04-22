@@ -15,3 +15,10 @@ export { createQueryHistoryEntry, findOldestHistoryEntryId, toQueryHistoryStatus
 export { SchemaManager, createSchemaManager } from "./SchemaManager";
 export { redactSecrets, toSafeErrorMessage } from "./SecretSafeErrors";
 export { TableEditorService, createTableEditorService } from "./TableEditorService";
+export { buildRemediationHint } from "./RemediationHints";
+export {
+  checkCommandPermission,
+  isDestructiveOperation,
+  RbacOperation,
+  RbacCheckResult,
+} from "./RbacGuard";

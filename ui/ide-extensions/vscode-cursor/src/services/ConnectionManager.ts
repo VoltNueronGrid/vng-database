@@ -3,7 +3,7 @@
  */
 
 import * as vscode from "vscode";
-import { Connection, ConnectionSettings, StoredConnection } from "../models/Connection";
+import { Connection, ConnectionDiagnostic, ConnectionHealthState, ConnectionSettings, StoredConnection } from "../models/Connection";
 
 export class ConnectionManager {
   private connections: Map<string, Connection> = new Map();
@@ -33,6 +33,7 @@ export class ConnectionManager {
           settings: settings as ConnectionSettings,
           isActive: false,
           isConnected: false,
+          diagnostic: { state: "unverified" },
         });
       }
 
@@ -64,6 +65,7 @@ export class ConnectionManager {
       settings: { ...settings },
       isActive: false,
       isConnected: false,
+      diagnostic: { state: "unverified" },
     };
 
     this.connections.set(id, connection);
@@ -181,13 +183,50 @@ export class ConnectionManager {
   }
 
   /**
-   * Update connection status
+   * Update connection status and derive health state.
+   *
+   * - true  → state becomes "verified"
+   * - false → "degraded" if was previously "verified", otherwise "error"
    */
-  setConnectionStatus(id: string, isConnected: boolean): void {
+  setConnectionStatus(id: string, isConnected: boolean, message?: string): void {
     const conn = this.connections.get(id);
-    if (conn) {
-      conn.isConnected = isConnected;
+    if (!conn) {
+      return;
     }
+
+    conn.isConnected = isConnected;
+
+    const now = Date.now();
+    if (isConnected) {
+      conn.diagnostic = {
+        state: "verified",
+        lastChecked: now,
+        message: message ?? `HTTP 200`,
+      };
+    } else {
+      const wasVerified = conn.diagnostic.state === "verified";
+      conn.diagnostic = {
+        state: wasVerified ? "degraded" : "error",
+        lastChecked: now,
+        message: message,
+      };
+    }
+  }
+
+  /**
+   * Directly set health state and diagnostic message for a connection.
+   */
+  setConnectionDiagnostic(id: string, state: ConnectionHealthState, message?: string): void {
+    const conn = this.connections.get(id);
+    if (!conn) {
+      return;
+    }
+
+    conn.diagnostic = {
+      state,
+      lastChecked: Date.now(),
+      message,
+    } satisfies ConnectionDiagnostic;
   }
 
   /**

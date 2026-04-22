@@ -181,6 +181,56 @@
           "command": "vng.reRunHistoryQuery",
           "when": "view == vngQueryHistory && viewItem == historyEntry",
           "group": "inline@1"
+        },
+        {
+          "command": "vng.copyConnectionHost",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@5"
+        },
+        {
+          "command": "vng.showConnectionStatus",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@6"
+        },
+        {
+          "command": "vng.showConnectionHistory",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@7"
+        },
+        {
+          "command": "vng.importSqlFile",
+          "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
+          "group": "0_connection@8"
+        },
+        {
+          "command": "vng.copyTableName",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "1_modification@0"
+        },
+        {
+          "command": "vng.dumpTableData",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "3_export@2"
+        },
+        {
+          "command": "vng.truncateTable",
+          "when": "view == vngDatabaseExplorer && viewItem == table",
+          "group": "4_danger@2"
+        },
+        {
+          "command": "vng.copyColumnName",
+          "when": "view == vngDatabaseExplorer && viewItem == column",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "vng.copyColumnDefinition",
+          "when": "view == vngDatabaseExplorer && viewItem == column",
+          "group": "1_modification@2"
+        },
+        {
+          "command": "vng.addColumnWizard",
+          "when": "view == vngDatabaseExplorer && (viewItem == table || viewItem == column)",
+          "group": "1_modification@4"
         }
       ]
     },
@@ -363,6 +413,56 @@
       {
         "command": "vng.openSettings",
         "title": "VoltNueronGrid: Settings",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.copyConnectionHost",
+        "title": "Copy Host:Port",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.showConnectionStatus",
+        "title": "Show Connection Status",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.showConnectionHistory",
+        "title": "Show Connection History",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.importSqlFile",
+        "title": "Import SQL File…",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.copyTableName",
+        "title": "Copy Table Name",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.dumpTableData",
+        "title": "Dump Table Data",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.truncateTable",
+        "title": "Truncate Table…",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.copyColumnName",
+        "title": "Copy Column Name",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.copyColumnDefinition",
+        "title": "Copy Column Definition",
+        "category": "VoltNueronGrid"
+      },
+      {
+        "command": "vng.addColumnWizard",
+        "title": "Add Column…",
         "category": "VoltNueronGrid"
       }
     ],

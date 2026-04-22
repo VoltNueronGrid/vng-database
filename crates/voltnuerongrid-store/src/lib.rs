@@ -11,8 +11,17 @@ pub mod ddl_catalog;
 pub mod htap_sync;
 pub mod index;
 pub mod mvcc;
+// S7-001/002: trigger framework
+pub mod triggers;
+// S7-003: trigger emitters
+pub mod trigger_emitter;
 pub mod wal_adapter;
 use wal_adapter::{WalAdapter, WalAdapterError};
+
+pub use triggers::{
+    DdlTriggerDefinition, TriggerDefinition, TriggerEvent, TriggerGranularity, TriggerRegistry,
+};
+pub use trigger_emitter::{LoggingTriggerEmitter, NoOpTriggerEmitter, TriggerEmitter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurabilityConfig {

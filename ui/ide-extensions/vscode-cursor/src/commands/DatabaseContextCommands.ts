@@ -1,10 +1,12 @@
 /**
  * Context Menu Commands for Database Explorer
+ * Includes S5-001 (connection), S5-002 (table), S5-003 (column) additions.
  */
 
 import * as vscode from "vscode";
 import { SchemaTreeItem } from "../providers/DatabaseExplorerProvider";
 import { Table, Column } from "../models/Schema";
+import { Connection } from "../models";
 
 interface TableNodeData {
   database: string;
@@ -276,4 +278,227 @@ async function showInQuickPick(title: string, content: string): Promise<void> {
     canPickMany: false,
     matchOnDetail: false,
   });
+}
+
+// ─── S5-001: Connection context menu commands ─────────────────────────────────
+
+/**
+ * Copy the host:port of the selected connection to the clipboard.
+ */
+export async function handleCopyConnectionHost(connection: Connection): Promise<void> {
+  const { host, port } = connection.settings;
+  const text = `${host}:${port}`;
+  await vscode.env.clipboard.writeText(text);
+  vscode.window.showInformationMessage(`Copied: ${text}`);
+}
+
+/**
+ * Show connection diagnostic information in the VoltNueronGrid output channel.
+ */
+export async function handleShowConnectionStatus(
+  connection: Connection,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const { name, baseUrl, mode, host, port } = connection.settings;
+  const healthState = connection.isConnected ? "verified" : "not verified";
+  output.appendLine("─── Connection Status ───────────────────────────────────");
+  output.appendLine(`Name:      ${name}`);
+  output.appendLine(`Base URL:  ${baseUrl}`);
+  output.appendLine(`Host:      ${host}:${port}`);
+  output.appendLine(`Mode:      ${mode}`);
+  output.appendLine(`Health:    ${healthState}`);
+  output.appendLine(`Active:    ${connection.isActive}`);
+  output.appendLine("─────────────────────────────────────────────────────────");
+  output.show(true);
+  vscode.window.showInformationMessage(`Connection status for '${name}' written to output.`);
+}
+
+/**
+ * Show recent query history entries for the given connection.
+ */
+export async function handleShowConnectionHistory(
+  connection: Connection,
+  historyEntries: Array<{ query: string; timestamp: number; status: string; executionTime?: number }>
+): Promise<void> {
+  if (historyEntries.length === 0) {
+    vscode.window.showInformationMessage(`No query history found for '${connection.settings.name}'.`);
+    return;
+  }
+
+  const items = historyEntries.slice(0, 50).map((entry) => ({
+    label: entry.query.replace(/\s+/g, " ").trim().slice(0, 120),
+    description: `${entry.status} • ${entry.executionTime ?? 0} ms`,
+    detail: new Date(entry.timestamp).toLocaleString(),
+  }));
+
+  await vscode.window.showQuickPick(items, {
+    title: `Query History — ${connection.settings.name}`,
+    placeHolder: "Recent queries (read-only)",
+    canPickMany: false,
+  });
+}
+
+/**
+ * Open a file-picker for a .sql file and return its content for execution.
+ * The actual SQL execution is wired in extension.ts.
+ */
+export async function handleImportSqlFile(): Promise<string | undefined> {
+  const uris = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    filters: { SQL: ["sql"], "All Files": ["*"] },
+    openLabel: "Import SQL File",
+  });
+
+  if (!uris || uris.length === 0) {
+    return undefined;
+  }
+
+  const { promises: fsPromises } = await import("fs");
+  const content = await fsPromises.readFile(uris[0].fsPath, "utf8");
+  return content;
+}
+
+// ─── S5-002: Table context menu commands ─────────────────────────────────────
+
+/**
+ * Copy the table name to the clipboard (table-specific alias of handleCopyName).
+ */
+export async function handleCopyTableName(element: SchemaTreeItem): Promise<void> {
+  if (element.type === "table") {
+    await vscode.env.clipboard.writeText(element.label);
+    vscode.window.showInformationMessage(`Copied table name: ${element.label}`);
+  } else {
+    vscode.window.showWarningMessage("Select a table node to copy its name.");
+  }
+}
+
+/**
+ * Show a placeholder message for table data export (streaming hint).
+ */
+export async function handleDumpTableData(element: SchemaTreeItem): Promise<void> {
+  if (element.type !== "table") {
+    vscode.window.showWarningMessage("Select a table to dump its data.");
+    return;
+  }
+  const table = getTableFromItem(element);
+  const tableName = table ? `"${table.schema}"."${table.name}"` : element.label;
+  vscode.window.showInformationMessage(
+    `Dump table data for ${tableName}: streaming export is available via GET /api/v1/export/dump?table=${element.label}&format=sql. Full GUI streaming support is planned.`
+  );
+}
+
+/**
+ * Prompt for confirmation then return the TRUNCATE SQL for execution.
+ * Returns undefined if the user cancels.
+ */
+export async function handleTruncateTable(element: SchemaTreeItem): Promise<string | undefined> {
+  if (element.type !== "table") {
+    vscode.window.showWarningMessage("Select a table to truncate.");
+    return undefined;
+  }
+  const table = getTableFromItem(element);
+  if (!table) {
+    vscode.window.showErrorMessage("Unable to resolve table metadata.");
+    return undefined;
+  }
+
+  const confirmed = await vscode.window.showWarningMessage(
+    `TRUNCATE TABLE "${table.schema}"."${table.name}"? This deletes ALL rows and cannot be undone.`,
+    { modal: true },
+    "Truncate"
+  );
+
+  if (confirmed !== "Truncate") {
+    return undefined;
+  }
+
+  return `TRUNCATE TABLE "${table.schema}"."${table.name}";`;
+}
+
+// ─── S5-003: Column context menu commands ────────────────────────────────────
+
+function getColumnFromItem(element: SchemaTreeItem): Column | undefined {
+  if (element.type !== "column" || !element.data) {
+    return undefined;
+  }
+  return element.data as Column;
+}
+
+/**
+ * Copy the column name to the clipboard.
+ */
+export async function handleCopyColumnName(element: SchemaTreeItem): Promise<void> {
+  if (element.type !== "column") {
+    vscode.window.showWarningMessage("Select a column node to copy its name.");
+    return;
+  }
+  await vscode.env.clipboard.writeText(element.label);
+  vscode.window.showInformationMessage(`Copied column name: ${element.label}`);
+}
+
+/**
+ * Copy the full column definition ({name} {type}) to the clipboard.
+ */
+export async function handleCopyColumnDefinition(element: SchemaTreeItem): Promise<void> {
+  if (element.type !== "column") {
+    vscode.window.showWarningMessage("Select a column node to copy its definition.");
+    return;
+  }
+  const column = getColumnFromItem(element);
+  const definition = column ? `${column.name} ${column.type}` : element.label;
+  await vscode.env.clipboard.writeText(definition);
+  vscode.window.showInformationMessage(`Copied column definition: ${definition}`);
+}
+
+/**
+ * Interactive ALTER TABLE ADD COLUMN wizard.
+ * Returns the generated SQL or undefined if cancelled.
+ */
+export async function handleAddColumnWizard(element: SchemaTreeItem): Promise<string | undefined> {
+  // Resolve the parent table — element may be a column or a table node
+  let schemaName: string | undefined;
+  let tableName: string | undefined;
+
+  if (element.type === "table") {
+    const table = getTableFromItem(element);
+    schemaName = table?.schema;
+    tableName = table?.name;
+  } else if (element.type === "column") {
+    // Parent table info is not directly on column; use label as fallback
+    tableName = element.label;
+  }
+
+  if (!tableName) {
+    vscode.window.showWarningMessage("Select a table or column node to use the Add Column wizard.");
+    return undefined;
+  }
+
+  const columnName = await vscode.window.showInputBox({
+    title: "Add Column — Name",
+    prompt: "Enter the new column name",
+    ignoreFocusOut: true,
+    validateInput: (v) => (v.trim().length === 0 ? "Column name is required." : undefined),
+  });
+  if (!columnName) {
+    return undefined;
+  }
+
+  const columnTypes = [
+    "INT", "BIGINT", "SMALLINT", "DECIMAL", "FLOAT", "DOUBLE",
+    "VARCHAR(255)", "TEXT", "BOOLEAN", "DATE", "TIMESTAMP", "JSON", "BYTEA",
+  ];
+
+  const picked = await vscode.window.showQuickPick(columnTypes, {
+    title: "Add Column — Type",
+    placeHolder: "Choose a column type",
+  });
+  if (!picked) {
+    return undefined;
+  }
+
+  const qualifiedTable = schemaName
+    ? `"${schemaName}"."${tableName}"`
+    : `"${tableName}"`;
+
+  return `ALTER TABLE ${qualifiedTable} ADD COLUMN "${columnName.trim()}" ${picked};`;
 }

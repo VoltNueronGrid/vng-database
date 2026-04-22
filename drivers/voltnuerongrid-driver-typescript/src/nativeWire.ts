@@ -8,58 +8,61 @@ export function encodeFramedJson(payload: unknown): Buffer {
   return Buffer.concat([header, body]);
 }
 
-function readExactly(socket: net.Socket, n: number, idleMs: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
+/**
+ * Stateful framed-JSON reader that maintains a persistent buffer across reads.
+ * Required because a single TCP `data` event may deliver more bytes than the
+ * current `readExactly` call requests; excess bytes must not be discarded.
+ *
+ * Create one FramedReader per socket and pass it to every `readFramedJson`
+ * call on that socket so the shared buffer is preserved between reads.
+ */
+export class FramedReader {
+  private buf: Buffer = Buffer.alloc(0);
+  private waiters: Array<{ needed: number; resolve: (b: Buffer) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
 
-    const timer = setTimeout(() => {
-      cleanup();
-      socket.destroy();
-      reject(new Error(`native wire read timeout after ${idleMs}ms`));
-    }, idleMs);
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      socket.removeListener("data", onData);
-      socket.removeListener("error", onErr);
-      socket.removeListener("close", onClose);
-    };
-
-    const tryFinish = () => {
-      if (total < n) {
-        return;
+  constructor(private socket: net.Socket) {
+    socket.on("data", (chunk: Buffer) => {
+      this.buf = Buffer.concat([this.buf, chunk]);
+      this.drain();
+    });
+    socket.once("error", (e) => {
+      for (const w of this.waiters) {
+        clearTimeout(w.timer);
+        w.reject(e);
       }
-      const joined = Buffer.concat(chunks);
-      cleanup();
-      resolve(joined.subarray(0, n));
-    };
+      this.waiters = [];
+    });
+    socket.once("close", () => {
+      const e = new Error("socket closed before read completed");
+      for (const w of this.waiters) {
+        clearTimeout(w.timer);
+        w.reject(e);
+      }
+      this.waiters = [];
+    });
+  }
 
-    const onData = (chunk: Buffer) => {
-      chunks.push(chunk);
-      total += chunk.length;
-      tryFinish();
-    };
-
-    const onErr = (e: Error) => {
-      cleanup();
-      reject(e);
-    };
-
-    const onClose = () => {
-      cleanup();
-      reject(new Error("socket closed before read completed"));
-    };
-
-    socket.on("data", onData);
-    socket.once("error", onErr);
-    socket.once("close", onClose);
-
-    const pending = socket.read();
-    if (pending) {
-      onData(pending);
+  private drain() {
+    while (this.waiters.length > 0 && this.buf.length >= this.waiters[0].needed) {
+      const w = this.waiters.shift()!;
+      clearTimeout(w.timer);
+      const data = this.buf.subarray(0, w.needed);
+      this.buf = this.buf.subarray(w.needed);
+      w.resolve(Buffer.from(data)); // copy to avoid subarray aliasing
     }
-  });
+  }
+
+  readExactly(n: number, idleMs: number): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.waiters.findIndex((w) => w.resolve === resolve);
+        if (idx >= 0) this.waiters.splice(idx, 1);
+        reject(new Error(`native wire read timeout after ${idleMs}ms`));
+      }, idleMs);
+      this.waiters.push({ needed: n, resolve, reject, timer });
+      this.drain(); // satisfy immediately if data already buffered
+    });
+  }
 }
 
 /** Reads one framed JSON value from the socket (4-byte big-endian length + UTF-8 JSON). */
@@ -67,13 +70,29 @@ export async function readFramedJson(
   socket: net.Socket,
   maxPayloadBytes: number,
   idleMs: number
+): Promise<unknown>;
+/** Overload: accepts a pre-built FramedReader to share the buffer across calls. */
+export async function readFramedJson(
+  reader: FramedReader,
+  maxPayloadBytes: number,
+  idleMs: number
+): Promise<unknown>;
+export async function readFramedJson(
+  socketOrReader: net.Socket | FramedReader,
+  maxPayloadBytes: number,
+  idleMs: number
 ): Promise<unknown> {
-  const lenBuf = await readExactly(socket, 4, idleMs);
+  const reader =
+    socketOrReader instanceof FramedReader
+      ? socketOrReader
+      : new FramedReader(socketOrReader);
+
+  const lenBuf = await reader.readExactly(4, idleMs);
   const len = lenBuf.readUInt32BE(0);
   if (len > maxPayloadBytes) {
     throw new Error(`native frame payload ${len} exceeds max ${maxPayloadBytes}`);
   }
-  const body = await readExactly(socket, len, idleMs);
+  const body = await reader.readExactly(len, idleMs);
   return JSON.parse(body.toString("utf8"));
 }
 

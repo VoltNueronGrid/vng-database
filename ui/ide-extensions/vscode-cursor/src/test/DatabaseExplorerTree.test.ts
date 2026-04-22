@@ -13,6 +13,7 @@ test("describeConnectionNode marks active connection state", () => {
     settings: createDefaultConnection({ name: "Local Dev" }),
     isActive: true,
     isConnected: true,
+    diagnostic: { state: "verified" as const },
   };
 
   const presentation = describeConnectionNode(connection);
@@ -27,6 +28,7 @@ test("describeConnectionNode guides inactive browsing flow", () => {
     settings: createDefaultConnection({ name: "Staging" }),
     isActive: false,
     isConnected: false,
+    diagnostic: { state: "unverified" as const },
   };
 
   const presentation = describeConnectionNode(connection);
@@ -41,6 +43,7 @@ test("connection flow covers empty -> create -> connect -> expand -> disconnect"
     settings: createDefaultConnection({ name: "Flow Connection" }),
     isActive: false,
     isConnected: false,
+    diagnostic: { state: "unverified" as const },
   };
 
   const emptySnapshot = getConnectionFlowSnapshot([]);

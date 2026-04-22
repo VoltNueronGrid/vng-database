@@ -61,11 +61,20 @@ export interface ConnectionSettings {
   lastUsed?: number; // timestamp
 }
 
+export type ConnectionHealthState = "unverified" | "verified" | "degraded" | "error";
+
+export interface ConnectionDiagnostic {
+  state: ConnectionHealthState;
+  lastChecked?: number; // epoch ms
+  message?: string;
+}
+
 export interface Connection {
   id: string;
   settings: ConnectionSettings;
   isActive: boolean;
   isConnected: boolean;
+  diagnostic: ConnectionDiagnostic;
 }
 
 export interface StoredConnection {
