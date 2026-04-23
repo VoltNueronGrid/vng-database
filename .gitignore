@@ -11,3 +11,6 @@ ui/ide-extensions/vscode-cursor/node_modules/
 ui/ide-extensions/vscode-cursor/.tmp-clean-install
 drivers/voltnuerongrid-driver-typescript/node_modules/
 drivers/voltnuerongrid-driver-typescript/dist/
+.claude/worktrees/focused-maxwell-b73e6f
+.m2/
+drivers/voltnuerongrid-driver-java/target/
