@@ -224,7 +224,7 @@ async function activate(context) {
         },
     });
     const buildConnectionManagerState = () => ({
-        connections: connectionManager.listConnections().map((connection) => ({
+        connections: connectionManager.listConnections().filter((c) => c.settings).map((connection) => ({
             id: connection.id,
             name: connection.settings.name,
             mode: connection.settings.mode,
@@ -302,19 +302,42 @@ async function activate(context) {
     };
     const saveConnectionDraft = async (draft, mode) => {
         try {
+            if (!draft) {
+                output.appendLine(`[Connection] ${mode} called with missing draft — ignoring.`);
+                return false;
+            }
             if (!draft.name.trim()) {
                 vscode.window.showWarningMessage("Connection name is required.");
                 return false;
             }
             let parsedUrl;
+            let resolvedHost;
+            let resolvedPort;
+            let resolvedBaseUrl;
+            let nativeEndpoint;
+            let transportMode;
+            const rawUrl = draft.baseUrl.trim().replace(/\/$/, "");
             try {
-                parsedUrl = new URL(draft.baseUrl);
-                if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-                    throw new Error("Only http/https URLs are supported.");
-                }
+                parsedUrl = new URL(rawUrl);
             }
             catch {
-                vscode.window.showWarningMessage("Enter a valid base URL (http/https).");
+                vscode.window.showWarningMessage("Enter a valid base URL (e.g. http://127.0.0.1:8080 or vng://127.0.0.1:7542).");
+                return false;
+            }
+            if (parsedUrl.protocol === "vng:") {
+                resolvedHost = parsedUrl.hostname;
+                resolvedPort = parsedUrl.port ? Number(parsedUrl.port) : 7542;
+                nativeEndpoint = rawUrl;
+                transportMode = "native";
+                resolvedBaseUrl = rawUrl;
+            }
+            else if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
+                resolvedHost = parsedUrl.hostname;
+                resolvedPort = parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === "https:" ? 443 : 80;
+                resolvedBaseUrl = rawUrl;
+            }
+            else {
+                vscode.window.showWarningMessage("Enter a valid base URL (e.g. http://127.0.0.1:8080 or vng://127.0.0.1:7542).");
                 return false;
             }
             const existingConnection = draft.id ? connectionManager.getConnection(draft.id) : undefined;
@@ -333,9 +356,11 @@ async function activate(context) {
             }
             const connectionPatch = {
                 name: draft.name.trim(),
-                baseUrl: draft.baseUrl.replace(/\/$/, ""),
-                host: parsedUrl.hostname,
-                port: parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === "https:" ? 443 : 80,
+                baseUrl: resolvedBaseUrl,
+                host: resolvedHost,
+                port: resolvedPort,
+                transportMode,
+                nativeEndpoint,
                 mode: draft.mode,
                 runtimeTarget: draft.runtimeTarget,
                 operatorId: draft.mode === "operator" ? (draft.operatorId ?? "").trim() : undefined,
@@ -381,14 +406,25 @@ async function activate(context) {
                 }
             });
             vscode.window.showInformationMessage(mode === "edit" ? "Connection updated." : "Connection created.");
-            await syncConnectionViews();
-            await verifyActiveProfileHealth({ silent: true });
             closeConnectionEditorPanel();
+            // Run view sync and health check outside the try block so they can't
+            // cause a false "connection failed" error if they fail non-critically.
+            try {
+                await syncConnectionViews();
+            }
+            catch { /* best-effort */ }
+            try {
+                await verifyActiveProfileHealth({ silent: true });
+            }
+            catch { /* best-effort */ }
             return true;
         }
         catch (error) {
             const safeMessage = (0, services_1.toSafeErrorMessage)(error, "Unexpected connection error.");
             output.appendLine(`[Connection] ${mode === "edit" ? "Update" : "Create"} failed: ${safeMessage}`);
+            if (error instanceof Error && error.stack) {
+                output.appendLine(`[Connection] Stack: ${error.stack}`);
+            }
             output.show(true);
             vscode.window.showErrorMessage(`${mode === "edit" ? "Update" : "Create"} connection failed. Check output for details.`);
             return false;
@@ -402,7 +438,62 @@ async function activate(context) {
                     closeConnectionEditorPanel();
                     return;
                 }
-                await saveConnectionDraft(message.draft, connectionEditorState?.mode ?? "create");
+                if (message.type === "test") {
+                    const draft = message.draft;
+                    const rawUrl = (draft.baseUrl ?? "").trim().replace(/\/$/, "");
+                    let testBaseUrl = rawUrl;
+                    let testNativeEndpoint;
+                    let testTransportMode;
+                    try {
+                        const p = new URL(rawUrl);
+                        if (p.protocol === "vng:") {
+                            testNativeEndpoint = rawUrl;
+                            testTransportMode = "native";
+                        }
+                    }
+                    catch { /* ignore parse error — test will fail anyway */ }
+                    const tempConn = {
+                        id: `test-${Date.now()}`,
+                        isActive: false,
+                        isConnected: false,
+                        diagnostic: { state: "unverified" },
+                        settings: {
+                            id: `test-${Date.now()}`,
+                            name: draft.name || "Test",
+                            serverType: "voltnuerongrid",
+                            runtimeTarget: draft.runtimeTarget ?? "local",
+                            baseUrl: testBaseUrl,
+                            host: "",
+                            port: 0,
+                            mode: draft.mode ?? "admin",
+                            adminKey: draft.adminKey,
+                            operatorId: draft.operatorId,
+                            tenantId: draft.tenantId,
+                            userId: draft.userId,
+                            transportMode: testTransportMode,
+                            nativeEndpoint: testNativeEndpoint,
+                            ssl: { enabled: draft.ssl?.enabled ?? false },
+                            advanced: { connectionTimeout: 5000, idleTimeout: 300000, keepAlive: true, maxConnections: 1 },
+                            createdAt: Date.now(),
+                        },
+                    };
+                    try {
+                        const result = await httpClient.testConnection(tempConn);
+                        await connectionEditorPanel?.panel.webview.postMessage({
+                            type: "testResult",
+                            ok: result.isHealthy,
+                            message: result.message,
+                        });
+                    }
+                    catch (err) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        await connectionEditorPanel?.panel.webview.postMessage({ type: "testResult", ok: false, message: msg });
+                    }
+                    return;
+                }
+                if (message.type === "save") {
+                    await saveConnectionDraft(message.draft, connectionEditorState?.mode ?? "create");
+                }
             });
             connectionEditorPanel.panel.onDidDispose(() => {
                 connectionEditorState = undefined;
@@ -1034,7 +1125,23 @@ async function activate(context) {
         await (0, commands_1.handleDumpStruct)(element);
     });
     const dropTable = vscode.commands.registerCommand("vng.dropTable", async (element) => {
-        await (0, commands_1.handleDropTable)(element);
+        const activeConnection = connectionManager.getActiveConnection();
+        if (!activeConnection) {
+            vscode.window.showWarningMessage("Activate a managed connection before dropping a table.");
+            return;
+        }
+        const perm = (0, services_2.checkCommandPermission)(activeConnection, "schema-write");
+        if (!perm.allowed) {
+            vscode.window.showErrorMessage(`Permission denied: ${perm.reason}`);
+            return;
+        }
+        const sql = await (0, commands_1.handleDropTable)(element);
+        if (!sql) {
+            return;
+        }
+        await executeManagedSqlWithProgress(activeConnection, sql, "Drop Table", { stopOnError: true });
+        schemaManager.invalidateCache(activeConnection.id);
+        databaseExplorerProvider.refresh();
     });
     const openTableEditor = vscode.commands.registerCommand("vng.openTableEditor", async (element) => {
         if (element.type !== "table") {
@@ -1172,11 +1279,23 @@ async function activate(context) {
         await executeManagedSqlWithProgress(connection, sql, "Import SQL File", { stopOnError: true });
     });
     // ─── S5-002: Table context menu commands ──────────────────────────────────
-    const copyTableName = vscode.commands.registerCommand("vng.copyTableName", async (element) => {
-        await (0, commands_1.handleCopyTableName)(element);
-    });
     const dumpTableData = vscode.commands.registerCommand("vng.dumpTableData", async (element) => {
-        await (0, commands_1.handleDumpTableData)(element);
+        const activeConnection = connectionManager.getActiveConnection();
+        if (!activeConnection) {
+            vscode.window.showWarningMessage("Activate a managed connection before exporting table data.");
+            return;
+        }
+        await (0, commands_1.handleDumpTableData)(element, async (sql) => {
+            const response = await httpClient.executeQuery(activeConnection, sql);
+            if (response.status !== 200 || !response.data) {
+                vscode.window.showErrorMessage(`Query failed: ${response.error ?? `HTTP ${response.status}`}`);
+                return null;
+            }
+            const data = response.data;
+            const columns = Array.isArray(data.columns) ? data.columns : [];
+            const rows = Array.isArray(data.rows) ? data.rows : [];
+            return { columns, rows };
+        });
     });
     const truncateTable = vscode.commands.registerCommand("vng.truncateTable", async (element) => {
         const activeConnection = connectionManager.getActiveConnection();
@@ -1269,7 +1388,7 @@ async function activate(context) {
             });
         });
     };
-    context.subscriptions.push(newConnection, editConnection, connectConnection, disconnectConnection, deleteConnectionCommand, manageConnections, quickSwitchConnection, test, queryRunner, showQueryResults, refreshQueryHistory, clearQueryHistory, searchQueryHistory, reRunHistoryQuery, cancelActiveQuery, diagnostics, schema, focusPanel, refreshSchema, copyName, showTableDDL, showSQLTemplate, generateMockData, dumpTableStruct, dropTable, openTableEditor, openTableEditorPicker, createTableWizard, alterTableWizard, tableEditorSave, tableEditorAddRow, tableEditorDiscard, tableEditorRefresh, copyConnectionHost, showConnectionStatus, showConnectionHistory, importSqlFile, copyTableName, dumpTableData, truncateTable, copyColumnName, copyColumnDefinition, addColumnWizard, ...sqlDisposables, databaseView, queryHistoryView, connectionStatusBar, output);
+    context.subscriptions.push(newConnection, editConnection, connectConnection, disconnectConnection, deleteConnectionCommand, manageConnections, quickSwitchConnection, test, queryRunner, showQueryResults, refreshQueryHistory, clearQueryHistory, searchQueryHistory, reRunHistoryQuery, cancelActiveQuery, diagnostics, schema, focusPanel, refreshSchema, copyName, showTableDDL, showSQLTemplate, generateMockData, dumpTableStruct, dropTable, openTableEditor, openTableEditorPicker, createTableWizard, alterTableWizard, tableEditorSave, tableEditorAddRow, tableEditorDiscard, tableEditorRefresh, copyConnectionHost, showConnectionStatus, showConnectionHistory, importSqlFile, dumpTableData, truncateTable, copyColumnName, copyColumnDefinition, addColumnWizard, ...sqlDisposables, databaseView, queryHistoryView, connectionStatusBar, output);
 }
 function deactivate() {
     // Clean up service resources if needed

@@ -33,7 +33,7 @@ function getTableFromItem(element: SchemaTreeItem): Table | undefined {
 export function generateTableDDL(table: Table): string {
   const columns = table.columns
     .map((col) => {
-      let def = `"${col.name}" ${col.type}`;
+      let def = `"${col.name}" ${col.type ?? "UNKNOWN"}`;
       if (!col.nullable) def += " NOT NULL";
       if (col.isPrimaryKey) def += " PRIMARY KEY";
       if (col.isUnique) def += " UNIQUE";
@@ -94,7 +94,7 @@ export function generateDeleteTemplate(table: Table): string {
  */
 export function generateMockData(table: Table, rowCount: number = 5): string {
   const mockValueGetter = (column: Column): string => {
-    const type = column.type.toUpperCase();
+    const type = (column.type ?? "UNKNOWN").toUpperCase();
 
     if (type.includes("INT") || type.includes("BIGINT")) {
       return Math.floor(Math.random() * 10000).toString();
@@ -153,17 +153,26 @@ export function exportTableStructure(table: Table): string {
 }
 
 /**
- * Handle "Copy Name" command
+ * Handle "Copy Name" command — copies fully-qualified name (db.schema.table or db.schema.table.column)
  */
 export async function handleCopyName(element: SchemaTreeItem): Promise<void> {
-  if (element.type === "table" || element.type === "column") {
+  if (element.type === "table") {
+    const wrapped = element.data as Partial<TableNodeData>;
+    const table = wrapped.table ?? (element.data as Table);
+    const db = wrapped.database ?? "default";
+    const schema = wrapped.schema ?? table?.schema ?? "public";
+    const name = table?.name ?? element.label;
+    const qualified = `${db}.${schema}.${name}`;
+    await vscode.env.clipboard.writeText(qualified);
+    vscode.window.showInformationMessage(`Copied: ${qualified}`);
+  } else if (element.type === "column") {
     await vscode.env.clipboard.writeText(element.label);
     vscode.window.showInformationMessage(`Copied: ${element.label}`);
   }
 }
 
 /**
- * Handle "Show DDL" command
+ * Handle "Show DDL" command — opens a new untitled SQL editor
  */
 export async function handleShowDDL(element: SchemaTreeItem): Promise<void> {
   if (element.type === "table") {
@@ -173,7 +182,8 @@ export async function handleShowDDL(element: SchemaTreeItem): Promise<void> {
       return;
     }
     const ddl = generateTableDDL(table);
-    await showInQuickPick("Table DDL", ddl);
+    const doc = await vscode.workspace.openTextDocument({ content: ddl, language: "sql" });
+    await vscode.window.showTextDocument(doc, { preview: false });
   }
 }
 
@@ -200,13 +210,14 @@ export async function handleSQLTemplate(element: SchemaTreeItem): Promise<void> 
     });
 
     if (selected) {
-      await showInQuickPick(`${selected.label} Template`, selected.value);
+      const doc = await vscode.workspace.openTextDocument({ content: selected.value, language: "sql" });
+      await vscode.window.showTextDocument(doc, { preview: false });
     }
   }
 }
 
 /**
- * Handle "Generate Mock Data" command
+ * Handle "Generate Mock Data" command — opens generated INSERT SQL in a new untitled editor
  */
 export async function handleGenerateMockData(element: SchemaTreeItem): Promise<void> {
   if (element.type === "table") {
@@ -225,13 +236,14 @@ export async function handleGenerateMockData(element: SchemaTreeItem): Promise<v
     if (rowCountStr) {
       const rowCount = parseInt(rowCountStr);
       const mockData = generateMockData(table, rowCount);
-      await showInQuickPick("Generated Mock Data", mockData);
+      const doc = await vscode.workspace.openTextDocument({ content: mockData, language: "sql" });
+      await vscode.window.showTextDocument(doc, { preview: false });
     }
   }
 }
 
 /**
- * Handle "Dump Struct" command
+ * Handle "Dump Struct" command — opens table structure JSON in a new untitled editor
  */
 export async function handleDumpStruct(element: SchemaTreeItem): Promise<void> {
   if (element.type === "table") {
@@ -241,43 +253,34 @@ export async function handleDumpStruct(element: SchemaTreeItem): Promise<void> {
       return;
     }
     const json = exportTableStructure(table);
-    await showInQuickPick("Table Structure", json);
+    const doc = await vscode.workspace.openTextDocument({ content: json, language: "json" });
+    await vscode.window.showTextDocument(doc, { preview: false });
   }
 }
 
 /**
- * Handle "Drop" command
+ * Handle "Drop" command — returns the DROP SQL for execution, or undefined if cancelled.
  */
-export async function handleDropTable(element: SchemaTreeItem): Promise<void> {
-  if (element.type === "table") {
-    const table = getTableFromItem(element);
-    if (!table) {
-      vscode.window.showErrorMessage("Unable to resolve table metadata.");
-      return;
-    }
-    const confirmed = await vscode.window.showWarningMessage(
-      `Are you sure you want to drop table "${table.schema}"."${table.name}"?`,
-      { modal: true },
-      "Drop"
-    );
-
-    if (confirmed === "Drop") {
-      const sql = `DROP TABLE "${table.schema}"."${table.name}";`;
-      await showInQuickPick("Drop Table SQL", sql);
-    }
+export async function handleDropTable(element: SchemaTreeItem): Promise<string | undefined> {
+  if (element.type !== "table") {
+    return undefined;
   }
-}
+  const table = getTableFromItem(element);
+  if (!table) {
+    vscode.window.showErrorMessage("Unable to resolve table metadata.");
+    return undefined;
+  }
+  const confirmed = await vscode.window.showWarningMessage(
+    `Are you sure you want to DROP TABLE "${table.schema}"."${table.name}"? This cannot be undone.`,
+    { modal: true },
+    "Drop"
+  );
 
-/**
- * Show content in a quick pick dropdown
- */
-async function showInQuickPick(title: string, content: string): Promise<void> {
-  const lines = content.split("\n");
-  await vscode.window.showQuickPick(lines, {
-    title,
-    canPickMany: false,
-    matchOnDetail: false,
-  });
+  if (confirmed !== "Drop") {
+    return undefined;
+  }
+
+  return `DROP TABLE "${table.schema}"."${table.name}";`;
 }
 
 // ─── S5-001: Connection context menu commands ─────────────────────────────────
@@ -360,31 +363,89 @@ export async function handleImportSqlFile(): Promise<string | undefined> {
 
 // ─── S5-002: Table context menu commands ─────────────────────────────────────
 
-/**
- * Copy the table name to the clipboard (table-specific alias of handleCopyName).
- */
-export async function handleCopyTableName(element: SchemaTreeItem): Promise<void> {
-  if (element.type === "table") {
-    await vscode.env.clipboard.writeText(element.label);
-    vscode.window.showInformationMessage(`Copied table name: ${element.label}`);
-  } else {
-    vscode.window.showWarningMessage("Select a table node to copy its name.");
-  }
-}
+export type DumpFormat = "csv" | "csv-headers" | "json" | "parquet" | "excel";
 
 /**
- * Show a placeholder message for table data export (streaming hint).
+ * Dump table data — prompts for format, executes query, opens result in untitled editor.
+ * @param executeSql callback that runs SQL and returns rows (column names + row arrays)
  */
-export async function handleDumpTableData(element: SchemaTreeItem): Promise<void> {
+export async function handleDumpTableData(
+  element: SchemaTreeItem,
+  executeSql: (sql: string) => Promise<{ columns: string[]; rows: unknown[][] } | null>
+): Promise<void> {
   if (element.type !== "table") {
     vscode.window.showWarningMessage("Select a table to dump its data.");
     return;
   }
   const table = getTableFromItem(element);
-  const tableName = table ? `"${table.schema}"."${table.name}"` : element.label;
-  vscode.window.showInformationMessage(
-    `Dump table data for ${tableName}: streaming export is available via GET /api/v1/export/dump?table=${element.label}&format=sql. Full GUI streaming support is planned.`
+  if (!table) {
+    vscode.window.showErrorMessage("Unable to resolve table metadata.");
+    return;
+  }
+
+  const formatPick = await vscode.window.showQuickPick(
+    [
+      { label: "CSV", description: "Comma-separated values, no header row", format: "csv" as DumpFormat },
+      { label: "CSV with Headers", description: "Comma-separated values with column names", format: "csv-headers" as DumpFormat },
+      { label: "JSON", description: "Array of objects", format: "json" as DumpFormat },
+      { label: "Parquet", description: "Apache Parquet (CLI export)", format: "parquet" as DumpFormat },
+      { label: "Excel", description: "Excel workbook (CLI export)", format: "excel" as DumpFormat },
+    ],
+    { title: "Dump Table Data — Choose Format", placeHolder: "Select export format" }
   );
+  if (!formatPick) {
+    return;
+  }
+
+  if (formatPick.format === "parquet" || formatPick.format === "excel") {
+    const ext = formatPick.format === "parquet" ? "parquet" : "xlsx";
+    vscode.window.showInformationMessage(
+      `${formatPick.label} export requires the VoltNueronGrid CLI: vng export --table="${table.schema}"."${table.name}" --format=${ext}`
+    );
+    return;
+  }
+
+  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Exporting ${table.name}…`, cancellable: false }, async () => {
+    const sql = `SELECT * FROM "${table.schema}"."${table.name}" LIMIT 10000;`;
+    const result = await executeSql(sql);
+    if (!result) {
+      vscode.window.showErrorMessage("Failed to fetch table data.");
+      return;
+    }
+
+    let content: string;
+    let language: string;
+
+    if (formatPick.format === "csv") {
+      content = result.rows.map((row) => row.map((v) => csvCell(v)).join(",")).join("\n");
+      language = "csv";
+    } else if (formatPick.format === "csv-headers") {
+      const header = result.columns.map((c) => csvCell(c)).join(",");
+      const rows = result.rows.map((row) => row.map((v) => csvCell(v)).join(",")).join("\n");
+      content = rows.length > 0 ? `${header}\n${rows}` : header;
+      language = "csv";
+    } else {
+      const objects = result.rows.map((row) => {
+        const obj: Record<string, unknown> = {};
+        result.columns.forEach((col, i) => { obj[col] = row[i]; });
+        return obj;
+      });
+      content = JSON.stringify(objects, null, 2);
+      language = "json";
+    }
+
+    const doc = await vscode.workspace.openTextDocument({ content, language });
+    await vscode.window.showTextDocument(doc, { preview: false });
+  });
+}
+
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) { return ""; }
+  const s = String(value);
+  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
 }
 
 /**

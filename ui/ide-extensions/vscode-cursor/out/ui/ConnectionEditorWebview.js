@@ -162,6 +162,21 @@ function getConnectionEditorHtml(initialState) {
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
     }
+    .test-result {
+      margin-top: 8px;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      display: none;
+    }
+    .test-result.ok {
+      background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 20%, transparent);
+      border: 1px solid var(--vscode-testing-iconPassed, #73c991);
+    }
+    .test-result.fail {
+      background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f48771) 20%, transparent);
+      border: 1px solid var(--vscode-testing-iconFailed, #f48771);
+    }
     .modal-backdrop {
       display: none;
       position: fixed;
@@ -462,8 +477,10 @@ function getConnectionEditorHtml(initialState) {
         '</div>' +
         '<div class="actions">' +
           '<button data-action="save" aria-label="Save connection profile">' + (state.mode === "create" ? 'Create Connection' : 'Save Changes') + '</button>' +
+          '<button class="secondary" data-action="test" aria-label="Test connection">Test Connection</button>' +
           '<button class="secondary" data-action="cancel" aria-label="Cancel connection editing">Cancel</button>' +
         '</div>' +
+        '<div id="test-result" class="test-result" role="status" aria-live="polite"></div>' +
         '<div class="hint">Admin mode: Admin Key required. Operator mode: Admin Key + Operator ID required. Tenant mode: Tenant ID required, User ID optional.</div>';
     }
 
@@ -471,6 +488,15 @@ function getConnectionEditorHtml(initialState) {
       if (event.data && event.data.type === "state") {
         state = event.data.state;
         render();
+        return;
+      }
+      if (event.data && event.data.type === "testResult") {
+        const resultEl = byId("test-result");
+        if (resultEl) {
+          resultEl.textContent = event.data.message;
+          resultEl.className = "test-result " + (event.data.ok ? "ok" : "fail");
+          resultEl.style.display = "block";
+        }
       }
     });
 
@@ -497,6 +523,16 @@ function getConnectionEditorHtml(initialState) {
       }
       if (action === "save") {
         postMessage({ type: "save", draft: readDraftFromDom() });
+        return;
+      }
+      if (action === "test") {
+        const resultEl = byId("test-result");
+        if (resultEl) {
+          resultEl.textContent = "Testing connection…";
+          resultEl.className = "test-result";
+          resultEl.style.display = "block";
+        }
+        postMessage({ type: "test", draft: readDraftFromDom() });
         return;
       }
       postMessage({ type: action });

@@ -158,11 +158,6 @@
           "group": "2_queries@1"
         },
         {
-          "command": "vng.showSQLTemplate",
-          "when": "view == vngDatabaseExplorer && viewItem == table",
-          "group": "2_queries@2"
-        },
-        {
           "command": "vng.generateMockData",
           "when": "view == vngDatabaseExplorer && viewItem == table",
           "group": "2_queries@3"
@@ -201,11 +196,6 @@
           "command": "vng.importSqlFile",
           "when": "view == vngDatabaseExplorer && (viewItem == connectionActive || viewItem == connectionInactive)",
           "group": "0_connection@8"
-        },
-        {
-          "command": "vng.copyTableName",
-          "when": "view == vngDatabaseExplorer && viewItem == table",
-          "group": "1_modification@0"
         },
         {
           "command": "vng.dumpTableData",
@@ -403,12 +393,14 @@
       {
         "command": "vng.sql.executeSelectionOrFile",
         "title": "VoltNueronGrid: Execute SQL (Selection/File)",
-        "category": "VoltNueronGrid"
+        "category": "VoltNueronGrid",
+        "icon": "$(run)"
       },
       {
         "command": "vng.sql.analyzeSelectionOrFile",
         "title": "VoltNueronGrid: Analyze SQL (Selection/File)",
-        "category": "VoltNueronGrid"
+        "category": "VoltNueronGrid",
+        "icon": "$(search)"
       },
       {
         "command": "vng.openSettings",
@@ -433,11 +425,6 @@
       {
         "command": "vng.importSqlFile",
         "title": "Import SQL File…",
-        "category": "VoltNueronGrid"
-      },
-      {
-        "command": "vng.copyTableName",
-        "title": "Copy Table Name",
         "category": "VoltNueronGrid"
       },
       {

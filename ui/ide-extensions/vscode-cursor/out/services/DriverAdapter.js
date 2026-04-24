@@ -51,7 +51,12 @@ function buildHeaders(config) {
     if ((config.mode === "admin" || config.mode === "operator") && config.adminApiKey) {
         h["x-vng-admin-key"] = config.adminApiKey;
     }
-    if (config.mode === "operator" && config.operatorId) {
+    // SQL execute endpoint requires x-vng-operator-id for RBAC even in admin mode.
+    // "admin" is the built-in operator binding that maps to the Dba role.
+    if (config.mode === "admin") {
+        h["x-vng-operator-id"] = config.operatorId ?? "admin";
+    }
+    else if (config.mode === "operator" && config.operatorId) {
         h["x-vng-operator-id"] = config.operatorId;
     }
     if (config.mode === "tenant" && config.tenantId) {

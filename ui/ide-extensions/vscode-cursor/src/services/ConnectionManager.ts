@@ -177,8 +177,8 @@ export class ConnectionManager {
     const lowerQuery = query.toLowerCase();
     return Array.from(this.connections.values()).filter(
       (conn) =>
-        conn.settings.name.toLowerCase().includes(lowerQuery) ||
-        conn.settings.host.toLowerCase().includes(lowerQuery)
+        (conn.settings?.name ?? "").toLowerCase().includes(lowerQuery) ||
+        (conn.settings?.host ?? "").toLowerCase().includes(lowerQuery)
     );
   }
 

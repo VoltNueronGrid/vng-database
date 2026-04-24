@@ -54,7 +54,6 @@ exports.handleCopyConnectionHost = handleCopyConnectionHost;
 exports.handleShowConnectionStatus = handleShowConnectionStatus;
 exports.handleShowConnectionHistory = handleShowConnectionHistory;
 exports.handleImportSqlFile = handleImportSqlFile;
-exports.handleCopyTableName = handleCopyTableName;
 exports.handleDumpTableData = handleDumpTableData;
 exports.handleTruncateTable = handleTruncateTable;
 exports.handleCopyColumnName = handleCopyColumnName;
@@ -77,7 +76,7 @@ function getTableFromItem(element) {
 function generateTableDDL(table) {
     const columns = table.columns
         .map((col) => {
-        let def = `"${col.name}" ${col.type}`;
+        let def = `"${col.name}" ${col.type ?? "UNKNOWN"}`;
         if (!col.nullable)
             def += " NOT NULL";
         if (col.isPrimaryKey)
@@ -134,7 +133,7 @@ function generateDeleteTemplate(table) {
  */
 function generateMockData(table, rowCount = 5) {
     const mockValueGetter = (column) => {
-        const type = column.type.toUpperCase();
+        const type = (column.type ?? "UNKNOWN").toUpperCase();
         if (type.includes("INT") || type.includes("BIGINT")) {
             return Math.floor(Math.random() * 10000).toString();
         }
@@ -183,16 +182,26 @@ function exportTableStructure(table) {
     }, null, 2);
 }
 /**
- * Handle "Copy Name" command
+ * Handle "Copy Name" command — copies fully-qualified name (db.schema.table or db.schema.table.column)
  */
 async function handleCopyName(element) {
-    if (element.type === "table" || element.type === "column") {
+    if (element.type === "table") {
+        const wrapped = element.data;
+        const table = wrapped.table ?? element.data;
+        const db = wrapped.database ?? "default";
+        const schema = wrapped.schema ?? table?.schema ?? "public";
+        const name = table?.name ?? element.label;
+        const qualified = `${db}.${schema}.${name}`;
+        await vscode.env.clipboard.writeText(qualified);
+        vscode.window.showInformationMessage(`Copied: ${qualified}`);
+    }
+    else if (element.type === "column") {
         await vscode.env.clipboard.writeText(element.label);
         vscode.window.showInformationMessage(`Copied: ${element.label}`);
     }
 }
 /**
- * Handle "Show DDL" command
+ * Handle "Show DDL" command — opens a new untitled SQL editor
  */
 async function handleShowDDL(element) {
     if (element.type === "table") {
@@ -202,7 +211,8 @@ async function handleShowDDL(element) {
             return;
         }
         const ddl = generateTableDDL(table);
-        await showInQuickPick("Table DDL", ddl);
+        const doc = await vscode.workspace.openTextDocument({ content: ddl, language: "sql" });
+        await vscode.window.showTextDocument(doc, { preview: false });
     }
 }
 /**
@@ -226,12 +236,13 @@ async function handleSQLTemplate(element) {
             placeHolder: "Choose a template",
         });
         if (selected) {
-            await showInQuickPick(`${selected.label} Template`, selected.value);
+            const doc = await vscode.workspace.openTextDocument({ content: selected.value, language: "sql" });
+            await vscode.window.showTextDocument(doc, { preview: false });
         }
     }
 }
 /**
- * Handle "Generate Mock Data" command
+ * Handle "Generate Mock Data" command — opens generated INSERT SQL in a new untitled editor
  */
 async function handleGenerateMockData(element) {
     if (element.type === "table") {
@@ -249,12 +260,13 @@ async function handleGenerateMockData(element) {
         if (rowCountStr) {
             const rowCount = parseInt(rowCountStr);
             const mockData = generateMockData(table, rowCount);
-            await showInQuickPick("Generated Mock Data", mockData);
+            const doc = await vscode.workspace.openTextDocument({ content: mockData, language: "sql" });
+            await vscode.window.showTextDocument(doc, { preview: false });
         }
     }
 }
 /**
- * Handle "Dump Struct" command
+ * Handle "Dump Struct" command — opens table structure JSON in a new untitled editor
  */
 async function handleDumpStruct(element) {
     if (element.type === "table") {
@@ -264,36 +276,27 @@ async function handleDumpStruct(element) {
             return;
         }
         const json = exportTableStructure(table);
-        await showInQuickPick("Table Structure", json);
+        const doc = await vscode.workspace.openTextDocument({ content: json, language: "json" });
+        await vscode.window.showTextDocument(doc, { preview: false });
     }
 }
 /**
- * Handle "Drop" command
+ * Handle "Drop" command — returns the DROP SQL for execution, or undefined if cancelled.
  */
 async function handleDropTable(element) {
-    if (element.type === "table") {
-        const table = getTableFromItem(element);
-        if (!table) {
-            vscode.window.showErrorMessage("Unable to resolve table metadata.");
-            return;
-        }
-        const confirmed = await vscode.window.showWarningMessage(`Are you sure you want to drop table "${table.schema}"."${table.name}"?`, { modal: true }, "Drop");
-        if (confirmed === "Drop") {
-            const sql = `DROP TABLE "${table.schema}"."${table.name}";`;
-            await showInQuickPick("Drop Table SQL", sql);
-        }
+    if (element.type !== "table") {
+        return undefined;
     }
-}
-/**
- * Show content in a quick pick dropdown
- */
-async function showInQuickPick(title, content) {
-    const lines = content.split("\n");
-    await vscode.window.showQuickPick(lines, {
-        title,
-        canPickMany: false,
-        matchOnDetail: false,
-    });
+    const table = getTableFromItem(element);
+    if (!table) {
+        vscode.window.showErrorMessage("Unable to resolve table metadata.");
+        return undefined;
+    }
+    const confirmed = await vscode.window.showWarningMessage(`Are you sure you want to DROP TABLE "${table.schema}"."${table.name}"? This cannot be undone.`, { modal: true }, "Drop");
+    if (confirmed !== "Drop") {
+        return undefined;
+    }
+    return `DROP TABLE "${table.schema}"."${table.name}";`;
 }
 // ─── S5-001: Connection context menu commands ─────────────────────────────────
 /**
@@ -358,30 +361,76 @@ async function handleImportSqlFile() {
     const content = await fsPromises.readFile(uris[0].fsPath, "utf8");
     return content;
 }
-// ─── S5-002: Table context menu commands ─────────────────────────────────────
 /**
- * Copy the table name to the clipboard (table-specific alias of handleCopyName).
+ * Dump table data — prompts for format, executes query, opens result in untitled editor.
+ * @param executeSql callback that runs SQL and returns rows (column names + row arrays)
  */
-async function handleCopyTableName(element) {
-    if (element.type === "table") {
-        await vscode.env.clipboard.writeText(element.label);
-        vscode.window.showInformationMessage(`Copied table name: ${element.label}`);
-    }
-    else {
-        vscode.window.showWarningMessage("Select a table node to copy its name.");
-    }
-}
-/**
- * Show a placeholder message for table data export (streaming hint).
- */
-async function handleDumpTableData(element) {
+async function handleDumpTableData(element, executeSql) {
     if (element.type !== "table") {
         vscode.window.showWarningMessage("Select a table to dump its data.");
         return;
     }
     const table = getTableFromItem(element);
-    const tableName = table ? `"${table.schema}"."${table.name}"` : element.label;
-    vscode.window.showInformationMessage(`Dump table data for ${tableName}: streaming export is available via GET /api/v1/export/dump?table=${element.label}&format=sql. Full GUI streaming support is planned.`);
+    if (!table) {
+        vscode.window.showErrorMessage("Unable to resolve table metadata.");
+        return;
+    }
+    const formatPick = await vscode.window.showQuickPick([
+        { label: "CSV", description: "Comma-separated values, no header row", format: "csv" },
+        { label: "CSV with Headers", description: "Comma-separated values with column names", format: "csv-headers" },
+        { label: "JSON", description: "Array of objects", format: "json" },
+        { label: "Parquet", description: "Apache Parquet (CLI export)", format: "parquet" },
+        { label: "Excel", description: "Excel workbook (CLI export)", format: "excel" },
+    ], { title: "Dump Table Data — Choose Format", placeHolder: "Select export format" });
+    if (!formatPick) {
+        return;
+    }
+    if (formatPick.format === "parquet" || formatPick.format === "excel") {
+        const ext = formatPick.format === "parquet" ? "parquet" : "xlsx";
+        vscode.window.showInformationMessage(`${formatPick.label} export requires the VoltNueronGrid CLI: vng export --table="${table.schema}"."${table.name}" --format=${ext}`);
+        return;
+    }
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Exporting ${table.name}…`, cancellable: false }, async () => {
+        const sql = `SELECT * FROM "${table.schema}"."${table.name}" LIMIT 10000;`;
+        const result = await executeSql(sql);
+        if (!result) {
+            vscode.window.showErrorMessage("Failed to fetch table data.");
+            return;
+        }
+        let content;
+        let language;
+        if (formatPick.format === "csv") {
+            content = result.rows.map((row) => row.map((v) => csvCell(v)).join(",")).join("\n");
+            language = "csv";
+        }
+        else if (formatPick.format === "csv-headers") {
+            const header = result.columns.map((c) => csvCell(c)).join(",");
+            const rows = result.rows.map((row) => row.map((v) => csvCell(v)).join(",")).join("\n");
+            content = rows.length > 0 ? `${header}\n${rows}` : header;
+            language = "csv";
+        }
+        else {
+            const objects = result.rows.map((row) => {
+                const obj = {};
+                result.columns.forEach((col, i) => { obj[col] = row[i]; });
+                return obj;
+            });
+            content = JSON.stringify(objects, null, 2);
+            language = "json";
+        }
+        const doc = await vscode.workspace.openTextDocument({ content, language });
+        await vscode.window.showTextDocument(doc, { preview: false });
+    });
+}
+function csvCell(value) {
+    if (value === null || value === undefined) {
+        return "";
+    }
+    const s = String(value);
+    if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
 }
 /**
  * Prompt for confirmation then return the TRUNCATE SQL for execution.
