@@ -1,32 +1,43 @@
 {
   "gate": "v3-s8",
   "status": "passed",
-  "generated_at_utc": "2026-04-22T16:14:10.901868Z",
+  "generated_at_utc": "2026-04-23T13:29:52.5137580Z",
   "cloud_validation": "deferred",
   "checks": [
     {
       "check": "s8-001-benchmark-ingest-route",
-      "passed": true
+      "passed": true,
+      "detail": "ingest benchmark route exists"
     },
     {
       "check": "s8-001-benchmark-query-route",
-      "passed": true
+      "passed": true,
+      "detail": "query benchmark route exists"
+    },
+    {
+      "check": "s8-001-benchmark-suite-doc",
+      "passed": true,
+      "detail": "benchmark suite document exists"
     },
     {
       "check": "s8-002-chunked-loader-usage",
-      "passed": true
+      "passed": true,
+      "detail": "chunked loader path present for ingest pressure"
     },
     {
       "check": "s8-003-join-handlers-present",
-      "passed": true
+      "passed": true,
+      "detail": "join response handlers are present"
     },
     {
       "check": "s8-003-paging-max-rows",
-      "passed": true
+      "passed": true,
+      "detail": "max_rows paging control appears in query paths"
     },
     {
       "check": "s8-004-memory-review-doc",
-      "passed": true
+      "passed": true,
+      "detail": "memory profiling and allocator strategy notes exist"
     }
   ]
 }

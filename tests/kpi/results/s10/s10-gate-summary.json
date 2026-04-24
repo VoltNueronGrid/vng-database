@@ -1,28 +1,33 @@
 {
   "gate": "v3-s10",
   "status": "passed",
-  "generated_at_utc": "2026-04-22T16:14:10.901868Z",
+  "generated_at_utc": "2026-04-23T13:30:07.4786770Z",
   "cloud_validation": "deferred",
   "checks": [
     {
       "check": "s10-001-java-driver-baseline",
-      "passed": true
+      "passed": true,
+      "detail": "java driver baseline scaffold exists"
     },
     {
       "check": "s10-002-node-driver-baseline",
-      "passed": true
+      "passed": true,
+      "detail": "node/typescript driver baseline exists"
     },
     {
       "check": "s10-003-cffi-poc",
-      "passed": true
+      "passed": true,
+      "detail": "C/C++ FFI strategy/PoC artifact exists"
     },
     {
       "check": "s10-004-deno-adapter",
-      "passed": true
+      "passed": true,
+      "detail": "Deno adapter source exists"
     },
     {
       "check": "s10-005-perl-feasibility",
-      "passed": true
+      "passed": true,
+      "detail": "Perl feasibility report exists"
     }
   ]
 }

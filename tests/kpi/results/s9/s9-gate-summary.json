@@ -1,24 +1,28 @@
 {
   "gate": "v3-s9-local",
   "status": "passed",
-  "generated_at_utc": "2026-04-22T16:14:10.901868Z",
+  "generated_at_utc": "2026-04-23T13:29:59.8803170Z",
   "cloud_validation": "deferred",
   "checks": [
     {
       "check": "s9-001-soak-plan-documented",
-      "passed": true
+      "passed": true,
+      "detail": "local soak approach documented"
     },
     {
       "check": "s9-002-shard-code-path-detected",
-      "passed": true
+      "passed": true,
+      "detail": "shard keyword/code path present in runtime source"
     },
     {
       "check": "s9-003-failure-injection-covered",
-      "passed": true
+      "passed": true,
+      "detail": "existing failure/fault scripts available for recovery evidence"
     },
     {
       "check": "s9-004-playbook-v1-published",
-      "passed": true
+      "passed": true,
+      "detail": "production tuning playbook exists"
     }
   ]
 }

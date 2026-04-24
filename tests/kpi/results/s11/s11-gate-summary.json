@@ -1,24 +1,28 @@
 {
   "gate": "v3-s11-local",
   "status": "passed",
-  "generated_at_utc": "2026-04-22T16:14:10.901868Z",
+  "generated_at_utc": "2026-04-23T13:30:13.9533810Z",
   "cloud_validation": "deferred",
   "checks": [
     {
       "check": "s11-001-e2e-scenario-pack",
-      "passed": true
+      "passed": true,
+      "detail": "end-to-end scenario pack exists"
     },
     {
       "check": "s11-002-compatibility-matrix",
-      "passed": true
+      "passed": true,
+      "detail": "versioned compatibility matrix exists"
     },
     {
       "check": "s11-003-security-closure",
-      "passed": true
+      "passed": true,
+      "detail": "security/compliance closure checklist exists"
     },
     {
       "check": "s11-004-rc-packaging-guides",
-      "passed": true
+      "passed": true,
+      "detail": "RC packaging and install guide exists"
     }
   ]
 }
