@@ -36,6 +36,7 @@ use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, DdlCatalog};
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_store::{InMemoryDurabilityEngine, DurabilityConfig};
+use voltnuerongrid_mcp::{McpRequest, McpServerCapabilities, process_request};
 use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
 use voltnuerongrid_ingest::{
     IngestionConnector, ManagedEventBusTransport, ManagedReplayCursorStore,
@@ -5729,6 +5730,7 @@ async fn main() {
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/admin/cluster/topology", get(admin_cluster_topology))
+        .route("/api/v1/admin/schema/tree", get(admin_schema_tree))
         .route("/api/v1/admin/sql/transactions/control", post(admin_sql_transaction_control))
         .route("/api/v1/admin/sql/locks/control", post(admin_sql_lock_control))
         .route("/api/v1/admin/cluster/nodes/manage", post(admin_cluster_node_manage))
@@ -6199,6 +6201,9 @@ async fn main() {
         .route("/api/v1/admin/server-status", get(admin_server_status))
         // S6-005: full-text search (feature-gated by VNG_FTS_ENABLED)
         .route("/api/v1/search/fulltext", post(search_fulltext))
+        // MCP: Model Context Protocol tool invocation endpoints
+        .route("/api/v1/mcp/capabilities", get(mcp_capabilities))
+        .route("/api/v1/mcp/invoke", post(mcp_invoke))
         .with_state(state.clone());
 
     if native_listener_config.enabled {
@@ -19466,6 +19471,119 @@ async fn catalog_table_columns(
 
 // â”€â”€ REQ-23: ACID active transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// ─── IDE admin schema tree (admin-key only, no RBAC) ──────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct AdminSchemaColumn {
+    name: String,
+    data_type: String,
+    nullable: bool,
+    primary_key: bool,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaIndex {
+    name: String,
+    columns: Vec<String>,
+    unique: bool,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaTable {
+    name: String,
+    schema: String,
+    columns: Vec<AdminSchemaColumn>,
+    indexes: Vec<AdminSchemaIndex>,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaSchemaEntry {
+    name: String,
+    database: String,
+    tables: Vec<AdminSchemaTable>,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaDatabase {
+    name: String,
+    schemas: Vec<AdminSchemaSchemaEntry>,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaTreeResponse {
+    databases: Vec<AdminSchemaDatabase>,
+    timestamp: u128,
+}
+
+async fn admin_schema_tree(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AdminSchemaTreeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+
+    let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+    let index_mgr = state.index_manager.lock().expect("index lock");
+
+    let mut tables: Vec<AdminSchemaTable> = catalog
+        .active_entries()
+        .iter()
+        .filter(|e| e.object_kind == "table")
+        .map(|e| {
+            let columns = match voltnuerongrid_sql::parse_one(&e.original_statement) {
+                Ok(Statement::CreateTable(stmt)) => stmt
+                    .columns
+                    .iter()
+                    .map(|c| AdminSchemaColumn {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                        nullable: true,
+                        primary_key: false,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let indexes = index_mgr
+                .list_indexes()
+                .iter()
+                .filter(|idx| idx.table.eq_ignore_ascii_case(&e.object_name))
+                .map(|idx| AdminSchemaIndex {
+                    name: idx.name.clone(),
+                    columns: vec![idx.column.clone()],
+                    unique: idx.unique,
+                })
+                .collect();
+            AdminSchemaTable {
+                name: e.object_name.clone(),
+                schema: "public".to_string(),
+                columns,
+                indexes,
+            }
+        })
+        .collect();
+
+    tables.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    let response = AdminSchemaTreeResponse {
+        databases: vec![AdminSchemaDatabase {
+            name: "default".to_string(),
+            schemas: vec![AdminSchemaSchemaEntry {
+                name: "public".to_string(),
+                database: "default".to_string(),
+                tables,
+            }],
+        }],
+        timestamp: now_ms,
+    };
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+
 #[derive(Serialize)]
 struct AcidTransactionsResponse {
     status: &'static str,
@@ -19843,6 +19961,19 @@ async fn search_fulltext(
     .unwrap_or(json!({}));
 
     Ok((StatusCode::OK, Json(body)))
+}
+
+// ─── MCP endpoints ────────────────────────────────────────────────────────────
+
+async fn mcp_capabilities() -> Json<McpServerCapabilities> {
+    Json(McpServerCapabilities::default())
+}
+
+async fn mcp_invoke(
+    Json(req): Json<McpRequest>,
+) -> Json<voltnuerongrid_mcp::McpResponse> {
+    let capabilities = McpServerCapabilities::default();
+    Json(process_request(req, &capabilities).await)
 }
 
 #[cfg(test)]

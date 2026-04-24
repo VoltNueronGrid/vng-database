@@ -29,6 +29,7 @@ class ConnectionManager {
                     settings: settings,
                     isActive: false,
                     isConnected: false,
+                    diagnostic: { state: "unverified" },
                 });
             }
             // Restore active connection
@@ -57,6 +58,7 @@ class ConnectionManager {
             settings: { ...settings },
             isActive: false,
             isConnected: false,
+            diagnostic: { state: "unverified" },
         };
         this.connections.set(id, connection);
         await this.persist();
@@ -154,13 +156,47 @@ class ConnectionManager {
             conn.settings.host.toLowerCase().includes(lowerQuery));
     }
     /**
-     * Update connection status
+     * Update connection status and derive health state.
+     *
+     * - true  → state becomes "verified"
+     * - false → "degraded" if was previously "verified", otherwise "error"
      */
-    setConnectionStatus(id, isConnected) {
+    setConnectionStatus(id, isConnected, message) {
         const conn = this.connections.get(id);
-        if (conn) {
-            conn.isConnected = isConnected;
+        if (!conn) {
+            return;
         }
+        conn.isConnected = isConnected;
+        const now = Date.now();
+        if (isConnected) {
+            conn.diagnostic = {
+                state: "verified",
+                lastChecked: now,
+                message: message ?? `HTTP 200`,
+            };
+        }
+        else {
+            const wasVerified = conn.diagnostic.state === "verified";
+            conn.diagnostic = {
+                state: wasVerified ? "degraded" : "error",
+                lastChecked: now,
+                message: message,
+            };
+        }
+    }
+    /**
+     * Directly set health state and diagnostic message for a connection.
+     */
+    setConnectionDiagnostic(id, state, message) {
+        const conn = this.connections.get(id);
+        if (!conn) {
+            return;
+        }
+        conn.diagnostic = {
+            state,
+            lastChecked: Date.now(),
+            message,
+        };
     }
     /**
      * Clear all connections

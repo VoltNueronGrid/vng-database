@@ -69,10 +69,13 @@ class SchemaManager {
         try {
             const response = await this.httpClient.getSchemaRegistry(connection);
             if (response.status !== 200) {
-                throw new Error(`Failed to fetch schema: ${response.error}`);
+                const detail = response.error ?? `HTTP ${response.status}`;
+                throw new Error(`Failed to fetch schema: ${detail}`);
             }
+            const raw = response.data;
+            const databases = Array.isArray(raw?.databases) ? raw.databases : [];
             const registry = {
-                databases: response.data?.databases || [],
+                databases,
                 timestamp: Date.now(),
             };
             // Cache result

@@ -2049,6 +2049,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vng-benchmarks"
+version = "0.1.0"
+
+[[package]]
+name = "vng-driver-c"
+version = "0.1.0"
+
+[[package]]
+name = "vng-soak"
+version = "0.1.0"
+
+[[package]]
 name = "voltnuerongrid-ai"
 version = "0.1.0"
 dependencies = [
@@ -2209,6 +2221,7 @@ dependencies = [
  "voltnuerongrid-driver-rust",
  "voltnuerongrid-exec",
  "voltnuerongrid-ingest",
+ "voltnuerongrid-mcp",
  "voltnuerongrid-opt",
  "voltnuerongrid-plugins",
  "voltnuerongrid-sql",

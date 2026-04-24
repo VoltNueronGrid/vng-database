@@ -13,6 +13,7 @@ const Connection_1 = require("../models/Connection");
         settings: (0, Connection_1.createDefaultConnection)({ name: "Local Dev" }),
         isActive: true,
         isConnected: true,
+        diagnostic: { state: "verified" },
     };
     const presentation = (0, DatabaseExplorerTree_1.describeConnectionNode)(connection);
     strict_1.default.equal(presentation.contextValue, "connectionActive");
@@ -25,6 +26,7 @@ const Connection_1 = require("../models/Connection");
         settings: (0, Connection_1.createDefaultConnection)({ name: "Staging" }),
         isActive: false,
         isConnected: false,
+        diagnostic: { state: "unverified" },
     };
     const presentation = (0, DatabaseExplorerTree_1.describeConnectionNode)(connection);
     strict_1.default.equal(presentation.contextValue, "connectionInactive");
@@ -37,6 +39,7 @@ const Connection_1 = require("../models/Connection");
         settings: (0, Connection_1.createDefaultConnection)({ name: "Flow Connection" }),
         isActive: false,
         isConnected: false,
+        diagnostic: { state: "unverified" },
     };
     const emptySnapshot = (0, DatabaseExplorerTree_1.getConnectionFlowSnapshot)([]);
     strict_1.default.equal(emptySnapshot.rootKind, "empty");

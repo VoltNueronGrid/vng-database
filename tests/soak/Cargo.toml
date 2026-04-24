@@ -1,0 +1,6 @@
+[package]
+name = "vng-soak"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

@@ -1,50 +1,116 @@
 "use strict";
 /**
- * HttpClient: HTTP communication with auth headers and error handling
+ * HttpClient: transport-aware communication for the VoltNueronGrid extension.
+ *
+ * S3-001: HTTP path backed by VoltNueronGridDriver request builders.
+ * NT-S4-001 extension: routes to NativeClient when connection transportMode
+ * is "native", or when "auto" and a nativeEndpoint is configured.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HttpClient = void 0;
 exports.createHttpClient = createHttpClient;
+const DriverAdapter_1 = require("./DriverAdapter");
+const NativeClient_1 = require("./NativeClient");
 class HttpClient {
     constructor() {
-        this.requestTimeout = 30000; // 30 seconds
+        this.native = new NativeClient_1.NativeClient();
     }
     /**
-     * Execute a query against the server
+     * Resolve the effective transport mode for a connection.
+     * "native" → always native socket.
+     * "auto"   → native when nativeEndpoint is configured, else HTTP.
+     * "http"   → always HTTP (default).
+     */
+    effectiveTransport(connection) {
+        const mode = connection.settings.transportMode ?? "http";
+        if (mode === "native") {
+            return "native";
+        }
+        if (mode === "auto" && connection.settings.nativeEndpoint?.trim()) {
+            return "native";
+        }
+        return "http";
+    }
+    /**
+     * Execute a query against the server.
+     * Routes to native socket transport when transportMode is "native" or
+     * "auto" with a configured nativeEndpoint; otherwise uses HTTP.
      */
     async executeQuery(connection, query, options) {
-        return this.post(connection, "/api/v1/sql/execute", {
-            sql_batch: [query],
-            request_id: options?.requestId ?? `ide-query-${Date.now()}`,
-        }, {
-            timeoutMs: options?.timeoutMs,
-            signal: options?.signal,
-        });
+        if (this.effectiveTransport(connection) === "native") {
+            return this.native.executeQuery(connection, query, { timeoutMs: options?.timeoutMs });
+        }
+        try {
+            const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
+            const req = driver.buildSqlExecuteRequest(query);
+            const execOpts = {};
+            if (options?.timeoutMs !== undefined) {
+                execOpts.timeoutMs = options.timeoutMs;
+            }
+            if (options?.signal !== undefined) {
+                execOpts.abortSignal = options.signal;
+            }
+            const result = await (0, DriverAdapter_1.executeDriverRequest)(req, execOpts);
+            return this.toHttpResponse(result);
+        }
+        catch (err) {
+            return this.toErrorResponse(err);
+        }
     }
     /**
-     * Get schema registry
+     * Get schema registry.
+     * Routes to native socket when transportMode is "native" or effective-auto-native.
      */
     async getSchemaRegistry(connection) {
-        return this.get(connection, "/api/v1/ingest/schema/registry");
+        if (this.effectiveTransport(connection) === "native") {
+            return this.native.getSchemaRegistry(connection);
+        }
+        try {
+            const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
+            const req = driver.buildSchemaRegistryRequest();
+            const result = await (0, DriverAdapter_1.executeDriverRequest)(req);
+            return this.toHttpResponse(result);
+        }
+        catch (err) {
+            return this.toErrorResponse(err);
+        }
     }
     /**
-     * Health check
+     * Health check.
+     * Routes to native socket when transportMode is "native" or effective-auto-native;
+     * otherwise HTTP with retries suppressed for fast deterministic probes.
      */
     async healthCheck(connection) {
-        return this.get(connection, "/health");
+        if (this.effectiveTransport(connection) === "native") {
+            return this.native.healthCheck(connection);
+        }
+        try {
+            const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
+            const req = driver.buildHealthRequest();
+            const result = await (0, DriverAdapter_1.executeDriverRequest)(req, { maxRetries: 0 });
+            return this.toHttpResponse(result);
+        }
+        catch (err) {
+            return this.toErrorResponse(err);
+        }
     }
     /**
-     * Test connection
+     * Test connection: returns structured result for UI display.
+     * Delegates to NativeClient.testConnection when on native transport.
      */
     async testConnection(connection) {
+        if (this.effectiveTransport(connection) === "native") {
+            return this.native.testConnection(connection);
+        }
         try {
             const response = await this.healthCheck(connection);
             if (response.status === 200) {
                 return { isHealthy: true, message: "Connection successful" };
             }
-            else {
-                return { isHealthy: false, message: `Server returned status ${response.status}` };
+            if (response.error) {
+                return { isHealthy: false, message: response.error };
             }
+            return { isHealthy: false, message: `Server returned status ${response.status}` };
         }
         catch (error) {
             const message = error instanceof Error ? error.message : "Unknown error";
@@ -52,137 +118,31 @@ class HttpClient {
         }
     }
     /**
-     * Generic GET request
+     * Converts a driver HttpExecutionResult to the extension's HttpResponse shape.
+     * Response headers are not available from the driver layer; callers that need
+     * specific headers should migrate to direct driver calls.
      */
-    async get(connection, path) {
-        const url = `${connection.settings.baseUrl}${path}`;
-        const headers = this.buildHeaders(connection, "GET");
-        try {
-            const response = await this.fetchWithTimeout(url, {
-                method: "GET",
-                headers,
-            });
-            const data = await this.parseResponse(response);
-            return {
-                status: response.status,
-                data,
-                headers: this.extractHeaders(response),
-            };
-        }
-        catch (error) {
-            return {
-                status: 0,
-                error: error instanceof Error ? error.message : "Unknown error",
-                headers: {},
-            };
-        }
-    }
-    /**
-     * Generic POST request
-     */
-    async post(connection, path, body, requestOptions) {
-        const url = `${connection.settings.baseUrl}${path}`;
-        const headers = this.buildHeaders(connection, "POST");
-        try {
-            const response = await this.fetchWithTimeout(url, {
-                method: "POST",
-                headers,
-                body: JSON.stringify(body),
-            }, requestOptions?.timeoutMs, requestOptions?.signal);
-            const data = await this.parseResponse(response);
-            return {
-                status: response.status,
-                data,
-                headers: this.extractHeaders(response),
-            };
-        }
-        catch (error) {
-            return {
-                status: 0,
-                error: error instanceof Error ? error.message : "Unknown error",
-                headers: {},
-            };
-        }
-    }
-    /**
-     * Build request headers with auth
-     */
-    buildHeaders(connection, method) {
-        const headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "VoltNueronGrid-VSCode/0.3.2",
-        };
-        const { mode, adminKey, operatorId, tenantId, userId } = connection.settings;
-        // Admin or operator mode: include admin key
-        if ((mode === "admin" || mode === "operator") && adminKey) {
-            headers["x-vng-admin-key"] = adminKey;
-        }
-        // Operator mode: include operator ID
-        if (mode === "operator" && operatorId) {
-            headers["x-vng-operator-id"] = operatorId;
-        }
-        // Tenant mode: include tenant and user IDs
-        if (mode === "tenant") {
-            if (tenantId)
-                headers["x-vng-tenant-id"] = tenantId;
-            if (userId)
-                headers["x-vng-user-id"] = userId;
-        }
-        return headers;
-    }
-    /**
-     * Parse response based on content-type
-     */
-    async parseResponse(response) {
-        const contentType = response.headers.get("content-type") || "";
-        if (contentType.includes("application/json")) {
+    toHttpResponse(result) {
+        let data;
+        if (result.bodyText) {
             try {
-                return await response.json();
+                data = JSON.parse(result.bodyText);
             }
             catch {
-                return null;
+                data = result.bodyText;
             }
         }
-        if (contentType.includes("text/")) {
-            return await response.text();
-        }
-        return null;
+        return { status: result.status, data, headers: {} };
     }
     /**
-     * Extract response headers
+     * Wraps any thrown error (DriverError or otherwise) into an HttpResponse error shape.
      */
-    extractHeaders(response) {
-        const headers = {};
-        response.headers.forEach((value, key) => {
-            headers[key] = value;
-        });
-        return headers;
-    }
-    /**
-     * Fetch with timeout
-     */
-    fetchWithTimeout(url, options, timeout = this.requestTimeout, upstreamSignal) {
-        const controller = new AbortController();
-        let upstreamAbortHandler;
-        if (upstreamSignal) {
-            if (upstreamSignal.aborted) {
-                controller.abort();
-            }
-            else {
-                upstreamAbortHandler = () => controller.abort();
-                upstreamSignal.addEventListener("abort", upstreamAbortHandler, { once: true });
-            }
+    toErrorResponse(err) {
+        if (err instanceof DriverAdapter_1.DriverError) {
+            return { status: err.statusCode ?? 0, error: err.message, headers: {} };
         }
-        const timeoutId = setTimeout(() => controller.abort(new Error(`Request timeout after ${timeout}ms`)), timeout);
-        return fetch(url, {
-            ...options,
-            signal: controller.signal,
-        }).finally(() => {
-            clearTimeout(timeoutId);
-            if (upstreamSignal && upstreamAbortHandler) {
-                upstreamSignal.removeEventListener("abort", upstreamAbortHandler);
-            }
-        });
+        const message = err instanceof Error ? err.message : "Unknown error";
+        return { status: 0, error: message, headers: {} };
     }
 }
 exports.HttpClient = HttpClient;

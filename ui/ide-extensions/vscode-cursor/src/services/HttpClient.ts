@@ -1,14 +1,15 @@
 /**
- * HttpClient: HTTP communication backed by the VoltNueronGrid TypeScript driver.
+ * HttpClient: transport-aware communication for the VoltNueronGrid extension.
  *
- * S3-001: replaced ad-hoc fetch() with VoltNueronGridDriver request builders +
- * performDriverHttpRequest so auth headers, timeout, and retry logic are owned
- * by the shared driver package, not duplicated in the extension.
+ * S3-001: HTTP path backed by VoltNueronGridDriver request builders.
+ * NT-S4-001 extension: routes to NativeClient when connection transportMode
+ * is "native", or when "auto" and a nativeEndpoint is configured.
  */
 
 import { Connection } from "../models/Connection";
 import { makeVngDriver, executeDriverRequest, DriverError } from "./DriverAdapter";
 import type { HttpExecutionOptions } from "./DriverAdapter";
+import { NativeClient } from "./NativeClient";
 
 export interface HttpResponse<T = any> {
   status: number;
@@ -24,16 +25,38 @@ export interface QueryRequestOptions {
 }
 
 export class HttpClient {
+  private readonly native = new NativeClient();
+
+  /**
+   * Resolve the effective transport mode for a connection.
+   * "native" → always native socket.
+   * "auto"   → native when nativeEndpoint is configured, else HTTP.
+   * "http"   → always HTTP (default).
+   */
+  private effectiveTransport(connection: Connection): "http" | "native" {
+    const mode = connection.settings.transportMode ?? "http";
+    if (mode === "native") {
+      return "native";
+    }
+    if (mode === "auto" && connection.settings.nativeEndpoint?.trim()) {
+      return "native";
+    }
+    return "http";
+  }
+
   /**
    * Execute a query against the server.
-   * Uses VoltNueronGridDriver.buildSqlExecuteRequest so the request format
-   * is owned by the shared driver-core-contract v1.
+   * Routes to native socket transport when transportMode is "native" or
+   * "auto" with a configured nativeEndpoint; otherwise uses HTTP.
    */
   async executeQuery(
     connection: Connection,
     query: string,
     options?: QueryRequestOptions
   ): Promise<HttpResponse> {
+    if (this.effectiveTransport(connection) === "native") {
+      return this.native.executeQuery(connection, query, { timeoutMs: options?.timeoutMs });
+    }
     try {
       const driver = makeVngDriver(connection);
       const req = driver.buildSqlExecuteRequest(query);
@@ -53,9 +76,12 @@ export class HttpClient {
 
   /**
    * Get schema registry.
-   * Uses VoltNueronGridDriver.buildSchemaRegistryRequest.
+   * Routes to native socket when transportMode is "native" or effective-auto-native.
    */
   async getSchemaRegistry(connection: Connection): Promise<HttpResponse> {
+    if (this.effectiveTransport(connection) === "native") {
+      return this.native.getSchemaRegistry(connection);
+    }
     try {
       const driver = makeVngDriver(connection);
       const req = driver.buildSchemaRegistryRequest();
@@ -68,10 +94,13 @@ export class HttpClient {
 
   /**
    * Health check.
-   * Uses VoltNueronGridDriver.buildHealthRequest; retries suppressed (maxRetries=0)
-   * so health probes are fast and deterministic.
+   * Routes to native socket when transportMode is "native" or effective-auto-native;
+   * otherwise HTTP with retries suppressed for fast deterministic probes.
    */
   async healthCheck(connection: Connection): Promise<HttpResponse> {
+    if (this.effectiveTransport(connection) === "native") {
+      return this.native.healthCheck(connection);
+    }
     try {
       const driver = makeVngDriver(connection);
       const req = driver.buildHealthRequest();
@@ -84,8 +113,12 @@ export class HttpClient {
 
   /**
    * Test connection: returns structured result for UI display.
+   * Delegates to NativeClient.testConnection when on native transport.
    */
   async testConnection(connection: Connection): Promise<{ isHealthy: boolean; message: string }> {
+    if (this.effectiveTransport(connection) === "native") {
+      return this.native.testConnection(connection);
+    }
     try {
       const response = await this.healthCheck(connection);
       if (response.status === 200) {

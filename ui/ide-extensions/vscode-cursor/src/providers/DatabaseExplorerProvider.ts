@@ -168,11 +168,14 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
     } else if (element.type === "error") {
       treeItem.iconPath = new vscode.ThemeIcon("error");
     } else if (element.type === "connection") {
-      // S4-001: status dot inline with connection label
       const connection = element.data as Connection;
-      const stateIcon = connectionStateIcon(connection.diagnostic.state);
-      treeItem.label = `${stateIcon} ${connection.settings.name}`;
-      treeItem.iconPath = this.getMediaIcon(connection.isActive ? "connection-active" : "connection-inactive");
+      treeItem.label = connection.settings.name;
+      // Use a ThemeIcon to show the health state; codicons in plain string labels render literally
+      const iconId = connection.diagnostic.state === "verified" ? "pass-filled"
+        : connection.diagnostic.state === "degraded" ? "warning"
+        : connection.diagnostic.state === "error" ? "error"
+        : "circle-large-outline";
+      treeItem.iconPath = new vscode.ThemeIcon(iconId);
       treeItem.tooltip = new vscode.MarkdownString(
         `**${connection.settings.name}**\n\n` +
           `${connection.settings.baseUrl}\n\n` +

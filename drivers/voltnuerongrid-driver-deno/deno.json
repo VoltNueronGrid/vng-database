@@ -1,0 +1,23 @@
+{
+  "name": "@voltnuerongrid/driver-deno",
+  "version": "0.1.0",
+  "exports": "./mod.ts",
+  "imports": {
+    "@voltnuerongrid/driver-typescript/": "../voltnuerongrid-driver-typescript/src/"
+  },
+  "tasks": {
+    "test": "deno test --allow-net test/driver_test.ts"
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  },
+  "fmt": {
+    "useTabs": false,
+    "lineWidth": 100,
+    "indentWidth": 2,
+    "semiColons": true,
+    "singleQuote": false
+  }
+}

@@ -88,18 +88,22 @@ function makeSchemaManagerStub(): { getSchemaRegistry(conn: Connection): Promise
   return {
     async getSchemaRegistry(_conn: Connection): Promise<SchemaRegistry> {
       return {
+        timestamp: Date.now(),
         databases: [
           {
             name: "test_db",
             schemas: [
               {
                 name: "public",
+                database: "test_db",
                 tables: [
                   {
                     name: "users",
+                    schema: "public",
+                    indexes: [],
                     columns: [
-                      { name: "id", type: "bigint", index: 0 },
-                      { name: "name", type: "text", index: 1 },
+                      { name: "id", type: "BIGINT", nullable: false, isPrimaryKey: true, isUnique: true, isForeignKey: false },
+                      { name: "name", type: "TEXT", nullable: true, isPrimaryKey: false, isUnique: false, isForeignKey: false },
                     ],
                   },
                 ],

@@ -20,6 +20,7 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         }),
         isActive: true,
         isConnected: true,
+        diagnostic: { state: "verified" },
     };
     const httpClient = {
         async executeQuery(_connection, query, options) {
@@ -72,12 +73,14 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-a", name: "Conn A" }),
         isActive: true,
         isConnected: true,
+        diagnostic: { state: "verified" },
     };
     const connectionB = {
         id: "conn-b",
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-b", name: "Conn B" }),
         isActive: false,
         isConnected: true,
+        diagnostic: { state: "verified" },
     };
     const httpClient = {
         async executeQuery(_connection, query) {
@@ -153,6 +156,7 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-persisted", name: "Persisted" }),
         isActive: true,
         isConnected: true,
+        diagnostic: { state: "verified" },
     }, ["select 1;", "select 2;"], { executionId: "multi" });
     strict_1.default.equal(results.length, 2);
     strict_1.default.equal(service.getHistory("conn-persisted").length, 3);
@@ -167,6 +171,7 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-cancel", name: "Cancel" }),
         isActive: true,
         isConnected: true,
+        diagnostic: { state: "verified" },
     };
     const httpClient = {
         executeQuery(_connection, _query, options) {
@@ -251,6 +256,7 @@ const QueryResultsState_1 = require("../ui/QueryResultsState");
         settings: (0, Connection_1.createDefaultConnection)({ id: "conn-cache", name: "Cache" }),
         isActive: true,
         isConnected: true,
+        diagnostic: { state: "verified" },
     };
     let executeCount = 0;
     const context = {

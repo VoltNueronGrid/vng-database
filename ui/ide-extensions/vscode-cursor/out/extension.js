@@ -44,6 +44,7 @@ const models_1 = require("./models");
 const services_1 = require("./services");
 const providers_1 = require("./providers");
 const commands_1 = require("./commands");
+const services_2 = require("./services");
 const sql_1 = require("./sql");
 const ConnectionManagerWebview_1 = require("./ui/ConnectionManagerWebview");
 const ConnectionEditorWebview_1 = require("./ui/ConnectionEditorWebview");
@@ -53,7 +54,9 @@ const QueryResultsState_1 = require("./ui/QueryResultsState");
 const TableEditorWebview_1 = require("./ui/TableEditorWebview");
 const transportConfig_1 = require("./transportConfig");
 const transportLog_1 = require("./transportLog");
-// Global service instances
+// Global service instances — and latest transport observability state
+let lastTransportDiagnostic;
+let lastHealthRttMs;
 let connectionManager;
 let httpClient;
 let queryExecutionService;
@@ -74,11 +77,29 @@ async function activate(context) {
         const transport = (0, transportConfig_1.readTransportInjectionFromConfig)();
         const healthIcon = active.isConnected ? "$(pass-filled)" : "$(circle-large-outline)";
         connectionStatusBar.text = `${healthIcon} $(database) ${active.settings.name}`;
+        // Build active-transport label for tooltip (NT-S5-001 / NT-S5-002)
+        let activeTransportLabel;
+        if (lastTransportDiagnostic) {
+            const diag = lastTransportDiagnostic;
+            if (diag.fallbackTriggered && diag.fallbackReason) {
+                activeTransportLabel = `Active transport: ${diag.activeTransport} (fallback: ${diag.fallbackReason})`;
+            }
+            else {
+                activeTransportLabel = `Active transport: ${diag.activeTransport}`;
+            }
+        }
+        else {
+            activeTransportLabel = `Active transport: ${transport.transportMode === "native" ? "native" : "http"}`;
+        }
+        if (lastHealthRttMs !== undefined) {
+            activeTransportLabel += ` | RTT: ${lastHealthRttMs} ms`;
+        }
         connectionStatusBar.tooltip = [
             `Active connection: ${active.settings.name}`,
             `Mode: ${active.settings.mode}`,
             `Base URL: ${active.settings.baseUrl}`,
             `Transport (settings): ${transport.transportMode}${transport.nativeEndpoint ? ` — native ${transport.nativeEndpoint}` : ""}`,
+            activeTransportLabel,
             `Health: ${active.isConnected ? "Connected" : "Not verified"}`,
             "Click to switch connections.",
         ].join("\n");
@@ -228,8 +249,23 @@ async function activate(context) {
      */
     const verifyConnectionHealth = async (connection, options) => {
         try {
+            const t0 = Date.now();
             const result = await httpClient.testConnection(connection);
+            const rttMs = Date.now() - t0;
             connectionManager.setConnectionStatus(connection.id, result.isHealthy);
+            if (result.isHealthy) {
+                // NT-S5-002: record RTT
+                lastHealthRttMs = rttMs;
+                const transportInject = (0, transportConfig_1.readTransportInjectionFromConfig)();
+                (0, transportLog_1.appendTransportRttLine)(transportInject.transportMode, rttMs, connection.settings.baseUrl);
+                // NT-S5-001: run fallback diagnostic when mode is "auto"
+                if (transportInject.transportMode === "auto") {
+                    lastTransportDiagnostic = await (0, transportLog_1.runTransportFallbackDiagnostic)(connection, transportInject.transportMode, transportInject.nativeEndpoint);
+                }
+                else {
+                    lastTransportDiagnostic = undefined;
+                }
+            }
             if (!result.isHealthy) {
                 const detail = (0, services_1.redactSecrets)(result.message);
                 output.appendLine(`[Health] '${connection.settings.name}' not verified: ${detail}`);
@@ -818,7 +854,10 @@ async function activate(context) {
                     output.appendLine("[Connectivity] Failed checks:");
                     output.appendLine(summary);
                     output.show(true);
-                    vscode.window.showErrorMessage("Connectivity test failed. See VoltNueronGrid output channel for details.");
+                    const firstFailed = failed[0];
+                    const endpoint = `${connection.settings.baseUrl}${firstFailed.endpoint}`;
+                    const hint = (0, services_1.buildRemediationHint)(endpoint, firstFailed.status, firstFailed.detail, managedConnection ?? undefined);
+                    vscode.window.showErrorMessage(`Connectivity test failed: ${hint}`);
                     return;
                 }
                 output.appendLine("[Connectivity] Passed checks:");
@@ -1090,6 +1129,100 @@ async function activate(context) {
     const tableEditorRefresh = vscode.commands.registerCommand("vng.tableEditor.refresh", async () => {
         await handleTableEditorMessage({ type: "refresh" });
     });
+    // ─── S5-001: Connection context menu commands ─────────────────────────────
+    const copyConnectionHost = vscode.commands.registerCommand("vng.copyConnectionHost", async (input) => {
+        const connectionId = resolveConnectionId(input);
+        const connection = connectionId ? connectionManager.getConnection(connectionId) : connectionManager.getActiveConnection();
+        if (!connection) {
+            vscode.window.showWarningMessage("No connection selected.");
+            return;
+        }
+        await (0, commands_1.handleCopyConnectionHost)(connection);
+    });
+    const showConnectionStatus = vscode.commands.registerCommand("vng.showConnectionStatus", async (input) => {
+        const connectionId = resolveConnectionId(input);
+        const connection = connectionId ? connectionManager.getConnection(connectionId) : connectionManager.getActiveConnection();
+        if (!connection) {
+            vscode.window.showWarningMessage("No connection selected.");
+            return;
+        }
+        await (0, commands_1.handleShowConnectionStatus)(connection, output);
+    });
+    const showConnectionHistory = vscode.commands.registerCommand("vng.showConnectionHistory", async (input) => {
+        const connectionId = resolveConnectionId(input);
+        const connection = connectionId ? connectionManager.getConnection(connectionId) : connectionManager.getActiveConnection();
+        if (!connection) {
+            vscode.window.showWarningMessage("No connection selected.");
+            return;
+        }
+        const entries = queryExecutionService.searchHistory("", connection.id);
+        await (0, commands_1.handleShowConnectionHistory)(connection, entries);
+    });
+    const importSqlFile = vscode.commands.registerCommand("vng.importSqlFile", async (input) => {
+        const connectionId = resolveConnectionId(input);
+        const connection = connectionId ? connectionManager.getConnection(connectionId) : connectionManager.getActiveConnection();
+        if (!connection) {
+            vscode.window.showWarningMessage("No active connection. Activate a connection before importing SQL.");
+            return;
+        }
+        const sql = await (0, commands_1.handleImportSqlFile)();
+        if (!sql) {
+            return;
+        }
+        await executeManagedSqlWithProgress(connection, sql, "Import SQL File", { stopOnError: true });
+    });
+    // ─── S5-002: Table context menu commands ──────────────────────────────────
+    const copyTableName = vscode.commands.registerCommand("vng.copyTableName", async (element) => {
+        await (0, commands_1.handleCopyTableName)(element);
+    });
+    const dumpTableData = vscode.commands.registerCommand("vng.dumpTableData", async (element) => {
+        await (0, commands_1.handleDumpTableData)(element);
+    });
+    const truncateTable = vscode.commands.registerCommand("vng.truncateTable", async (element) => {
+        const activeConnection = connectionManager.getActiveConnection();
+        if (!activeConnection) {
+            vscode.window.showWarningMessage("Activate a managed connection before truncating a table.");
+            return;
+        }
+        const perm = (0, services_2.checkCommandPermission)(activeConnection, "truncate");
+        if (!perm.allowed) {
+            vscode.window.showErrorMessage(`Permission denied: ${perm.reason}`);
+            return;
+        }
+        const sql = await (0, commands_1.handleTruncateTable)(element);
+        if (!sql) {
+            return;
+        }
+        await executeManagedSqlWithProgress(activeConnection, sql, "Truncate Table", { stopOnError: true });
+        schemaManager.invalidateCache(activeConnection.id);
+        databaseExplorerProvider.refresh();
+    });
+    // ─── S5-003: Column context menu commands ─────────────────────────────────
+    const copyColumnName = vscode.commands.registerCommand("vng.copyColumnName", async (element) => {
+        await (0, commands_1.handleCopyColumnName)(element);
+    });
+    const copyColumnDefinition = vscode.commands.registerCommand("vng.copyColumnDefinition", async (element) => {
+        await (0, commands_1.handleCopyColumnDefinition)(element);
+    });
+    const addColumnWizard = vscode.commands.registerCommand("vng.addColumnWizard", async (element) => {
+        const activeConnection = connectionManager.getActiveConnection();
+        if (!activeConnection) {
+            vscode.window.showWarningMessage("Activate a managed connection before using the Add Column wizard.");
+            return;
+        }
+        const perm = (0, services_2.checkCommandPermission)(activeConnection, "schema-write");
+        if (!perm.allowed) {
+            vscode.window.showErrorMessage(`Permission denied: ${perm.reason}`);
+            return;
+        }
+        const sql = await (0, commands_1.handleAddColumnWizard)(element);
+        if (!sql) {
+            return;
+        }
+        await executeManagedSqlWithProgress(activeConnection, sql, "Add Column", { stopOnError: true });
+        schemaManager.invalidateCache(activeConnection.id);
+        databaseExplorerProvider.refresh();
+    });
     // Register settings panel command
     (0, commands_1.registerSettingsCommands)(context, context.extensionUri);
     const sqlDisposables = (0, sql_1.registerSqlEditorFeatures)({
@@ -1136,7 +1269,7 @@ async function activate(context) {
             });
         });
     };
-    context.subscriptions.push(newConnection, editConnection, connectConnection, disconnectConnection, deleteConnectionCommand, manageConnections, quickSwitchConnection, test, queryRunner, showQueryResults, refreshQueryHistory, clearQueryHistory, searchQueryHistory, reRunHistoryQuery, cancelActiveQuery, diagnostics, schema, focusPanel, refreshSchema, copyName, showTableDDL, showSQLTemplate, generateMockData, dumpTableStruct, dropTable, openTableEditor, openTableEditorPicker, createTableWizard, alterTableWizard, tableEditorSave, tableEditorAddRow, tableEditorDiscard, tableEditorRefresh, ...sqlDisposables, databaseView, queryHistoryView, connectionStatusBar, output);
+    context.subscriptions.push(newConnection, editConnection, connectConnection, disconnectConnection, deleteConnectionCommand, manageConnections, quickSwitchConnection, test, queryRunner, showQueryResults, refreshQueryHistory, clearQueryHistory, searchQueryHistory, reRunHistoryQuery, cancelActiveQuery, diagnostics, schema, focusPanel, refreshSchema, copyName, showTableDDL, showSQLTemplate, generateMockData, dumpTableStruct, dropTable, openTableEditor, openTableEditorPicker, createTableWizard, alterTableWizard, tableEditorSave, tableEditorAddRow, tableEditorDiscard, tableEditorRefresh, copyConnectionHost, showConnectionStatus, showConnectionHistory, importSqlFile, copyTableName, dumpTableData, truncateTable, copyColumnName, copyColumnDefinition, addColumnWizard, ...sqlDisposables, databaseView, queryHistoryView, connectionStatusBar, output);
 }
 function deactivate() {
     // Clean up service resources if needed
