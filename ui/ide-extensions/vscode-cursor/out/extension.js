@@ -329,7 +329,9 @@ async function activate(context) {
                 resolvedPort = parsedUrl.port ? Number(parsedUrl.port) : 7542;
                 nativeEndpoint = rawUrl;
                 transportMode = "native";
-                resolvedBaseUrl = rawUrl;
+                // HTTP companion URL used for schema registry, health checks, and SQL
+                // when the native driver package is not bundled in the .vsix.
+                resolvedBaseUrl = `http://${resolvedHost}:8080`;
             }
             else if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
                 resolvedHost = parsedUrl.hostname;
