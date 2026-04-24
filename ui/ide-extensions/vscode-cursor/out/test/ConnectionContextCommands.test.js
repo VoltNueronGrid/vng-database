@@ -19,12 +19,11 @@ const ConnectionContextCommands_1 = require("../commands/ConnectionContextComman
         }),
         isActive: true,
         isConnected: true,
-        state: "verified",
-        diagnostics: {},
+        diagnostic: { state: "verified" },
     };
     strict_1.default.equal((0, ConnectionContextCommands_1.getConnectionHostLabel)(connection), "db.local:9443");
 });
-(0, node_test_1.default)("toConnectionExportJson redacts admin key while preserving diagnostics", () => {
+(0, node_test_1.default)("toConnectionExportJson redacts admin key while preserving diagnostic", () => {
     const connection = {
         id: "conn-2",
         settings: (0, Connection_1.createDefaultConnection)({
@@ -35,15 +34,11 @@ const ConnectionContextCommands_1 = require("../commands/ConnectionContextComman
         }),
         isActive: false,
         isConnected: false,
-        state: "degraded",
-        diagnostics: {
-            reason: "manual_test_failed",
-            detail: "timeout",
-        },
+        diagnostic: { state: "degraded", message: "timeout" },
     };
     const exported = JSON.parse((0, ConnectionContextCommands_1.toConnectionExportJson)(connection));
     strict_1.default.equal(exported.settings.adminKey, "<redacted>");
-    strict_1.default.equal(exported.diagnostics.reason, "manual_test_failed");
+    strict_1.default.equal(exported.state, "degraded");
 });
 (0, node_test_1.default)("buildConnectionStatusSummary includes state and history count", () => {
     const connection = {
@@ -57,11 +52,7 @@ const ConnectionContextCommands_1 = require("../commands/ConnectionContextComman
         }),
         isActive: true,
         isConnected: false,
-        state: "degraded",
-        diagnostics: {
-            reason: "connect_failed",
-            detail: "x-vng-user-id missing",
-        },
+        diagnostic: { state: "degraded", message: "connect_failed" },
     };
     const lines = (0, ConnectionContextCommands_1.buildConnectionStatusSummary)(connection, 7);
     strict_1.default.equal(lines.includes("State: degraded"), true);

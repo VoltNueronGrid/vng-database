@@ -86,7 +86,8 @@ const DRIVER_NOT_AVAILABLE: HttpResponse = {
   headers: {},
 };
 
-type DriverModule = typeof import("@voltnuerongrid/driver-typescript");
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DriverModule = any;
 
 let driverCache: DriverModule | null | undefined = undefined; // undefined = not tried yet, null = unavailable
 

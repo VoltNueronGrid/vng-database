@@ -19,14 +19,13 @@ test("getConnectionHostLabel derives host and port from baseUrl", () => {
     }),
     isActive: true,
     isConnected: true,
-    state: "verified" as const,
-    diagnostics: {},
+    diagnostic: { state: "verified" as const },
   };
 
   assert.equal(getConnectionHostLabel(connection), "db.local:9443");
 });
 
-test("toConnectionExportJson redacts admin key while preserving diagnostics", () => {
+test("toConnectionExportJson redacts admin key while preserving diagnostic", () => {
   const connection = {
     id: "conn-2",
     settings: createDefaultConnection({
@@ -37,16 +36,12 @@ test("toConnectionExportJson redacts admin key while preserving diagnostics", ()
     }),
     isActive: false,
     isConnected: false,
-    state: "degraded" as const,
-    diagnostics: {
-      reason: "manual_test_failed",
-      detail: "timeout",
-    },
+    diagnostic: { state: "degraded" as const, message: "timeout" },
   };
 
   const exported = JSON.parse(toConnectionExportJson(connection));
   assert.equal(exported.settings.adminKey, "<redacted>");
-  assert.equal(exported.diagnostics.reason, "manual_test_failed");
+  assert.equal(exported.state, "degraded");
 });
 
 test("buildConnectionStatusSummary includes state and history count", () => {
@@ -61,11 +56,7 @@ test("buildConnectionStatusSummary includes state and history count", () => {
     }),
     isActive: true,
     isConnected: false,
-    state: "degraded" as const,
-    diagnostics: {
-      reason: "connect_failed",
-      detail: "x-vng-user-id missing",
-    },
+    diagnostic: { state: "degraded" as const, message: "connect_failed" },
   };
 
   const lines = buildConnectionStatusSummary(connection, 7);

@@ -22,10 +22,10 @@ export function toConnectionExportJson(connection: Connection): string {
   return JSON.stringify(
     {
       id: connection.id,
-      state: connection.state,
+      state: connection.diagnostic.state,
       isActive: connection.isActive,
       isConnected: connection.isConnected,
-      diagnostics: connection.diagnostics,
+      diagnostic: connection.diagnostic,
       settings: {
         ...connection.settings,
         adminKey: connection.settings.adminKey ? "<redacted>" : undefined,
@@ -37,15 +37,14 @@ export function toConnectionExportJson(connection: Connection): string {
 }
 
 export function buildConnectionStatusSummary(connection: Connection, historyCount: number): string[] {
-  const diagnosticsDetail = connection.diagnostics.detail ? truncate(connection.diagnostics.detail, 140) : "n/a";
+  const diagnosticMsg = connection.diagnostic.message ? truncate(connection.diagnostic.message, 140) : "n/a";
   return [
     `Connection: ${connection.settings.name}`,
     `Mode: ${connection.settings.mode}`,
-    `State: ${connection.state}`,
+    `State: ${connection.diagnostic.state}`,
     `Base URL: ${connection.settings.baseUrl}`,
     `Host: ${getConnectionHostLabel(connection)}`,
     `History entries: ${historyCount}`,
-    `Last check reason: ${connection.diagnostics.reason ?? "n/a"}`,
-    `Last check detail: ${diagnosticsDetail}`,
+    `Last diagnostic: ${diagnosticMsg}`,
   ];
 }

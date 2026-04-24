@@ -1,7 +1,5 @@
 import { EndpointCheckResult, HttpResult } from "./types";
 import { RuntimeConnection } from "./config";
-import { Connection } from "./models/Connection";
-import { DriverError, executeDriverRequest, makeVngDriver } from "./services/DriverAdapter";
 
 interface RequestOptions {
   method: "GET" | "POST";
@@ -66,34 +64,41 @@ export async function getSchemaRegistry(connection: RuntimeConnection): Promise<
 }
 
 export async function requestRuntime(connection: RuntimeConnection, options: RequestOptions): Promise<HttpResult> {
-  try {
-    const driver = makeVngDriver(runtimeToManagedConnection(connection));
-    const req = {
-      method: options.method,
-      url: `${connection.settings.baseUrl}${options.path}`,
-      headers: {
-        "content-type": "application/json",
-      },
-      body: options.body,
-    };
-    // Keep checks deterministic and fast by disabling retries in ad-hoc probes.
-    const result = await executeDriverRequest(req, { maxRetries: 0 });
-    return {
-      status: result.status,
-      bodyText: result.bodyText,
-    };
-  } catch (error: unknown) {
-    if (error instanceof DriverError) {
-      return {
-        status: error.statusCode ?? 0,
-        bodyText: error.message,
-      };
+  const url = `${connection.settings.baseUrl}${options.path}`;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+
+  if (connection.settings.mode === "admin" || connection.settings.mode === "operator") {
+    if (connection.adminApiKey) {
+      headers["x-vng-admin-key"] = connection.adminApiKey;
     }
-    return {
-      status: 0,
-      bodyText: error instanceof Error ? error.message : "Unknown request error",
-    };
   }
+
+  if (connection.settings.mode === "operator" && connection.settings.operatorId) {
+    headers["x-vng-operator-id"] = connection.settings.operatorId;
+  }
+
+  if (connection.settings.mode === "tenant") {
+    if (connection.settings.tenantId) {
+      headers["x-vng-tenant-id"] = connection.settings.tenantId;
+    }
+    if (connection.settings.userId) {
+      headers["x-vng-user-id"] = connection.settings.userId;
+    }
+  }
+
+  const response = await fetch(url, {
+    method: options.method,
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const bodyText = await response.text();
+  return {
+    status: response.status,
+    bodyText,
+  };
 }
 
 export function toPermissionMessage(status: number, mode: string): string | undefined {
@@ -132,35 +137,4 @@ function summarizeBody(bodyText: string): string {
   }
 
   return `${bodyText.slice(0, 200)}...`;
-}
-
-function runtimeToManagedConnection(connection: RuntimeConnection): Connection {
-  return {
-    id: `runtime-${connection.settings.mode}-${connection.settings.baseUrl}`,
-    settings: {
-      id: `runtime-${connection.settings.mode}-${connection.settings.baseUrl}`,
-      name: "Runtime",
-      serverType: "voltnuerongrid",
-      runtimeTarget: connection.settings.runtimeTarget,
-      baseUrl: connection.settings.baseUrl,
-      host: "127.0.0.1",
-      port: 8080,
-      mode: connection.settings.mode,
-      adminKey: connection.adminApiKey,
-      operatorId: connection.settings.operatorId,
-      tenantId: connection.settings.tenantId,
-      userId: connection.settings.userId,
-      ssl: {
-        enabled: false,
-      },
-      advanced: {
-        connectionTimeout: 5000,
-      },
-      createdAt: Date.now(),
-    },
-    isActive: true,
-    isConnected: false,
-    state: "active",
-    diagnostics: {},
-  };
 }
