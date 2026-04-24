@@ -13,14 +13,12 @@ function describeConnectionNode(connection) {
         description: badges.join(" • "),
         contextValue: connection.isActive ? "connectionActive" : "connectionInactive",
         browseMessage: connection.isActive
-            ? connection.isConnected
-                ? `Browsing ${connection.settings.name}`
-                : `Connection is active but not verified. Run Connect/Test to browse databases.`
+            ? `Browsing ${connection.settings.name}`
             : `Activate ${connection.settings.name} to browse databases.`,
     };
 }
 function shouldExpandConnectionToDatabases(connection) {
-    return connection.isActive && connection.isConnected;
+    return connection.isActive;
 }
 function getConnectionFlowSnapshot(connections, selected) {
     return {

@@ -24,15 +24,13 @@ export function describeConnectionNode(connection: Connection): ConnectionNodePr
     description: badges.join(" • "),
     contextValue: connection.isActive ? "connectionActive" : "connectionInactive",
     browseMessage: connection.isActive
-      ? connection.isConnected
-        ? `Browsing ${connection.settings.name}`
-        : `Connection is active but not verified. Run Connect/Test to browse databases.`
+      ? `Browsing ${connection.settings.name}`
       : `Activate ${connection.settings.name} to browse databases.`,
   };
 }
 
 export function shouldExpandConnectionToDatabases(connection: Connection): boolean {
-  return connection.isActive && connection.isConnected;
+  return connection.isActive;
 }
 
 export function getConnectionFlowSnapshot(connections: Connection[], selected?: Connection): ConnectionFlowSnapshot {
