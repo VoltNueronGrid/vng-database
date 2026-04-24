@@ -4299,3 +4299,120 @@ mod tests {
         assert!(c.relative_cost >= 0.03, "ColumnAlias must carry at least 0.03 cost overhead");
     }
 }
+
+// ─── S8-003: Join/path optimisation + paging strategy ────────────────────────
+
+/// Strategy for paginating result sets.
+///
+/// - `Offset`: classic `LIMIT n OFFSET m` — simple but degrades at large offsets.
+/// - `KeysetForward`: seek-based forward pagination using a stable sort key —
+///   O(log n) regardless of page depth.
+/// - `KeysetBackward`: seek-based backward pagination (reverse keyset walk).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PagingStrategy {
+    /// Classic offset-based pagination (`LIMIT … OFFSET …`).
+    Offset,
+    /// Keyset / cursor-based forward pagination.
+    KeysetForward,
+    /// Keyset / cursor-based backward pagination.
+    KeysetBackward,
+}
+
+/// Optimiser hints attached to a [`LogicalPlan`] at planning time.
+#[derive(Debug, Clone)]
+pub struct QueryPlanHints {
+    /// Index name to force, if any (overrides cost-based selection).
+    pub use_index: Option<String>,
+    /// Paging strategy selected for this query.
+    pub paging: PagingStrategy,
+    /// Row cap; `None` means unlimited.
+    pub max_rows: Option<usize>,
+    /// When `true`, the planner returns the plan without executing it.
+    pub explain_only: bool,
+}
+
+impl Default for QueryPlanHints {
+    fn default() -> Self {
+        Self {
+            use_index: None,
+            paging: PagingStrategy::Offset,
+            max_rows: None,
+            explain_only: false,
+        }
+    }
+}
+
+/// Select the optimal paging strategy for a query.
+///
+/// Returns [`PagingStrategy::KeysetForward`] when both conditions hold:
+/// - `total_estimated_rows > 10_000` (large result set where offset degrades)
+/// - `has_stable_key` (a stable sort key exists for seek-based pagination)
+///
+/// Falls back to [`PagingStrategy::Offset`] otherwise.
+pub fn select_paging_strategy(total_estimated_rows: usize, has_stable_key: bool) -> PagingStrategy {
+    if total_estimated_rows > 10_000 && has_stable_key {
+        PagingStrategy::KeysetForward
+    } else {
+        PagingStrategy::Offset
+    }
+}
+
+#[cfg(test)]
+mod paging_strategy_tests {
+    use super::*;
+
+    #[test]
+    fn test_small_table_no_key_uses_offset() {
+        assert_eq!(
+            select_paging_strategy(100, false),
+            PagingStrategy::Offset,
+            "small table without stable key should use Offset"
+        );
+    }
+
+    #[test]
+    fn test_small_table_with_key_still_uses_offset() {
+        assert_eq!(
+            select_paging_strategy(5_000, true),
+            PagingStrategy::Offset,
+            "table with <= 10_000 rows should still use Offset even with a key"
+        );
+    }
+
+    #[test]
+    fn test_exact_boundary_uses_offset() {
+        // 10_000 is NOT > 10_000, so still Offset.
+        assert_eq!(
+            select_paging_strategy(10_000, true),
+            PagingStrategy::Offset,
+            "exactly 10_000 rows is not > 10_000, should remain Offset"
+        );
+    }
+
+    #[test]
+    fn test_large_table_with_stable_key_uses_keyset_forward() {
+        assert_eq!(
+            select_paging_strategy(10_001, true),
+            PagingStrategy::KeysetForward,
+            "large table with stable key should use KeysetForward"
+        );
+    }
+
+    #[test]
+    fn test_large_table_without_key_uses_offset() {
+        assert_eq!(
+            select_paging_strategy(1_000_000, false),
+            PagingStrategy::Offset,
+            "large table without stable key must fall back to Offset"
+        );
+    }
+
+    #[test]
+    fn test_query_plan_hints_default_paging_is_offset() {
+        let hints = QueryPlanHints::default();
+        assert_eq!(hints.paging, PagingStrategy::Offset);
+        assert!(hints.use_index.is_none());
+        assert!(hints.max_rows.is_none());
+        assert!(!hints.explain_only);
+    }
+}

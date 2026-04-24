@@ -3,13 +3,7 @@
  */
 
 import * as vscode from "vscode";
-import {
-  Connection,
-  ConnectionDiagnostics,
-  ConnectionSettings,
-  ConnectionState,
-  StoredConnection,
-} from "../models/Connection";
+import { Connection, ConnectionDiagnostic, ConnectionHealthState, ConnectionSettings, StoredConnection } from "../models/Connection";
 
 export class ConnectionManager {
   private connections: Map<string, Connection> = new Map();
@@ -38,9 +32,8 @@ export class ConnectionManager {
           id: conn.id,
           settings: settings as ConnectionSettings,
           isActive: false,
-          isConnected: conn.isConnected ?? false,
-          state: conn.state ?? "active",
-          diagnostics: conn.diagnostics ?? {},
+          isConnected: false,
+          diagnostic: { state: "unverified" },
         });
       }
 
@@ -72,8 +65,7 @@ export class ConnectionManager {
       settings: { ...settings },
       isActive: false,
       isConnected: false,
-      state: "active",
-      diagnostics: {},
+      diagnostic: { state: "unverified" },
     };
 
     this.connections.set(id, connection);
@@ -185,33 +177,56 @@ export class ConnectionManager {
     const lowerQuery = query.toLowerCase();
     return Array.from(this.connections.values()).filter(
       (conn) =>
-        conn.settings.name.toLowerCase().includes(lowerQuery) ||
-        conn.settings.host.toLowerCase().includes(lowerQuery)
+        (conn.settings?.name ?? "").toLowerCase().includes(lowerQuery) ||
+        (conn.settings?.host ?? "").toLowerCase().includes(lowerQuery)
     );
   }
 
   /**
-   * Update connection status
+   * Update connection status and derive health state.
+   *
+   * - true  → state becomes "verified"
+   * - false → "degraded" if was previously "verified", otherwise "error"
    */
-  setConnectionStatus(id: string, isConnected: boolean, diagnostics?: ConnectionDiagnostics): void {
-    const conn = this.connections.get(id);
-    if (conn) {
-      conn.isConnected = isConnected;
-      conn.state = isConnected ? "verified" : "degraded";
-      conn.diagnostics = diagnostics ?? (isConnected ? {} : conn.diagnostics);
-      void this.persist();
-    }
-  }
-
-  setConnectionState(id: string, state: ConnectionState, diagnostics?: ConnectionDiagnostics): void {
+  setConnectionStatus(id: string, isConnected: boolean, message?: string): void {
     const conn = this.connections.get(id);
     if (!conn) {
       return;
     }
-    conn.state = state;
-    conn.isConnected = state === "verified";
-    conn.diagnostics = diagnostics ?? conn.diagnostics;
-    void this.persist();
+
+    conn.isConnected = isConnected;
+
+    const now = Date.now();
+    if (isConnected) {
+      conn.diagnostic = {
+        state: "verified",
+        lastChecked: now,
+        message: message ?? `HTTP 200`,
+      };
+    } else {
+      const wasVerified = conn.diagnostic.state === "verified";
+      conn.diagnostic = {
+        state: wasVerified ? "degraded" : "error",
+        lastChecked: now,
+        message: message,
+      };
+    }
+  }
+
+  /**
+   * Directly set health state and diagnostic message for a connection.
+   */
+  setConnectionDiagnostic(id: string, state: ConnectionHealthState, message?: string): void {
+    const conn = this.connections.get(id);
+    if (!conn) {
+      return;
+    }
+
+    conn.diagnostic = {
+      state,
+      lastChecked: Date.now(),
+      message,
+    } satisfies ConnectionDiagnostic;
   }
 
   /**
@@ -238,9 +253,6 @@ export class ConnectionManager {
         ...conn.settings,
         adminKey: undefined, // Don't store admin key in globalState
       } as any,
-      isConnected: conn.isConnected,
-      state: conn.state,
-      diagnostics: conn.diagnostics,
     }));
 
     await this.context.globalState.update("vng.connections", toStore);

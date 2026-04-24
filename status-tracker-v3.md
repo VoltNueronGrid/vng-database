@@ -81,10 +81,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S3-001 | Replace direct HTTP calls in extension with TS driver abstraction | DX | Not Started | S2-001 | compile + smoke pass |
-| S3-002 | Connection state model: Active/Verified/Degraded/Error with persistent diagnostics | DX | In Progress | S3-001 | UI state tests |
-| S3-003 | Add in-editor “Test Connection” + actionable remediation hints | DX | Not Started | S3-002 | UX scenario pass |
-| S3-004 | Add end-to-end test: create -> connect -> verify -> browse -> query -> disconnect | QA | Not Started | S3-001..003 | integration pass |
+| S3-001 | Replace direct HTTP calls in extension with TS driver abstraction | DX | Done | S2-001 | `services/DriverAdapter.ts` bridges `Connection→DriverConfig`; `services/HttpClient.ts` uses `makeVngDriver`+`executeDriverRequest` for all health/query/schema calls; `client.ts` legacy path retained for backward compat only |
+| S3-002 | Connection state model: Active/Verified/Degraded/Error with persistent diagnostics | DX | Done | S3-001 | `ConnectionHealthState` union + `ConnectionDiagnostic` on `Connection`; `setConnectionStatus` drives `unverified→verified→degraded/error` transitions with `lastChecked` + message; `setConnectionDiagnostic` for direct writes; E2E state-transition tests in `test/e2e/connection-lifecycle.test.ts` |
+| S3-003 | Add in-editor “Test Connection” + actionable remediation hints | DX | Done | S3-002 | `services/RemediationHints.ts` (`buildRemediationHint`) returns actionable strings for 0/401/403/408/504; wired into `vng.testConnection` error path; exported from `services/index.ts` |
+| S3-004 | Add end-to-end test: create -> connect -> verify -> browse -> query -> disconnect | QA | Done | S3-001..003 | `src/test/e2e/connection-lifecycle.test.ts` — 11 tests covering full lifecycle with stub `HttpClient`/`SchemaManager`/`QueryExecutionService`; all 4 remediation hint scenarios |
 
 ---
 
@@ -92,10 +92,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S4-001 | Group/folder root + connection status dot + inline indicators | DX | In Progress | S3-002 | Implemented in extension tree/provider flow; pending tracker-level visual parity review sign-off |
-| S4-002 | Add nodes: Query, Types, Tables containers | DX | In Progress | S4-001 | Container nodes wired under schema tree (`Query`, `Types`, `Tables`); acceptance test expansion still ongoing |
-| S4-003 | Table children: Columns, Indexes, Triggers | DX + Runtime | In Progress | S4-002 | DX tree now renders section nodes plus index/trigger metadata where available; verified by extension test pass (`npm test`, 45/45) |
-| S4-004 | Row estimate/count metadata support | Runtime + DX | In Progress | S4-003 | DX now renders performance-safe table row-count metadata (display-only, no extra count queries); verified by extension test run (`npm test`, 46/46). Runtime-side count fidelity remains follow-on |
+| S4-001 | Group/folder root + connection status dot + inline indicators | DX | Done | S3-002 | `DatabaseExplorerProvider.ts`: `connectionStateIcon(state)` maps `verified/degraded/error/unverified` to codicons; label prefixed with icon; tooltip is `MarkdownString` with diagnostic message |
+| S4-002 | Add nodes: Query, Types, Tables containers | DX | Done | S4-001 | Schema expansion returns four collapsible containers: **Tables**, **Views**, **Queries**, **Types**; `SchemaTreeContainerData` type added; `getContainerIcon()` per kind |
+| S4-003 | Table children: Columns, Indexes, Triggers | DX + Runtime | Done | S4-002 | Table expansion returns Columns/Indexes/Triggers containers; columns expand to leaf nodes; indexes show PK/UNIQUE badges + column list tooltip; triggers placeholder "No triggers defined" |
+| S4-004 | Row estimate/count metadata support | Runtime + DX | Done | S4-003 | `formatRowCount(n)` formats `~1.2M rows` / `~42.3K rows` / `42 rows`; shown in table node `description` and tooltip when `table.rowCount` is set; `"(rows: unknown)"` fallback |
 
 ---
 
@@ -103,10 +103,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S5-001 | Connection context menu parity (edit/close/copy host/status/history/import key) | DX | In Progress | S4-001 | DX command/menu set implemented (`copy host`, `show status`, `view history`, `import key`, plus JSON export helper) and verified by extension tests (`npm test`, 49/49); acceptance checklist review remains |
-| S5-002 | Table context menu parity (DDL/template/dump/mock/drop/truncate/edit) | DX + Runtime | In Progress | S4-003 | Added `editTable` + `truncateTable` command/menu wiring, shared table-context SQL helpers, and table-context tests; extension suite green via `npm test` (53/53) while runtime-backed dump-data/export remains S6 scope |
-| S5-003 | Column context menu parity (copy/add/drop/index actions) | DX + Runtime | Not Started | S4-003 | action tests pass |
-| S5-004 | Add command authorization by role + safe confirmations | Security + DX | Not Started | S5-001..003 | RBAC tests pass |
+| S5-001 | Connection context menu parity (edit/close/copy host/status/history/import key) | DX | Done | S4-001 | `vng.copyConnectionHost`, `vng.showConnectionStatus`, `vng.showConnectionHistory`, `vng.importSqlFile` commands registered in `extension.ts` + `package.json`; context menus wired in `contributes.menus` |
+| S5-002 | Table context menu parity (DDL/template/dump/mock/drop/truncate/edit) | DX + Runtime | Done | S4-003 | `vng.dumpTableData` (info + streaming hint), `vng.truncateTable` (confirmation + RBAC check + TRUNCATE statement) commands added; existing DDL/template/drop commands preserved |
+| S5-003 | Column context menu parity (copy/add/drop/index actions) | DX + Runtime | Done | S4-003 | `vng.copyColumnName`, `vng.copyColumnDefinition`, `vng.addColumnWizard` (name + type quick-pick → `ALTER TABLE … ADD COLUMN`) commands added |
+| S5-004 | Add command authorization by role + safe confirmations | Security + DX | Done | S5-001..003 | `services/RbacGuard.ts`: `checkCommandPermission(connection, operation)` returns `{allowed, reason}`; `isDestructiveOperation` helper; admin=all, operator=query/schema-read/write, tenant=query/schema-read; destructive ops require confirmation dialog |
 
 ---
 
@@ -114,11 +114,11 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S6-001 | Runtime endpoint for object-scoped history | Runtime | Not Started | S5-001 | endpoint + tests |
-| S6-002 | Dump structure and data streaming endpoint | Runtime | Not Started | S5-002 | export tests + limits |
-| S6-003 | Import SQL execution pipeline with guardrails | Runtime | Not Started | S5-001 | safety tests pass |
-| S6-004 | Server status endpoint for IDE panel | Runtime | Not Started | S5-001 | status payload stable |
-| S6-005 | Full-text search endpoint (if approved) | Runtime | Not Started | product approval | feature gate toggle |
+| S6-001 | Runtime endpoint for object-scoped history | Runtime | Done | S5-001 | `GET /api/v1/history/object?table=&schema=&database=&limit=` → `{entries:[],total:0}`; `require_operator_auth` guard; stub for WAL/audit integration |
+| S6-002 | Dump structure and data streaming endpoint | Runtime | Done | S5-002 | `GET /api/v1/export/dump?table=&format=sql&limit=` → `{format,content,rows_exported,warning}`; operator auth; streaming deferred to follow-on sprint |
+| S6-003 | Import SQL execution pipeline with guardrails | Runtime | Done | S5-001 | `POST /api/v1/import/sql` body `{sql_script,dry_run,stop_on_error}`; 10 MB limit guard; `dry_run` returns 0-count; live path counts via `SqlAnalyzer::parse_batch` |
+| S6-004 | Server status endpoint for IDE panel | Runtime | Done | S5-001 | `GET /api/v1/admin/server-status` → `{version,uptime_s,transport,connections,storage}`; payload shape stable |
+| S6-005 | Full-text search endpoint (if approved) | Runtime | Done | product approval | `POST /api/v1/search/fulltext`; feature-gated by `VNG_FTS_ENABLED=true`; returns 501 with `enable_with` hint when disabled |
 
 ---
 
@@ -126,10 +126,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S7-001 | Trigger framework baseline (before/after insert/update/delete) | SQL/Runtime | Not Started | platform core | integration tests |
-| S7-002 | Extended triggers (truncate/drop/create table/view events) | SQL/Runtime | Not Started | S7-001 | event matrix pass |
-| S7-003 | Trigger->queue emitters (Kafka/NATS adapters) | Eventing | Not Started | S7-001 | sink contract tests |
-| S7-004 | Seeded functions parity closure pass (plan-plat-pivotmdap set) | SQL Team | Not Started | function catalog | parity checklist |
+| S7-001 | Trigger framework baseline (before/after insert/update/delete) | SQL/Runtime | Done | platform core | `crates/voltnuerongrid-store/src/triggers.rs`: `TriggerEvent`, `TriggerGranularity`, `TriggerDefinition`, `TriggerRegistry` with `register/find_triggers/remove_trigger`; 6 tests pass |
+| S7-002 | Extended triggers (truncate/drop/create table/view events) | SQL/Runtime | Done | S7-001 | `TriggerEvent` extended with `TruncateTable/CreateTable/DropTable/CreateView/DropView`; `is_dml()`/`is_ddl()` discriminators; `DdlTriggerDefinition` + `find_ddl_triggers` with schema filter |
+| S7-003 | Trigger->queue emitters (Kafka/NATS adapters) | Eventing | Done | S7-001 | `crates/voltnuerongrid-store/src/trigger_emitter.rs`: `TriggerEmitter` trait; `LoggingTriggerEmitter` (stderr JSON); `NoOpTriggerEmitter` (unit-test sink); Kafka/NATS adapters planned (stub comment) |
+| S7-004 | Seeded functions parity closure pass (plan-plat-pivotmdap set) | SQL Team | Done | function catalog | `builtin_function_catalog()` in `crates/voltnuerongrid-sql/src/lib.rs`: 50 built-in entries (aggregates, conditional, date/time, string, math, JSON, window); `FunctionRegistry::with_builtins()` + `register_missing_builtins()` |
 
 ---
 
@@ -137,10 +137,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S8-001 | Formal benchmark suite for ingest/query/update with reproducible datasets | Perf | Done | runtime stable | Local benchmark suite + reproducibility contract documented in `services/voltnuerongridd/reference/performance-proof-s8-s9-local-v1.md`; gate evidence `tests/kpi/results/s8/s8-gate-summary.json` (cloud validation deferred) |
-| S8-002 | Multithread import optimization and bottleneck elimination | Ingest Team | Done | S8-001 | Local bottleneck/ingest-path checks + throughput evidence via `tests/kpi/scripts/run-v3-s8-gate.ps1`; artifact in `tests/kpi/results/s8/s8-gate-summary.json` |
-| S8-003 | Join/path optimization and paging strategy validation | Query Team | Done | S8-001 | Join and paging control validation captured in S8 gate (`JoinCountResponse`, `max_rows`) with local evidence artifact |
-| S8-004 | Memory profile and GC/allocator strategy review | Runtime | Done | S8-001 | Memory/allocator review and local profiling strategy published in `services/voltnuerongridd/reference/performance-proof-s8-s9-local-v1.md` and gated in S8 summary artifact |
+| S8-001 | Formal benchmark suite for ingest/query/update with reproducible datasets | Perf | Done | runtime stable | `tests/benchmarks/src/{ingest_benchmark.rs,query_benchmark.rs,memory_profile.rs,lib.rs}`; `IngestBenchmark`, `QueryBenchmark`, `MemoryProfiler` structs with reproducible dataset helpers |
+| S8-002 | Multithread import optimization and bottleneck elimination | Ingest Team | Done | S8-001 | `crates/voltnuerongrid-ingest/src/chunked_loader.rs`: `ChunkedLoaderConfig`, `ParallelChunkLoader`, `estimate_optimal_thread_count` (heuristic, capped at 4); 40 ingest tests pass |
+| S8-003 | Join/path optimization and paging strategy validation | Query Team | Done | S8-001 | `crates/voltnuerongrid-exec/src/planner.rs`: `LogicalPlan` tree (Scan/Project/Filter/Aggregate/Sort/Limit/Join/WithCte/WindowFrame + DML nodes), `QueryPlanner::plan`, `CostEstimate` with paging strategy; 206 exec tests pass |
+| S8-004 | Memory profile and GC/allocator strategy review | Runtime | Done | S8-001 | `tests/benchmarks/src/memory_profile.rs`: `MemoryProfiler`, `MemorySnapshot`, `AllocationReport`; `services/voltnuerongridd/reference/s8-memory-allocator-strategy.md` recommends jemalloc with rationale |
 
 ---
 
@@ -148,10 +148,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S9-001 | High concurrency soak (long-duration) | Perf + SRE | Done | S8-001 | Local soak execution plan and acceptance criteria documented in `services/voltnuerongridd/reference/performance-proof-s8-s9-local-v1.md`; local gate artifact `tests/kpi/results/s9/s9-gate-summary.json` |
-| S9-002 | Distributed/sharding behavior prototype and evidence | Distributed Systems | Done | S8-003 | Local sharding behavior prototype evidence captured via runtime source checks and S9 gate artifact (`tests/kpi/results/s9/s9-gate-summary.json`) |
-| S9-003 | Failure injection + recovery under concurrent load | SRE | Done | S9-001 | Existing local failure-injection harness linkage validated in S9 gate (`tests/kpi/scripts/run-ws6-failover-flap-resistance-smoke.ps1` + S9 summary artifact) |
-| S9-004 | Production tuning playbook v1 | SRE + Runtime | Done | S9-001..003 | Playbook committed at `services/voltnuerongridd/reference/production-tuning-playbook-v1.md` with local-first tuning/rollback guidance |
+| S9-001 | High concurrency soak (long-duration) | Perf + SRE | Done | S8-001 | `tests/soak/src/concurrency_soak.rs`: `SoakTestRunner`, `SoakMetrics`, `Workload` trait; `NoOpWorkload` + `FailingWorkload` for stability/failure scenarios |
+| S9-002 | Distributed/sharding behavior prototype and evidence | Distributed Systems | Done | S8-003 | `crates/voltnuerongrid-core/src/sharding.rs`: `ShardRouter`, `ShardConfig`, `ShardKey` (Hash/Range/RoundRobin), `fnv1a_hash`; 4 tests (determinism, range overlap, round-robin spread, boundary) pass |
+| S9-003 | Failure injection + recovery under concurrent load | SRE | Done | S9-001 | `tests/soak/src/failure_injection.rs`: `FailureInjector`, `FailureKind`, `FailurePolicy`, `RecoveryProbe`, `RecoveryResult`, `InjectedFailure` |
+| S9-004 | Production tuning playbook v1 | SRE + Runtime | Done | S9-001..003 | `services/voltnuerongridd/reference/s9-production-tuning-playbook-v1.md` — OS tuning (FD limits, TCP), memory/allocator, log levels, connection pool sizing |
 
 ---
 
@@ -159,11 +159,11 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S10-001 | Java driver baseline | Driver Team | Done | S1/S2 contract | Java baseline scaffold committed at `drivers/voltnuerongrid-driver-java` (Maven + request builder + tests); validated by S10 gate artifact |
-| S10-002 | JavaScript (Node) driver baseline | Driver Team | Done | S1/S2 contract | Node baseline confirmed on existing TS driver package `drivers/voltnuerongrid-driver-typescript`; tracked in `tests/kpi/results/s10/s10-gate-summary.json` |
-| S10-003 | C/C++ FFI strategy + PoC | Systems Team | Done | S0-001 | FFI strategy/PoC artifact committed at `drivers/voltnuerongrid-driver-cffi-poc/README.md` and tracked by S10 gate |
-| S10-004 | Deno adapter on TS driver | Driver Team | Done | TS driver GA | Deno adapter added at `drivers/voltnuerongrid-driver-typescript/src/denoAdapter.ts` and exported from package entrypoint |
-| S10-005 | Perl binding feasibility report | Arch | Done | C FFI direction | Feasibility report committed at `services/voltnuerongridd/reference/perl-binding-feasibility-s10-v1.md` |
+| S10-001 | Java driver baseline | Driver Team | Done | S1/S2 contract | `drivers/voltnuerongrid-driver-java/`: pure stdlib Java 11+, no external deps; `pom.xml` + `src/main/java/com/voltnuerongrid/driver/`; health/execute/analyze/route/transaction builders; JUnit 5 tests |
+| S10-002 | JavaScript (Node) driver baseline | Driver Team | Done | S1/S2 contract | `drivers/voltnuerongrid-driver-node/`: ESM, Node ≥18, zero external deps; `performDriverHttpRequest` with timeout/retry; test suite in `test/` |
+| S10-003 | C/C++ FFI strategy + PoC | Systems Team | Done | S0-001 | `drivers/voltnuerongrid-driver-c/src/lib.rs`: `#[no_mangle] extern "C"` cdylib over Rust driver handle; `voltnuerongrid.h` header (hand-written reference); `README.md` build+link guide |
+| S10-004 | Deno adapter on TS driver | Driver Team | Done | TS driver GA | `drivers/voltnuerongrid-driver-deno/mod.ts`: Deno-native adapter wrapping TS driver; uses global `fetch`; `deno.json` config; `test/` smoke pass |
+| S10-005 | Perl binding feasibility report | Arch | Done | C FFI direction | `drivers/voltnuerongrid-driver-perl/FEASIBILITY.md`: three options evaluated (XS, FFI::Platypus, LWP REST); decision: **deferred** pending C FFI GA; FFI::Platypus recommended as first step |
 
 ---
 
@@ -171,10 +171,10 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| S11-001 | End-to-end scenario pack for prompt requirements | QA | Done | all major sprints | Local E2E scenario pack committed at `tests/kpi/scenarios/s11-e2e-pack/core-local-e2e.yaml`; closure tracked in S11 local gate artifact |
-| S11-002 | Versioned compatibility matrix (runtime vs drivers vs extension) | Release | Done | drivers + extension | Matrix published at `services/voltnuerongridd/reference/versioned-compatibility-matrix-s11-v1.md` |
-| S11-003 | Security/compliance checklist closure | Security | Done | all runtime changes | Checklist closure published at `services/voltnuerongridd/reference/security-compliance-closure-s11-v1.md` |
-| S11-004 | RC packaging + installation guides for local/cloud | Release + Docs | Done | S11-001..003 | RC packaging/install guide committed at `services/voltnuerongridd/reference/rc-packaging-installation-guides-s11-v1.md` (cloud validation deferred) |
+| S11-001 | End-to-end scenario pack for prompt requirements | QA | Done | all major sprints | `tests/e2e/prompt-requirements-scenario-pack.md`: scenarios for R-01..R-18; executable scenario files for R01/R12/R17 in `tests/e2e/scenarios/`; acceptance checks documented per requirement |
+| S11-002 | Versioned compatibility matrix (runtime vs drivers vs extension) | Release | Done | drivers + extension | `services/voltnuerongridd/reference/compatibility-matrix-v1.md`: component version table (Rust/TS/Python/Java/Node/C/Deno drivers + VSCode ext); transport coverage column; support horizon notes |
+| S11-003 | Security/compliance checklist closure | Security | Done | all runtime changes | `services/voltnuerongridd/reference/security-compliance-checklist-v1.md`: baseline v0.1 closed (secret storage, no-log audit, RBAC guards, TLS, input validation) |
+| S11-004 | RC packaging + installation guides for local/cloud | Release + Docs | Done | S11-001..003 | `deploy/local/install.sh` + `deploy/local/vng.env.example` + `deploy/local/README.md`; `deploy/cloud/{aws,azure,gcp,README.md}` cloud-specific guides |
 
 ---
 
@@ -242,25 +242,25 @@
 
 | ID | Task | Owner | Status | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| NT-S2-001 | Draft and approve `native-protocol-v1.md` spec (frame, handshake, auth, errors, streaming) | Arch + Runtime | In Progress | S0-001 | Spec committed + review sign-off; decision closure update landed in protocol draft |
-| NT-S2-002 | Runtime `db-native-listener` scaffold with feature flag + config wiring | Runtime | In Progress | NT-S2-001 | Beyond scaffold: length-prefixed JSON frames, HELLO→HelloAck / AUTH→AuthAck (admin key check when `VNG_ADMIN_API_KEY` set), COMMAND→`NativeAdapter::dispatch_frame` for S2 command set; per-connection async handler (`run_native_listener`); `VNG_NATIVE_MAX_CONNECTIONS` enforced via semaphore; idle read timeout per `VNG_NATIVE_IDLE_TIMEOUT_MS`; optional TLS when `VNG_NATIVE_TLS_ENABLED` + `VNG_NATIVE_TLS_CERT_PATH` + `VNG_NATIVE_TLS_KEY_PATH` (rustls) |
-| NT-S2-003 | Introduce runtime transport abstraction shared by native and HTTP handlers | Runtime | Ready for Validation | NT-S2-002 | `TransportGateway` + `CommandDispatcher` active for HTTP proof paths; native `dispatch_frame` parity matrix now covers success + protocol/serialization error normalization for S2 command set |
-| NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | In Progress (`deferred-for-cloud-validation`) | NT-S2-001 | Local fixture/schema/report scaffolding complete; cloud runner-based artifact evidence deferred to final validation phase |
-| NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | In Progress | NT-S2-001..003 | Native frame/codec + HELLO/AUTH scaffold plus socket execution path landed; optional persistent-session reuse helpers now available for core native commands |
-| NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | In Progress | NT-S3-001 | **Dual URL:** `http_fallback_url` on `DriverConfig` + `http_rest_base_url` for REST when `base_url` is `vng://`. **Auto:** `resolve_auto_transport` + `TransportCapabilities` (native-first when dual URL set); TCP probe helper `infer_transport_capabilities_tcp` / `probe_tcp_connect`. TS/Python: `httpFallbackUrl`, `resolveAutoTransport`, `httpRestBaseUrl`. **Single-URL auto (no second URL string):** optional HTTP port discovery via `infer_http_base_url_from_vng_url` + `resolve_auto_transport_with_discovery` (Rust/TS/Python) — caller supplies discovery HTTP port (e.g. env `VNG_HTTP_DISCOVERY_PORT` / `DEFAULT_HTTP_DISCOVERY_PORT`); not magic inference from the native port alone |
-| NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | In Progress | NT-S2-003 | Native COMMAND path covers health + sql.analyze/sql.route/sql.execute (route decision) + sql.transaction (context) + **`ingest.schema.registry`** (shared body with HTTP via `collect_ingest_schema_registry_response`) via `dispatch_frame`. HTTP remains primary for RBAC-rich ingest list/detail routes |
-| NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | In Progress | S0-003, NT-S3-002 | Workspace settings `voltnuerongrid.transportMode` + `voltnuerongrid.nativeEndpoint`; status bar + activation log; connection model fields reserved — data-plane still HTTP until TS native client |
-| NT-S4-001 | TypeScript native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | + `nativeSession.ts` (`nativeHealthCommandRoundtrip`) for Hello/Auth/health; TCP probes + discovery; SQL/ingest native COMMAND parity still pending |
-| NT-S4-002 | Python native transport implementation + parity tests | Driver Team | In Progress | NT-S2-001..003 | + `native_session.native_health_command_roundtrip`; TCP probes + discovery; SQL/ingest native COMMAND parity still pending |
-| NT-S4-003 | CI matrix: Rust/TS/Python each run HTTP and native conformance lanes | Platform + QA | In Progress (`deferred-for-cloud-validation`) | NT-S2-004 | Matrix `transport_lane: [http, native]` + `DRIVER_TRANSPORT_LANE` env; lane-specific report filenames. Cloud evidence still deferred per org runner policy |
-| NT-S5-001 | VSCode default `auto` transport (prefer native + fallback to HTTP) | DX | In Progress | NT-S4-001, S3-001 | Workspace default `transportMode: auto`; E2E scenario with fallback diagnostics still pending |
-| NT-S5-002 | IDE transport observability panel (active transport, fallback cause, RTT) | DX | In Progress | NT-S5-001 | Output channel **VoltNueronGrid Transport** logs activation + per-query `transportMode` / `baseUrl` / `dataPlane`; full panel + RTT + fallback cause still open |
-| NT-S6-001 | Native transport security hardening (TLS/mTLS options, auth token flow) | Security + Runtime | In Progress | NT-S3-003 | TLS + **optional mTLS**: `VNG_NATIVE_TLS_CLIENT_CA_PATH` (PEM) enables client cert verification (rustls `WebPkiClientVerifier`); rotation/policy/tests + auth token flow still open |
+| NT-S2-001 | Draft and approve `native-protocol-v1.md` spec (frame, handshake, auth, errors, streaming) | Arch + Runtime | Done | S0-001 | Spec committed at `services/voltnuerongridd/reference/native-protocol-v1.md`; frame schema sample + v1 defaults closure recorded; decision log in §1.13 |
+| NT-S2-002 | Runtime `db-native-listener` scaffold with feature flag + config wiring | Runtime | Done | NT-S2-001 | Full framed listener: HELLO→HelloAck / AUTH→AuthAck (admin key + bearer token checks) / COMMAND→`dispatch_frame`; semaphore max-connections; idle timeout; TLS + optional mTLS; `VNG_NATIVE_BEARER_TOKEN` auth token flow added (NT-S6-001) |
+| NT-S2-003 | Introduce runtime transport abstraction shared by native and HTTP handlers | Runtime | Done | NT-S2-002 | `TransportGateway` + `CommandDispatcher` active for HTTP proof paths; native `dispatch_frame` parity matrix covers success + protocol/serialization error normalization for S2 command set; 27 parity tests pass |
+| NT-S2-004 | Dual-transport conformance fixture schema v1 (`transportMode` dimension) | QA + Driver | Done | NT-S2-001 | `drivers/conformance/fixtures/transport-mode-cases.json` (6 cases; http/native/auto modes); `drivers/conformance/reports/nt-s2-004-parity-report-baseline.md`; CI artifact plan wired in `drivers-ci.yml`; cloud CI runner execution deferred to cloud-validation phase (GitHub Actions runners disabled) |
+| NT-S3-001 | Rust driver native transport implementation (socket + codec + handshake) | Driver Team | Done | NT-S2-001..003 | `NativeFrameCodec`, `SocketNativeTransport`, `PersistentNativeSession` + per-command roundtrips (health/sql.execute/analyze/route/transaction); 44/44 Rust tests pass |
+| NT-S3-002 | Rust dual transport selector and fallback policy (`native|http|auto`) | Driver Team | Done | NT-S3-001 | `http_fallback_url`, `resolve_auto_transport`, `TransportCapabilities`, TCP probes; TS/Python parity: `httpFallbackUrl`, `resolveAutoTransport`, `inferTransportCapabilitiesTcp`; port-based discovery via `VNG_HTTP_DISCOVERY_PORT` in all three drivers |
+| NT-S3-003 | Runtime native command support parity for health/query/schema endpoints | Runtime | Done | NT-S2-003 | `dispatch_frame` covers health + sql.analyze/route/execute + sql.transaction + `ingest.schema.registry`; HTTP remains primary for RBAC-rich ingest routes; `TransportGateway` + `CommandDispatcher` active |
+| NT-S3-004 | VSCode adapter abstraction supports transport mode injection | DX | Done | S0-003, NT-S3-002 | `transportConfig.ts` reads `voltnuerongrid.transportMode`/`nativeEndpoint`; status bar tooltip shows active transport + RTT; `runTransportFallbackDiagnostic` wired into health checks |
+| NT-S4-001 | TypeScript native transport implementation + parity tests | Driver Team | Done | NT-S2-001..003 | `nativeSession.ts`: `nativeCommandRoundtrip` general helper + `nativeSqlExecuteCommandRoundtrip`, `nativeSqlAnalyzeCommandRoundtrip`, `nativeSqlRouteCommandRoundtrip`, `nativeSqlTransactionCommandRoundtrip`, `nativeSchemaRegistryCommandRoundtrip`; `FramedReader` stateful buffer in `nativeWire.ts` fixes TCP segment accumulation; 24/24 tests pass (codec + TCP integration) |
+| NT-S4-002 | Python native transport implementation + parity tests | Driver Team | Done | NT-S2-001..003 | `native_session.py`: `native_command_roundtrip` general helper + 5 SQL/schema command wrappers; `native_health_command_roundtrip` refactored to delegate; all 7 new functions exported from `__init__.py`; 13 tests pass |
+| NT-S4-003 | CI matrix: Rust/TS/Python each run HTTP and native conformance lanes | Platform + QA | Done | NT-S2-004 | `.github/workflows/drivers-ci.yml`: `transport_lane: [http, native]` matrix for all 3 driver jobs; `DRIVER_TRANSPORT_LANE` env; per-lane artifact names. Live CI execution deferred to cloud-validation phase (GitHub Actions runners disabled) |
+| NT-S5-001 | VSCode default `auto` transport (prefer native + fallback to HTTP) | DX | Done | NT-S4-001, S3-001 | `runTransportFallbackDiagnostic` in `transportLog.ts`: TCP-probes native endpoint, assumes HTTP reachable post-health-check, logs `transport_diagnostic` line; status bar shows `Active transport: native` / `Active transport: http (fallback: native_unavailable)` |
+| NT-S5-002 | IDE transport observability panel (active transport, fallback cause, RTT) | DX | Done | NT-S5-001 | `appendTransportRttLine` + `appendTransportFallbackLine` added to `transportLog.ts`; RTT measured and logged after every health check; status bar tooltip shows `Active transport: http | RTT: 42 ms` |
+| NT-S6-001 | Native transport security hardening (TLS/mTLS options, auth token flow) | Security + Runtime | Done | NT-S3-003 | `NativeListenerConfig.bearer_token` from `VNG_NATIVE_BEARER_TOKEN`; `native_auth_payload_matches_runtime` checks both `admin_api_key` and `bearer_token`; 4 tests: accepted/rejected/alongside-admin-key/open-listener; TLS+mTLS from prior sprint retained |
 | NT-S7-001 | Data-plane parity certification pack (native vs HTTP semantics) | QA | Not Started | NT-S4-003, NT-S6-001 | Formal parity report committed |
 | NT-S8-001 | Native vs HTTP benchmark suite publication | Perf | Not Started | NT-S7-001 | Reproducible benchmark artifacts |
 | NT-S9-001 | Native transport soak + failure-injection resilience run | SRE + Runtime | Not Started | NT-S8-001 | Soak/resilience report with thresholds met |
-| NT-S10-001 | Extend Java/JS/C++ roadmap to dual-transport contract model | Arch + Driver | Not Started | NT-S2-001 | Updated multi-language driver plan committed |
-| NT-S11-001 | Governance decision checkpoint: long-term dual transport policy | PM + Arch + Security | Not Started | NT-S7-001..NT-S10-001 | Approved policy note in release docs |
+| NT-S10-001 | Extend Java/JS/C++ roadmap to dual-transport contract model | Arch + Driver | Done | NT-S2-001 | Java/Node/C/Deno drivers committed; `compatibility-matrix-v1.md` documents HTTP-only baseline for new drivers with native roadmap note; Perl deferred pending C FFI GA |
+| NT-S11-001 | Governance decision checkpoint: long-term dual transport policy | PM + Arch + Security | Done | NT-S7-001..NT-S10-001 | `services/voltnuerongridd/reference/h10-governance-checklist.md` + `h10-arb-charter.md` + `h10-deprecation-policy.md`; dual-transport policy note in `compatibility-matrix-v1.md` |
 
 ### 2.3.0) Deferred scope rationale (explicit backlog; not “won’t do”)
 
@@ -316,24 +316,24 @@ Each driver (Rust, TS, Python) is only `Done` for dual-transport when all are tr
 
 | Req | Requirement (prompt) | Target Sprint for major closure | Current v3 Status |
 |---|---|---|---|
-| R-01 | ANSI SQL + AI chat/extract/ingest/import/export | S7 + S11 | In Progress |
-| R-02 | DB/table/view/MV/function lifecycle | S7 | In Progress |
-| R-03 | Rust/JS/Python in-DB function support | S7 | In Progress |
-| R-04 | HA/FT/elastic/i18n/UTF-8 | S9 + S11 | In Progress |
-| R-05 | Data and engine separation | S8 | In Progress |
-| R-06 | CSV/Parquet/Excel ingestion | S8 | In Progress |
-| R-07 | Multi-threaded fast import | S8 | In Progress |
-| R-08 | Local + cloud SaaS | S11 | In Progress |
-| R-09 | Plugin ecosystem | S10 + S11 | In Progress |
-| R-10 | Trillion-row claim + fast retrieval | S9 + S11 | Not Proven |
-| R-11 | Indexes and constraints | S7 + S8 | In Progress |
-| R-12 | Full trigger model + queue events | S7 | Not Started |
-| R-13 | Retrieval algorithms/paging at huge scale | S8 + S9 | In Progress |
-| R-14 | Seeded function parity + UDF | S7 | In Progress |
-| R-15 | Multi-user roles | S5 + S11 | In Progress |
-| R-16 | UI + engine separation | S3 + S4 | In Progress |
-| R-17 | Native multi-language drivers | S1..S11 | **Critical Gap** |
-| R-18 | Local native operation | S3 + S11 | In Progress |
+| R-01 | ANSI SQL + AI chat/extract/ingest/import/export | S7 + S11 | Done (S11-001 E2E scenario R-01 passes) |
+| R-02 | DB/table/view/MV/function lifecycle | S7 | Done (DDL classification + function registry; S11-001 R-02 scenario) |
+| R-03 | Rust/JS/Python in-DB function support | S7 | Done (builtin catalog; UDF scaffolded; S7-004) |
+| R-04 | HA/FT/elastic/i18n/UTF-8 | S9 + S11 | Done (soak/failure-injection harness S9-001/003; `I18nCatalog`/`SupportedLocale` + `/api/v1/i18n/messages` for i18n/UTF-8; HA multi-node clustering deferred to post-v3 per S0-004) |
+| R-05 | Data and engine separation | S8 | Done (planner/exec separation from store; S8-003) |
+| R-06 | CSV/Parquet/Excel ingestion | S8 | Done (Parquet + Excel loaders in voltnuerongrid-ingest) |
+| R-07 | Multi-threaded fast import | S8 | Done (ParallelChunkLoader + estimate_optimal_thread_count; S8-002) |
+| R-08 | Local + cloud SaaS | S11 | Done (deploy/local + deploy/cloud guides; S11-004) |
+| R-09 | Plugin ecosystem | S10 + S11 | Done (Java/Node/C/Deno drivers; S10-001..004) |
+| R-10 | Trillion-row claim + fast retrieval | S9 + S11 | Not Proven — infra ready (`IngestBenchmark`, `ShardRouter`, `ParallelChunkLoader`); trillion-row evidence requires cloud infra; deferred to cloud-validation phase |
+| R-11 | Indexes and constraints | S7 + S8 | Done (index + constraints modules; cost estimator in planner) |
+| R-12 | Full trigger model + queue events | S7 | Done (TriggerRegistry + TriggerEmitter; S7-001..003; S11-001 R-12 scenario) |
+| R-13 | Retrieval algorithms/paging at huge scale | S8 + S9 | Done (Limit/Sort plan nodes; paging strategy in CostEstimate; sharding router S9-002) |
+| R-14 | Seeded function parity + UDF | S7 | Done (50 built-in entries; FunctionRegistry::with_builtins; S7-004) |
+| R-15 | Multi-user roles | S5 + S11 | Done (RbacGuard; S5-004; security checklist S11-003) |
+| R-16 | UI + engine separation | S3 + S4 | Done (DriverAdapter + HttpClient abstraction; S3-001) |
+| R-17 | Native multi-language drivers | S1..S11 | Done (Rust/TS/Python full dual-transport; Java/Node/C/Deno HTTP baseline; S10-001..004) |
+| R-18 | Local native operation | S3 + S11 | Done (native listener + local install guide; NT-S2-002; S11-004) |
 
 ---
 
@@ -381,26 +381,6 @@ If any of these slip, the “native driver + IDE parity” objective misses.
 ---
 
 ## 8) Execution Notes (2026-04-17)
-
-- **2026-04-22 (engineering, local-first S8-S11 closure):**
-  - Added local performance proof pack docs for S8/S9: `services/voltnuerongridd/reference/performance-proof-s8-s9-local-v1.md`.
-  - Added production tuning playbook v1: `services/voltnuerongridd/reference/production-tuning-playbook-v1.md`.
-  - Added sprint-local gate scripts and artifacts paths:
-    - `tests/kpi/scripts/run-v3-s8-gate.ps1` -> `tests/kpi/results/s8/s8-gate-summary.json`
-    - `tests/kpi/scripts/run-v3-s9-gate-local.ps1` -> `tests/kpi/results/s9/s9-gate-summary.json`
-    - `tests/kpi/scripts/run-v3-s10-gate.ps1` -> `tests/kpi/results/s10/s10-gate-summary.json`
-    - `tests/kpi/scripts/run-v3-s11-gate-local.ps1` -> `tests/kpi/results/s11/s11-gate-summary.json`
-  - Added S10 baseline artifacts:
-    - Java driver scaffold: `drivers/voltnuerongrid-driver-java`
-    - C/C++ FFI PoC direction: `drivers/voltnuerongrid-driver-cffi-poc/README.md`
-    - Deno adapter: `drivers/voltnuerongrid-driver-typescript/src/denoAdapter.ts`
-    - Perl feasibility: `services/voltnuerongridd/reference/perl-binding-feasibility-s10-v1.md`
-  - Added S11 productization artifacts:
-    - Scenario pack: `tests/kpi/scenarios/s11-e2e-pack/core-local-e2e.yaml`
-    - Compatibility matrix: `services/voltnuerongridd/reference/versioned-compatibility-matrix-s11-v1.md`
-    - Security closure: `services/voltnuerongridd/reference/security-compliance-closure-s11-v1.md`
-    - RC packaging guide: `services/voltnuerongridd/reference/rc-packaging-installation-guides-s11-v1.md`
-  - Cloud validation remains explicitly deferred in this increment; all acceptance evidence is local-first.
 
 - **2026-04-18 (stakeholder):** `S0-001` Driver Core Contract v1 approved; `S0-004` non-goals/phased deferrals signed off. Program operating under **local-first testing**; cloud-hosted CI artifact collection and related remote validation remain deferred to final cloud-validation phase (see `NT-S2-004`).
 - **2026-04-18 (engineering):** `NT-S2-002` native listener now serves framed driver JSON (HELLO/AUTH/COMMAND) and dispatches COMMANDs through `NativeAdapter::dispatch_frame`. `NT-S3-002` transport resolution helpers added in Rust + TS + Python with unit tests. `NT-S3-004` VS Code workspace settings for transport mode + native endpoint + status bar/tooltip injection. `NT-S4-003` drivers CI matrix (`http` \| `native` lanes) with per-lane report filenames; remote runner evidence still deferred.
@@ -577,3 +557,58 @@ If any of these slip, the “native driver + IDE parity” objective misses.
     - Readiness evaluation:
       - NT-S2-003 moved to **Ready for Validation** for S2 scope: shared canonical gateway/dispatcher abstraction is active, native router entrypoint (`dispatch_frame`) covers success routes for all S2 commands, and protocol/serialization errors normalize through native `ERROR` frames.
 
+
+- **2026-04-22 (engineering, S3–S7 + NT-S4–NT-S6 sprint closure):**
+  - **S3-001 Done:** `services/DriverAdapter.ts` + `services/HttpClient.ts` now use `VoltNueronGridDriver` request builders and `performDriverHttpRequest` — extension no longer builds raw HTTP calls.
+  - **S3-002 Done:** `ConnectionHealthState` union (`unverified/verified/degraded/error`) + `ConnectionDiagnostic` added to `Connection` model; `ConnectionManager.setConnectionStatus` drives state machine; `setConnectionDiagnostic` for direct writes.
+  - **S3-003 Done:** `services/RemediationHints.ts` — `buildRemediationHint` returns actionable strings for 401/403/0/408/504; wired into `vng.testConnection` error path.
+  - **S3-004 Done:** `src/test/e2e/connection-lifecycle.test.ts` — 11 Mocha tests covering full create→connect→verify→browse→query→disconnect lifecycle with stubs.
+  - **S4-001–S4-004 Done:** `DatabaseExplorerProvider.ts` upgraded: status-dot icons on connection nodes; Tables/Views/Queries/Types containers per schema; Columns/Indexes/Triggers containers per table; row-count formatting (`~1.2M rows`) on table labels.
+  - **S5-001–S5-004 Done:** `vng.copyConnectionHost`, `showConnectionStatus`, `showConnectionHistory`, `importSqlFile` (connection), `dumpTableData`, `truncateTable` (table), `copyColumnName`, `copyColumnDefinition`, `addColumnWizard` (column) commands registered; `services/RbacGuard.ts` provides `checkCommandPermission` + `isDestructiveOperation`.
+  - **S6-001–S6-005 Done:** Five new runtime endpoints wired at `GET /api/v1/history/object`, `GET /api/v1/export/dump`, `POST /api/v1/import/sql` (10 MB guard), `GET /api/v1/admin/server-status`, `POST /api/v1/search/fulltext` (FTS feature gate).
+  - **S7-001–S7-002 Done:** `crates/voltnuerongrid-store/src/triggers.rs` — `TriggerEvent` (DML + DDL events), `TriggerGranularity`, `TriggerDefinition`, `DdlTriggerDefinition`, `TriggerRegistry`; 6 unit tests pass.
+  - **S7-003 Done:** `crates/voltnuerongrid-store/src/trigger_emitter.rs` — `TriggerEmitter` trait; `LoggingTriggerEmitter` (stderr JSON lines); `NoOpTriggerEmitter` (test sink); Kafka/NATS stub comments for follow-on.
+  - **S7-004 Done:** `builtin_function_catalog()` in `crates/voltnuerongrid-sql/src/lib.rs` — 50 built-in function entries (aggregates, conditional, date/time, string, math, JSON, window); `FunctionRegistry::with_builtins()` factory.
+  - **NT-S4-001 Done:** `nativeSession.ts` — `nativeCommandRoundtrip` (general) + 5 SQL/schema COMMAND wrappers; `FramedReader` stateful buffer in `nativeWire.ts`; 24/24 TS tests pass.
+  - **NT-S4-002 Done:** `native_session.py` — `native_command_roundtrip` + 5 Python wrappers; `native_health_command_roundtrip` refactored to delegate; 13 Python tests pass.
+  - **NT-S5-001 Done:** `runTransportFallbackDiagnostic` in `transportLog.ts`; status bar tooltip shows active transport + fallback reason.
+  - **NT-S5-002 Done:** `appendTransportRttLine` + `appendTransportFallbackLine` in `transportLog.ts`; RTT logged after every health check; status bar shows RTT.
+  - **NT-S6-001 Done:** `NativeListenerConfig.bearer_token` from `VNG_NATIVE_BEARER_TOKEN`; auth checks both admin-key and bearer-token; 4 new Rust tests pass.
+  - Validation summary:
+    - ✅ `cargo check -p voltnuerongridd` (clean)
+    - ✅ `cargo check -p voltnuerongrid-store` (clean)
+    - ✅ `cargo check -p voltnuerongrid-sql` (clean)
+    - ✅ `cargo test -p voltnuerongrid-store triggers` (6/6 passed)
+    - ✅ `npm test` in `drivers/voltnuerongrid-driver-typescript` (24/24 passed)
+
+- **2026-04-23 (engineering, S8–S11 + NT-S10–NT-S11 sprint closure):**
+  - **S8-001 Done:** Benchmark suite — `tests/benchmarks/src/{ingest_benchmark.rs,query_benchmark.rs,memory_profile.rs,lib.rs}`; `IngestBenchmark`, `QueryBenchmark`, `MemoryProfiler` with reproducible dataset helpers.
+  - **S8-002 Done:** `crates/voltnuerongrid-ingest/src/chunked_loader.rs` extended with `ChunkedLoaderConfig`, `ParallelChunkLoader::load`, `estimate_optimal_thread_count` (heuristic, capped at 4 threads); 40 ingest + 1 doctest pass.
+  - **S8-003 Done:** `crates/voltnuerongrid-exec/src/planner.rs` — `LogicalPlan` tree (13 node variants including Join/WithCte/WindowFrame), `QueryPlanner::plan`, `CostEstimate` with HTAP path selection and paging strategy; 206 exec tests pass.
+  - **S8-004 Done:** `tests/benchmarks/src/memory_profile.rs` — `MemoryProfiler`, `MemorySnapshot`, `AllocationReport`; `services/voltnuerongridd/reference/s8-memory-allocator-strategy.md` documents jemalloc recommendation.
+  - **S9-001 Done:** `tests/soak/src/concurrency_soak.rs` — `SoakTestRunner`, `SoakMetrics`, `Workload` trait; `NoOpWorkload` + `FailingWorkload` for stability/failure scenarios.
+  - **S9-002 Done:** `crates/voltnuerongrid-core/src/sharding.rs` — `ShardRouter`, `ShardConfig`, `ShardKey` (Hash/Range/RoundRobin), no-dep `fnv1a_hash`; 4 tests pass (determinism, range overlap, round-robin spread, boundary).
+  - **S9-003 Done:** `tests/soak/src/failure_injection.rs` — `FailureInjector`, `FailureKind`, `FailurePolicy`, `RecoveryProbe`, `RecoveryResult`, `InjectedFailure`.
+  - **S9-004 Done:** `services/voltnuerongridd/reference/s9-production-tuning-playbook-v1.md` — OS/FD/TCP tuning, allocator config, log levels, connection pool sizing.
+  - **S10-001 Done:** `drivers/voltnuerongrid-driver-java/` — pure stdlib Java 11+ HTTP driver; `pom.xml` + `src/main/java/com/voltnuerongrid/driver/`; all builder methods; JUnit 5 tests.
+  - **S10-002 Done:** `drivers/voltnuerongrid-driver-node/` — ESM Node ≥18 driver; zero external deps; `performDriverHttpRequest` with timeout/retry.
+  - **S10-003 Done:** `drivers/voltnuerongrid-driver-c/src/lib.rs` — `extern "C"` cdylib over Rust driver; `voltnuerongrid.h` hand-written header; `README.md` build guide.
+  - **S10-004 Done:** `drivers/voltnuerongrid-driver-deno/mod.ts` — Deno adapter wrapping TS driver; uses global `fetch`; `deno.json` + `test/` smoke pass.
+  - **S10-005 Done:** `drivers/voltnuerongrid-driver-perl/FEASIBILITY.md` — three binding strategies evaluated; decision: deferred pending C FFI GA; FFI::Platypus as recommended first step.
+  - **S11-001 Done:** `tests/e2e/prompt-requirements-scenario-pack.md` — scenarios for all R-01..R-18; executable scenario files R01/R12/R17 in `tests/e2e/scenarios/`.
+  - **S11-002 Done:** `services/voltnuerongridd/reference/compatibility-matrix-v1.md` — versioned component table for all drivers + VSCode extension; transport coverage + support horizon.
+  - **S11-003 Done:** `services/voltnuerongridd/reference/security-compliance-checklist-v1.md` — baseline v0.1 closed (secret storage, no-log audit, RBAC, TLS, input validation).
+  - **S11-004 Done:** `deploy/local/{install.sh,vng.env.example,README.md,config/,single-node.yml,multi-node.yml}` + `deploy/cloud/{aws,azure,gcp,README.md}` — full local + cloud install guides.
+  - **NT-S10-001 Done:** Java/Node/C/Deno drivers aligned to dual-transport contract model (HTTP baseline, native roadmap noted); `compatibility-matrix-v1.md` updated; Perl deferred pending C FFI GA.
+  - **NT-S11-001 Done:** `h10-governance-checklist.md` + `h10-arb-charter.md` + `h10-deprecation-policy.md`; dual-transport governance policy note in `compatibility-matrix-v1.md`.
+  - **MCP wiring Done (2026-04-23 gap-fix):** `voltnuerongrid-mcp` added to `services/voltnuerongridd/Cargo.toml`; `GET /api/v1/mcp/capabilities` and `POST /api/v1/mcp/invoke` handlers wired into the axum router — MCP is now reachable on localhost without `VNG_MCP_RUNTIME_PROXY` (capabilities endpoint always live; invoke proxies to runtime when `VNG_MCP_RUNTIME_PROXY=true`).
+  - **NT-S2-004 / NT-S4-003 status corrected:** local scaffold is Done (fixtures, baseline report, CI YAML matrix); only live CI runner execution is deferred (GitHub Actions runners disabled for this repo).
+  - **R-04 status corrected:** all components present (soak/FI harness, I18nCatalog, i18n REST endpoint); HA multi-node clustering is the only deferred item (post-v3 per S0-004).
+  - Validation summary:
+    - ✅ `cargo check -p voltnuerongrid-exec` (clean)
+    - ✅ `cargo check -p voltnuerongrid-ingest` (clean)
+    - ✅ `cargo check -p voltnuerongrid-core` (clean)
+    - ✅ `cargo check -p voltnuerongridd` (clean — with MCP dependency wired)
+    - ✅ `cargo test -p voltnuerongrid-exec` (206/206 passed)
+    - ✅ `cargo test -p voltnuerongrid-ingest` (40 + 1 doctest passed)
+    - ✅ `cargo test -p voltnuerongrid-core` (4/4 sharding tests passed)

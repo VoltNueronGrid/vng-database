@@ -16,7 +16,10 @@ members = [
   "crates/voltnuerongrid-mcp",
   "services/voltnuerongridd",
   "drivers/voltnuerongrid-driver-rust",
+  "drivers/voltnuerongrid-driver-c",
   "tools/voltnuerongrid-audit-companion",
+  "tests/soak",
+  "tests/benchmarks",
 ]
 
 [workspace.package]

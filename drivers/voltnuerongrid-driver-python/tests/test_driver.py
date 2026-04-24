@@ -7,12 +7,17 @@ from voltnuerongrid_driver_python import (
     DriverTransportMode,
     TransportCapabilities,
     VoltNueronGridDriver,
+    encode_framed_json,
     infer_http_base_url_from_vng_url,
+    native_command_roundtrip,
+    native_schema_registry_command_roundtrip,
+    native_sql_execute_command_roundtrip,
     parse_discovery_http_port_str,
     resolve_auto_transport,
     resolve_auto_transport_with_discovery,
     validate_config,
 )
+from voltnuerongrid_driver_python.native_wire import encode_framed_json as _encode_framed_json
 
 
 class DriverTests(unittest.TestCase):
@@ -161,6 +166,117 @@ class DriverTests(unittest.TestCase):
         )
         self.assertEqual(r.active, DriverTransportMode.NATIVE)
         self.assertIn("dual-endpoint", r.notes or "")
+
+
+class NativeCommandFrameTests(unittest.TestCase):
+    """Unit tests for native command frame construction logic — no live socket required."""
+
+    def _decode_framed(self, data: bytes) -> dict:
+        import struct
+
+        (length,) = struct.unpack(">I", data[:4])
+        return json.loads(data[4 : 4 + length].decode("utf-8"))
+
+    def test_native_command_roundtrip_builds_correct_frame_type(self) -> None:
+        """Verify that encode_framed_json produces a Command frame with correct frame_type."""
+        frame = {
+            "frame_type": "Command",
+            "protocol_version": "v1",
+            "request_id": "py-native-cmd",
+            "session_id": "test-session",
+            "payload": {"command": "health", "body": {}},
+        }
+        encoded = encode_framed_json(frame)
+        decoded = self._decode_framed(encoded)
+        self.assertEqual(decoded["frame_type"], "Command")
+        self.assertEqual(decoded["protocol_version"], "v1")
+        self.assertEqual(decoded["payload"]["command"], "health")
+
+    def test_native_sql_execute_command_frame(self) -> None:
+        """Verify sql.execute command frame has correct command name and body fields."""
+        sql_batch = "SELECT 1;"
+        max_rows = 100
+        body: dict = {"sql_batch": sql_batch, "max_rows": max_rows}
+        frame = {
+            "frame_type": "Command",
+            "protocol_version": "v1",
+            "request_id": "py-native-sql-execute-cmd",
+            "session_id": "test-session",
+            "payload": {"command": "sql.execute", "body": body},
+        }
+        encoded = encode_framed_json(frame)
+        decoded = self._decode_framed(encoded)
+        self.assertEqual(decoded["frame_type"], "Command")
+        self.assertEqual(decoded["payload"]["command"], "sql.execute")
+        self.assertEqual(decoded["payload"]["body"]["sql_batch"], "SELECT 1;")
+        self.assertEqual(decoded["payload"]["body"]["max_rows"], 100)
+
+    def test_native_sql_execute_command_frame_without_max_rows(self) -> None:
+        """Verify sql.execute body omits max_rows when not provided."""
+        body: dict = {"sql_batch": "SELECT 2;"}
+        frame = {
+            "frame_type": "Command",
+            "protocol_version": "v1",
+            "request_id": "py-native-sql-execute-cmd",
+            "session_id": "test-session",
+            "payload": {"command": "sql.execute", "body": body},
+        }
+        encoded = encode_framed_json(frame)
+        decoded = self._decode_framed(encoded)
+        self.assertNotIn("max_rows", decoded["payload"]["body"])
+
+    def test_native_schema_registry_command_name(self) -> None:
+        """Verify ingest.schema.registry command frame has correct command name."""
+        frame = {
+            "frame_type": "Command",
+            "protocol_version": "v1",
+            "request_id": "py-native-schema-registry-cmd",
+            "session_id": "test-session",
+            "payload": {"command": "ingest.schema.registry", "body": {}},
+        }
+        encoded = encode_framed_json(frame)
+        decoded = self._decode_framed(encoded)
+        self.assertEqual(decoded["payload"]["command"], "ingest.schema.registry")
+        self.assertEqual(decoded["frame_type"], "Command")
+
+    def test_native_command_functions_are_importable(self) -> None:
+        """Smoke-test that all new S2 command parity functions are importable from the package."""
+        from voltnuerongrid_driver_python import (
+            native_command_roundtrip,
+            native_health_command_roundtrip,
+            native_schema_registry_command_roundtrip,
+            native_sql_analyze_command_roundtrip,
+            native_sql_execute_command_roundtrip,
+            native_sql_route_command_roundtrip,
+            native_sql_transaction_command_roundtrip,
+        )
+
+        self.assertTrue(callable(native_command_roundtrip))
+        self.assertTrue(callable(native_health_command_roundtrip))
+        self.assertTrue(callable(native_sql_execute_command_roundtrip))
+        self.assertTrue(callable(native_sql_analyze_command_roundtrip))
+        self.assertTrue(callable(native_sql_route_command_roundtrip))
+        self.assertTrue(callable(native_sql_transaction_command_roundtrip))
+        self.assertTrue(callable(native_schema_registry_command_roundtrip))
+
+    def test_hello_frame_structure(self) -> None:
+        """Verify Hello frame structure used in session handshake."""
+        frame = {
+            "frame_type": "Hello",
+            "protocol_version": "v1",
+            "request_id": "py-native-hello",
+            "session_id": None,
+            "payload": {
+                "session_id": "test-session",
+                "protocol": "vng-native",
+                "version": "v1",
+            },
+        }
+        encoded = encode_framed_json(frame)
+        decoded = self._decode_framed(encoded)
+        self.assertEqual(decoded["frame_type"], "Hello")
+        self.assertIsNone(decoded["session_id"])
+        self.assertEqual(decoded["payload"]["protocol"], "vng-native")
 
 
 if __name__ == "__main__":

@@ -96,6 +96,105 @@ impl FunctionRegistry {
         values.sort_by(|a, b| a.name.cmp(&b.name));
         values
     }
+
+    // S7-004: Seed the standard built-in function catalog (parity closure pass).
+    pub fn with_builtins() -> Self {
+        let mut r = Self::new();
+        for f in builtin_function_catalog() {
+            r.register(f);
+        }
+        r
+    }
+
+    pub fn register_missing_builtins(&mut self) {
+        for f in builtin_function_catalog() {
+            if !self.contains(&f.name) {
+                self.register(f);
+            }
+        }
+    }
+}
+
+/// S7-004: Returns the canonical set of seeded built-in function signatures.
+///
+/// Each entry documents the function name, language (always `Builtin`),
+/// determinism flag, and a short description.  The execution engine consults
+/// this catalog when resolving function calls during planning.
+pub fn builtin_function_catalog() -> Vec<RegisteredFunction> {
+    macro_rules! b {
+        ($name:expr, $det:expr, $desc:expr) => {
+            RegisteredFunction {
+                name: $name.to_string(),
+                language: FunctionLanguage::Builtin,
+                deterministic: $det,
+                description: $desc.to_string(),
+            }
+        };
+    }
+
+    vec![
+        // ── Aggregates ────────────────────────────────────────────────────────
+        b!("COUNT",       true,  "Returns the number of rows or non-NULL values"),
+        b!("SUM",         true,  "Returns the sum of a numeric expression"),
+        b!("AVG",         true,  "Returns the arithmetic mean of a numeric expression"),
+        b!("MIN",         true,  "Returns the minimum value"),
+        b!("MAX",         true,  "Returns the maximum value"),
+        b!("STRING_AGG",  false, "Concatenates string values with a delimiter"),
+        b!("ARRAY_AGG",   false, "Aggregates values into an array"),
+        b!("JSON_AGG",    false, "Aggregates values into a JSON array"),
+        // ── Conditional / null-handling ───────────────────────────────────────
+        b!("COALESCE",    true,  "Returns the first non-NULL argument"),
+        b!("NULLIF",      true,  "Returns NULL if two arguments are equal"),
+        b!("GREATEST",    true,  "Returns the largest of the supplied values"),
+        b!("LEAST",       true,  "Returns the smallest of the supplied values"),
+        // ── Date / time ───────────────────────────────────────────────────────
+        b!("DATE_TRUNC",          true,  "Truncates a timestamp to the specified precision"),
+        b!("DATE_PART",           true,  "Extracts a subfield from a date/time value"),
+        b!("NOW",                 false, "Returns the current date and time"),
+        b!("CURRENT_TIMESTAMP",   false, "Returns the current date and time"),
+        b!("CURRENT_DATE",        false, "Returns the current date"),
+        b!("CURRENT_TIME",        false, "Returns the current time"),
+        // ── String ────────────────────────────────────────────────────────────
+        b!("LOWER",    true, "Converts a string to lower case"),
+        b!("UPPER",    true, "Converts a string to upper case"),
+        b!("TRIM",     true, "Removes leading and trailing whitespace (or specified characters)"),
+        b!("LTRIM",    true, "Removes leading whitespace or specified characters"),
+        b!("RTRIM",    true, "Removes trailing whitespace or specified characters"),
+        b!("SUBSTR",   true, "Extracts a substring"),
+        b!("SUBSTRING",true, "Extracts a substring (SQL-standard alias for SUBSTR)"),
+        b!("LENGTH",   true, "Returns the length of a string"),
+        b!("CONCAT",   true, "Concatenates strings"),
+        b!("REPLACE",  true, "Replaces occurrences of a substring"),
+        b!("SPLIT_PART", true, "Splits a string on a delimiter and returns the nth part"),
+        b!("LPAD",     true, "Pads a string on the left to a given length"),
+        b!("RPAD",     true, "Pads a string on the right to a given length"),
+        b!("REVERSE",  true, "Reverses a string"),
+        b!("REGEXP_MATCH",   true, "Matches a string against a regular expression"),
+        b!("REGEXP_REPLACE", true, "Replaces matches of a regular expression"),
+        // ── Type conversion ───────────────────────────────────────────────────
+        b!("CAST",     true, "Converts a value to the specified data type"),
+        b!("TRY_CAST", true, "Converts a value; returns NULL instead of raising on failure"),
+        // ── Math ─────────────────────────────────────────────────────────────
+        b!("ABS",    true, "Absolute value"),
+        b!("CEIL",   true, "Ceiling (smallest integer >= argument)"),
+        b!("FLOOR",  true, "Floor (largest integer <= argument)"),
+        b!("ROUND",  true, "Rounds to the nearest integer or given number of decimals"),
+        b!("POWER",  true, "Raises a value to the given power"),
+        b!("SQRT",   true, "Square root"),
+        b!("MOD",    true, "Remainder of division"),
+        b!("SIGN",   true, "Sign of a number (-1, 0, or 1)"),
+        // ── JSON helpers ──────────────────────────────────────────────────────
+        b!("JSON_EXTRACT",    true, "Extracts a value from a JSON document by path"),
+        b!("JSON_OBJECT",     true, "Constructs a JSON object from key/value pairs"),
+        b!("JSON_ARRAY",      true, "Constructs a JSON array"),
+        b!("JSONB_EXTRACT_PATH", true, "Extracts a sub-object from a JSONB value"),
+        // ── Window helpers ────────────────────────────────────────────────────
+        b!("ROW_NUMBER",   true, "Assigns a sequential integer to each row in the partition"),
+        b!("RANK",         true, "Assigns a rank with gaps for ties"),
+        b!("DENSE_RANK",   true, "Assigns a rank without gaps for ties"),
+        b!("LAG",          true, "Returns a value from a prior row in the partition"),
+        b!("LEAD",         true, "Returns a value from a subsequent row in the partition"),
+    ]
 }
 
 #[derive(Debug, Default)]

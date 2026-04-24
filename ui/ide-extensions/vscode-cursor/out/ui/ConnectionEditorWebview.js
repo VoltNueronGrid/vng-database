@@ -162,6 +162,21 @@ function getConnectionEditorHtml(initialState) {
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
     }
+    .test-result {
+      margin-top: 8px;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      display: none;
+    }
+    .test-result.ok {
+      background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 20%, transparent);
+      border: 1px solid var(--vscode-testing-iconPassed, #73c991);
+    }
+    .test-result.fail {
+      background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f48771) 20%, transparent);
+      border: 1px solid var(--vscode-testing-iconFailed, #f48771);
+    }
     .modal-backdrop {
       display: none;
       position: fixed;
@@ -296,7 +311,6 @@ function getConnectionEditorHtml(initialState) {
       return {
         id: state.draft ? state.draft.id : undefined,
         name: readTextInput("draft-name"),
-        group: readOptionalTextInput("draft-group"),
         baseUrl: readTextInput("draft-baseUrl"),
         mode,
         runtimeTarget: readSelectValue("draft-runtimeTarget", "custom"),
@@ -383,10 +397,10 @@ function getConnectionEditorHtml(initialState) {
           '<input id="draft-tenantId" type="text" aria-label="Tenant ID" value="' + escapeHtml(draft.tenantId || "") + '" placeholder="Required for tenant mode" />' +
         '</label>' +
         '<label class="field full">' +
-          '<span>User ID</span>' +
-          '<input id="draft-userId" type="text" aria-label="User ID" value="' + escapeHtml(draft.userId || "") + '" placeholder="Required for tenant mode" />' +
+          '<span>User ID (optional)</span>' +
+          '<input id="draft-userId" type="text" aria-label="User ID" value="' + escapeHtml(draft.userId || "") + '" placeholder="Optional - use when tenant requests user-level audit headers" />' +
         '</label>' +
-        '<div class="field full inline-help">Tenant mode requires both Tenant ID and User ID headers.</div>';
+        '<div class="field full inline-help">User ID is optional. Leave it empty unless your tenant-level authorization policy requires x-vng-user-id.</div>';
     }
 
     function render() {
@@ -403,10 +417,6 @@ function getConnectionEditorHtml(initialState) {
           '<label class="field full">' +
             '<span>Name</span>' +
             '<input id="draft-name" type="text" aria-label="Connection name" value="' + escapeHtml(draft.name || "") + '" />' +
-          '</label>' +
-          '<label class="field full">' +
-            '<span>Group (optional folder)</span>' +
-            '<input id="draft-group" type="text" aria-label="Connection group" value="' + escapeHtml(draft.group || "") + '" placeholder="Examples: localmachine, staging, prod" />' +
           '</label>' +
           '<label class="field full">' +
             '<span>Base URL</span>' +
@@ -467,15 +477,26 @@ function getConnectionEditorHtml(initialState) {
         '</div>' +
         '<div class="actions">' +
           '<button data-action="save" aria-label="Save connection profile">' + (state.mode === "create" ? 'Create Connection' : 'Save Changes') + '</button>' +
+          '<button class="secondary" data-action="test" aria-label="Test connection">Test Connection</button>' +
           '<button class="secondary" data-action="cancel" aria-label="Cancel connection editing">Cancel</button>' +
         '</div>' +
-        '<div class="hint">Admin mode: Admin Key required. Operator mode: Admin Key + Operator ID required. Tenant mode: Tenant ID + User ID required.</div>';
+        '<div id="test-result" class="test-result" role="status" aria-live="polite"></div>' +
+        '<div class="hint">Admin mode: Admin Key required. Operator mode: Admin Key + Operator ID required. Tenant mode: Tenant ID required, User ID optional.</div>';
     }
 
     window.addEventListener("message", (event) => {
       if (event.data && event.data.type === "state") {
         state = event.data.state;
         render();
+        return;
+      }
+      if (event.data && event.data.type === "testResult") {
+        const resultEl = byId("test-result");
+        if (resultEl) {
+          resultEl.textContent = event.data.message;
+          resultEl.className = "test-result " + (event.data.ok ? "ok" : "fail");
+          resultEl.style.display = "block";
+        }
       }
     });
 
@@ -502,6 +523,16 @@ function getConnectionEditorHtml(initialState) {
       }
       if (action === "save") {
         postMessage({ type: "save", draft: readDraftFromDom() });
+        return;
+      }
+      if (action === "test") {
+        const resultEl = byId("test-result");
+        if (resultEl) {
+          resultEl.textContent = "Testing connection…";
+          resultEl.className = "test-result";
+          resultEl.style.display = "block";
+        }
+        postMessage({ type: "test", draft: readDraftFromDom() });
         return;
       }
       postMessage({ type: action });

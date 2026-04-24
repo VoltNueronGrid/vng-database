@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SchemaManager = void 0;
 exports.createSchemaManager = createSchemaManager;
 const vscode = __importStar(require("vscode"));
+const Schema_1 = require("../models/Schema");
 class SchemaManager {
     constructor(httpClient) {
         this.cache = new Map();
@@ -69,10 +70,13 @@ class SchemaManager {
         try {
             const response = await this.httpClient.getSchemaRegistry(connection);
             if (response.status !== 200) {
-                throw new Error(`Failed to fetch schema: ${response.error}`);
+                const detail = response.error ?? `HTTP ${response.status}`;
+                throw new Error(`Failed to fetch schema: ${detail}`);
             }
+            const raw = response.data;
+            const databases = Array.isArray(raw?.databases) ? raw.databases.map(normalizeDatabase) : [];
             const registry = {
-                databases: response.data?.databases || [],
+                databases,
                 timestamp: Date.now(),
             };
             // Cache result
@@ -223,5 +227,54 @@ class SchemaManager {
 exports.SchemaManager = SchemaManager;
 function createSchemaManager(httpClient) {
     return new SchemaManager(httpClient);
+}
+// ── Server → TypeScript model normalizers ─────────────────────────────────────
+// The server uses snake_case (data_type, primary_key) while our TS model uses
+// camelCase (type, isPrimaryKey). Map them here so all downstream code works.
+function normalizeColumn(raw) {
+    const typeStr = String(raw["data_type"] ?? raw["type"] ?? "UNKNOWN");
+    return {
+        name: String(raw["name"] ?? ""),
+        type: (0, Schema_1.parseColumnType)(typeStr),
+        nullable: Boolean(raw["nullable"] ?? true),
+        isPrimaryKey: Boolean(raw["primary_key"] ?? raw["isPrimaryKey"] ?? false),
+        isUnique: Boolean(raw["is_unique"] ?? raw["isUnique"] ?? false),
+        isForeignKey: Boolean(raw["is_foreign_key"] ?? raw["isForeignKey"] ?? false),
+        defaultValue: raw["default_value"] != null ? String(raw["default_value"]) : raw["defaultValue"] != null ? String(raw["defaultValue"]) : undefined,
+        comment: raw["comment"] != null ? String(raw["comment"]) : undefined,
+    };
+}
+function normalizeTable(raw) {
+    const rawCols = Array.isArray(raw["columns"]) ? raw["columns"] : [];
+    const rawIdxs = Array.isArray(raw["indexes"]) ? raw["indexes"] : [];
+    return {
+        name: String(raw["name"] ?? ""),
+        schema: String(raw["schema"] ?? "public"),
+        columns: rawCols.map(normalizeColumn),
+        indexes: rawIdxs.map((idx) => ({
+            name: String(idx["name"] ?? ""),
+            columns: Array.isArray(idx["columns"]) ? idx["columns"].map(String) : [],
+            isUnique: Boolean(idx["is_unique"] ?? idx["isUnique"] ?? false),
+            isPrimary: Boolean(idx["is_primary"] ?? idx["isPrimary"] ?? false),
+        })),
+        comment: raw["comment"] != null ? String(raw["comment"]) : undefined,
+        rowCount: raw["row_count"] != null ? Number(raw["row_count"]) : raw["rowCount"] != null ? Number(raw["rowCount"]) : undefined,
+        isSystem: Boolean(raw["is_system"] ?? raw["isSystem"] ?? false),
+    };
+}
+function normalizeSchema(raw) {
+    const rawTables = Array.isArray(raw["tables"]) ? raw["tables"] : [];
+    return {
+        name: String(raw["name"] ?? "public"),
+        database: String(raw["database"] ?? "default"),
+        tables: rawTables.map(normalizeTable),
+    };
+}
+function normalizeDatabase(raw) {
+    const rawSchemas = Array.isArray(raw["schemas"]) ? raw["schemas"] : [];
+    return {
+        name: String(raw["name"] ?? "default"),
+        schemas: rawSchemas.map(normalizeSchema),
+    };
 }
 //# sourceMappingURL=SchemaManager.js.map

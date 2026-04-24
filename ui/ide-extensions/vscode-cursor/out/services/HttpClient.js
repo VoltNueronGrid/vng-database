@@ -1,22 +1,45 @@
 "use strict";
 /**
- * HttpClient: HTTP communication backed by the VoltNueronGrid TypeScript driver.
+ * HttpClient: transport-aware communication for the VoltNueronGrid extension.
  *
- * S3-001: replaced ad-hoc fetch() with VoltNueronGridDriver request builders +
- * performDriverHttpRequest so auth headers, timeout, and retry logic are owned
- * by the shared driver package, not duplicated in the extension.
+ * S3-001: HTTP path backed by VoltNueronGridDriver request builders.
+ * NT-S4-001 extension: routes to NativeClient when connection transportMode
+ * is "native", or when "auto" and a nativeEndpoint is configured.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HttpClient = void 0;
 exports.createHttpClient = createHttpClient;
 const DriverAdapter_1 = require("./DriverAdapter");
+const NativeClient_1 = require("./NativeClient");
 class HttpClient {
+    constructor() {
+        this.native = new NativeClient_1.NativeClient();
+    }
+    /**
+     * Resolve the effective transport mode for a connection.
+     * "native" → always native socket.
+     * "auto"   → native when nativeEndpoint is configured, else HTTP.
+     * "http"   → always HTTP (default).
+     */
+    effectiveTransport(connection) {
+        const mode = connection.settings.transportMode ?? "http";
+        if (mode === "native") {
+            return "native";
+        }
+        if (mode === "auto" && connection.settings.nativeEndpoint?.trim()) {
+            return "native";
+        }
+        return "http";
+    }
     /**
      * Execute a query against the server.
-     * Uses VoltNueronGridDriver.buildSqlExecuteRequest so the request format
-     * is owned by the shared driver-core-contract v1.
+     * Routes to native socket transport when transportMode is "native" or
+     * "auto" with a configured nativeEndpoint; otherwise uses HTTP.
      */
     async executeQuery(connection, query, options) {
+        if (this.effectiveTransport(connection) === "native") {
+            return this.native.executeQuery(connection, query, { timeoutMs: options?.timeoutMs });
+        }
         try {
             const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
             const req = driver.buildSqlExecuteRequest(query);
@@ -36,9 +59,12 @@ class HttpClient {
     }
     /**
      * Get schema registry.
-     * Uses VoltNueronGridDriver.buildSchemaRegistryRequest.
+     * Routes to native socket when transportMode is "native" or effective-auto-native.
      */
     async getSchemaRegistry(connection) {
+        if (this.effectiveTransport(connection) === "native") {
+            return this.native.getSchemaRegistry(connection);
+        }
         try {
             const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
             const req = driver.buildSchemaRegistryRequest();
@@ -51,10 +77,13 @@ class HttpClient {
     }
     /**
      * Health check.
-     * Uses VoltNueronGridDriver.buildHealthRequest; retries suppressed (maxRetries=0)
-     * so health probes are fast and deterministic.
+     * Routes to native socket when transportMode is "native" or effective-auto-native;
+     * otherwise HTTP with retries suppressed for fast deterministic probes.
      */
     async healthCheck(connection) {
+        if (this.effectiveTransport(connection) === "native") {
+            return this.native.healthCheck(connection);
+        }
         try {
             const driver = (0, DriverAdapter_1.makeVngDriver)(connection);
             const req = driver.buildHealthRequest();
@@ -67,8 +96,12 @@ class HttpClient {
     }
     /**
      * Test connection: returns structured result for UI display.
+     * Delegates to NativeClient.testConnection when on native transport.
      */
     async testConnection(connection) {
+        if (this.effectiveTransport(connection) === "native") {
+            return this.native.testConnection(connection);
+        }
         try {
             const response = await this.healthCheck(connection);
             if (response.status === 200) {

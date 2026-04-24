@@ -4,16 +4,10 @@
  */
 
 import * as vscode from "vscode";
-import { Database, Schema, Table, Column, Index, Trigger, TypeEntry, getColumnTypeDisplay } from "../models/Schema";
-import { Connection } from "../models/Connection";
+import { Database, Schema, Table, Column, Index, getColumnTypeDisplay } from "../models/Schema";
+import { Connection, ConnectionHealthState } from "../models/Connection";
 import { SchemaManager } from "../services/SchemaManager";
-import {
-  describeConnectionNode,
-  describeTableRowCount,
-  describeTableSections,
-  groupConnectionsForTree,
-  shouldExpandConnectionToDatabases,
-} from "./DatabaseExplorerTree";
+import { describeConnectionNode, shouldExpandConnectionToDatabases } from "./DatabaseExplorerTree";
 
 export interface SchemaTreeTableData {
   database: string;
@@ -28,12 +22,15 @@ export interface SchemaTreeColumnData {
   column: Column;
 }
 
-export interface SchemaTreeTableSectionData {
+export interface SchemaTreeContainerData {
   connectionId?: string;
   database: string;
   schema: string;
-  table: Table;
-  kind: "columns" | "indexes" | "triggers";
+  table: string;
+  /** Which container this node represents */
+  container: "columns" | "indexes" | "triggers" | "views" | "queries" | "types";
+  /** Extra payload (e.g. the full Table object so children can read it) */
+  tableData?: Table;
 }
 
 export interface SchemaTreeIndexData {
@@ -43,27 +40,27 @@ export interface SchemaTreeIndexData {
   index: Index;
 }
 
-export interface SchemaTreeTriggerData {
-  database: string;
-  schema: string;
-  table: string;
-  trigger: Trigger;
-}
-
+/**
+ * All discriminated node kinds in the explorer tree.
+ *
+ * New in S4:
+ *  - "view"       : individual view entry (placeholder, schema level)
+ *  - "container"  : generic collapsible folder (Columns / Indexes / Triggers /
+ *                   Views / Queries / Types)
+ *  - "index"      : a single index entry under the Indexes container
+ *  - "trigger"    : placeholder trigger leaf
+ */
 export type SchemaTreeItem = {
   type:
-    | "root"
-    | "group"
     | "connection"
-    | "container"
     | "database"
     | "schema"
     | "table"
-    | "tableSection"
     | "column"
+    | "container"
     | "index"
     | "trigger"
-    | "type"
+    | "view"
     | "loading"
     | "error"
     | "message";
@@ -74,6 +71,41 @@ export type SchemaTreeItem = {
   command?: vscode.Command;
   data?: any;
 };
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Map diagnostic.state → VS Code codicon for inline status dot */
+function connectionStateIcon(state: ConnectionHealthState): string {
+  switch (state) {
+    case "verified":
+      return "$(pass-filled)";
+    case "degraded":
+      return "$(warning)";
+    case "error":
+      return "$(error)";
+    case "unverified":
+    default:
+      return "$(circle-large-outline)";
+  }
+}
+
+/**
+ * Format a row count number into a human-readable string.
+ * e.g. 1_234_567 → "~1.2M rows", 42 → "42 rows"
+ */
+function formatRowCount(count: number): string {
+  if (count >= 1_000_000) {
+    return `~${(count / 1_000_000).toFixed(1)}M rows`;
+  }
+  if (count >= 1_000) {
+    return `~${(count / 1_000).toFixed(1)}K rows`;
+  }
+  return `${count} rows`;
+}
+
+// ---------------------------------------------------------------------------
 
 export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaTreeItem> {
   private _onDidChangeTreeData: vscode.EventEmitter<SchemaTreeItem | undefined | null | void> =
@@ -122,74 +154,80 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
     treeItem.id = this.getItemId(element);
     treeItem.contextValue = element.contextValue ?? element.type;
     treeItem.command = element.command;
-    treeItem.description = element.type === "column" ? (element.data as Column)?.type : element.description;
+    treeItem.description = element.description;
     treeItem.accessibilityInformation = {
       label: this.getAccessibilityLabel(element),
       role: "treeitem",
     };
 
+    // -----------------------------------------------------------------------
     // Icons
+    // -----------------------------------------------------------------------
     if (element.type === "loading") {
       treeItem.iconPath = new vscode.ThemeIcon("loading~spin");
     } else if (element.type === "error") {
       treeItem.iconPath = new vscode.ThemeIcon("error");
-    } else if (element.type === "root") {
-      treeItem.iconPath = new vscode.ThemeIcon("folder-library");
-    } else if (element.type === "group") {
-      treeItem.iconPath = new vscode.ThemeIcon("folder");
     } else if (element.type === "connection") {
       const connection = element.data as Connection;
-      const color =
-        connection.state === "verified"
-          ? new vscode.ThemeColor("testing.iconPassed")
-          : connection.state === "degraded"
-            ? new vscode.ThemeColor("testing.iconQueued")
-            : connection.state === "error"
-              ? new vscode.ThemeColor("testing.iconFailed")
-              : new vscode.ThemeColor("disabledForeground");
-      treeItem.iconPath = new vscode.ThemeIcon("circle-filled", color);
-      treeItem.tooltip = `${(element.data as Connection).settings.name}\n${(element.data as Connection).settings.baseUrl}`;
-    } else if (element.type === "container") {
-      treeItem.iconPath = new vscode.ThemeIcon("folder");
+      treeItem.label = connection.settings.name;
+      // Use a ThemeIcon to show the health state; codicons in plain string labels render literally
+      const iconId = connection.diagnostic.state === "verified" ? "pass-filled"
+        : connection.diagnostic.state === "degraded" ? "warning"
+        : connection.diagnostic.state === "error" ? "error"
+        : "circle-large-outline";
+      treeItem.iconPath = new vscode.ThemeIcon(iconId);
+      treeItem.tooltip = new vscode.MarkdownString(
+        `**${connection.settings.name}**\n\n` +
+          `${connection.settings.baseUrl}\n\n` +
+          `State: ${connection.diagnostic.state}` +
+          (connection.diagnostic.message ? `\n\n${connection.diagnostic.message}` : "")
+      );
     } else if (element.type === "database") {
       treeItem.iconPath = this.getMediaIcon("database");
     } else if (element.type === "schema") {
       treeItem.iconPath = this.getMediaIcon("schema");
     } else if (element.type === "table") {
       treeItem.iconPath = this.getMediaIcon("table");
-    } else if (element.type === "tableSection") {
-      treeItem.iconPath = new vscode.ThemeIcon("list-tree");
-    } else if (element.type === "type") {
-      treeItem.iconPath = new vscode.ThemeIcon("symbol-struct");
+      // S4-004: row count in description
+      const table = (element.data as SchemaTreeTableData & { connectionId?: string }).table;
+      if (table.rowCount !== undefined && table.rowCount !== null) {
+        treeItem.description = formatRowCount(table.rowCount);
+        treeItem.tooltip = `${table.name}\n${formatRowCount(table.rowCount)}${table.comment ? `\n${table.comment}` : ""}`;
+      } else {
+        treeItem.description = "(rows: unknown)";
+        treeItem.tooltip = table.comment ?? table.name;
+      }
     } else if (element.type === "column") {
-      const column = element.data as Column;
+      const column = (element.data as SchemaTreeColumnData).column;
       const typeDisplay = getColumnTypeDisplay(column.type);
       treeItem.iconPath = this.getMediaIcon("column");
       treeItem.description = `${typeDisplay.label}${column.nullable ? " (null)" : ""}${column.isPrimaryKey ? " (PK)" : ""}`;
+    } else if (element.type === "container") {
+      // S4-002 / S4-003: folder containers
+      const container = (element.data as SchemaTreeContainerData).container;
+      treeItem.iconPath = this.getContainerIcon(container);
     } else if (element.type === "index") {
-      const index = element.data as SchemaTreeIndexData;
       treeItem.iconPath = new vscode.ThemeIcon("symbol-key");
-      treeItem.description = [index.index.isPrimary ? "PRIMARY" : index.index.isUnique ? "UNIQUE" : "INDEX", index.index.columns.join(", ")]
-        .filter((entry) => entry.length > 0)
-        .join(" • ");
+      const idx = (element.data as SchemaTreeIndexData).index;
+      const badges: string[] = [];
+      if (idx.isPrimary) badges.push("PK");
+      if (idx.isUnique) badges.push("UNIQUE");
+      treeItem.description = badges.join(", ") || idx.columns.join(", ");
+      treeItem.tooltip = `${idx.name}\nColumns: ${idx.columns.join(", ")}${idx.isUnique ? "\nUnique" : ""}${idx.isPrimary ? "\nPrimary" : ""}`;
     } else if (element.type === "trigger") {
-      const trigger = element.data as SchemaTreeTriggerData;
       treeItem.iconPath = new vscode.ThemeIcon("zap");
-      treeItem.description = `${trigger.trigger.timing} ${trigger.trigger.event}${trigger.trigger.enabled === false ? " (disabled)" : ""}`;
+    } else if (element.type === "view") {
+      treeItem.iconPath = new vscode.ThemeIcon("eye");
     } else if (element.type === "message") {
       treeItem.iconPath = new vscode.ThemeIcon("info");
     }
 
+    // -----------------------------------------------------------------------
     // Collapsible state
+    // -----------------------------------------------------------------------
     if (element.type === "loading" || element.type === "error" || element.type === "message") {
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
-    } else if (element.type === "root") {
-      treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
-    } else if (element.type === "group") {
-      treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
     } else if (element.type === "connection") {
-      treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
-    } else if (element.type === "container") {
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
     } else if (element.type === "database") {
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
@@ -197,9 +235,15 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
     } else if (element.type === "table") {
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
-    } else if (element.type === "tableSection") {
+    } else if (element.type === "column") {
+      treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
+    } else if (element.type === "container") {
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
-    } else if (element.type === "column" || element.type === "type" || element.type === "index" || element.type === "trigger") {
+    } else if (element.type === "index") {
+      treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
+    } else if (element.type === "trigger") {
+      treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
+    } else if (element.type === "view") {
       treeItem.collapsibleState = vscode.TreeItemCollapsibleState.None;
     }
 
@@ -216,33 +260,7 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
           // Empty children so `viewsWelcome` in package.json shows (Screenshot-2 style).
           return [];
         }
-        return [
-          {
-            type: "root",
-            label: "Connections",
-            contextValue: "connectionsRoot",
-          },
-        ];
-      }
-
-      if (element.type === "root") {
-        const groupedConnections = groupConnectionsForTree(this.connections);
-        return groupedConnections.map((bucket) => ({
-          type: "group" as const,
-          label: bucket.groupLabel,
-          contextValue: "connectionGroup",
-          description: `${bucket.connections.length} connection${bucket.connections.length === 1 ? "" : "s"}`,
-          data: {
-            groupLabel: bucket.groupLabel,
-            connectionIds: bucket.connections.map((connection) => connection.id),
-          },
-        }));
-      }
-
-      if (element.type === "group") {
-        const connectionIds = (element.data as { connectionIds?: string[] })?.connectionIds ?? [];
-        const groupConnections = this.connections.filter((connection) => connectionIds.includes(connection.id));
-        return groupConnections.map((connection) => {
+        return this.connections.map((connection) => {
           const presentation = describeConnectionNode(connection);
           return {
             type: "connection" as const,
@@ -296,144 +314,98 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
         }));
       }
 
-      // Schema level: show tables
+      // Schema level: show container nodes (S4-002)
       if (element.type === "schema") {
         const connection = this.resolveConnectionForElement(element) ?? this.connection;
         const { database, schema } = element.data as { connectionId?: string; database: string; schema: Schema };
+        const tables = await this.schemaManager.getTables(connection, database, schema.name);
+        const visibleTables = tables.filter((t) => !t.isSystem);
+
+        if (visibleTables.length === 0) {
+          return [{ type: "message", label: "No tables found", contextValue: "message" }];
+        }
+
+        // Build the schema-level containers
+        const schemaContainerBase = {
+          connectionId: connection.id,
+          database,
+          schema: schema.name,
+          table: "",
+        };
+
         return [
+          // Tables — shows actual table children
           {
-            type: "container",
-            label: "Query",
-            contextValue: "queryContainer",
-            data: { connectionId: connection.id, database, schema: schema.name, kind: "query" as const },
-          },
-          {
-            type: "container",
-            label: "Types",
-            contextValue: "typesContainer",
-            data: { connectionId: connection.id, database, schema: schema.name, kind: "types" as const },
-          },
-          {
-            type: "container",
+            type: "container" as const,
             label: "Tables",
-            contextValue: "tablesContainer",
-            data: { connectionId: connection.id, database, schema: schema.name, kind: "tables" as const },
+            description: `${visibleTables.length}`,
+            contextValue: "containerTables",
+            data: { ...schemaContainerBase, container: "columns", _tables: visibleTables } as any,
+          },
+          // Views — placeholder
+          {
+            type: "container" as const,
+            label: "Views",
+            contextValue: "containerViews",
+            data: { ...schemaContainerBase, container: "views" } as SchemaTreeContainerData,
+          },
+          // Queries — placeholder
+          {
+            type: "container" as const,
+            label: "Queries",
+            contextValue: "containerQueries",
+            data: { ...schemaContainerBase, container: "queries" } as SchemaTreeContainerData,
+          },
+          // Types — placeholder
+          {
+            type: "container" as const,
+            label: "Types",
+            contextValue: "containerTypes",
+            data: { ...schemaContainerBase, container: "types" } as SchemaTreeContainerData,
           },
         ];
       }
 
+      // Container node expansion (S4-002 / S4-003)
       if (element.type === "container") {
+        return this.getContainerChildren(element);
+      }
+
+      // Table level: show Columns / Indexes / Triggers containers (S4-003)
+      if (element.type === "table") {
         const connection = this.resolveConnectionForElement(element) ?? this.connection;
-        const { database, schema, kind } = element.data as {
-          connectionId?: string;
-          database: string;
-          schema: string;
-          kind: "query" | "types" | "tables";
+        const { database, schema, table } = element.data as SchemaTreeTableData & { connectionId?: string };
+
+        const containerBase: Omit<SchemaTreeContainerData, "container"> = {
+          connectionId: connection.id,
+          database,
+          schema,
+          table: table.name,
+          tableData: table,
         };
 
-        if (kind === "query") {
-          return [{ type: "message", label: "Saved queries are coming in Sprint V3-S4.", contextValue: "message" }];
-        }
-
-        if (kind === "types") {
-          const schemas = await this.schemaManager.getSchemas(connection, database);
-          const schemaInfo = schemas.find((item) => item.name === schema);
-          const types = (schemaInfo?.types ?? []) as TypeEntry[];
-          if (types.length === 0) {
-            return [{ type: "message", label: "No user-defined types", contextValue: "message" }];
-          }
-          return types.map((entry) => ({
-            type: "type" as const,
-            label: entry.name,
-            description: entry.kind,
-            contextValue: "type",
-            data: entry,
-          }));
-        }
-
-        const tables = await this.schemaManager.getTables(connection, database, schema);
-        if (tables.length === 0) {
-          return [{ type: "message", label: "No tables found", contextValue: "message" }];
-        }
-        return tables
-          .filter((t) => !t.isSystem)
-          .map((table) => ({
-            type: "table" as const,
-            label: table.name,
-            description: describeTableRowCount(table),
-            data: { connectionId: connection.id, database, schema, table },
-          }));
-      }
-
-      // Table level: show section nodes (Columns, Indexes, Triggers)
-      if (element.type === "table") {
-        const { database, schema, table } = element.data as SchemaTreeTableData & { connectionId?: string };
-        const sections = describeTableSections(table);
-        return sections.map((section) => ({
-          type: "tableSection" as const,
-          label: section.label,
-          description: `${section.count}`,
-          contextValue: `tableSection.${section.kind}`,
-          data: {
-            connectionId: this.unwrapConnectionId(element.data),
-            database,
-            schema,
-            table,
-            kind: section.kind,
-          } as SchemaTreeTableSectionData,
-        }));
-      }
-
-      if (element.type === "tableSection") {
-        const { database, schema, table, kind } = element.data as SchemaTreeTableSectionData;
-        if (kind === "columns") {
-          if (table.columns.length === 0) {
-            return [{ type: "message", label: "No columns found", contextValue: "message" }];
-          }
-          return table.columns.map((column) => ({
-            type: "column" as const,
-            label: column.name,
-            data: {
-              database,
-              schema,
-              table: table.name,
-              column,
-            } as SchemaTreeColumnData,
-          }));
-        }
-
-        if (kind === "indexes") {
-          if (table.indexes.length === 0) {
-            return [{ type: "message", label: "No indexes found", contextValue: "message" }];
-          }
-          return table.indexes.map((index) => ({
-            type: "index" as const,
-            label: index.name,
-            contextValue: "index",
-            data: {
-              database,
-              schema,
-              table: table.name,
-              index,
-            } as SchemaTreeIndexData,
-          }));
-        }
-
-        const triggers = table.triggers ?? [];
-        if (triggers.length === 0) {
-          return [{ type: "message", label: "No triggers found", contextValue: "message" }];
-        }
-        return triggers.map((trigger) => ({
-          type: "trigger" as const,
-          label: trigger.name,
-          contextValue: "trigger",
-          data: {
-            database,
-            schema,
-            table: table.name,
-            trigger,
-          } as SchemaTreeTriggerData,
-        }));
+        return [
+          {
+            type: "container" as const,
+            label: "Columns",
+            description: `${table.columns.length}`,
+            contextValue: "containerColumns",
+            data: { ...containerBase, container: "columns" } as SchemaTreeContainerData,
+          },
+          {
+            type: "container" as const,
+            label: "Indexes",
+            description: `${table.indexes.length}`,
+            contextValue: "containerIndexes",
+            data: { ...containerBase, container: "indexes" } as SchemaTreeContainerData,
+          },
+          {
+            type: "container" as const,
+            label: "Triggers",
+            contextValue: "containerTriggers",
+            data: { ...containerBase, container: "triggers" } as SchemaTreeContainerData,
+          },
+        ];
       }
 
       return [];
@@ -442,6 +414,91 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
       console.error("DatabaseExplorerProvider.getChildren error:", message);
       return [{ type: "error", label: `Error: ${message}` }];
     }
+  }
+
+  /**
+   * Expand a container node into its children.
+   */
+  private async getContainerChildren(element: SchemaTreeItem): Promise<SchemaTreeItem[]> {
+    const data = element.data as SchemaTreeContainerData & { _tables?: Table[] };
+    const connection = this.resolveConnectionForElement(element) ?? this.connection;
+
+    // Schema-level "Tables" container  → list table nodes
+    if (element.contextValue === "containerTables") {
+      const tables: Table[] = data._tables ?? [];
+      if (tables.length === 0) {
+        return [{ type: "message", label: "No tables found", contextValue: "message" }];
+      }
+      return tables.map((table) => ({
+        type: "table" as const,
+        label: table.name,
+        data: {
+          connectionId: data.connectionId,
+          database: data.database,
+          schema: data.schema,
+          table,
+        },
+      }));
+    }
+
+    // Schema-level placeholder containers
+    if (element.contextValue === "containerViews") {
+      return [{ type: "message", label: "No views defined", contextValue: "message" }];
+    }
+    if (element.contextValue === "containerQueries") {
+      return [{ type: "message", label: "Query history coming soon", contextValue: "message" }];
+    }
+    if (element.contextValue === "containerTypes") {
+      return [{ type: "message", label: "No custom types defined", contextValue: "message" }];
+    }
+
+    // Table-level containers
+    if (element.contextValue === "containerColumns") {
+      if (!connection) return [];
+      const columns = await this.schemaManager.getColumns(
+        connection,
+        data.database,
+        data.schema,
+        data.table
+      );
+      if (columns.length === 0) {
+        return [{ type: "message", label: "No columns found", contextValue: "message" }];
+      }
+      return columns.map((column) => ({
+        type: "column" as const,
+        label: column.name,
+        data: {
+          database: data.database,
+          schema: data.schema,
+          table: data.table,
+          column,
+        } as SchemaTreeColumnData,
+      }));
+    }
+
+    if (element.contextValue === "containerIndexes") {
+      const table = data.tableData;
+      if (!table || table.indexes.length === 0) {
+        return [{ type: "message", label: "No indexes defined", contextValue: "message" }];
+      }
+      return table.indexes.map((index) => ({
+        type: "index" as const,
+        label: index.name,
+        contextValue: "index",
+        data: {
+          database: data.database,
+          schema: data.schema,
+          table: data.table,
+          index,
+        } as SchemaTreeIndexData,
+      }));
+    }
+
+    if (element.contextValue === "containerTriggers") {
+      return [{ type: "message", label: "No triggers defined", contextValue: "message" }];
+    }
+
+    return [];
   }
 
   /**
@@ -478,21 +535,17 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
       };
       return `table-${connectionId ?? this.connection?.id ?? "default"}-${database}-${schema}-${table.name}`;
     }
-    if (element.type === "tableSection") {
-      const { connectionId, database, schema, table, kind } = element.data as SchemaTreeTableSectionData;
-      return `table-section-${connectionId ?? this.connection?.id ?? "default"}-${database}-${schema}-${table.name}-${kind}`;
-    }
     if (element.type === "column") {
       const { database, schema, table, column } = element.data as SchemaTreeColumnData;
       return `col-${database}-${schema}-${table}-${column.name}`;
     }
-    if (element.type === "index") {
-      const { database, schema, table, index } = element.data as SchemaTreeIndexData;
-      return `idx-${database}-${schema}-${table}-${index.name}`;
+    if (element.type === "container") {
+      const d = element.data as SchemaTreeContainerData;
+      return `container-${d.connectionId ?? "default"}-${d.database}-${d.schema}-${d.table}-${element.contextValue}`;
     }
-    if (element.type === "trigger") {
-      const { database, schema, table, trigger } = element.data as SchemaTreeTriggerData;
-      return `trg-${database}-${schema}-${table}-${trigger.name}`;
+    if (element.type === "index") {
+      const d = element.data as SchemaTreeIndexData;
+      return `index-${d.database}-${d.schema}-${d.table}-${d.index.name}`;
     }
     return `${element.type}-${element.label}`;
   }
@@ -523,22 +576,30 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
     };
   }
 
+  /** Return an appropriate ThemeIcon for each container kind */
+  private getContainerIcon(container: SchemaTreeContainerData["container"]): vscode.ThemeIcon {
+    switch (container) {
+      case "columns":
+        return new vscode.ThemeIcon("list-unordered");
+      case "indexes":
+        return new vscode.ThemeIcon("symbol-key");
+      case "triggers":
+        return new vscode.ThemeIcon("zap");
+      case "views":
+        return new vscode.ThemeIcon("eye");
+      case "queries":
+        return new vscode.ThemeIcon("search");
+      case "types":
+        return new vscode.ThemeIcon("symbol-class");
+      default:
+        return new vscode.ThemeIcon("folder");
+    }
+  }
+
   private getAccessibilityLabel(element: SchemaTreeItem): string {
     if (element.type === "connection") {
       const connection = element.data as Connection;
-      return `Connection ${connection.settings.name}, ${connection.isActive ? "active" : "inactive"}, ${connection.state}`;
-    }
-    if (element.type === "root") {
-      return "Connection groups";
-    }
-    if (element.type === "group") {
-      return `Connection group ${element.label}`;
-    }
-    if (element.type === "container") {
-      return `${element.label} container`;
-    }
-    if (element.type === "type") {
-      return `Type ${element.label}`;
+      return `Connection ${connection.settings.name}, ${connection.isActive ? "active" : "inactive"}, state ${connection.diagnostic.state}`;
     }
     if (element.type === "database") {
       return `Database ${element.label}`;
@@ -547,22 +608,20 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
       return `Schema ${element.label}`;
     }
     if (element.type === "table") {
-      const { table } = element.data as SchemaTreeTableData;
-      const rowCount = describeTableRowCount(table);
-      return rowCount ? `Table ${element.label}, ${rowCount}` : `Table ${element.label}`;
-    }
-    if (element.type === "tableSection") {
-      return `${element.label} section`;
+      const table = (element.data as SchemaTreeTableData).table;
+      const rowPart = table.rowCount !== undefined ? `, ${formatRowCount(table.rowCount)}` : ", rows unknown";
+      return `Table ${element.label}${rowPart}`;
     }
     if (element.type === "column") {
       const column = (element.data as SchemaTreeColumnData).column;
       return `Column ${column.name}, type ${getColumnTypeDisplay(column.type).label}${column.isPrimaryKey ? ", primary key" : ""}${column.nullable ? ", nullable" : ""}`;
     }
-    if (element.type === "index") {
-      return `Index ${element.label}`;
+    if (element.type === "container") {
+      return `${element.label} folder`;
     }
-    if (element.type === "trigger") {
-      return `Trigger ${element.label}`;
+    if (element.type === "index") {
+      const idx = (element.data as SchemaTreeIndexData).index;
+      return `Index ${idx.name}, columns ${idx.columns.join(", ")}${idx.isPrimary ? ", primary" : ""}${idx.isUnique ? ", unique" : ""}`;
     }
     return element.label;
   }

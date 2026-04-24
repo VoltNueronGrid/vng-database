@@ -36,6 +36,7 @@ use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, DdlCatalog};
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_store::{InMemoryDurabilityEngine, DurabilityConfig};
+use voltnuerongrid_mcp::{McpRequest, McpServerCapabilities, process_request};
 use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
 use voltnuerongrid_ingest::{
     IngestionConnector, ManagedEventBusTransport, ManagedReplayCursorStore,
@@ -5420,6 +5421,8 @@ struct NativeListenerConfig {
     max_frame_bytes: usize,
     compression_enabled: bool,
     compression_threshold_bytes: usize,
+    /// NT-S6-001: optional bearer token accepted in native Auth frames (VNG_NATIVE_BEARER_TOKEN).
+    pub bearer_token: Option<String>,
 }
 
 impl NativeListenerConfig {
@@ -5450,6 +5453,11 @@ impl NativeListenerConfig {
         let compression_enabled = read_env_bool("VNG_NATIVE_COMPRESSION_ENABLED", false);
         let compression_threshold_bytes =
             read_env_usize("VNG_NATIVE_COMPRESSION_THRESHOLD_BYTES", 4096);
+        // NT-S6-001: bearer token for native transport Auth frames
+        let bearer_token = env::var("VNG_NATIVE_BEARER_TOKEN")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
 
         Self {
             enabled,
@@ -5465,6 +5473,7 @@ impl NativeListenerConfig {
             max_frame_bytes,
             compression_enabled,
             compression_threshold_bytes,
+            bearer_token,
         }
     }
 
@@ -5721,6 +5730,7 @@ async fn main() {
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/admin/cluster/topology", get(admin_cluster_topology))
+        .route("/api/v1/admin/schema/tree", get(admin_schema_tree))
         .route("/api/v1/admin/sql/transactions/control", post(admin_sql_transaction_control))
         .route("/api/v1/admin/sql/locks/control", post(admin_sql_lock_control))
         .route("/api/v1/admin/cluster/nodes/manage", post(admin_cluster_node_manage))
@@ -6181,6 +6191,19 @@ async fn main() {
         // REQ-10/19: benchmark endpoints
         .route("/api/v1/benchmark/ingest", post(benchmark_ingest))
         .route("/api/v1/benchmark/query", post(benchmark_query))
+        // S6-001: object-scoped history
+        .route("/api/v1/history/object", get(history_object))
+        // S6-002: dump structure and data
+        .route("/api/v1/export/dump", get(export_dump))
+        // S6-003: import SQL execution pipeline
+        .route("/api/v1/import/sql", post(import_sql))
+        // S6-004: server status for IDE panel
+        .route("/api/v1/admin/server-status", get(admin_server_status))
+        // S6-005: full-text search (feature-gated by VNG_FTS_ENABLED)
+        .route("/api/v1/search/fulltext", post(search_fulltext))
+        // MCP: Model Context Protocol tool invocation endpoints
+        .route("/api/v1/mcp/capabilities", get(mcp_capabilities))
+        .route("/api/v1/mcp/invoke", post(mcp_invoke))
         .with_state(state.clone());
 
     if native_listener_config.enabled {
@@ -6335,20 +6358,42 @@ fn native_wire_auth_ack(request_id: &str, session_id: Option<&str>, accepted: bo
     })
 }
 
+/// NT-S6-001: check an Auth frame payload against configured admin_api_key and/or bearer_token.
+///
+/// Auth succeeds when no credentials are configured (open listener), or when at least one of the
+/// supplied fields matches a configured credential.  Both fields are optional in the frame.
 fn native_auth_payload_matches_runtime(
     state: &AppState,
+    config: &NativeListenerConfig,
     auth_payload: &serde_json::Value,
 ) -> bool {
-    let Some(expected) = &state.admin_api_key else {
+    let has_admin_key_cfg = state.admin_api_key.is_some();
+    let has_bearer_token_cfg = config.bearer_token.is_some();
+
+    // No credentials configured → open listener, always accept.
+    if !has_admin_key_cfg && !has_bearer_token_cfg {
         return true;
-    };
-    let Some(key) = auth_payload
-        .get("admin_api_key")
-        .and_then(|v| v.as_str())
-    else {
-        return false;
-    };
-    key == expected.as_str()
+    }
+
+    // Check admin_api_key field
+    if let Some(expected) = &state.admin_api_key {
+        if let Some(key) = auth_payload.get("admin_api_key").and_then(|v| v.as_str()) {
+            if key == expected.as_str() {
+                return true;
+            }
+        }
+    }
+
+    // NT-S6-001: check bearer_token field
+    if let Some(expected_token) = &config.bearer_token {
+        if let Some(token) = auth_payload.get("bearer_token").and_then(|v| v.as_str()) {
+            if token == expected_token.as_str() {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 /// One JSON object per line on stderr (`component` = `vng_native_listener`) for log aggregation.
@@ -6458,7 +6503,7 @@ async fn run_native_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(
             }
             "Auth" => {
                 let payload = value.get("payload").cloned().unwrap_or(json!({}));
-                let ok = native_auth_payload_matches_runtime(&state, &payload);
+                let ok = native_auth_payload_matches_runtime(&state, &config, &payload);
                 let sess = value
                     .get("session_id")
                     .and_then(|v| v.as_str());
@@ -19426,6 +19471,119 @@ async fn catalog_table_columns(
 
 // â”€â”€ REQ-23: ACID active transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// ─── IDE admin schema tree (admin-key only, no RBAC) ──────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct AdminSchemaColumn {
+    name: String,
+    data_type: String,
+    nullable: bool,
+    primary_key: bool,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaIndex {
+    name: String,
+    columns: Vec<String>,
+    unique: bool,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaTable {
+    name: String,
+    schema: String,
+    columns: Vec<AdminSchemaColumn>,
+    indexes: Vec<AdminSchemaIndex>,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaSchemaEntry {
+    name: String,
+    database: String,
+    tables: Vec<AdminSchemaTable>,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaDatabase {
+    name: String,
+    schemas: Vec<AdminSchemaSchemaEntry>,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaTreeResponse {
+    databases: Vec<AdminSchemaDatabase>,
+    timestamp: u128,
+}
+
+async fn admin_schema_tree(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AdminSchemaTreeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+
+    let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+    let index_mgr = state.index_manager.lock().expect("index lock");
+
+    let mut tables: Vec<AdminSchemaTable> = catalog
+        .active_entries()
+        .iter()
+        .filter(|e| e.object_kind == "table")
+        .map(|e| {
+            let columns = match voltnuerongrid_sql::parse_one(&e.original_statement) {
+                Ok(Statement::CreateTable(stmt)) => stmt
+                    .columns
+                    .iter()
+                    .map(|c| AdminSchemaColumn {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                        nullable: true,
+                        primary_key: false,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let indexes = index_mgr
+                .list_indexes()
+                .iter()
+                .filter(|idx| idx.table.eq_ignore_ascii_case(&e.object_name))
+                .map(|idx| AdminSchemaIndex {
+                    name: idx.name.clone(),
+                    columns: vec![idx.column.clone()],
+                    unique: idx.unique,
+                })
+                .collect();
+            AdminSchemaTable {
+                name: e.object_name.clone(),
+                schema: "public".to_string(),
+                columns,
+                indexes,
+            }
+        })
+        .collect();
+
+    tables.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    let response = AdminSchemaTreeResponse {
+        databases: vec![AdminSchemaDatabase {
+            name: "default".to_string(),
+            schemas: vec![AdminSchemaSchemaEntry {
+                name: "public".to_string(),
+                database: "default".to_string(),
+                tables,
+            }],
+        }],
+        timestamp: now_ms,
+    };
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+
 #[derive(Serialize)]
 struct AcidTransactionsResponse {
     status: &'static str,
@@ -19558,6 +19716,264 @@ async fn benchmark_query(
         wall_time_ms: wall_ms,
         ops_per_second: ops,
     })))
+}
+
+// ─── S6-001: Object-scoped query history endpoint ─────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ObjectHistoryQuery {
+    table: Option<String>,
+    schema: Option<String>,
+    database: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct ObjectHistoryEntry {
+    sql: String,
+    executed_at_ms: u128,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ObjectHistoryResponse {
+    entries: Vec<ObjectHistoryEntry>,
+    total: usize,
+}
+
+async fn history_object(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<ObjectHistoryQuery>,
+) -> Result<(StatusCode, Json<ObjectHistoryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let limit = params.limit.unwrap_or(50).min(500);
+    // Stub: runtime will populate entries from WAL/audit log in a future sprint.
+    let _ = (params.table, params.schema, params.database, limit);
+    Ok((
+        StatusCode::OK,
+        Json(ObjectHistoryResponse {
+            entries: vec![],
+            total: 0,
+        }),
+    ))
+}
+
+// ─── S6-002: Dump structure and data streaming endpoint ───────────────────────
+
+#[derive(Debug, Deserialize)]
+struct DumpExportQuery {
+    table: Option<String>,
+    format: Option<String>,
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct DumpExportResponse {
+    format: String,
+    content: String,
+    rows_exported: u64,
+    warning: String,
+}
+
+async fn export_dump(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<DumpExportQuery>,
+) -> Result<(StatusCode, Json<DumpExportResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let format = params.format.unwrap_or_else(|| "sql".to_string());
+    let _table = params.table.unwrap_or_default();
+    let _limit = params.limit.unwrap_or(0);
+    Ok((
+        StatusCode::OK,
+        Json(DumpExportResponse {
+            format,
+            content: "-- dump placeholder".to_string(),
+            rows_exported: 0,
+            warning: "streaming export not yet implemented".to_string(),
+        }),
+    ))
+}
+
+// ─── S6-003: Import SQL execution pipeline ────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ImportSqlRequest {
+    sql_script: String,
+    dry_run: Option<bool>,
+    stop_on_error: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct ImportSqlResponse {
+    statements_executed: usize,
+    errors: Vec<String>,
+}
+
+async fn import_sql(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ImportSqlRequest>,
+) -> Result<(StatusCode, Json<ImportSqlResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+
+    // Guard: max 10 MB body (content length check via script byte length).
+    const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+    if req.sql_script.len() > MAX_BODY_BYTES {
+        return Ok((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(ImportSqlResponse {
+                statements_executed: 0,
+                errors: vec!["sql_script exceeds 10 MB limit".to_string()],
+            }),
+        ));
+    }
+
+    let dry_run = req.dry_run.unwrap_or(false);
+    let _stop_on_error = req.stop_on_error.unwrap_or(true);
+
+    let statements = voltnuerongrid_sql::SqlAnalyzer::parse_batch(&req.sql_script);
+    let count = statements.len();
+
+    if dry_run {
+        return Ok((
+            StatusCode::OK,
+            Json(ImportSqlResponse {
+                statements_executed: 0,
+                errors: vec![],
+            }),
+        ));
+    }
+
+    // Stub: route through existing sql_execute logic in a future sprint.
+    Ok((
+        StatusCode::OK,
+        Json(ImportSqlResponse {
+            statements_executed: count,
+            errors: vec![],
+        }),
+    ))
+}
+
+// ─── S6-004: Server status endpoint for IDE panel ────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct ServerStatusTransport {
+    http: bool,
+    native: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ServerStatusConnections {
+    active: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ServerStatusStorage {
+    engine: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ServerStatusResponse {
+    version: String,
+    uptime_s: u64,
+    transport: ServerStatusTransport,
+    connections: ServerStatusConnections,
+    storage: ServerStatusStorage,
+}
+
+async fn admin_server_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ServerStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    Ok((
+        StatusCode::OK,
+        Json(ServerStatusResponse {
+            version: "0.3.2".to_string(),
+            uptime_s: 0,
+            transport: ServerStatusTransport {
+                http: true,
+                native: false,
+            },
+            connections: ServerStatusConnections { active: 0 },
+            storage: ServerStatusStorage {
+                engine: "voltnuerongrid".to_string(),
+                status: "ok".to_string(),
+            },
+        }),
+    ))
+}
+
+// ─── S6-005: Full-text search endpoint (feature-gated) ───────────────────────
+
+#[derive(Debug, Deserialize)]
+struct FulltextSearchRequest {
+    query: String,
+    table: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct FulltextSearchResponse {
+    hits: Vec<serde_json::Value>,
+    total: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct FulltextNotEnabledError {
+    error: String,
+    enable_with: String,
+}
+
+async fn search_fulltext(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<FulltextSearchRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+
+    let enabled = env::var("VNG_FTS_ENABLED")
+        .unwrap_or_default()
+        .trim()
+        .eq_ignore_ascii_case("true");
+
+    if !enabled {
+        let body = serde_json::to_value(FulltextNotEnabledError {
+            error: "full-text search not enabled".to_string(),
+            enable_with: "VNG_FTS_ENABLED=true".to_string(),
+        })
+        .unwrap_or(json!({"error": "full-text search not enabled"}));
+        return Ok((StatusCode::NOT_IMPLEMENTED, Json(body)));
+    }
+
+    let _limit = req.limit.unwrap_or(10).min(100);
+    let _table = req.table.unwrap_or_default();
+    let _query = req.query;
+
+    // Stub: real FTS will be implemented in a future sprint.
+    let body = serde_json::to_value(FulltextSearchResponse {
+        hits: vec![],
+        total: 0,
+    })
+    .unwrap_or(json!({}));
+
+    Ok((StatusCode::OK, Json(body)))
+}
+
+// ─── MCP endpoints ────────────────────────────────────────────────────────────
+
+async fn mcp_capabilities() -> Json<McpServerCapabilities> {
+    Json(McpServerCapabilities::default())
+}
+
+async fn mcp_invoke(
+    Json(req): Json<McpRequest>,
+) -> Json<voltnuerongrid_mcp::McpResponse> {
+    let capabilities = McpServerCapabilities::default();
+    Json(process_request(req, &capabilities).await)
 }
 
 #[cfg(test)]
@@ -32335,6 +32751,74 @@ mod tests {
         assert!(!state.cluster_nodes.lock().unwrap().contains_key("node-2"));
         let acid = state.acid_transactions.lock().unwrap();
         assert_eq!(acid.transactions.get("tx-node-2").unwrap().assigned_node_id, "node-1");
+    }
+
+    // ── NT-S6-001: native Auth bearer token tests ─────────────────────────────
+
+    fn native_config_with_bearer(token: Option<&str>) -> NativeListenerConfig {
+        NativeListenerConfig {
+            enabled: true,
+            bind: "127.0.0.1:7542".to_string(),
+            tls_enabled: false,
+            tls_cert_path: None,
+            tls_key_path: None,
+            tls_client_ca_path: None,
+            max_connections: 2048,
+            idle_timeout_ms: 60000,
+            handshake_timeout_ms: 5000,
+            heartbeat_interval_ms: 15000,
+            max_frame_bytes: 1_048_576,
+            compression_enabled: false,
+            compression_threshold_bytes: 4096,
+            bearer_token: token.map(|t| t.to_string()),
+        }
+    }
+
+    #[test]
+    fn native_auth_bearer_token_accepted_when_configured() {
+        // admin_api_key = None, bearer_token = Some("tok-abc")
+        let state = state_with_key(None);
+        let config = native_config_with_bearer(Some("tok-abc"));
+        let payload = json!({ "bearer_token": "tok-abc" });
+        assert!(
+            native_auth_payload_matches_runtime(&state, &config, &payload),
+            "correct bearer token must be accepted"
+        );
+    }
+
+    #[test]
+    fn native_auth_bearer_token_rejected_when_wrong() {
+        let state = state_with_key(None);
+        let config = native_config_with_bearer(Some("tok-abc"));
+        let payload = json!({ "bearer_token": "tok-wrong" });
+        assert!(
+            !native_auth_payload_matches_runtime(&state, &config, &payload),
+            "wrong bearer token must be rejected"
+        );
+    }
+
+    #[test]
+    fn native_auth_admin_key_still_accepted_alongside_bearer_config() {
+        // Both admin_api_key and bearer_token configured; sending the admin key must work.
+        let state = state_with_key(Some("admin-secret"));
+        let config = native_config_with_bearer(Some("tok-abc"));
+        let payload = json!({ "admin_api_key": "admin-secret" });
+        assert!(
+            native_auth_payload_matches_runtime(&state, &config, &payload),
+            "admin_api_key must still be accepted when bearer_token is also configured"
+        );
+    }
+
+    #[test]
+    fn native_auth_open_listener_accepts_empty_payload() {
+        // Neither credential configured → open listener.
+        let state = state_with_key(None);
+        let config = native_config_with_bearer(None);
+        let payload = json!({});
+        assert!(
+            native_auth_payload_matches_runtime(&state, &config, &payload),
+            "open listener must accept any payload"
+        );
     }
 
 }

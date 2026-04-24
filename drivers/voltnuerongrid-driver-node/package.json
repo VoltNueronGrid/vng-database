@@ -1,0 +1,30 @@
+{
+  "name": "@voltnuerongrid/driver-node",
+  "version": "0.1.0",
+  "description": "Pure Node.js stdlib driver for the VoltNueronGrid database",
+  "type": "module",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.js",
+      "types": "./src/index.d.ts"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/driver.test.js"
+  },
+  "files": [
+    "src/"
+  ],
+  "keywords": [
+    "voltnuerongrid",
+    "database",
+    "driver"
+  ],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {}
+}
