@@ -307,10 +307,12 @@ function getConnectionEditorHtml(initialState) {
 
     function readDraftFromDom() {
       const mode = readSelectValue("draft-mode", "admin");
+      const driverMode = readSelectValue("draft-driverMode", "http");
       const sslEnabled = readCheckboxInput("draft-ssl-enabled", false);
       return {
         id: state.draft ? state.draft.id : undefined,
         name: readTextInput("draft-name"),
+        driverMode,
         baseUrl: readTextInput("draft-baseUrl"),
         mode,
         runtimeTarget: readSelectValue("draft-runtimeTarget", "custom"),
@@ -419,8 +421,15 @@ function getConnectionEditorHtml(initialState) {
             '<input id="draft-name" type="text" aria-label="Connection name" value="' + escapeHtml(draft.name || "") + '" />' +
           '</label>' +
           '<label class="field full">' +
+            '<span>Driver Mode</span>' +
+            '<select id="draft-driverMode" aria-label="Driver mode">' +
+              '<option value="http"' + ((draft.driverMode || "http") === "http" ? ' selected' : '') + '>http (REST)</option>' +
+              '<option value="native"' + (draft.driverMode === "native" ? ' selected' : '') + '>native (vng:// socket)</option>' +
+            '</select>' +
+          '</label>' +
+          '<label class="field full">' +
             '<span>Base URL</span>' +
-            '<input id="draft-baseUrl" type="text" aria-label="Connection base URL" value="' + escapeHtml(draft.baseUrl || "") + '" />' +
+            '<input id="draft-baseUrl" type="text" aria-label="Connection base URL" value="' + escapeHtml(draft.baseUrl || "") + '" placeholder="' + ((draft.driverMode || "http") === "native" ? "vng://127.0.0.1:7542" : "http://127.0.0.1:8080") + '" />' +
           '</label>' +
           '<label class="field">' +
             '<span>Mode</span>' +
@@ -538,11 +547,40 @@ function getConnectionEditorHtml(initialState) {
       postMessage({ type: action });
     });
 
+    // Default credentials populated when the user picks a Mode.
+    const MODE_DEFAULTS = {
+      admin:    { adminKey: "local-dev-test", operatorId: "",        tenantId: "",        userId: "" },
+      operator: { adminKey: "local-dev-test", operatorId: "operator-dev", tenantId: "",   userId: "" },
+      tenant:   { adminKey: "",               operatorId: "",        tenantId: "tenant-dev", userId: "" },
+    };
+    const DRIVER_DEFAULTS = {
+      http:   "http://127.0.0.1:8080",
+      native: "vng://127.0.0.1:7542",
+    };
+
     document.addEventListener("change", (event) => {
       const target = event.target;
       if (target instanceof HTMLSelectElement && target.id === "draft-mode") {
         syncDraftFromDom();
         state.draft.mode = target.value;
+        // Auto-populate the auth field for the new mode if it's empty.
+        const defaults = MODE_DEFAULTS[target.value] || MODE_DEFAULTS.admin;
+        if (!state.draft.adminKey)   { state.draft.adminKey   = defaults.adminKey; }
+        if (!state.draft.operatorId) { state.draft.operatorId = defaults.operatorId; }
+        if (!state.draft.tenantId)   { state.draft.tenantId   = defaults.tenantId; }
+        if (!state.draft.userId)     { state.draft.userId     = defaults.userId; }
+        render();
+        return;
+      }
+      if (target instanceof HTMLSelectElement && target.id === "draft-driverMode") {
+        syncDraftFromDom();
+        state.draft.driverMode = target.value;
+        // Replace baseUrl with the driver-specific default when switching
+        // unless the user has already typed a non-default custom URL.
+        const oppositeDefault = DRIVER_DEFAULTS[target.value === "http" ? "native" : "http"];
+        if (!state.draft.baseUrl || state.draft.baseUrl === oppositeDefault) {
+          state.draft.baseUrl = DRIVER_DEFAULTS[target.value] || "";
+        }
         render();
         return;
       }

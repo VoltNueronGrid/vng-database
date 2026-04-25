@@ -95,12 +95,24 @@ async function loadDriver(): Promise<DriverModule | null> {
   if (driverCache !== undefined) {
     return driverCache;
   }
-  try {
-    // Dynamic import prevents a missing module from crashing extension activation.
-    driverCache = await import("@voltnuerongrid/driver-typescript");
-  } catch {
-    driverCache = null;
+  // Try the vendored driver first (bundled in the .vsix at vendor/driver-typescript).
+  // Fall back to npm-resolved package for development workflows.
+  const candidates = [
+    "../../vendor/driver-typescript/dist/index.js",
+    "@voltnuerongrid/driver-typescript",
+  ];
+  for (const candidate of candidates) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      driverCache = require(candidate);
+      if (driverCache) {
+        return driverCache;
+      }
+    } catch {
+      // try next candidate
+    }
   }
+  driverCache = null;
   return driverCache;
 }
 

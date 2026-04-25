@@ -230,10 +230,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const defaultConnectionDraft = (): WebviewConnectionDraft => ({
     name: "",
+    driverMode: "http",
     baseUrl: "http://127.0.0.1:8080",
     mode: "admin",
     runtimeTarget: "custom",
-    adminKey: "",
+    adminKey: "local-dev-test",
     operatorId: "",
     tenantId: "",
     userId: "",
@@ -252,7 +253,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const draftFromConnection = (connection: Connection): WebviewConnectionDraft => ({
     id: connection.id,
     name: connection.settings.name,
-    baseUrl: connection.settings.baseUrl,
+    driverMode: connection.settings.transportMode === "native" ? "native" : "http",
+    // For native connections, the stored baseUrl is an HTTP companion URL;
+    // show the original native endpoint in the form instead.
+    baseUrl: connection.settings.transportMode === "native" && connection.settings.nativeEndpoint
+      ? connection.settings.nativeEndpoint
+      : connection.settings.baseUrl,
     mode: connection.settings.mode,
     runtimeTarget: connection.settings.runtimeTarget,
     adminKey: "",
@@ -388,21 +394,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return false;
       }
 
-      if (parsedUrl.protocol === "vng:") {
+      // Driver mode is the user's explicit choice (http or native). The URL
+      // protocol must match — but the user picks driver via the dropdown.
+      const driverMode = draft.driverMode === "native" ? "native" : "http";
+      if (driverMode === "native") {
+        if (parsedUrl.protocol !== "vng:") {
+          vscode.window.showWarningMessage("Native driver requires a vng:// base URL (e.g. vng://127.0.0.1:7542).");
+          return false;
+        }
         resolvedHost = parsedUrl.hostname;
         resolvedPort = parsedUrl.port ? Number(parsedUrl.port) : 7542;
         nativeEndpoint = rawUrl;
         transportMode = "native";
-        // HTTP companion URL used for schema registry, health checks, and SQL
-        // when the native driver package is not bundled in the .vsix.
+        // HTTP companion URL is used for schema/health (and as a fallback for
+        // SQL when the native driver isn't bundled). Default to port 8080.
         resolvedBaseUrl = `http://${resolvedHost}:8080`;
-      } else if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
+      } else {
+        if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+          vscode.window.showWarningMessage("HTTP driver requires an http:// or https:// base URL.");
+          return false;
+        }
         resolvedHost = parsedUrl.hostname;
         resolvedPort = parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === "https:" ? 443 : 80;
         resolvedBaseUrl = rawUrl;
-      } else {
-        vscode.window.showWarningMessage("Enter a valid base URL (e.g. http://127.0.0.1:8080 or vng://127.0.0.1:7542).");
-        return false;
+        transportMode = "http";
       }
 
       const existingConnection = draft.id ? connectionManager.getConnection(draft.id) : undefined;
@@ -515,13 +530,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           let testBaseUrl = rawUrl;
           let testNativeEndpoint: string | undefined;
           let testTransportMode: "http" | "native" | undefined;
-          try {
-            const p = new URL(rawUrl);
-            if (p.protocol === "vng:") {
-              testNativeEndpoint = rawUrl;
-              testTransportMode = "native";
-            }
-          } catch { /* ignore parse error — test will fail anyway */ }
+          if (draft.driverMode === "native") {
+            testNativeEndpoint = rawUrl;
+            testTransportMode = "native";
+            // Build HTTP companion URL for the test (fallback path).
+            try {
+              const p = new URL(rawUrl);
+              testBaseUrl = `http://${p.hostname}:8080`;
+            } catch { /* ignore parse error — test will fail anyway */ }
+          }
           const tempConn: Connection = {
             id: `test-${Date.now()}`,
             isActive: false,

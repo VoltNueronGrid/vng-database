@@ -79,8 +79,13 @@ export class HttpClient {
    * Routes to native socket when transportMode is "native" or effective-auto-native.
    */
   async getSchemaRegistry(connection: Connection): Promise<HttpResponse> {
-    // Schema registry is always fetched via HTTP — the native driver is not
-    // bundled in the .vsix and schema metadata has no latency requirement.
+    if (this.effectiveTransport(connection) === "native") {
+      const result = await this.native.getSchemaRegistry(connection);
+      // If native driver isn't available, fall back to HTTP companion URL.
+      if (result.status !== 0) {
+        return result;
+      }
+    }
     try {
       const driver = makeVngDriver(connection);
       const req = driver.buildSchemaRegistryRequest();
@@ -97,7 +102,12 @@ export class HttpClient {
    * otherwise HTTP with retries suppressed for fast deterministic probes.
    */
   async healthCheck(connection: Connection): Promise<HttpResponse> {
-    // Always use HTTP for health checks — the native driver is not bundled.
+    if (this.effectiveTransport(connection) === "native") {
+      const result = await this.native.healthCheck(connection);
+      if (result.status !== 0) {
+        return result;
+      }
+    }
     try {
       const driver = makeVngDriver(connection);
       const req = driver.buildHealthRequest();
@@ -113,7 +123,6 @@ export class HttpClient {
    * Delegates to NativeClient.testConnection when on native transport.
    */
   async testConnection(connection: Connection): Promise<{ isHealthy: boolean; message: string }> {
-    // Always use HTTP health check — native driver not bundled in .vsix.
     try {
       const response = await this.healthCheck(connection);
       if (response.status === 200) {

@@ -18,6 +18,7 @@ export interface WebviewConnectionDraft {
   id?: string;
   name: string;
   group?: string;
+  driverMode: "http" | "native";
   baseUrl: string;
   mode: "admin" | "operator" | "tenant";
   runtimeTarget: "local" | "docker" | "cloud" | "custom";
