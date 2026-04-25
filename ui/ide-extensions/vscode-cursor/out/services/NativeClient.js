@@ -75,15 +75,17 @@ async function loadDriver() {
     }
     // Try the vendored driver first (bundled in the .vsix at vendor/driver-typescript).
     // Fall back to npm-resolved package for development workflows.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require("path");
     const candidates = [
-        "../../vendor/driver-typescript/dist/index.js",
+        path.resolve(__dirname, "../../vendor/driver-typescript/dist/index.js"),
         "@voltnuerongrid/driver-typescript",
     ];
     for (const candidate of candidates) {
         try {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             driverCache = require(candidate);
-            if (driverCache) {
+            if (driverCache && typeof driverCache.nativeHealthCommandRoundtrip === "function") {
                 return driverCache;
             }
         }

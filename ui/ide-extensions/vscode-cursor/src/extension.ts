@@ -564,16 +564,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               createdAt: Date.now(),
             },
           };
+          // Hard timeout — guarantee the webview gets a result even if the
+          // underlying transport (native socket especially) hangs.
+          const TEST_TIMEOUT_MS = 10_000;
+          const timeoutPromise = new Promise<{ isHealthy: false; message: string }>((resolve) =>
+            setTimeout(() => resolve({ isHealthy: false, message: `Test timed out after ${TEST_TIMEOUT_MS}ms` }), TEST_TIMEOUT_MS),
+          );
+          let result: { isHealthy: boolean; message: string };
           try {
-            const result = await httpClient.testConnection(tempConn);
+            result = await Promise.race([httpClient.testConnection(tempConn), timeoutPromise]);
+          } catch (err) {
+            result = { isHealthy: false, message: err instanceof Error ? err.message : String(err) };
+          }
+          output.appendLine(`[Test Connection] ${result.isHealthy ? "OK" : "FAIL"}: ${result.message}`);
+          try {
             await connectionEditorPanel?.panel.webview.postMessage({
               type: "testResult",
               ok: result.isHealthy,
               message: result.message,
             });
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            await connectionEditorPanel?.panel.webview.postMessage({ type: "testResult", ok: false, message: msg });
+          } catch (postErr) {
+            output.appendLine(`[Test Connection] postMessage failed: ${postErr instanceof Error ? postErr.message : String(postErr)}`);
           }
           return;
         }
