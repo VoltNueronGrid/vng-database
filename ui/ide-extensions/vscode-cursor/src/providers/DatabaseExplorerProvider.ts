@@ -167,6 +167,8 @@ export class DatabaseExplorerProvider implements vscode.TreeDataProvider<SchemaT
       treeItem.iconPath = new vscode.ThemeIcon("loading~spin");
     } else if (element.type === "error") {
       treeItem.iconPath = new vscode.ThemeIcon("error");
+      // Show the full error on hover — labels truncate aggressively in the tree.
+      treeItem.tooltip = element.label;
     } else if (element.type === "connection") {
       const connection = element.data as Connection;
       treeItem.label = connection.settings.name;

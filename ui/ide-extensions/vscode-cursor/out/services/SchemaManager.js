@@ -70,7 +70,19 @@ class SchemaManager {
         try {
             const response = await this.httpClient.getSchemaRegistry(connection);
             if (response.status !== 200) {
-                const detail = response.error ?? `HTTP ${response.status}`;
+                // Surface the server body when present — tree labels truncate, but
+                // tooltips carry the full message so the root cause stays visible.
+                let bodySnippet = "";
+                if (response.data && typeof response.data === "object") {
+                    try {
+                        bodySnippet = ` — ${JSON.stringify(response.data).slice(0, 240)}`;
+                    }
+                    catch { /* ignore */ }
+                }
+                else if (typeof response.data === "string" && response.data.length > 0) {
+                    bodySnippet = ` — ${response.data.slice(0, 240)}`;
+                }
+                const detail = response.error ?? `HTTP ${response.status}${bodySnippet}`;
                 throw new Error(`Failed to fetch schema: ${detail}`);
             }
             const raw = response.data;
