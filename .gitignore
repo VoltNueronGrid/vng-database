@@ -15,3 +15,6 @@ drivers/voltnuerongrid-driver-typescript/dist/
 .m2/
 drivers/voltnuerongrid-driver-java/target/
 ui/ide-extensions/vscode-cursor/voltnuerongrid-vscode-cursor-0.3.2.vsix
+.claude/
+.claude/worktrees/focused-maxwell-b73e6f
+.claude/worktrees/focused-maxwell-b73e6f
