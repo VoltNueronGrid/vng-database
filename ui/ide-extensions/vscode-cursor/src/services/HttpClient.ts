@@ -79,13 +79,10 @@ export class HttpClient {
    * Routes to native socket when transportMode is "native" or effective-auto-native.
    */
   async getSchemaRegistry(connection: Connection): Promise<HttpResponse> {
-    if (this.effectiveTransport(connection) === "native") {
-      const result = await this.native.getSchemaRegistry(connection);
-      // If native driver isn't available, fall back to HTTP companion URL.
-      if (result.status !== 0) {
-        return result;
-      }
-    }
+    // Always use HTTP /api/v1/admin/schema/tree. The native protocol's
+    // ingest.schema.registry returns ingest-connector metadata, not the
+    // database table tree, so it's not a substitute. For native-mode
+    // connections, baseUrl is the HTTP companion URL set at create-time.
     try {
       const driver = makeVngDriver(connection);
       const req = driver.buildSchemaRegistryRequest();

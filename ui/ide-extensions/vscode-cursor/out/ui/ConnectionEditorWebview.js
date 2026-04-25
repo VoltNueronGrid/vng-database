@@ -548,10 +548,11 @@ function getConnectionEditorHtml(initialState) {
     });
 
     // Default credentials populated when the user picks a Mode.
+    // Matches deploy/local/vng-local-dev.env defaults.
     const MODE_DEFAULTS = {
-      admin:    { adminKey: "local-dev-test", operatorId: "",        tenantId: "",        userId: "" },
-      operator: { adminKey: "local-dev-test", operatorId: "operator-dev", tenantId: "",   userId: "" },
-      tenant:   { adminKey: "",               operatorId: "",        tenantId: "tenant-dev", userId: "" },
+      admin:    { adminKey: "local-dev-key", operatorId: "",             tenantId: "",           userId: "" },
+      operator: { adminKey: "local-dev-key", operatorId: "automation",   tenantId: "",           userId: "" },
+      tenant:   { adminKey: "",              operatorId: "",             tenantId: "tenant-dev", userId: "" },
     };
     const DRIVER_DEFAULTS = {
       http:   "http://127.0.0.1:8080",
