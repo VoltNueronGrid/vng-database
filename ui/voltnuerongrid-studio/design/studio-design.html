@@ -1,0 +1,1677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoltNueronGrid Studio — Design Prototype</title>
+  <style>
+    /* ─── Reset & Base ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      /* Brand */
+      --brand-cyan:     #00d4ff;
+      --brand-cyan-dim: #00d4ff22;
+      --brand-purple:   #9333ea;
+      --brand-purple-dim: #9333ea22;
+      /* Surfaces */
+      --bg-base:    #08080f;
+      --bg-1:       #0f0f1a;
+      --bg-2:       #15151f;
+      --bg-3:       #1c1c2a;
+      --bg-4:       #222232;
+      --bg-hover:   #252538;
+      --bg-active:  #2a2a40;
+      /* Borders */
+      --border:     #252534;
+      --border-strong: #333348;
+      /* Text */
+      --text-1:     #e4e4f0;
+      --text-2:     #a8a8c0;
+      --text-3:     #6a6a88;
+      --text-inv:   #0a0a14;
+      /* Status */
+      --green:  #22c55e;
+      --yellow: #eab308;
+      --red:    #ef4444;
+      --blue:   #3b82f6;
+      --orange: #f97316;
+      /* Type badge colors */
+      --type-int:    #60a5fa;
+      --type-str:    #34d399;
+      --type-bool:   #a78bfa;
+      --type-date:   #f59e0b;
+      --type-json:   #fb7185;
+      /* Sizing */
+      --sidebar-w:   240px;
+      --titlebar-h:  38px;
+      --tabbar-h:    36px;
+      --statusbar-h: 26px;
+      --radius-sm:   4px;
+      --radius-md:   7px;
+      --radius-lg:   10px;
+      /* Font */
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+    }
+
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-base); color: var(--text-1); }
+
+    /* ─── Typography ────────────────────────────────────────── */
+    .mono { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+    .label-xs  { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+    .label-sm  { font-size: 11px; font-weight: 500; color: var(--text-2); }
+    .label-md  { font-size: 13px; font-weight: 500; }
+
+    /* ─── Scrollbar ─────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; }
+
+    /* ─── App Shell ─────────────────────────────────────────── */
+    .app { display: flex; flex-direction: column; width: 100vw; height: 100vh; }
+
+    /* ─── Title Bar ─────────────────────────────────────────── */
+    .titlebar {
+      height: var(--titlebar-h);
+      background: var(--bg-1);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 12px;
+      gap: 10px;
+      flex-shrink: 0;
+      -webkit-app-region: drag;
+      position: relative;
+      z-index: 100;
+    }
+    .titlebar-traffic {
+      display: flex; gap: 6px;
+      -webkit-app-region: no-drag;
+    }
+    .traffic { width: 12px; height: 12px; border-radius: 50%; cursor: pointer; transition: filter .15s; }
+    .traffic:hover { filter: brightness(1.3); }
+    .traffic-close  { background: #ff5f57; }
+    .traffic-min    { background: #febc2e; }
+    .traffic-max    { background: #28c840; }
+    .titlebar-logo {
+      display: flex; align-items: center; gap: 7px;
+      margin-left: 8px;
+    }
+    .logo-icon {
+      width: 22px; height: 22px;
+      background: linear-gradient(135deg, var(--brand-cyan), var(--brand-purple));
+      border-radius: var(--radius-sm);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 11px; color: white;
+      flex-shrink: 0;
+      box-shadow: 0 0 10px var(--brand-cyan-dim), 0 0 6px var(--brand-purple-dim);
+    }
+    .titlebar-name { font-weight: 600; font-size: 13px; color: var(--text-1); }
+    .titlebar-name span { color: var(--brand-cyan); }
+    .titlebar-spacer { flex: 1; }
+    .titlebar-conn-badge {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--bg-3); border: 1px solid var(--border-strong);
+      border-radius: 99px; padding: 3px 10px;
+      font-size: 11px; color: var(--text-2);
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+      transition: border-color .15s, background .15s;
+    }
+    .titlebar-conn-badge:hover { border-color: var(--brand-cyan); background: var(--bg-4); }
+    .titlebar-conn-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 5px var(--green); }
+    .titlebar-actions {
+      display: flex; gap: 2px;
+      -webkit-app-region: no-drag;
+    }
+    .titlebar-btn {
+      width: 28px; height: 26px;
+      background: transparent; border: none; border-radius: var(--radius-sm);
+      color: var(--text-3); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+      transition: background .12s, color .12s;
+    }
+    .titlebar-btn:hover { background: var(--bg-3); color: var(--text-1); }
+
+    /* ─── Main Layout ────────────────────────────────────────── */
+    .main-layout {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ─── Sidebar ────────────────────────────────────────────── */
+    .sidebar {
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      background: var(--bg-1);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Sidebar nav icons (activity bar-style) */
+    .activity-bar {
+      height: 40px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 8px; gap: 2px;
+    }
+    .activity-btn {
+      flex: 1; height: 28px;
+      background: transparent; border: none; border-radius: var(--radius-sm);
+      color: var(--text-3); cursor: pointer;
+      font-size: 11px; font-weight: 600;
+      transition: background .12s, color .12s;
+    }
+    .activity-btn:hover { background: var(--bg-3); color: var(--text-1); }
+    .activity-btn.active { background: var(--brand-cyan-dim); color: var(--brand-cyan); border: 1px solid #00d4ff33; }
+
+    .sidebar-section { overflow-y: auto; flex: 1; }
+
+    /* Connection list */
+    .conn-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px 6px;
+    }
+    .conn-add-btn {
+      width: 20px; height: 20px;
+      background: transparent; border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm); color: var(--text-2); cursor: pointer;
+      display: flex; align-items: center; justify-content: center; font-size: 14px;
+      transition: background .12s, border-color .12s, color .12s;
+    }
+    .conn-add-btn:hover { background: var(--bg-3); border-color: var(--brand-cyan); color: var(--brand-cyan); }
+
+    .conn-item {
+      display: flex; align-items: center; gap: 7px;
+      padding: 5px 10px 5px 12px;
+      cursor: pointer; border-radius: 0;
+      transition: background .1s;
+      position: relative;
+    }
+    .conn-item:hover { background: var(--bg-hover); }
+    .conn-item.active { background: var(--bg-active); }
+    .conn-item.active::before {
+      content: '';
+      position: absolute; left: 0; top: 2px; bottom: 2px; width: 2px;
+      background: var(--brand-cyan);
+      border-radius: 0 2px 2px 0;
+    }
+    .conn-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .conn-dot.connected { background: var(--green); box-shadow: 0 0 5px #22c55e88; }
+    .conn-dot.disconnected { background: var(--text-3); }
+    .conn-dot.error { background: var(--red); }
+    .conn-name { flex: 1; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .conn-type-badge {
+      font-size: 9px; font-weight: 700; letter-spacing: .05em;
+      padding: 1px 5px; border-radius: 99px;
+      background: var(--brand-cyan-dim); color: var(--brand-cyan); border: 1px solid #00d4ff22;
+      text-transform: uppercase; flex-shrink: 0;
+    }
+    .conn-type-badge.pg { background: #3b82f611; color: #3b82f6; border-color: #3b82f622; }
+
+    /* Tree */
+    .tree-node {
+      display: flex; align-items: center; gap: 5px;
+      padding: 3px 8px 3px 0;
+      cursor: pointer;
+      transition: background .1s;
+      border-radius: var(--radius-sm);
+      position: relative;
+    }
+    .tree-node:hover { background: var(--bg-hover); }
+    .tree-node.selected { background: var(--bg-active); }
+    .tree-node .indent { display: inline-block; width: 16px; flex-shrink: 0; }
+    .tree-node .chevron {
+      width: 12px; height: 12px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-3); font-size: 9px;
+      transition: transform .15s;
+    }
+    .tree-node .chevron.open { transform: rotate(90deg); }
+    .tree-node .tree-icon { width: 14px; height: 14px; flex-shrink: 0; font-size: 13px; line-height: 1; }
+    .tree-node .tree-label { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-node .tree-count { font-size: 10px; color: var(--text-3); margin-left: auto; padding-right: 8px; }
+    .tree-node .tree-badge {
+      font-size: 9px; padding: 0 4px; border-radius: 99px;
+      background: var(--bg-4); color: var(--text-3);
+      margin-right: 8px;
+    }
+
+    .tree-group { padding-left: 12px; }
+
+    .col-type-chip {
+      font-size: 9px; font-weight: 600; padding: 0 4px; border-radius: 3px;
+      flex-shrink: 0; margin-right: 8px;
+      font-family: 'SF Mono', monospace;
+    }
+    .col-type-chip.int    { background: #1d4ed844; color: var(--type-int); }
+    .col-type-chip.str    { background: #06564444; color: var(--type-str); }
+    .col-type-chip.bool   { background: #5b21b644; color: var(--type-bool); }
+    .col-type-chip.date   { background: #78350f44; color: var(--type-date); }
+    .col-type-chip.json   { background: #9f123944; color: var(--type-json); }
+
+    .pk-icon { font-size: 9px; color: var(--yellow); margin-right: 2px; }
+
+    /* ─── Workspace ──────────────────────────────────────────── */
+    .workspace {
+      flex: 1;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-base);
+    }
+
+    /* Tab bar */
+    .tabbar {
+      height: var(--tabbar-h);
+      background: var(--bg-1);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-end;
+      padding: 0 0 0 4px;
+      overflow-x: auto; overflow-y: hidden;
+      flex-shrink: 0;
+      gap: 1px;
+    }
+    .tabbar::-webkit-scrollbar { height: 0; }
+
+    .tab {
+      height: 32px;
+      min-width: 120px; max-width: 200px;
+      display: flex; align-items: center; gap: 6px;
+      padding: 0 10px;
+      background: var(--bg-2); border: 1px solid transparent;
+      border-bottom: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+      cursor: pointer; transition: background .12s;
+      position: relative; flex-shrink: 0;
+    }
+    .tab:hover { background: var(--bg-3); }
+    .tab.active {
+      background: var(--bg-base);
+      border-color: var(--border);
+      border-bottom-color: var(--bg-base);
+    }
+    .tab.active::after {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: var(--brand-cyan);
+      border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    }
+    .tab-icon { font-size: 12px; flex-shrink: 0; }
+    .tab-label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tab-close {
+      margin-left: auto; width: 16px; height: 16px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 3px; color: var(--text-3); font-size: 11px;
+      transition: background .1s, color .1s; flex-shrink: 0;
+    }
+    .tab-close:hover { background: var(--bg-active); color: var(--text-1); }
+    .tab-new {
+      height: 28px; width: 28px; margin-bottom: 4px; margin-left: 4px;
+      background: transparent; border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text-3);
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      font-size: 14px; transition: border-color .12s, color .12s, background .12s;
+      flex-shrink: 0;
+    }
+    .tab-new:hover { border-color: var(--brand-cyan); color: var(--brand-cyan); background: var(--brand-cyan-dim); }
+
+    /* Toolbar */
+    .toolbar {
+      height: 36px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 10px; gap: 6px;
+      background: var(--bg-1); flex-shrink: 0;
+    }
+    .btn {
+      height: 26px; padding: 0 10px;
+      background: var(--bg-3); border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm); color: var(--text-1);
+      cursor: pointer; display: flex; align-items: center; gap: 5px;
+      font-size: 12px; transition: background .12s, border-color .12s;
+      white-space: nowrap;
+    }
+    .btn:hover { background: var(--bg-4); border-color: var(--border-strong); }
+    .btn.primary { background: var(--brand-cyan); border-color: var(--brand-cyan); color: var(--text-inv); font-weight: 600; }
+    .btn.primary:hover { filter: brightness(1.1); }
+    .btn.danger { background: #ef444422; border-color: var(--red); color: var(--red); }
+    .btn.danger:hover { background: #ef444433; }
+    .btn-icon { font-size: 13px; }
+    .toolbar-divider { width: 1px; background: var(--border); height: 18px; margin: 0 4px; }
+    .toolbar-spacer { flex: 1; }
+    .toolbar-select {
+      height: 26px; padding: 0 8px;
+      background: var(--bg-3); border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm); color: var(--text-1);
+      font-size: 11px; cursor: pointer;
+      appearance: none; -webkit-appearance: none;
+    }
+    .toolbar-route-badge {
+      padding: 2px 8px; border-radius: 99px;
+      font-size: 10px; font-weight: 700; letter-spacing: .05em;
+    }
+    .route-oltp   { background: #22c55e22; color: var(--green); border: 1px solid #22c55e33; }
+    .route-olap   { background: #3b82f622; color: var(--blue);  border: 1px solid #3b82f633; }
+    .route-hybrid { background: #9333ea22; color: #c084fc;       border: 1px solid #9333ea33; }
+
+    /* ─── Editor ─────────────────────────────────────────────── */
+    .editor-area {
+      flex: 1; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    .editor-pane {
+      flex: 1.2; overflow: hidden;
+      position: relative;
+      background: var(--bg-base);
+    }
+    .editor-gutter {
+      position: absolute; left: 0; top: 0; bottom: 0; width: 44px;
+      background: var(--bg-1); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; padding-top: 12px;
+      overflow: hidden;
+    }
+    .gutter-line {
+      height: 20px; display: flex; align-items: center;
+      justify-content: flex-end; padding-right: 10px;
+      font-family: monospace; font-size: 12px; color: var(--text-3);
+    }
+    .gutter-line.active { color: var(--text-1); }
+    .editor-content {
+      position: absolute; left: 44px; top: 0; right: 0; bottom: 0;
+      padding: 12px 16px;
+      overflow: auto;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 13px; line-height: 20px;
+      white-space: pre;
+    }
+
+    /* SQL Syntax highlighting */
+    .kw  { color: #c084fc; font-weight: 600; }   /* keywords */
+    .fn  { color: #60a5fa; }                      /* functions */
+    .str { color: #34d399; }                       /* strings */
+    .num { color: #fb923c; }                       /* numbers */
+    .op  { color: #94a3b8; }                       /* operators */
+    .cm  { color: #4b5563; font-style: italic; }  /* comments */
+    .id  { color: var(--text-1); }                 /* identifiers */
+    .tbl { color: #e2e8f0; font-weight: 500; }     /* table names */
+    .col-ref { color: #a5f3fc; }                   /* column refs */
+    .cursor-line { background: #ffffff0a; border-radius: 2px; display: block; }
+    .selection  { background: #00d4ff22; }
+
+    /* Resize handle */
+    .resize-handle {
+      height: 4px; background: transparent; cursor: row-resize;
+      border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+      transition: background .15s;
+    }
+    .resize-handle:hover { background: var(--brand-cyan-dim); border-color: var(--brand-cyan); }
+
+    /* ─── Results Pane ───────────────────────────────────────── */
+    .results-pane {
+      flex: 1; display: flex; flex-direction: column;
+      background: var(--bg-1); border-top: 1px solid var(--border);
+    }
+    .results-toolbar {
+      height: 32px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 10px; gap: 6px;
+      flex-shrink: 0;
+    }
+    .results-tab {
+      height: 24px; padding: 0 10px; border-radius: var(--radius-sm);
+      font-size: 11px; font-weight: 500; cursor: pointer;
+      background: transparent; border: none; color: var(--text-3);
+      transition: background .1s, color .1s;
+    }
+    .results-tab:hover { background: var(--bg-3); color: var(--text-2); }
+    .results-tab.active { background: var(--bg-4); color: var(--text-1); }
+    .results-meta {
+      margin-left: auto; display: flex; align-items: center; gap: 10px;
+      font-size: 11px; color: var(--text-3);
+    }
+    .results-meta .val { color: var(--text-2); font-weight: 500; }
+    .results-meta .sep { width: 1px; height: 12px; background: var(--border); }
+
+    /* Data table */
+    .data-table-wrap { flex: 1; overflow: auto; }
+    .data-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 12px; font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+    .data-table thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--bg-2); border-bottom: 1px solid var(--border-strong);
+      padding: 6px 12px; text-align: left;
+      font-size: 11px; font-weight: 600; color: var(--text-2);
+      white-space: nowrap; cursor: pointer;
+      transition: background .1s;
+    }
+    .data-table thead th:hover { background: var(--bg-3); color: var(--text-1); }
+    .data-table thead th .sort-icon { color: var(--brand-cyan); margin-left: 4px; font-size: 10px; }
+    .data-table thead th .th-type {
+      font-size: 9px; color: var(--text-3); font-weight: 500;
+      display: block; letter-spacing: .04em;
+    }
+    .data-table tbody tr { border-bottom: 1px solid var(--border); transition: background .08s; }
+    .data-table tbody tr:hover { background: var(--bg-hover); }
+    .data-table tbody tr.selected { background: var(--brand-cyan-dim); }
+    .data-table tbody td {
+      padding: 5px 12px;
+      color: var(--text-1); white-space: nowrap;
+      max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+    }
+    .data-table tbody td.null-val { color: var(--text-3); font-style: italic; }
+    .data-table tbody td.num-val { color: var(--type-int); }
+    .data-table tbody td.bool-true  { color: var(--green); }
+    .data-table tbody td.bool-false { color: var(--red); }
+    .data-table tbody td.date-val   { color: var(--type-date); }
+    .data-table .row-num {
+      color: var(--text-3); font-size: 11px; user-select: none;
+      border-right: 1px solid var(--border); min-width: 42px;
+    }
+
+    /* ─── Status Bar ─────────────────────────────────────────── */
+    .statusbar {
+      height: var(--statusbar-h);
+      background: linear-gradient(90deg, var(--bg-2), var(--bg-1));
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 10px; gap: 0;
+      flex-shrink: 0; font-size: 11px; color: var(--text-3);
+    }
+    .status-item {
+      display: flex; align-items: center; gap: 4px;
+      padding: 0 8px; height: 100%; cursor: pointer;
+      transition: background .1s;
+    }
+    .status-item:hover { background: var(--bg-4); color: var(--text-1); }
+    .status-item .s-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .status-item .s-dot.ok { background: var(--green); box-shadow: 0 0 4px var(--green); }
+    .status-item .s-dot.warn { background: var(--yellow); box-shadow: 0 0 4px var(--yellow); }
+    .status-bar-sep { width: 1px; background: var(--border); height: 14px; }
+    .status-spacer { flex: 1; }
+    .status-right { display: flex; align-items: center; }
+    .status-branch { color: var(--brand-cyan); font-weight: 500; }
+
+    /* ─── Right Panel ─────────────────────────────────────────── */
+    .right-panel {
+      width: 260px; background: var(--bg-1);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-header {
+      height: 36px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 12px;
+      font-size: 11px; font-weight: 600; color: var(--text-2);
+      letter-spacing: .04em; text-transform: uppercase;
+    }
+    .panel-header .panel-close {
+      margin-left: auto; background: transparent; border: none;
+      color: var(--text-3); cursor: pointer; font-size: 14px;
+      transition: color .1s;
+    }
+    .panel-header .panel-close:hover { color: var(--text-1); }
+    .panel-body { flex: 1; overflow-y: auto; padding: 12px; }
+
+    /* Table detail panel */
+    .detail-section { margin-bottom: 16px; }
+    .detail-title {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-3); margin-bottom: 8px;
+    }
+    .detail-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .detail-stat {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 7px 9px;
+    }
+    .detail-stat .ds-val { font-size: 16px; font-weight: 700; color: var(--text-1); line-height: 1.1; }
+    .detail-stat .ds-label { font-size: 10px; color: var(--text-3); margin-top: 2px; }
+    .detail-stat .ds-val.cyan { color: var(--brand-cyan); }
+    .detail-stat .ds-val.green { color: var(--green); }
+
+    .col-list { display: flex; flex-direction: column; gap: 2px; }
+    .col-row {
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 6px; border-radius: var(--radius-sm);
+      transition: background .1s; cursor: pointer;
+    }
+    .col-row:hover { background: var(--bg-3); }
+    .col-row .cr-name { font-size: 12px; font-family: monospace; color: var(--text-1); flex: 1; }
+    .col-row .cr-nullable { font-size: 9px; color: var(--text-3); }
+
+    /* ─── Connection Panel (overlay) ─────────────────────────── */
+    .overlay {
+      position: fixed; inset: 0;
+      background: #00000088; backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .conn-panel {
+      width: 560px;
+      background: var(--bg-2); border: 1px solid var(--border-strong);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 24px 80px #00000099, 0 0 0 1px #ffffff08;
+      overflow: hidden;
+    }
+    .conn-panel-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .conn-panel-title { font-size: 15px; font-weight: 700; color: var(--text-1); }
+    .conn-panel-close {
+      margin-left: auto; width: 28px; height: 28px;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 50%;
+      color: var(--text-2); cursor: pointer;
+      display: flex; align-items: center; justify-content: center; font-size: 14px;
+      transition: background .12s, color .12s;
+    }
+    .conn-panel-close:hover { background: var(--bg-active); color: var(--text-1); }
+
+    .conn-panel-tabs {
+      display: flex; border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+    }
+    .cp-tab {
+      padding: 8px 12px; font-size: 12px; font-weight: 500;
+      color: var(--text-3); cursor: pointer; border-bottom: 2px solid transparent;
+      margin-bottom: -1px; transition: color .12s, border-color .12s;
+    }
+    .cp-tab:hover { color: var(--text-1); }
+    .cp-tab.active { color: var(--brand-cyan); border-bottom-color: var(--brand-cyan); }
+
+    .conn-panel-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .form-field { display: flex; flex-direction: column; gap: 4px; }
+    .form-field.full { grid-column: span 2; }
+    .form-label { font-size: 11px; font-weight: 600; color: var(--text-2); }
+    .form-input {
+      height: 32px; padding: 0 10px;
+      background: var(--bg-3); border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm); color: var(--text-1);
+      font-size: 12.5px; transition: border-color .12s, box-shadow .12s;
+      outline: none;
+    }
+    .form-input:focus { border-color: var(--brand-cyan); box-shadow: 0 0 0 2px var(--brand-cyan-dim); }
+    .form-input::placeholder { color: var(--text-3); }
+    .form-select {
+      height: 32px; padding: 0 8px;
+      background: var(--bg-3); border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm); color: var(--text-1); font-size: 12px;
+      appearance: none; -webkit-appearance: none; cursor: pointer;
+      outline: none; transition: border-color .12s;
+    }
+    .form-select:focus { border-color: var(--brand-cyan); }
+    .mode-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; }
+    .mode-card {
+      padding: 8px 10px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border); background: var(--bg-3);
+      cursor: pointer; transition: border-color .15s, background .15s;
+    }
+    .mode-card:hover { border-color: var(--brand-cyan); background: var(--bg-4); }
+    .mode-card.selected { border-color: var(--brand-cyan); background: var(--brand-cyan-dim); }
+    .mode-card .mc-icon { font-size: 18px; margin-bottom: 4px; }
+    .mode-card .mc-title { font-size: 12px; font-weight: 600; color: var(--text-1); }
+    .mode-card .mc-desc  { font-size: 10px; color: var(--text-3); margin-top: 2px; }
+
+    .conn-panel-footer {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 20px 16px; border-top: 1px solid var(--border);
+    }
+    .btn-full { flex: 1; height: 32px; border-radius: var(--radius-sm); font-size: 12.5px; font-weight: 600; cursor: pointer; border: none; transition: filter .12s; }
+    .btn-test  { background: var(--bg-4); color: var(--text-1); border: 1px solid var(--border-strong); }
+    .btn-test:hover { filter: brightness(1.2); }
+    .btn-save  { background: var(--brand-cyan); color: var(--text-inv); }
+    .btn-save:hover { filter: brightness(1.1); }
+    .conn-test-result {
+      font-size: 11px; display: flex; align-items: center; gap: 5px;
+      color: var(--green);
+    }
+    .conn-test-result.fail { color: var(--red); }
+
+    /* ─── Welcome Screen ─────────────────────────────────────── */
+    .welcome {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 24px; padding: 40px;
+    }
+    .welcome-logo {
+      width: 64px; height: 64px;
+      background: linear-gradient(135deg, var(--brand-cyan), var(--brand-purple));
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; font-weight: 900; color: white;
+      box-shadow: 0 0 40px var(--brand-cyan-dim), 0 0 20px var(--brand-purple-dim);
+    }
+    .welcome-title { font-size: 22px; font-weight: 700; text-align: center; }
+    .welcome-title span { color: var(--brand-cyan); }
+    .welcome-sub { font-size: 13px; color: var(--text-3); text-align: center; max-width: 400px; line-height: 1.6; }
+    .welcome-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    .welcome-card {
+      width: 160px; padding: 16px;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: var(--radius-md); cursor: pointer;
+      transition: border-color .15s, background .15s, transform .15s;
+      text-align: center;
+    }
+    .welcome-card:hover { border-color: var(--brand-cyan); background: var(--bg-3); transform: translateY(-2px); }
+    .welcome-card .wc-icon { font-size: 24px; margin-bottom: 8px; }
+    .welcome-card .wc-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .welcome-card .wc-desc  { font-size: 11px; color: var(--text-3); }
+
+    /* ─── Dashboard Screen ────────────────────────────────────── */
+    .dashboard { padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 20px; }
+    .dash-header { display: flex; align-items: center; justify-content: space-between; }
+    .dash-title { font-size: 17px; font-weight: 700; color: var(--text-1); }
+    .dash-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+
+    .kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+    .kpi-card {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+      padding: 14px 16px;
+    }
+    .kpi-card .kpi-val { font-size: 24px; font-weight: 700; line-height: 1; }
+    .kpi-card .kpi-label { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+    .kpi-card .kpi-trend { font-size: 11px; margin-top: 6px; display: flex; align-items: center; gap: 3px; }
+    .trend-up   { color: var(--green); }
+    .trend-down { color: var(--red); }
+    .trend-flat { color: var(--text-3); }
+
+    .section-title { font-size: 12px; font-weight: 700; color: var(--text-2); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
+
+    .cluster-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 8px; }
+    .node-card {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+      padding: 12px 14px; display: flex; gap: 12px; align-items: flex-start;
+    }
+    .node-status-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 3px; flex-shrink: 0; }
+    .node-status-dot.active { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .node-status-dot.passive { background: var(--yellow); }
+    .node-info { flex: 1; }
+    .node-name { font-weight: 700; font-size: 13px; color: var(--text-1); }
+    .node-role { font-size: 10px; color: var(--brand-cyan); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+    .node-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 8px; }
+    .node-meta-item { font-size: 11px; color: var(--text-3); }
+    .node-meta-item .nm-val { color: var(--text-1); font-weight: 600; }
+
+    .bar-wrap { background: var(--bg-3); border-radius: 99px; height: 4px; margin-top: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 99px; transition: width .3s; }
+    .bar-fill.cpu { background: linear-gradient(90deg, var(--brand-cyan), var(--brand-purple)); }
+    .bar-fill.ram { background: linear-gradient(90deg, #34d399, #059669); }
+
+    /* Audit log mini */
+    .audit-list { display: flex; flex-direction: column; gap: 1px; }
+    .audit-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border-radius: var(--radius-sm);
+      background: var(--bg-2); border: 1px solid var(--border);
+      font-size: 11px; cursor: pointer; transition: background .1s;
+    }
+    .audit-row:hover { background: var(--bg-3); }
+    .audit-kind { padding: 1px 6px; border-radius: 99px; font-size: 9px; font-weight: 700; flex-shrink: 0; }
+    .ak-sql   { background: #3b82f622; color: var(--blue); border: 1px solid #3b82f633; }
+    .ak-auth  { background: #9333ea22; color: #c084fc;      border: 1px solid #9333ea33; }
+    .ak-ddl   { background: #f9731622; color: var(--orange); border: 1px solid #f9731633; }
+    .ak-admin { background: #ef444422; color: var(--red);   border: 1px solid #ef444433; }
+    .audit-actor { color: var(--brand-cyan); font-weight: 600; flex-shrink: 0; }
+    .audit-action { flex: 1; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .audit-time { color: var(--text-3); flex-shrink: 0; }
+    .audit-outcome { font-size: 10px; font-weight: 700; flex-shrink: 0; }
+    .ao-ok   { color: var(--green); }
+    .ao-fail { color: var(--red); }
+
+    /* ─── Notification toast ─────────────────────────────────── */
+    .toast-area { position: fixed; bottom: 40px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+    .toast {
+      background: var(--bg-4); border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md); padding: 10px 14px;
+      display: flex; align-items: flex-start; gap: 9px;
+      box-shadow: 0 8px 32px #00000066;
+      pointer-events: all; min-width: 260px; max-width: 340px;
+      animation: slideIn .2s ease-out;
+    }
+    @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+    .toast-icon { font-size: 16px; flex-shrink: 0; }
+    .toast-title { font-size: 12.5px; font-weight: 600; color: var(--text-1); }
+    .toast-msg   { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+    .toast.ok   { border-left: 3px solid var(--green); }
+    .toast.warn { border-left: 3px solid var(--yellow); }
+    .toast.err  { border-left: 3px solid var(--red); }
+
+    /* ─── Screen switcher (design nav) ────────────────────────── */
+    .design-nav {
+      position: fixed; top: 8px; right: 8px; z-index: 9998;
+      display: flex; gap: 4px;
+    }
+    .design-nav-btn {
+      padding: 4px 10px; background: var(--bg-4); border: 1px solid var(--border-strong);
+      border-radius: 99px; font-size: 11px; color: var(--text-2);
+      cursor: pointer; transition: all .12s;
+    }
+    .design-nav-btn:hover,
+    .design-nav-btn.active { background: var(--brand-cyan); color: var(--text-inv); border-color: var(--brand-cyan); font-weight: 600; }
+
+    /* ─── Utility ────────────────────────────────────────────── */
+    .hidden { display: none !important; }
+    .flex-center { display: flex; align-items: center; justify-content: center; }
+    .gap-4 { gap: 4px; }
+    .gap-8 { gap: 8px; }
+  </style>
+</head>
+<body>
+
+<!-- ============================================================
+     DESIGN NAVIGATION (prototype only)
+     ============================================================ -->
+<div class="design-nav">
+  <button class="design-nav-btn active" onclick="showScreen('main')">SQL Editor</button>
+  <button class="design-nav-btn" onclick="showScreen('dashboard')">Dashboard</button>
+  <button class="design-nav-btn" onclick="showScreen('welcome')">Welcome</button>
+  <button class="design-nav-btn" onclick="showScreen('connect')">New Connection</button>
+</div>
+
+<!-- ============================================================
+     SCREEN: SQL EDITOR (main)
+     ============================================================ -->
+<div id="screen-main" class="app">
+
+  <!-- Title Bar -->
+  <div class="titlebar">
+    <div class="titlebar-traffic">
+      <div class="traffic traffic-close"></div>
+      <div class="traffic traffic-min"></div>
+      <div class="traffic traffic-max"></div>
+    </div>
+    <div class="titlebar-logo">
+      <div class="logo-icon">V</div>
+      <span class="titlebar-name"><span>Volt</span>NueronGrid Studio</span>
+    </div>
+    <div class="titlebar-spacer"></div>
+    <div class="titlebar-conn-badge" onclick="showScreen('connect')">
+      <div class="dot"></div>
+      Local Dev · 127.0.0.1:8080
+      <span style="color:var(--text-3);font-size:10px;">▾</span>
+    </div>
+    <div class="titlebar-spacer"></div>
+    <div class="titlebar-actions">
+      <button class="titlebar-btn" title="Notifications">🔔</button>
+      <button class="titlebar-btn" title="Settings">⚙</button>
+      <button class="titlebar-btn" title="Theme">◑</button>
+    </div>
+  </div>
+
+  <!-- Main Layout -->
+  <div class="main-layout">
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="activity-bar">
+        <button class="activity-btn active">Connections</button>
+        <button class="activity-btn">History</button>
+        <button class="activity-btn">Saved</button>
+      </div>
+      <div class="sidebar-section">
+
+        <!-- Connections -->
+        <div class="conn-header">
+          <span class="label-xs">Connections</span>
+          <button class="conn-add-btn" title="Add Connection" onclick="showScreen('connect')">+</button>
+        </div>
+
+        <!-- Connection 1: Active -->
+        <div class="conn-item active">
+          <div class="conn-dot connected"></div>
+          <span class="conn-name">Local Dev</span>
+          <span class="conn-type-badge">VNG</span>
+        </div>
+        <!-- Schema tree for Connection 1 -->
+        <div class="tree-group">
+          <!-- Database -->
+          <div class="tree-node selected" onclick="toggleTree('db-analytics')">
+            <span class="indent"></span>
+            <span class="chevron open" id="chev-db-analytics">▶</span>
+            <span class="tree-icon">🗄</span>
+            <span class="tree-label">analytics</span>
+            <span class="tree-badge">2 schemas</span>
+          </div>
+          <div id="db-analytics">
+            <!-- Schema: public -->
+            <div class="tree-node" onclick="toggleTree('schema-public')">
+              <span class="indent"></span><span class="indent"></span>
+              <span class="chevron open" id="chev-schema-public">▶</span>
+              <span class="tree-icon">📁</span>
+              <span class="tree-label">public</span>
+              <span class="tree-count">3 tables</span>
+            </div>
+            <div id="schema-public">
+              <!-- Tables -->
+              <div class="tree-node" onclick="toggleTree('tbl-users')">
+                <span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                <span class="chevron open" id="chev-tbl-users">▶</span>
+                <span class="tree-icon">📋</span>
+                <span class="tree-label">users</span>
+                <span class="tree-count">1.2M</span>
+              </div>
+              <div id="tbl-users">
+                <div class="tree-node">
+                  <span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                  <span class="chevron" style="visibility:hidden">▶</span>
+                  <span class="pk-icon">🔑</span>
+                  <span class="tree-label">id</span>
+                  <span class="col-type-chip int">BIGINT</span>
+                </div>
+                <div class="tree-node">
+                  <span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                  <span class="chevron" style="visibility:hidden">▶</span>
+                  <span class="tree-icon" style="width:14px"></span>
+                  <span class="tree-label">email</span>
+                  <span class="col-type-chip str">VARCHAR</span>
+                </div>
+                <div class="tree-node">
+                  <span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                  <span class="chevron" style="visibility:hidden">▶</span>
+                  <span class="tree-icon" style="width:14px"></span>
+                  <span class="tree-label">created_at</span>
+                  <span class="col-type-chip date">TIMESTAMP</span>
+                </div>
+                <div class="tree-node">
+                  <span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                  <span class="chevron" style="visibility:hidden">▶</span>
+                  <span class="tree-icon" style="width:14px"></span>
+                  <span class="tree-label">is_active</span>
+                  <span class="col-type-chip bool">BOOL</span>
+                </div>
+                <div class="tree-node">
+                  <span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                  <span class="chevron" style="visibility:hidden">▶</span>
+                  <span class="tree-icon" style="width:14px"></span>
+                  <span class="tree-label">metadata</span>
+                  <span class="col-type-chip json">JSON</span>
+                </div>
+              </div>
+
+              <div class="tree-node">
+                <span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                <span class="chevron" id="chev-tbl-orders">▶</span>
+                <span class="tree-icon">📋</span>
+                <span class="tree-label">orders</span>
+                <span class="tree-count">8.4M</span>
+              </div>
+
+              <div class="tree-node">
+                <span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                <span class="chevron">▶</span>
+                <span class="tree-icon">📋</span>
+                <span class="tree-label">products</span>
+                <span class="tree-count">42K</span>
+              </div>
+            </div>
+
+            <!-- Schema: reporting -->
+            <div class="tree-node" onclick="toggleTree('schema-reporting')">
+              <span class="indent"></span><span class="indent"></span>
+              <span class="chevron" id="chev-schema-reporting">▶</span>
+              <span class="tree-icon">📁</span>
+              <span class="tree-label">reporting</span>
+              <span class="tree-count">1 view</span>
+            </div>
+            <div id="schema-reporting" class="hidden">
+              <div class="tree-node">
+                <span class="indent"></span><span class="indent"></span><span class="indent"></span>
+                <span class="chevron" style="visibility:hidden">▶</span>
+                <span class="tree-icon">👁</span>
+                <span class="tree-label">monthly_sales_mv</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Connection 2 -->
+        <div class="conn-item" style="margin-top:8px;">
+          <div class="conn-dot disconnected"></div>
+          <span class="conn-name">Staging Cloud</span>
+          <span class="conn-type-badge">VNG</span>
+        </div>
+
+        <!-- Connection 3 -->
+        <div class="conn-item">
+          <div class="conn-dot disconnected"></div>
+          <span class="conn-name">PG Legacy</span>
+          <span class="conn-type-badge pg">PG</span>
+        </div>
+
+      </div><!-- /sidebar-section -->
+    </div><!-- /sidebar -->
+
+    <!-- Main Workspace -->
+    <div class="workspace">
+
+      <!-- Tab Bar -->
+      <div class="tabbar">
+        <div class="tab active">
+          <span class="tab-icon">📄</span>
+          <span class="tab-label">query_1.sql</span>
+          <span class="tab-close">✕</span>
+        </div>
+        <div class="tab">
+          <span class="tab-icon">📋</span>
+          <span class="tab-label">users</span>
+          <span class="tab-close">✕</span>
+        </div>
+        <div class="tab">
+          <span class="tab-icon">📊</span>
+          <span class="tab-label">Dashboard</span>
+          <span class="tab-close">✕</span>
+        </div>
+        <button class="tab-new" title="New Query">+</button>
+      </div>
+
+      <!-- Query Toolbar -->
+      <div class="toolbar">
+        <button class="btn primary">
+          <span class="btn-icon">▶</span> Run
+        </button>
+        <button class="btn">
+          <span class="btn-icon">⏸</span> Stop
+        </button>
+        <div class="toolbar-divider"></div>
+        <button class="btn">Format</button>
+        <button class="btn">Explain</button>
+        <div class="toolbar-divider"></div>
+        <select class="toolbar-select">
+          <option>analytics</option>
+          <option>reporting</option>
+        </select>
+        <select class="toolbar-select" style="margin-left:4px">
+          <option>public</option>
+        </select>
+        <div class="toolbar-spacer"></div>
+        <span class="toolbar-route-badge route-oltp">OLTP</span>
+        <span style="font-size:11px;color:var(--text-3);margin-left:8px;">127 ms · 5 rows</span>
+      </div>
+
+      <!-- Editor + Results -->
+      <div class="editor-area">
+
+        <!-- SQL Editor -->
+        <div class="editor-pane">
+          <div class="editor-gutter">
+            <div class="gutter-line">1</div>
+            <div class="gutter-line">2</div>
+            <div class="gutter-line active">3</div>
+            <div class="gutter-line">4</div>
+            <div class="gutter-line">5</div>
+            <div class="gutter-line">6</div>
+            <div class="gutter-line">7</div>
+            <div class="gutter-line">8</div>
+            <div class="gutter-line">9</div>
+            <div class="gutter-line">10</div>
+            <div class="gutter-line">11</div>
+            <div class="gutter-line">12</div>
+          </div>
+          <div class="editor-content mono">
+<span class="cm">-- Analyze high-value users with recent orders</span>
+
+<span class="cursor-line"><span class="kw">SELECT</span></span>
+    u.<span class="col-ref">id</span>,
+    u.<span class="col-ref">email</span>,
+    <span class="fn">COUNT</span>(o.<span class="col-ref">id</span>)        <span class="kw">AS</span> <span class="col-ref">order_count</span>,
+    <span class="fn">SUM</span>(o.<span class="col-ref">total_amount</span>) <span class="kw">AS</span> <span class="col-ref">lifetime_value</span>,
+    <span class="fn">MAX</span>(o.<span class="col-ref">created_at</span>)  <span class="kw">AS</span> <span class="col-ref">last_order_at</span>
+<span class="kw">FROM</span>   <span class="tbl">users</span> u
+<span class="kw">JOIN</span>   <span class="tbl">orders</span> o <span class="kw">ON</span> o.<span class="col-ref">user_id</span> <span class="op">=</span> u.<span class="col-ref">id</span>
+<span class="kw">WHERE</span>  u.<span class="col-ref">is_active</span> <span class="op">=</span> <span class="kw">TRUE</span>
+  <span class="kw">AND</span>  o.<span class="col-ref">created_at</span> <span class="op">&gt;</span> <span class="fn">NOW</span>() <span class="op">-</span> <span class="kw">INTERVAL</span> <span class="str">'30 days'</span>
+<span class="kw">GROUP BY</span> u.<span class="col-ref">id</span>, u.<span class="col-ref">email</span>
+<span class="kw">HAVING</span>   <span class="fn">SUM</span>(o.<span class="col-ref">total_amount</span>) <span class="op">&gt;</span> <span class="num">1000</span>
+<span class="kw">ORDER BY</span> <span class="col-ref">lifetime_value</span> <span class="kw">DESC</span>
+<span class="kw">LIMIT</span>  <span class="num">100</span><span class="op">;</span>
+          </div>
+        </div>
+
+        <!-- Resize handle -->
+        <div class="resize-handle"></div>
+
+        <!-- Results Pane -->
+        <div class="results-pane">
+          <div class="results-toolbar">
+            <button class="results-tab active">Results</button>
+            <button class="results-tab">Messages</button>
+            <button class="results-tab">Explain Plan</button>
+            <div class="results-meta">
+              <span>Rows</span><span class="val">5 of 5</span>
+              <div class="sep"></div>
+              <span>Time</span><span class="val">127 ms</span>
+              <div class="sep"></div>
+              <span>Route</span><span class="val">OLTP</span>
+              <div class="sep"></div>
+              <button class="btn" style="height:22px;font-size:11px;padding:0 8px;">Export ↓</button>
+            </div>
+          </div>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th class="row-num">#</th>
+                  <th>id <span class="th-type">BIGINT</span><span class="sort-icon">↑</span></th>
+                  <th>email <span class="th-type">VARCHAR</span></th>
+                  <th>order_count <span class="th-type">INT</span></th>
+                  <th>lifetime_value <span class="th-type">DECIMAL</span></th>
+                  <th>last_order_at <span class="th-type">TIMESTAMP</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="selected">
+                  <td class="row-num">1</td>
+                  <td class="num-val">10042</td>
+                  <td>alice@example.com</td>
+                  <td class="num-val">48</td>
+                  <td class="num-val">12,480.00</td>
+                  <td class="date-val">2026-04-24 18:32:01</td>
+                </tr>
+                <tr>
+                  <td class="row-num">2</td>
+                  <td class="num-val">8817</td>
+                  <td>bob.smith@corp.io</td>
+                  <td class="num-val">31</td>
+                  <td class="num-val">9,225.50</td>
+                  <td class="date-val">2026-04-23 09:10:44</td>
+                </tr>
+                <tr>
+                  <td class="row-num">3</td>
+                  <td class="num-val">23451</td>
+                  <td>carol@analytics.dev</td>
+                  <td class="num-val">22</td>
+                  <td class="num-val">5,670.75</td>
+                  <td class="date-val">2026-04-22 14:55:09</td>
+                </tr>
+                <tr>
+                  <td class="row-num">4</td>
+                  <td class="num-val">5509</td>
+                  <td>dave@enterprise.co</td>
+                  <td class="num-val">17</td>
+                  <td class="num-val">3,140.25</td>
+                  <td class="date-val">2026-04-21 07:00:33</td>
+                </tr>
+                <tr>
+                  <td class="row-num">5</td>
+                  <td class="num-val">91002</td>
+                  <td>eve.marketing@biz.com</td>
+                  <td class="num-val">14</td>
+                  <td class="num-val">1,890.00</td>
+                  <td class="date-val">2026-04-20 22:11:57</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div><!-- /results-pane -->
+
+      </div><!-- /editor-area -->
+
+    </div><!-- /workspace -->
+
+    <!-- Right Panel: Table Details -->
+    <div class="right-panel">
+      <div class="panel-header">
+        Table: users
+        <button class="panel-close">✕</button>
+      </div>
+      <div class="panel-body">
+        <div class="detail-section">
+          <div class="detail-title">Stats</div>
+          <div class="detail-stat-grid">
+            <div class="detail-stat">
+              <div class="ds-val cyan">1.2M</div>
+              <div class="ds-label">Rows</div>
+            </div>
+            <div class="detail-stat">
+              <div class="ds-val">5</div>
+              <div class="ds-label">Columns</div>
+            </div>
+            <div class="detail-stat">
+              <div class="ds-val">3</div>
+              <div class="ds-label">Indexes</div>
+            </div>
+            <div class="detail-stat">
+              <div class="ds-val green">OK</div>
+              <div class="ds-label">Health</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-title">Columns</div>
+          <div class="col-list">
+            <div class="col-row">
+              <span class="pk-icon">🔑</span>
+              <span class="col-row cr-name" style="flex:1;font-size:12px;font-family:monospace">id</span>
+              <span class="col-type-chip int">BIGINT</span>
+            </div>
+            <div class="col-row">
+              <span style="width:14px"></span>
+              <span class="col-row cr-name" style="flex:1;font-size:12px;font-family:monospace">email</span>
+              <span class="col-type-chip str">VARCHAR</span>
+            </div>
+            <div class="col-row">
+              <span style="width:14px"></span>
+              <span class="col-row cr-name" style="flex:1;font-size:12px;font-family:monospace">created_at</span>
+              <span class="col-type-chip date">TIMESTAMP</span>
+            </div>
+            <div class="col-row">
+              <span style="width:14px"></span>
+              <span class="col-row cr-name" style="flex:1;font-size:12px;font-family:monospace">is_active</span>
+              <span class="col-type-chip bool">BOOL</span>
+            </div>
+            <div class="col-row">
+              <span style="width:14px"></span>
+              <span class="col-row cr-name" style="flex:1;font-size:12px;font-family:monospace">metadata</span>
+              <span class="col-type-chip json">JSON</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-title">Quick Actions</div>
+          <div style="display:flex;flex-direction:column;gap:5px;">
+            <button class="btn" style="width:100%;justify-content:center;font-size:11.5px;">SELECT * FROM users LIMIT 100</button>
+            <button class="btn" style="width:100%;justify-content:center;font-size:11.5px;">View DDL</button>
+            <button class="btn" style="width:100%;justify-content:center;font-size:11.5px;">Analyze Table</button>
+            <button class="btn danger" style="width:100%;justify-content:center;font-size:11.5px;">TRUNCATE TABLE</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main-layout -->
+
+  <!-- Status Bar -->
+  <div class="statusbar">
+    <div class="status-item">
+      <div class="s-dot ok"></div>
+      Local Dev
+    </div>
+    <div class="status-bar-sep"></div>
+    <div class="status-item">127.0.0.1:8080</div>
+    <div class="status-bar-sep"></div>
+    <div class="status-item">analytics / public</div>
+    <div class="status-bar-sep"></div>
+    <div class="status-item">admin</div>
+    <div class="status-spacer"></div>
+    <div class="status-right">
+      <div class="status-item">UTF-8</div>
+      <div class="status-bar-sep"></div>
+      <div class="status-item"><span class="status-branch">OLTP route</span></div>
+      <div class="status-bar-sep"></div>
+      <div class="status-item">v0.1.0</div>
+    </div>
+  </div>
+
+</div><!-- /screen-main -->
+
+
+<!-- ============================================================
+     SCREEN: DASHBOARD
+     ============================================================ -->
+<div id="screen-dashboard" class="app hidden">
+
+  <!-- Title Bar (reuse) -->
+  <div class="titlebar">
+    <div class="titlebar-traffic">
+      <div class="traffic traffic-close"></div>
+      <div class="traffic traffic-min"></div>
+      <div class="traffic traffic-max"></div>
+    </div>
+    <div class="titlebar-logo">
+      <div class="logo-icon">V</div>
+      <span class="titlebar-name"><span>Volt</span>NueronGrid Studio</span>
+    </div>
+    <div class="titlebar-spacer"></div>
+    <div class="titlebar-conn-badge">
+      <div class="dot"></div>
+      Local Dev · 127.0.0.1:8080
+      <span style="color:var(--text-3);font-size:10px;">▾</span>
+    </div>
+    <div class="titlebar-spacer"></div>
+    <div class="titlebar-actions">
+      <button class="titlebar-btn">🔔</button>
+      <button class="titlebar-btn">⚙</button>
+    </div>
+  </div>
+
+  <div class="main-layout">
+    <!-- sidebar -->
+    <div class="sidebar">
+      <div class="activity-bar">
+        <button class="activity-btn">Connections</button>
+        <button class="activity-btn active">Dashboard</button>
+        <button class="activity-btn">Audit</button>
+      </div>
+      <div class="sidebar-section" style="padding:10px 8px;">
+        <div class="label-xs" style="padding:4px 4px 8px">Navigation</div>
+        <div class="tree-node selected">
+          <span class="tree-icon">📊</span>
+          <span class="tree-label">Cluster Overview</span>
+        </div>
+        <div class="tree-node">
+          <span class="tree-icon">🔒</span>
+          <span class="tree-label">Active Transactions</span>
+          <span class="tree-badge">3</span>
+        </div>
+        <div class="tree-node">
+          <span class="tree-icon">🔐</span>
+          <span class="tree-label">Locks</span>
+          <span class="tree-badge">1</span>
+        </div>
+        <div class="tree-node">
+          <span class="tree-icon">📋</span>
+          <span class="tree-label">Audit Log</span>
+        </div>
+        <div class="tree-node">
+          <span class="tree-icon">🤖</span>
+          <span class="tree-label">AI Actions</span>
+          <span class="tree-badge">2</span>
+        </div>
+        <div class="tree-node">
+          <span class="tree-icon">⚡</span>
+          <span class="tree-label">Performance</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dashboard content -->
+    <div class="workspace">
+      <div class="tabbar">
+        <div class="tab active">
+          <span class="tab-icon">📊</span>
+          <span class="tab-label">Cluster Overview</span>
+          <span class="tab-close">✕</span>
+        </div>
+        <div class="tab">
+          <span class="tab-icon">📋</span>
+          <span class="tab-label">Audit Log</span>
+          <span class="tab-close">✕</span>
+        </div>
+        <button class="tab-new">+</button>
+      </div>
+
+      <div class="dashboard">
+        <div class="dash-header">
+          <div>
+            <div class="dash-title">Cluster Overview</div>
+            <div class="dash-sub">Local Dev · Last refreshed 2s ago</div>
+          </div>
+          <button class="btn primary" style="height:30px">⟳ Refresh</button>
+        </div>
+
+        <!-- KPI Cards -->
+        <div>
+          <div class="section-title">Live Metrics</div>
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-val" style="color:var(--brand-cyan)">2</div>
+              <div class="kpi-label">Active Nodes</div>
+              <div class="kpi-trend trend-up">↑ 0 change</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-val" style="color:var(--green)">4</div>
+              <div class="kpi-label">Active Sessions</div>
+              <div class="kpi-trend trend-up">↑ +1 from 1m ago</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-val" style="color:var(--yellow)">3</div>
+              <div class="kpi-label">Live Transactions</div>
+              <div class="kpi-trend trend-down">↓ -1 from 1m ago</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-val" style="color:var(--orange)">1</div>
+              <div class="kpi-label">Active Locks</div>
+              <div class="kpi-trend trend-flat">→ stable</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cluster Nodes -->
+        <div>
+          <div class="section-title">Cluster Nodes</div>
+          <div class="cluster-grid">
+            <div class="node-card">
+              <div class="node-status-dot active"></div>
+              <div class="node-info">
+                <div class="node-name">node-1</div>
+                <div class="node-role">Leader</div>
+                <div class="node-meta">
+                  <div class="node-meta-item">CPU <span class="nm-val">33%</span></div>
+                  <div class="node-meta-item">RAM <span class="nm-val">2 / 16 GB</span></div>
+                  <div class="node-meta-item">Sessions <span class="nm-val">4</span></div>
+                  <div class="node-meta-item">Txns <span class="nm-val">3</span></div>
+                </div>
+                <div style="margin-top:8px;">
+                  <div style="font-size:10px;color:var(--text-3);margin-bottom:2px;">CPU</div>
+                  <div class="bar-wrap"><div class="bar-fill cpu" style="width:33%"></div></div>
+                  <div style="font-size:10px;color:var(--text-3);margin-top:5px;margin-bottom:2px;">RAM</div>
+                  <div class="bar-wrap"><div class="bar-fill ram" style="width:12%"></div></div>
+                </div>
+              </div>
+            </div>
+            <div class="node-card">
+              <div class="node-status-dot passive"></div>
+              <div class="node-info">
+                <div class="node-name">node-2</div>
+                <div class="node-role" style="color:var(--yellow)">Follower</div>
+                <div class="node-meta">
+                  <div class="node-meta-item">CPU <span class="nm-val">18%</span></div>
+                  <div class="node-meta-item">RAM <span class="nm-val">1.4 / 16 GB</span></div>
+                  <div class="node-meta-item">Sessions <span class="nm-val">2</span></div>
+                  <div class="node-meta-item">Txns <span class="nm-val">6</span></div>
+                </div>
+                <div style="margin-top:8px;">
+                  <div style="font-size:10px;color:var(--text-3);margin-bottom:2px;">CPU</div>
+                  <div class="bar-wrap"><div class="bar-fill cpu" style="width:18%"></div></div>
+                  <div style="font-size:10px;color:var(--text-3);margin-top:5px;margin-bottom:2px;">RAM</div>
+                  <div class="bar-wrap"><div class="bar-fill ram" style="width:9%"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Audit Log -->
+        <div>
+          <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+            Recent Audit Events
+            <button class="btn" style="height:22px;font-size:11px;padding:0 8px;">View All</button>
+          </div>
+          <div class="audit-list">
+            <div class="audit-row">
+              <span class="audit-kind ak-sql">SQL</span>
+              <span class="audit-actor">admin</span>
+              <span class="audit-action">SELECT users ORDER BY lifetime_value DESC LIMIT 100</span>
+              <span class="audit-outcome ao-ok">OK</span>
+              <span class="audit-time">1s ago</span>
+            </div>
+            <div class="audit-row">
+              <span class="audit-kind ak-ddl">DDL</span>
+              <span class="audit-actor">admin</span>
+              <span class="audit-action">CREATE INDEX idx_orders_user_id ON orders(user_id)</span>
+              <span class="audit-outcome ao-ok">OK</span>
+              <span class="audit-time">3m ago</span>
+            </div>
+            <div class="audit-row">
+              <span class="audit-kind ak-auth">AUTH</span>
+              <span class="audit-actor">operator-1</span>
+              <span class="audit-action">LOGIN via admin key</span>
+              <span class="audit-outcome ao-ok">OK</span>
+              <span class="audit-time">12m ago</span>
+            </div>
+            <div class="audit-row">
+              <span class="audit-kind ak-admin">ADMIN</span>
+              <span class="audit-actor">admin</span>
+              <span class="audit-action">KILL LOCK tx-deadlock-victim — cycle_detected</span>
+              <span class="audit-outcome ao-ok">OK</span>
+              <span class="audit-time">1h ago</span>
+            </div>
+            <div class="audit-row">
+              <span class="audit-kind ak-sql">SQL</span>
+              <span class="audit-actor">tenant-7</span>
+              <span class="audit-action">INSERT INTO orders VALUES (…) — rejected: quota exceeded</span>
+              <span class="audit-outcome ao-fail">FAIL</span>
+              <span class="audit-time">2h ago</span>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /dashboard -->
+    </div><!-- /workspace -->
+  </div><!-- /main-layout -->
+
+  <div class="statusbar">
+    <div class="status-item"><div class="s-dot ok"></div>Local Dev</div>
+    <div class="status-bar-sep"></div>
+    <div class="status-item">2 nodes active</div>
+    <div class="status-bar-sep"></div>
+    <div class="status-item"><div class="s-dot warn" style="background:var(--yellow);box-shadow:0 0 4px var(--yellow)"></div>1 lock</div>
+    <div class="status-spacer"></div>
+    <div class="status-right">
+      <div class="status-item">v0.1.0</div>
+    </div>
+  </div>
+</div><!-- /screen-dashboard -->
+
+
+<!-- ============================================================
+     SCREEN: WELCOME
+     ============================================================ -->
+<div id="screen-welcome" class="app hidden">
+  <div class="titlebar">
+    <div class="titlebar-traffic">
+      <div class="traffic traffic-close"></div>
+      <div class="traffic traffic-min"></div>
+      <div class="traffic traffic-max"></div>
+    </div>
+    <div class="titlebar-logo">
+      <div class="logo-icon">V</div>
+      <span class="titlebar-name"><span>Volt</span>NueronGrid Studio</span>
+    </div>
+  </div>
+  <div class="main-layout" style="align-items:center;justify-content:center;">
+    <div class="welcome">
+      <div class="welcome-logo">V</div>
+      <div>
+        <div class="welcome-title"><span>VoltNueronGrid</span> Studio</div>
+        <div class="welcome-sub">A modern, high-performance database studio for HTAP workloads. Connect to any VoltNueronGrid, PostgreSQL, or MySQL instance.</div>
+      </div>
+      <div class="welcome-actions">
+        <div class="welcome-card" onclick="showScreen('connect')">
+          <div class="wc-icon">⚡</div>
+          <div class="wc-title">New Connection</div>
+          <div class="wc-desc">Connect to a database</div>
+        </div>
+        <div class="welcome-card">
+          <div class="wc-icon">📄</div>
+          <div class="wc-title">Open SQL File</div>
+          <div class="wc-desc">Open an existing .sql file</div>
+        </div>
+        <div class="welcome-card" onclick="showScreen('main')">
+          <div class="wc-icon">📝</div>
+          <div class="wc-title">New Query</div>
+          <div class="wc-desc">Start a blank editor</div>
+        </div>
+        <div class="welcome-card" onclick="showScreen('dashboard')">
+          <div class="wc-icon">📊</div>
+          <div class="wc-title">Dashboard</div>
+          <div class="wc-desc">Monitor cluster health</div>
+        </div>
+      </div>
+
+      <!-- Recent connections -->
+      <div style="width:100%;max-width:480px;">
+        <div class="section-title">Recent Connections</div>
+        <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px;">
+          <div class="conn-item" style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 14px;" onclick="showScreen('main')">
+            <div class="conn-dot connected"></div>
+            <span class="conn-name">Local Dev — 127.0.0.1:8080</span>
+            <span class="conn-type-badge">VNG</span>
+            <span style="font-size:11px;color:var(--text-3);margin-left:8px;">2 min ago</span>
+          </div>
+          <div class="conn-item" style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 14px;">
+            <div class="conn-dot disconnected"></div>
+            <span class="conn-name">Staging Cloud — vng.staging.io:8080</span>
+            <span class="conn-type-badge">VNG</span>
+            <span style="font-size:11px;color:var(--text-3);margin-left:8px;">1 day ago</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- /screen-welcome -->
+
+
+<!-- ============================================================
+     SCREEN: NEW CONNECTION (modal on main)
+     ============================================================ -->
+<div id="screen-connect" class="hidden">
+  <!-- behind: show main in bg -->
+  <div id="connect-bg" style="position:fixed;inset:0;z-index:900;">
+    <!-- blurred bg placeholder -->
+    <div style="width:100%;height:100%;background:var(--bg-base);opacity:.97;"></div>
+  </div>
+  <div class="overlay" style="z-index:1001">
+    <div class="conn-panel">
+      <div class="conn-panel-header">
+        <div class="logo-icon" style="width:28px;height:28px;font-size:14px">V</div>
+        <span class="conn-panel-title">New Connection</span>
+        <button class="conn-panel-close" onclick="showScreen('main')">✕</button>
+      </div>
+
+      <div class="conn-panel-tabs">
+        <div class="cp-tab active">General</div>
+        <div class="cp-tab">Auth</div>
+        <div class="cp-tab">SSL / TLS</div>
+        <div class="cp-tab">Advanced</div>
+      </div>
+
+      <div class="conn-panel-body">
+        <div class="form-row">
+          <div class="form-field full">
+            <label class="form-label">Connection Name</label>
+            <input class="form-input" type="text" placeholder="e.g. Local Dev" value="My VNG Instance" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-field">
+            <label class="form-label">Server Type</label>
+            <select class="form-select">
+              <option selected>VoltNueronGrid</option>
+              <option>PostgreSQL</option>
+              <option>MySQL</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label class="form-label">Runtime Target</label>
+            <select class="form-select">
+              <option selected>Local</option>
+              <option>Docker</option>
+              <option>Cloud</option>
+              <option>Custom</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-field">
+            <label class="form-label">Host</label>
+            <input class="form-input" type="text" placeholder="127.0.0.1" value="127.0.0.1" />
+          </div>
+          <div class="form-field">
+            <label class="form-label">Port</label>
+            <input class="form-input" type="number" placeholder="8080" value="8080" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-field full">
+            <label class="form-label">Database (optional)</label>
+            <input class="form-input" type="text" placeholder="Leave blank to browse all" />
+          </div>
+        </div>
+
+        <div style="margin-top:4px;">
+          <label class="form-label" style="display:block;margin-bottom:6px;">Connection Mode</label>
+          <div class="mode-grid">
+            <div class="mode-card selected">
+              <div class="mc-icon">🛡</div>
+              <div class="mc-title">Admin</div>
+              <div class="mc-desc">Full access via API key</div>
+            </div>
+            <div class="mode-card">
+              <div class="mc-icon">⚙</div>
+              <div class="mc-title">Operator</div>
+              <div class="mc-desc">Service-level access</div>
+            </div>
+            <div class="mode-card">
+              <div class="mc-icon">👤</div>
+              <div class="mc-title">Tenant</div>
+              <div class="mc-desc">Isolated tenant scope</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-row" style="margin-top:4px;">
+          <div class="form-field full">
+            <label class="form-label">Admin API Key</label>
+            <input class="form-input" type="password" placeholder="x-vng-admin-key" value="secret" />
+          </div>
+        </div>
+      </div>
+
+      <div class="conn-panel-footer">
+        <span class="conn-test-result">✔ Connected — 127.0.0.1:8080 (14ms)</span>
+        <div style="flex:1"></div>
+        <button class="btn-full btn-test" style="width:120px" onclick="testConn()">Test Connection</button>
+        <button class="btn-full btn-save" style="width:120px" onclick="showScreen('main')">Save &amp; Connect</button>
+      </div>
+    </div>
+  </div>
+</div><!-- /screen-connect -->
+
+
+<!-- ─── Toast Notifications ───────────────────────────────── -->
+<div class="toast-area" id="toast-area">
+  <div class="toast ok">
+    <span class="toast-icon">✓</span>
+    <div>
+      <div class="toast-title">Query executed</div>
+      <div class="toast-msg">5 rows returned in 127 ms · OLTP route</div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ─── JavaScript ─────────────────────────────────────────── -->
+<script>
+  /* Screen switcher */
+  const screens = ['main','dashboard','welcome','connect'];
+  function showScreen(name) {
+    screens.forEach(s => {
+      const el = document.getElementById('screen-' + s);
+      if (!el) return;
+      el.classList.toggle('hidden', s !== name);
+    });
+    // update nav buttons
+    document.querySelectorAll('.design-nav-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.textContent.toLowerCase().includes(name) ||
+        (name === 'main' && btn.textContent === 'SQL Editor'));
+    });
+  }
+
+  /* Tree toggle */
+  function toggleTree(id) {
+    const el = document.getElementById(id);
+    const chev = document.getElementById('chev-' + id);
+    if (!el) return;
+    el.classList.toggle('hidden');
+    if (chev) chev.classList.toggle('open');
+  }
+
+  /* Connection test simulation */
+  function testConn() {
+    const span = document.querySelector('.conn-test-result');
+    span.style.color = 'var(--text-3)';
+    span.textContent = '↻ Testing…';
+    setTimeout(() => {
+      span.style.color = 'var(--green)';
+      span.textContent = '✔ Connected — 127.0.0.1:8080 (14ms)';
+    }, 900);
+  }
+
+  /* Auto-hide toast */
+  setTimeout(() => {
+    const t = document.querySelector('.toast');
+    if (t) t.style.opacity = '0', t.style.transition = 'opacity .4s', setTimeout(() => t.remove(), 400);
+  }, 3000);
+</script>
+
+</body>
+</html>
