@@ -11,28 +11,28 @@ function defineTheme(monaco: typeof import("monaco-editor")) {
     base: "vs-dark",
     inherit: true,
     rules: [
-      { token: "keyword.sql",          foreground: "c084fc", fontStyle: "bold" },
-      { token: "string.sql",           foreground: "34d399" },
-      { token: "number.sql",           foreground: "fb923c" },
-      { token: "comment.sql",          foreground: "4b5563", fontStyle: "italic" },
-      { token: "operator.sql",         foreground: "94a3b8" },
-      { token: "identifier.sql",       foreground: "e4e4f0" },
+      { token: "keyword.sql",    foreground: "c084fc", fontStyle: "bold" },
+      { token: "string.sql",     foreground: "34d399" },
+      { token: "number.sql",     foreground: "fb923c" },
+      { token: "comment.sql",    foreground: "4b5563", fontStyle: "italic" },
+      { token: "operator.sql",   foreground: "94a3b8" },
+      { token: "identifier.sql", foreground: "e4e4f0" },
     ],
     colors: {
-      "editor.background":             "#08080f",
-      "editor.foreground":             "#e4e4f0",
-      "editorLineNumber.foreground":   "#5a5a78",
+      "editor.background":              "#08080f",
+      "editor.foreground":              "#e4e4f0",
+      "editorLineNumber.foreground":    "#5a5a78",
       "editorLineNumber.activeForeground": "#e4e4f0",
-      "editor.lineHighlightBackground":"#ffffff08",
-      "editorCursor.foreground":       "#00d4ff",
-      "editor.selectionBackground":    "#00d4ff22",
-      "editorIndentGuide.background1": "#21212e",
+      "editor.lineHighlightBackground": "#ffffff08",
+      "editorCursor.foreground":        "#00d4ff",
+      "editor.selectionBackground":     "#00d4ff22",
+      "editorIndentGuide.background1":  "#21212e",
       "editorIndentGuide.activeBackground1": "#2e2e3e",
-      "editorWidget.background":       "#15151f",
-      "editorWidget.border":           "#2e2e3e",
-      "input.background":              "#1c1c2a",
-      "list.hoverBackground":          "#25253a",
-      "list.activeSelectionBackground":"#2a2a40",
+      "editorWidget.background":        "#15151f",
+      "editorWidget.border":            "#2e2e3e",
+      "input.background":               "#1c1c2a",
+      "list.hoverBackground":           "#25253a",
+      "list.activeSelectionBackground": "#2a2a40",
     },
   });
 }
@@ -61,7 +61,8 @@ export function SqlEditorPane() {
     );
   };
 
-  if (!tab || tab.type !== "sql") return null;
+  // Show for both sql and table tab types (table tabs have pre-filled SELECT SQL)
+  if (!tab || (tab.type !== "sql" && tab.type !== "table")) return null;
 
   return (
     <div className="editor-pane">
@@ -74,6 +75,21 @@ export function SqlEditorPane() {
           if (activeTabId) updateSql(activeTabId, value ?? "");
         }}
         onMount={handleMount}
+        loading={
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              height: "100%",
+              color: "#5a5a78",
+              fontSize: 12,
+              fontFamily: "monospace",
+            }}
+          >
+            Loading editor…
+          </div>
+        }
         options={{
           minimap: { enabled: false },
           fontSize: 13,
