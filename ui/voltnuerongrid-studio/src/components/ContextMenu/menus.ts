@@ -14,6 +14,24 @@ const u = () => useUiStore.getState();
 const c = () => useConnectionStore.getState();
 const e = () => useEditorStore.getState();
 
+/** Return a type-appropriate SQL literal for an INSERT template. */
+function typedDefault(dataType: string): string {
+  const t = dataType.toUpperCase();
+  if (t.includes("BOOL"))                                          return "true";
+  if (t.includes("INT") || t.includes("SERIAL"))                  return "1";
+  if (t.includes("FLOAT") || t.includes("DOUBLE") ||
+      t.includes("DECIMAL") || t.includes("NUMERIC") ||
+      t.includes("REAL"))                                          return "0.00";
+  if (t.includes("TIMESTAMP") || t.includes("DATETIME"))          return "CURRENT_TIMESTAMP";
+  if (t.includes("DATE"))                                          return "CURRENT_DATE";
+  if (t.includes("TIME"))                                          return "CURRENT_TIME";
+  if (t.includes("JSON"))                                          return "'{}'";
+  if (t.includes("ARRAY"))                                         return "ARRAY[]";
+  if (t.includes("UUID"))                                          return "gen_random_uuid()";
+  // TEXT, VARCHAR, CHAR, CLOB, etc.
+  return "'value'";
+}
+
 // ─── Connection menu ─────────────────────────────────────────
 export function buildConnectionMenu(
   conn: ConnectionSettings,
@@ -257,9 +275,22 @@ export function buildTableMenu(
             icon: "·",
             onSelect: () => {
               const cols = table.columns.map((col) => col.name).join(", ");
-              const vals = table.columns.map(() => "?").join(", ");
+              const vals = table.columns.map((col) => typedDefault(col.data_type)).join(", ");
               e().openSqlTab(
                 `INSERT INTO ${schemaName}.${table.name} (${cols})\nVALUES (${vals});`,
+                `insert_${table.name}.sql`
+              );
+            },
+          },
+          {
+            id: "insert-multi",
+            label: "Multi-row template (3 rows)",
+            icon: "·",
+            onSelect: () => {
+              const cols = table.columns.map((col) => col.name).join(", ");
+              const row = `(${table.columns.map((col) => typedDefault(col.data_type)).join(", ")})`;
+              e().openSqlTab(
+                `INSERT INTO ${schemaName}.${table.name} (${cols})\nVALUES\n  ${row},\n  ${row},\n  ${row};`,
                 `insert_${table.name}.sql`
               );
             },
@@ -324,7 +355,7 @@ export function buildTableMenu(
         icon: "📊",
         onSelect: () =>
           e().openSqlTab(
-            `ANALYZE TABLE ${schemaName}.${table.name};`,
+            `SELECT COUNT(*) AS total_rows FROM ${schemaName}.${table.name};`,
             `analyze_${table.name}.sql`
           ),
       },

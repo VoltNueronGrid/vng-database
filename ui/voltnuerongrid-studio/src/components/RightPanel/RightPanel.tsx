@@ -1,6 +1,7 @@
 import { useUiStore } from "@/store/ui";
 import { useConnectionStore } from "@/store/connection";
 import { useEditorStore } from "@/store/editor";
+import type { SchemaColumn } from "@/api/studio-client";
 
 function colTypeClass(type: string): string {
   const t = type.toUpperCase();
@@ -12,11 +13,27 @@ function colTypeClass(type: string): string {
   return "str";
 }
 
+/** Return a type-appropriate SQL literal for INSERT / DDL templates. */
+function typedDefault(col: SchemaColumn): string {
+  const t = col.data_type.toUpperCase();
+  if (t.includes("BOOL"))                                        return "true";
+  if (t.includes("INT") || t.includes("SERIAL"))                return "1";
+  if (t.includes("FLOAT") || t.includes("DOUBLE") ||
+      t.includes("DECIMAL") || t.includes("NUMERIC"))           return "0.00";
+  if (t.includes("TIMESTAMP") || t.includes("DATETIME"))        return "CURRENT_TIMESTAMP";
+  if (t.includes("DATE"))                                        return "CURRENT_DATE";
+  if (t.includes("TIME"))                                        return "CURRENT_TIME";
+  if (t.includes("JSON"))                                        return "'{}'";
+  if (t.includes("UUID"))                                        return "gen_random_uuid()";
+  return "'value'";
+}
+
 export function RightPanel() {
   const closeRightPanel = useUiStore((s) => s.closeRightPanel);
   const rightPanelTable = useUiStore((s) => s.rightPanelTable); // "schema.table"
   const databases = useConnectionStore((s) => s.getDatabases());
   const openTableTab = useEditorStore((s) => s.openTableTab);
+  const openSqlTab = useEditorStore((s) => s.openSqlTab);
 
   // Resolve the table from schema
   const parts = rightPanelTable?.split(".") ?? [];
@@ -31,6 +48,46 @@ export function RightPanel() {
         if (t) { tableInfo = t; break; }
       }
     }
+  }
+
+  function handleGenerateInsert() {
+    if (!tableInfo) return;
+    const cols = tableInfo.columns.map((c) => c.name).join(", ");
+    const vals = tableInfo.columns.map((c) => typedDefault(c)).join(", ");
+    openSqlTab(
+      `INSERT INTO ${tableInfo.schema}.${tableInfo.name} (${cols})\nVALUES (${vals});`,
+      `insert_${tableInfo.name}.sql`
+    );
+  }
+
+  function handleViewDDL() {
+    if (!tableInfo) return;
+    const cols = tableInfo.columns.map((c) => {
+      const pk = c.primary_key ? " PRIMARY KEY" : "";
+      const nn = !c.nullable && !c.primary_key ? " NOT NULL" : "";
+      return `  ${c.name} ${c.data_type}${pk}${nn}`;
+    }).join(",\n");
+    openSqlTab(
+      `-- Reconstructed DDL for ${tableInfo.schema}.${tableInfo.name}\nCREATE TABLE ${tableInfo.schema}.${tableInfo.name} (\n${cols}\n);`,
+      `ddl_${tableInfo.name}.sql`
+    );
+  }
+
+  function handleAnalyze() {
+    if (!tableInfo) return;
+    openSqlTab(
+      `SELECT COUNT(*) AS total_rows FROM ${tableInfo.schema}.${tableInfo.name};`,
+      `analyze_${tableInfo.name}.sql`
+    );
+  }
+
+  function handleTruncate() {
+    if (!tableInfo) return;
+    if (!confirm(`Truncate table ${tableInfo.schema}.${tableInfo.name}? This cannot be undone.`)) return;
+    openSqlTab(
+      `TRUNCATE TABLE ${tableInfo.schema}.${tableInfo.name};`,
+      `truncate_${tableInfo.name}.sql`
+    );
   }
 
   return (
@@ -91,15 +148,31 @@ export function RightPanel() {
                 >
                   SELECT * LIMIT 100
                 </button>
-                <button className="btn" style={{ justifyContent: "center", fontSize: 11.5 }}>
+                <button
+                  className="btn"
+                  style={{ justifyContent: "center", fontSize: 11.5 }}
+                  onClick={handleGenerateInsert}
+                >
+                  Generate INSERT
+                </button>
+                <button
+                  className="btn"
+                  style={{ justifyContent: "center", fontSize: 11.5 }}
+                  onClick={handleViewDDL}
+                >
                   View DDL
                 </button>
-                <button className="btn" style={{ justifyContent: "center", fontSize: 11.5 }}>
+                <button
+                  className="btn"
+                  style={{ justifyContent: "center", fontSize: 11.5 }}
+                  onClick={handleAnalyze}
+                >
                   Analyze Table
                 </button>
                 <button
                   className="btn danger"
                   style={{ justifyContent: "center", fontSize: 11.5 }}
+                  onClick={handleTruncate}
                 >
                   TRUNCATE TABLE
                 </button>
