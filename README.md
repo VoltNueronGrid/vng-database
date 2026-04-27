@@ -399,3 +399,35 @@ Next step: scaffold Rust workspace and implement Phase 1 core engine foundations
         - Quick recommendation:
           - Use the prompt for daily use.
           - Use the agent directly only when you want manual control or quick debugging.
+
+
+### Quick Start:
+Two ways to run the Studio UI:
+
+- Option 1: Option 1 — Web app only (browser, fastest)
+```bash
+# Terminal 1: Start the DB server
+cargo run -p voltnuerongridd
+# Listens on http://127.0.0.1:8080
+
+# Terminal 2: Start the Vite dev server
+cd ui/voltnuerongrid-studio
+npm run dev
+# Opens at http://localhost:1420
+```
+
+- Option 2 — Tauri desktop app (native window)
+```bash
+# Terminal 1: Start the DB server
+cargo run -p voltnuerongridd
+
+# Terminal 2: Start Tauri dev (wraps Vite + opens desktop window)
+cd ui/voltnuerongrid-studio
+npm run tauri:dev
+```
+
+- First time only — install JS deps if you haven't:
+```bash
+cd ui/voltnuerongrid-studio
+npm install
+```
