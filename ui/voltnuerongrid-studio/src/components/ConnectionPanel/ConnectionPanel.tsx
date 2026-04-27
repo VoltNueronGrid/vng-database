@@ -1,13 +1,13 @@
 import { useState, useEffect } from "react";
 import { useUiStore } from "@/store/ui";
 import { useConnectionStore } from "@/store/connection";
-import { defaultConnection } from "@/store/connection";
-import type { ConnectionSettings, ConnectionMode, ServerType, RuntimeTarget } from "@/store/connection";
+import { defaultConnection, PROTOCOL_DEFAULT_PORTS } from "@/store/connection";
+import type { ConnectionSettings, ConnectionMode, ServerType, RuntimeTarget, ConnectionProtocol } from "@/store/connection";
 import { StudioApiClient } from "@/api/studio-client";
 import { tauriCredentials } from "@/api/tauri";
 
 type Tab = "general" | "auth" | "ssl" | "advanced";
-type TestState = "idle" | "testing" | "ok" | "fail";
+type TestState = "idle" | "testing" | "ok" | "fail" | "warn";
 
 export function ConnectionPanel() {
   const closeConnectionPanel = useUiStore((s) => s.closeConnectionPanel);
@@ -42,18 +42,58 @@ export function ConnectionPanel() {
   }, [existing]);
 
   function patch<K extends keyof ConnectionSettings>(k: K, v: ConnectionSettings[K]) {
-    setForm((f) => ({ ...f, [k]: v }));
-    // Auto-sync baseUrl when host/port change
-    if (k === "host" || k === "port") {
-      setForm((f) => {
+    setForm((f) => {
+      const next = { ...f, [k]: v };
+
+      // Auto-sync baseUrl when host/port/protocol change
+      if (k === "host" || k === "port" || k === "protocol") {
         const host = k === "host" ? (v as string) : f.host;
         const port = k === "port" ? (v as number) : f.port;
-        return { ...f, [k]: v, baseUrl: `http://${host}:${port}` };
-      });
-    }
+        next.baseUrl = `http://${host}:${port}`;
+      }
+
+      // When protocol changes, auto-update port to the protocol default
+      // ONLY if the current port matches the other protocol's default (i.e. not customised)
+      if (k === "protocol") {
+        const newProto = v as ConnectionProtocol;
+        const oldDefault = PROTOCOL_DEFAULT_PORTS[f.protocol];
+        if (f.port === oldDefault) {
+          next.port = PROTOCOL_DEFAULT_PORTS[newProto];
+          next.baseUrl = `http://${f.host}:${next.port}`;
+        }
+      }
+
+      return next;
+    });
+  }
+
+  /** Returns a validation error string, or null if all required fields are present. */
+  function validate(): string | null {
+    if (!form.host.trim()) return "Host is required";
+    if (!form.port || form.port <= 0) return "Port is required";
+    if (form.mode === "admin" && !adminKey.trim()) return "Admin API Key is required (Auth tab)";
+    if (form.mode === "operator" && !form.operatorId?.trim()) return "Operator ID is required (Auth tab)";
+    if (form.mode === "tenant" && !form.tenantId?.trim()) return "Tenant ID is required (Auth tab)";
+    if (form.mode === "tenant" && !form.userId?.trim()) return "User ID is required (Auth tab)";
+    return null;
   }
 
   async function testConnection() {
+    // Validate required fields first — don't hit the network if they're missing
+    const validationErr = validate();
+    if (validationErr) {
+      setTestState("fail");
+      setTestMsg(validationErr);
+      return;
+    }
+
+    // Native protocol: can't test raw TCP from the browser — validate fields only
+    if (form.protocol === "native") {
+      setTestState("warn");
+      setTestMsg("Fields valid — native wire protocol cannot be tested from the browser");
+      return;
+    }
+
     setTestState("testing");
     setTestMsg("Connecting…");
     const client = new StudioApiClient({
@@ -74,7 +114,8 @@ export function ConnectionPanel() {
 
   async function save() {
     if (!form.name.trim()) { setError("Connection name is required"); return; }
-    if (!form.host.trim()) { setError("Host is required"); return; }
+    const validationErr = validate();
+    if (validationErr) { setError(validationErr); return; }
     setError(null);
 
     if (existing) {
@@ -95,10 +136,16 @@ export function ConnectionPanel() {
   }
 
   const testStatusClass =
-    testState === "ok" ? "ok" : testState === "fail" ? "fail" : testState === "testing" ? "testing" : "";
+    testState === "ok" ? "ok"
+    : testState === "fail" ? "fail"
+    : testState === "warn" ? "warn"
+    : testState === "testing" ? "testing" : "";
 
   const testStatusIcon =
-    testState === "ok" ? "✔" : testState === "fail" ? "✗" : testState === "testing" ? "⟳" : "";
+    testState === "ok" ? "✔"
+    : testState === "fail" ? "✗"
+    : testState === "warn" ? "⚠"
+    : testState === "testing" ? "⟳" : "";
 
   return (
     <div className="overlay" onClick={(e) => e.target === e.currentTarget && closeConnectionPanel()}>
@@ -166,6 +213,27 @@ export function ConnectionPanel() {
                     <option value="cloud">Cloud</option>
                     <option value="custom">Custom</option>
                   </select>
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-field full">
+                  <label className="form-label">Connection Protocol</label>
+                  <div className="protocol-toggle">
+                    {(["http", "native"] as ConnectionProtocol[]).map((p) => (
+                      <button
+                        key={p}
+                        className={`protocol-btn${form.protocol === p ? " selected" : ""}`}
+                        onClick={() => patch("protocol", p)}
+                        type="button"
+                      >
+                        {p === "http" ? (
+                          <><span className="proto-icon">🌐</span><span className="proto-label">HTTP</span><span className="proto-desc">REST API · port {PROTOCOL_DEFAULT_PORTS.http}</span></>
+                        ) : (
+                          <><span className="proto-icon">⚡</span><span className="proto-label">Native</span><span className="proto-desc">Wire protocol · port {PROTOCOL_DEFAULT_PORTS.native}</span></>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="form-row">

@@ -92,7 +92,11 @@ test.describe("live: Test Connection button", () => {
     // The connection panel modal should now be visible
     await expect(page.locator(".conn-panel-title")).toBeVisible({ timeout: 5_000 });
 
-    // Defaults are already 127.0.0.1:8080 — just click Test Connection
+    // Switch to Auth tab and fill in the Admin API Key (now required)
+    await page.locator(".cp-tab", { hasText: "Auth" }).click();
+    await page.locator('input[placeholder="x-vng-admin-key value"]').fill(ADMIN_KEY);
+
+    // Click Test Connection
     await page.locator("button", { hasText: "Test Connection" }).click();
 
     // Expect the success message — "Connected" followed by response time
@@ -101,10 +105,24 @@ test.describe("live: Test Connection button", () => {
     ).toContainText("Connected", { timeout: 10_000 });
   });
 
+  test("shows validation error when Admin Key is missing", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate((key) => localStorage.removeItem(key), CONN_STORE_KEY);
+    await page.reload();
+
+    await page.locator(".welcome-card").filter({ hasText: "New Connection" }).click();
+    await expect(page.locator(".conn-panel-title")).toBeVisible({ timeout: 5_000 });
+
+    // Don't fill in admin key — click Test Connection directly
+    await page.locator("button", { hasText: "Test Connection" }).click();
+
+    // Should fail with a validation message (no network call made)
+    await expect(page.locator(".test-status.fail")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".test-status.fail")).toContainText("Admin API Key");
+  });
+
   test("shows error when server returns HTTP 500", async ({ page }) => {
-    // In browser dev mode, StudioApiClient.baseUrl() always returns "" and
-    // routes through the Vite proxy — the configured host:port is ignored.
-    // So we intercept /health at the proxy level to simulate a server error.
+    // Intercept /health at the proxy level to simulate a server error.
     await page.route("**/health", (route) =>
       route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "forced failure" }) })
     );
@@ -115,6 +133,10 @@ test.describe("live: Test Connection button", () => {
 
     await page.locator(".welcome-card").filter({ hasText: "New Connection" }).click();
     await expect(page.locator(".conn-panel-title")).toBeVisible({ timeout: 5_000 });
+
+    // Fill required admin key so validation passes and the network call is made
+    await page.locator(".cp-tab", { hasText: "Auth" }).click();
+    await page.locator('input[placeholder="x-vng-admin-key value"]').fill("any-key");
 
     await page.locator("button", { hasText: "Test Connection" }).click();
 

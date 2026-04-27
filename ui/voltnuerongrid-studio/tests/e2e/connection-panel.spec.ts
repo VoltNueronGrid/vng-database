@@ -109,6 +109,9 @@ test.describe("Connection Panel", () => {
   test("saves successfully with valid name and host", async ({ mockedPage }) => {
     await mockedPage.locator('input[placeholder="e.g. Local Dev"]').fill("My Test Conn");
     await mockedPage.locator('input[placeholder="127.0.0.1"]').fill("192.168.1.10");
+    // Admin key is required to save
+    await mockedPage.locator(".cp-tab", { hasText: "Auth" }).click();
+    await mockedPage.locator('input[type="password"]').fill("test-key");
     await mockedPage.locator("button", { hasText: "Save & Connect" }).click();
     // Panel should close and we should land on main workspace
     await expect(mockedPage.locator(".conn-panel")).not.toBeVisible();
@@ -135,6 +138,9 @@ test.describe("Connection Panel", () => {
 
   test("Test Connection shows success state when health endpoint returns ok", async ({ mockedPage }) => {
     await mockedPage.locator('input[placeholder="e.g. Local Dev"]').fill("Local VNG");
+    // Admin key is required before test connection
+    await mockedPage.locator(".cp-tab", { hasText: "Auth" }).click();
+    await mockedPage.locator('input[type="password"]').fill("test-key");
     await mockedPage.locator("button", { hasText: "Test Connection" }).click();
     // Wait for test status to resolve
     const testStatus = mockedPage.locator(".test-status");

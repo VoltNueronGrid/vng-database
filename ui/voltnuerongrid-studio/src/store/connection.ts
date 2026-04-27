@@ -6,10 +6,18 @@ export type ConnectionMode = "admin" | "operator" | "tenant";
 export type ServerType = "voltnuerongrid" | "postgresql" | "mysql" | "other";
 export type RuntimeTarget = "local" | "docker" | "cloud" | "custom";
 export type HealthState = "unverified" | "ok" | "degraded" | "error";
+export type ConnectionProtocol = "http" | "native";
+
+/** Default ports per protocol */
+export const PROTOCOL_DEFAULT_PORTS: Record<ConnectionProtocol, number> = {
+  http: 8080,
+  native: 7542,
+};
 
 export interface ConnectionSettings {
   id: string;
   name: string;
+  protocol: ConnectionProtocol;
   serverType: ServerType;
   runtimeTarget: RuntimeTarget;
   baseUrl: string;
@@ -39,6 +47,7 @@ export function defaultConnection(
   return {
     id: `conn-${now}`,
     name: "New Connection",
+    protocol: "http",
     serverType: "voltnuerongrid",
     runtimeTarget: "local",
     baseUrl: "http://127.0.0.1:8080",

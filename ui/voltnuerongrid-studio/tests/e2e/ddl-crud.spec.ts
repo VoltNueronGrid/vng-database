@@ -193,6 +193,10 @@ test.describe("Connection Creation", () => {
     await portInput.fill("");
     await portInput.type("8080");
 
+    // Admin key required before test connection
+    await mockedPage.locator(".cp-tab", { hasText: "Auth" }).click();
+    await mockedPage.locator('input[type="password"]').fill("test-key");
+
     await mockedPage.locator("button", { hasText: "Test Connection" }).click();
     const status = mockedPage.locator(".test-status");
     await expect(status).toBeVisible({ timeout: 6000 });
@@ -217,6 +221,10 @@ test.describe("Connection Creation", () => {
     await mockedPage.locator('input[placeholder="e.g. Local Dev"]').fill("E2E Workspace Conn");
     await mockedPage.locator('input[placeholder="127.0.0.1"]').fill("127.0.0.1");
 
+    // Admin key required to save
+    await mockedPage.locator(".cp-tab", { hasText: "Auth" }).click();
+    await mockedPage.locator('input[type="password"]').fill("test-key");
+
     await mockedPage.locator("button", { hasText: "Save & Connect" }).click();
 
     await expect(mockedPage.locator(".conn-panel")).not.toBeVisible({ timeout: 5000 });
@@ -226,6 +234,9 @@ test.describe("Connection Creation", () => {
   test("saved connection appears in recent list after page reload", async ({ mockedPage }) => {
     await mockedPage.locator(".welcome-card").filter({ hasText: "New Connection" }).click();
     await mockedPage.locator('input[placeholder="e.g. Local Dev"]').fill("Persistent Server");
+    // Admin key required to save
+    await mockedPage.locator(".cp-tab", { hasText: "Auth" }).click();
+    await mockedPage.locator('input[type="password"]').fill("test-key");
     await mockedPage.locator("button", { hasText: "Save & Connect" }).click();
     await expect(mockedPage.locator(".workspace")).toBeVisible({ timeout: 5000 });
 
