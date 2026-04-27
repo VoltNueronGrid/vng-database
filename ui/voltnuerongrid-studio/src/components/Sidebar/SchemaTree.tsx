@@ -26,13 +26,17 @@ function TableNode({ table, schemaName, dbName }: { table: SchemaTable; schemaNa
   const openRightPanel = useUiStore((s) => s.openRightPanel);
   const openTableTab = useEditorStore((s) => s.openTableTab);
 
+  // Server may return table.name as qualified ("schema.table" or "db.schema.table").
+  // Strip qualification so all UI operations use the short name.
+  const tableBaseName = table.name.split(".").pop() ?? table.name;
+
   return (
     <>
       <div
         className="tree-node"
         style={{ paddingLeft: 0 }}
         onClick={() => setOpen((o) => !o)}
-        onDoubleClick={() => openTableTab(table.name, schemaName)}
+        onDoubleClick={() => openTableTab(tableBaseName, schemaName)}
         onContextMenu={openMenuFor(() => buildTableMenu(dbName, schemaName, table))}
       >
         <span className="tree-indent" />
@@ -40,7 +44,7 @@ function TableNode({ table, schemaName, dbName }: { table: SchemaTable; schemaNa
         <span className="tree-indent" />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
         <span className="tree-icon">📋</span>
-        <span className="tree-label">{table.name}</span>
+        <span className="tree-label">{tableBaseName}</span>
         {table.row_count != null && (
           <span className="tree-count">
             {table.row_count >= 1_000_000
@@ -56,8 +60,8 @@ function TableNode({ table, schemaName, dbName }: { table: SchemaTable; schemaNa
           key={col.name}
           className="tree-node"
           style={{ paddingLeft: 0 }}
-          onClick={() => openRightPanel(`${schemaName}.${table.name}`)}
-          onContextMenu={openMenuFor(() => buildColumnMenu(dbName, schemaName, table.name, col))}
+          onClick={() => openRightPanel(`${schemaName}.${tableBaseName}`)}
+          onContextMenu={openMenuFor(() => buildColumnMenu(dbName, schemaName, tableBaseName, col))}
         >
           <span className="tree-indent" />
           <span className="tree-indent" />
