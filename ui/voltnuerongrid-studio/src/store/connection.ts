@@ -26,6 +26,7 @@ export interface ConnectionSettings {
   database?: string;
   username?: string;
   mode: ConnectionMode;
+  adminKey?: string;
   operatorId?: string;
   tenantId?: string;
   userId?: string;
@@ -142,7 +143,9 @@ export const useConnectionStore = create<ConnectionState>()(
 
       getActiveKey() {
         const { activeId, resolvedKeys } = get();
-        return activeId ? resolvedKeys[activeId] : undefined;
+        if (!activeId) return undefined;
+        // Prefer runtime-resolved key (Tauri keychain), fall back to persisted adminKey
+        return resolvedKeys[activeId] ?? get().connections.find((c) => c.id === activeId)?.adminKey;
       },
 
       getDatabases() {
@@ -153,7 +156,7 @@ export const useConnectionStore = create<ConnectionState>()(
       name: "vng-studio-connections",
       // Do NOT persist resolvedKeys — those live only in memory
       partialize: (s) => ({
-        connections: s.connections,
+        connections: s.connections.map((c) => ({ ...c })),
         activeId: s.activeId,
       }),
     }

@@ -34,12 +34,22 @@ export function ConnectionPanel() {
   useEffect(() => {
     if (existing) {
       setForm(existing);
-      // Load key from keychain if editing
+      // Load key from persisted connection field first, then try Tauri keychain
+      if (existing.adminKey) setAdminKey(existing.adminKey);
       tauriCredentials.get(existing.id, "adminKey")
         .then((k) => { if (k) setAdminKey(k); })
         .catch(() => {});
     }
   }, [existing]);
+
+  // Close on Escape
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") closeConnectionPanel();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [closeConnectionPanel]);
 
   function patch<K extends keyof ConnectionSettings>(k: K, v: ConnectionSettings[K]) {
     setForm((f) => {
@@ -119,9 +129,9 @@ export function ConnectionPanel() {
     setError(null);
 
     if (existing) {
-      updateConnection(form.id, form);
+      updateConnection(form.id, { ...form, adminKey: form.mode === "admin" ? adminKey : undefined });
     } else {
-      addConnection(form);
+      addConnection({ ...form, adminKey: form.mode === "admin" ? adminKey : undefined });
     }
 
     // Persist admin key in OS keychain
@@ -148,7 +158,7 @@ export function ConnectionPanel() {
     : testState === "testing" ? "⟳" : "";
 
   return (
-    <div className="overlay" onClick={(e) => e.target === e.currentTarget && closeConnectionPanel()}>
+    <div className="overlay">
       <div className="conn-panel">
         {/* Header */}
         <div className="conn-panel-header">

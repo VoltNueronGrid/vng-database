@@ -41,9 +41,8 @@ test.describe("Connection Panel", () => {
     await expect(mockedPage.locator(".conn-panel")).not.toBeVisible();
   });
 
-  test("clicking outside overlay dismisses the panel", async ({ mockedPage }) => {
-    // Click the very top-left corner of the overlay (outside the panel)
-    await mockedPage.locator(".overlay").click({ position: { x: 5, y: 5 }, force: true });
+  test("pressing Escape dismisses the panel", async ({ mockedPage }) => {
+    await mockedPage.keyboard.press("Escape");
     await expect(mockedPage.locator(".conn-panel")).not.toBeVisible();
   });
 
