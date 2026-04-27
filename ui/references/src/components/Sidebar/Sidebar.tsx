@@ -27,14 +27,12 @@ export function Sidebar() {
         <button
           className={`activity-btn ${sidebarTab === "history" ? "active" : ""}`}
           onClick={() => setSidebarTab("history")}
-          title="Query History"
         >
           History
         </button>
         <button
           className={`activity-btn ${sidebarTab === "saved" ? "active" : ""}`}
           onClick={() => setSidebarTab("saved")}
-          title="Saved Queries"
         >
           Saved
         </button>

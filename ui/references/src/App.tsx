@@ -8,9 +8,6 @@ import { ConnectionPanel } from "@/components/ConnectionPanel/ConnectionPanel";
 import { Dashboard } from "@/components/Dashboard/Dashboard";
 import { Welcome } from "@/components/Welcome/Welcome";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { ContextMenu } from "@/components/ContextMenu/ContextMenu";
-import { ResourceModal } from "@/components/Modals/ResourceModal";
-import { Toast } from "@/components/Toast/Toast";
 
 export function App() {
   const screen = useUiStore((s) => s.screen);
@@ -66,13 +63,6 @@ export function App() {
           <ConnectionPanel />
         </ErrorBoundary>
       )}
-
-      <ErrorBoundary label="ResourceModal">
-        <ResourceModal />
-      </ErrorBoundary>
-
-      <ContextMenu />
-      <Toast />
     </div>
   );
 }

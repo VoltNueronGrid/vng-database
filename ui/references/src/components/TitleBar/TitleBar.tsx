@@ -54,23 +54,10 @@ export function TitleBar() {
 
   return (
     <div className="titlebar">
-      {/* macOS traffic-lights placeholder */}
       <div className="titlebar-traffic">
-        <button
-          className="traffic traffic-close"
-          onClick={() => tauriWindow.close().catch(() => {})}
-          aria-label="Close"
-        />
-        <button
-          className="traffic traffic-min"
-          onClick={() => tauriWindow.minimize().catch(() => {})}
-          aria-label="Minimize"
-        />
-        <button
-          className="traffic traffic-max"
-          onClick={() => tauriWindow.toggleMaximize().catch(() => {})}
-          aria-label="Maximize"
-        />
+        <button className="traffic traffic-close" onClick={() => tauriWindow.close().catch(() => {})} aria-label="Close" />
+        <button className="traffic traffic-min" onClick={() => tauriWindow.minimize().catch(() => {})} aria-label="Minimize" />
+        <button className="traffic traffic-max" onClick={() => tauriWindow.toggleMaximize().catch(() => {})} aria-label="Maximize" />
       </div>
 
       <div className="titlebar-logo">
@@ -101,52 +88,39 @@ export function TitleBar() {
             className="titlebar-btn"
             title="Refresh schema"
             onClick={() => refresh()}
-          >
-            ↻
-          </button>
+          >↻</button>
         )}
         {active && (
           <button
             className="titlebar-btn"
             title="Disconnect"
             onClick={disconnect}
-          >
-            ⏻
-          </button>
+          >⏻</button>
         )}
         <button
           className="titlebar-btn"
           title="Dashboard"
           onClick={() => setScreen("dashboard")}
-        >
-          📊
-        </button>
+        >📊</button>
         <button
           className="titlebar-btn"
           title="New Connection"
           onClick={() => openConnectionPanel(null)}
-        >
-          ＋
-        </button>
+        >＋</button>
 
         <div className="theme-menu-anchor" ref={themeAnchorRef}>
           <button
             className={`titlebar-btn${themeMenuOpen ? " active" : ""}`}
             title={`Theme: ${themeInfo.label}`}
             onClick={() => setThemeMenuOpen((o) => !o)}
-          >
-            {themeInfo.icon}
-          </button>
+          >{themeInfo.icon}</button>
           {themeMenuOpen && (
             <div className="theme-menu">
               {(["light", "dark", "system"] as ThemeMode[]).map((m) => (
                 <button
                   key={m}
                   className={themeMode === m ? "active" : ""}
-                  onClick={() => {
-                    setThemeMode(m);
-                    setThemeMenuOpen(false);
-                  }}
+                  onClick={() => { setThemeMode(m); setThemeMenuOpen(false); }}
                 >
                   <span>{THEME_LABELS[m].icon}</span>
                   <span>{THEME_LABELS[m].label}</span>

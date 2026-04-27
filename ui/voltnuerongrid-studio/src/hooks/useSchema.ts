@@ -3,13 +3,11 @@ import { StudioApiClient } from "@/api/studio-client";
 import { useConnectionStore } from "@/store/connection";
 
 export function useSchema() {
-  const getActive = useConnectionStore((s) => s.getActive);
-  const getActiveKey = useConnectionStore((s) => s.getActiveKey);
   const activeId = useConnectionStore((s) => s.activeId);
-  const setSchema = useConnectionStore((s) => s.setSchema);
-  const setHealth = useConnectionStore((s) => s.setHealth);
 
   const refresh = useCallback(async () => {
+    const { getActive, getActiveKey, setSchema, setHealth } =
+      useConnectionStore.getState();
     const conn = getActive();
     if (!conn) return;
 
@@ -30,7 +28,7 @@ export function useSchema() {
         message: String(err),
       });
     }
-  }, [getActive, getActiveKey, setSchema, setHealth]);
+  }, []);
 
   // Auto-fetch when the active connection changes
   useEffect(() => {

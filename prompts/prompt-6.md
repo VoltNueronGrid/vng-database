@@ -1,0 +1,1 @@
+I would like to get a design of Studio UI. Can you design a very nice, intuitive, simple, modern and responsive UI for this ? Also, i would need a desktop application. So, please create the design first and based on that, we can develop
