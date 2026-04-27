@@ -36,6 +36,7 @@ const TITLES: Record<ResourceModalKind, string> = {
   "create-role":     "Create Role",
   "grant-role":      "Grant Role",
   "view-ddl":        "DDL",
+  "generate-insert": "Generate INSERT",
 };
 
 // ─── Root modal shell ─────────────────────────────────────────
@@ -109,6 +110,7 @@ function renderBody(ctx: CtxType, runSql: RunSqlFn) {
     case "create-role":     return <CreateRoleForm onSubmit={runSql} />;
     case "grant-role":      return <GrantRoleForm user={ctx.target!} onSubmit={runSql} />;
     case "view-ddl":        return <ViewDdlForm target={ctx.target!} payload={ctx.payload} onSubmit={runSql} />;
+    case "generate-insert": return <GenerateInsertForm target={ctx.target!} payload={ctx.payload} onSubmit={runSql} />;
   }
 }
 
@@ -127,11 +129,12 @@ function Field({ label, children, full = false }: {
   );
 }
 
-function Footer({ onCancel, onSubmit, label = "Generate SQL", danger = false }: {
+function Footer({ onCancel, onSubmit, label = "Generate SQL", danger = false, disabled = false }: {
   onCancel: () => void;
   onSubmit: () => void;
   label?: string;
   danger?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <div className="conn-panel-footer" style={{ borderTop: "1px solid var(--border)", marginTop: 14 }}>
@@ -147,6 +150,7 @@ function Footer({ onCancel, onSubmit, label = "Generate SQL", danger = false }: 
         className="btn-wide primary"
         style={{ width: 160, background: danger ? "var(--red)" : undefined }}
         onClick={onSubmit}
+        disabled={disabled}
       >
         {label}
       </button>
@@ -822,5 +826,141 @@ function ViewDdlForm({
         onSubmit={() => onSubmit(ddl, `ddl_${target}.sql`)}
       />
     </>
+  );
+}
+
+// ─── Generate Insert Form ──────────────────────────────────────
+
+function insertTypedDefault(col: SchemaColumn): string {
+  const t = col.data_type.toUpperCase();
+  if (t.includes("BOOL"))                                        return "true";
+  if (t.includes("INT") || t.includes("SERIAL"))                return "1";
+  if (t.includes("FLOAT") || t.includes("DOUBLE") ||
+      t.includes("DECIMAL") || t.includes("NUMERIC"))           return "0.00";
+  if (t.includes("TIMESTAMP") || t.includes("DATETIME"))        return "CURRENT_TIMESTAMP";
+  if (t.includes("DATE"))                                        return "CURRENT_DATE";
+  if (t.includes("TIME"))                                        return "CURRENT_TIME";
+  if (t.includes("JSON"))                                        return "'{}'";
+  if (t.includes("UUID"))                                        return "gen_random_uuid()";
+  return "'value'";
+}
+
+function GenerateInsertForm({
+  target,
+  payload,
+  onSubmit,
+}: {
+  target: string;
+  payload?: Record<string, unknown>;
+  onSubmit: RunSqlFn;
+}) {
+  const close = useModalStore((s) => s.close);
+  const [rowCount, setRowCount] = useState(1);
+  const [rawInput, setRawInput] = useState("1");
+
+  const columns = useMemo(() => (payload?.columns as SchemaColumn[]) ?? [], [payload]);
+  const [schemaName, tableName] = target.split(".");
+
+  const QUICK = [1, 5, 10, 50, 100] as const;
+
+  function buildSql(n: number): string {
+    const cols = columns.map((c) => c.name).join(", ");
+    const singleRow = `(${columns.map((c) => insertTypedDefault(c)).join(", ")})`;
+    const rows = Array.from({ length: n }, () => `  ${singleRow}`).join(",\n");
+    return `INSERT INTO ${schemaName}.${tableName} (${cols})\nVALUES\n${rows};`;
+  }
+
+  const previewSql = useMemo(
+    () => buildSql(Math.min(rowCount, 3)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rowCount, columns, schemaName, tableName]
+  );
+
+  function handleChange(raw: string) {
+    setRawInput(raw);
+    const n = parseInt(raw, 10);
+    if (!isNaN(n) && n >= 1 && n <= 1000) setRowCount(n);
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Row count picker */}
+      <div>
+        <label style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text-2)" }}>
+          Number of rows
+        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {QUICK.map((n) => (
+            <button
+              key={n}
+              className="btn"
+              style={{
+                fontSize: 11.5,
+                padding: "4px 12px",
+                background: rowCount === n ? "var(--brand-cyan)" : undefined,
+                color: rowCount === n ? "#000" : undefined,
+                fontWeight: rowCount === n ? 700 : undefined,
+              }}
+              onClick={() => { setRowCount(n); setRawInput(String(n)); }}
+            >
+              {n}
+            </button>
+          ))}
+          <input
+            data-testid="row-count-input"
+            className="conn-input"
+            type="number"
+            min={1}
+            max={1000}
+            value={rawInput}
+            onChange={(e) => handleChange(e.target.value)}
+            style={{ width: 80, marginLeft: 4 }}
+            placeholder="Custom"
+          />
+        </div>
+      </div>
+
+      {/* Column info */}
+      {columns.length === 0 && (
+        <div style={{ fontSize: 12, color: "var(--text-3)", padding: "8px 0" }}>
+          No column metadata — schema may not be loaded. Refresh schema tree and retry.
+        </div>
+      )}
+
+      {/* SQL preview */}
+      {columns.length > 0 && (
+        <div>
+          <label style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 6, color: "var(--text-2)" }}>
+            SQL preview{rowCount > 3 ? ` (first 3 of ${rowCount} rows shown)` : ""}
+          </label>
+          <pre
+            style={{
+              background: "var(--bg-2)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "10px 12px",
+              fontSize: 11.5,
+              maxHeight: 180,
+              overflowY: "auto",
+              margin: 0,
+              color: "var(--text-1)",
+              lineHeight: 1.6,
+            }}
+          >
+            {previewSql}
+          </pre>
+        </div>
+      )}
+
+      <Footer
+        onCancel={close}
+        label={`Generate ${rowCount} ${rowCount === 1 ? "Row" : "Rows"} →`}
+        disabled={columns.length === 0}
+        onSubmit={() => {
+          const n = Math.max(1, Math.min(1000, rowCount));
+          onSubmit(buildSql(n), `insert_${tableName}.sql`);
+        }}
+      />
+    </div>
   );
 }

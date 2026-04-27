@@ -423,3 +423,126 @@ test.describe("live-headed: status bar", () => {
     await expect(page.locator(".statusbar")).toContainText(/oltp|olap|hybrid/i, { timeout: 8_000 });
   });
 });
+
+// ─── Right Panel — Generate INSERT modal ─────────────────────────────────────
+
+test.describe("live-headed: right panel generate insert", () => {
+  const TABLE = "rp_gen_insert_e2e";
+  const SCHEMA = "public";
+
+  /** Open the Right Panel for the test table via context menu. */
+  async function openRightPanelForTable(page: import("@playwright/test").Page) {
+    const sidebar = page.locator(".sidebar");
+
+    // Find the tree-node whose .tree-label text is EXACTLY TABLE (not a qualified variant)
+    const tableNode = sidebar.locator(".tree-node").filter({
+      has: page.locator(`.tree-label`, { hasText: new RegExp(`^${TABLE}$`) }),
+    }).first();
+    await expect(tableNode).toBeVisible({ timeout: 12_000 });
+
+    // Right-click to open context menu, then click "Show Details" (opens Right Panel)
+    await tableNode.click({ button: "right" });
+    await page.locator(".ctx-menu-item .ctx-menu-label", { hasText: "Show Details" }).click();
+
+    // Right Panel should be visible
+    await expect(page.locator(".right-panel")).toBeVisible({ timeout: 5_000 });
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await goToWorkspace(page);
+
+    // Create the test table WITHOUT schema prefix so the server stores a short name
+    // ("rp_gen_insert_e2e" not "public.rp_gen_insert_e2e").
+    // If the table already exists the query will error — that's OK, the table is still there.
+    await fillEditor(
+      page,
+      `CREATE TABLE ${TABLE} (\n` +
+      `  id INT,\n` +
+      `  name VARCHAR(255),\n` +
+      `  score DECIMAL(10,2),\n` +
+      `  active BOOLEAN,\n` +
+      `  created_at TIMESTAMP\n` +
+      `);`
+    );
+    await runQuery(page);
+
+    // Refresh schema so the tree picks up the table (whether created now or already existed)
+    const refreshBtn = page.locator(".titlebar-btn[title='Refresh schema']");
+    if (await refreshBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await refreshBtn.click();
+    }
+
+    // Wait for the table to appear in the tree (exact name match — avoids qualified variants)
+    const sidebar = page.locator(".sidebar");
+    await expect(
+      sidebar.locator(".tree-node").filter({
+        has: page.locator(`.tree-label`, { hasText: new RegExp(`^${TABLE}$`) }),
+      }).first()
+    ).toBeVisible({ timeout: 12_000 });
+  });
+
+  test("Generate INSERT button opens row-count modal", async ({ page }) => {
+    await openRightPanelForTable(page);
+    await expect(page.locator(".right-panel")).toContainText(TABLE);
+
+    // Click "Generate INSERT" quick action
+    await page.locator(".right-panel button", { hasText: "Generate INSERT" }).click();
+
+    // The generate-insert modal should appear
+    await expect(page.locator(".conn-panel-title")).toContainText("Generate INSERT", { timeout: 5_000 });
+  });
+
+  test("Generate INSERT modal has quick row count buttons and preview", async ({ page }) => {
+    await openRightPanelForTable(page);
+    await page.locator(".right-panel button", { hasText: "Generate INSERT" }).click();
+    await expect(page.locator(".conn-panel-title")).toContainText("Generate INSERT", { timeout: 5_000 });
+
+    // Quick-count buttons (1, 5, 10, 50, 100) should be present
+    for (const n of [1, 5, 10, 50, 100]) {
+      await expect(page.locator(".conn-panel button", { hasText: String(n) }).first()).toBeVisible();
+    }
+
+    // SQL preview area should contain table name
+    await expect(page.locator(".conn-panel pre")).toContainText(TABLE, { timeout: 3_000 });
+  });
+
+  test("clicking row count 5 generates 5-row INSERT and opens SQL tab", async ({ page }) => {
+    await openRightPanelForTable(page);
+    await page.locator(".right-panel button", { hasText: "Generate INSERT" }).click();
+    await expect(page.locator(".conn-panel-title")).toContainText("Generate INSERT", { timeout: 5_000 });
+
+    // Click quick button "5"
+    await page.locator(".conn-panel button", { hasText: "5" }).first().click();
+
+    // Preview should now show INSERT INTO
+    const preview = page.locator(".conn-panel pre");
+    await expect(preview).toContainText("INSERT INTO", { timeout: 3_000 });
+
+    // Submit — "Generate 5 Rows →"
+    await page.locator(".conn-panel button", { hasText: "Generate 5 Rows" }).click();
+
+    // Verify the modal closed and the INSERT tab was opened (overlays removed)
+    await expect(page.locator(".overlay")).not.toBeVisible({ timeout: 5_000 });
+
+    // A new SQL tab with the INSERT content should be active
+    const activeTabTitle = page.locator(".tabbar .tab.active .tab-label");
+    await expect(activeTabTitle).toContainText(`insert_${TABLE}`, { timeout: 5_000 });
+
+    // Monaco editor should show INSERT SQL
+    await expect(page.locator(".monaco-editor")).toContainText("INSERT INTO", { timeout: 5_000 });
+  });
+
+  test("typing custom row count in input updates generate button label", async ({ page }) => {
+    await openRightPanelForTable(page);
+    await page.locator(".right-panel button", { hasText: "Generate INSERT" }).click();
+    await expect(page.locator(".conn-panel-title")).toContainText("Generate INSERT", { timeout: 5_000 });
+
+    // Clear and type a custom row count
+    const rowInput = page.locator("[data-testid='row-count-input']");
+    await rowInput.click({ clickCount: 3 });
+    await rowInput.fill("20");
+
+    // Generate button label should update
+    await expect(page.locator(".conn-panel .btn-wide.primary")).toContainText("Generate 20 Rows", { timeout: 3_000 });
+  });
+});

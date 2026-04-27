@@ -15,7 +15,8 @@ export type ResourceModalKind =
   | "drop-user"
   | "create-role"
   | "grant-role"
-  | "view-ddl";
+  | "view-ddl"
+  | "generate-insert";
 
 export interface ResourceModalContext {
   kind: ResourceModalKind;

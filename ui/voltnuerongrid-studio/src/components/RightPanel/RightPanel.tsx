@@ -1,7 +1,7 @@
 import { useUiStore } from "@/store/ui";
 import { useConnectionStore } from "@/store/connection";
 import { useEditorStore } from "@/store/editor";
-import type { SchemaColumn } from "@/api/studio-client";
+import { useModalStore } from "@/store/modal";
 
 function colTypeClass(type: string): string {
   const t = type.toUpperCase();
@@ -13,38 +13,32 @@ function colTypeClass(type: string): string {
   return "str";
 }
 
-/** Return a type-appropriate SQL literal for INSERT / DDL templates. */
-function typedDefault(col: SchemaColumn): string {
-  const t = col.data_type.toUpperCase();
-  if (t.includes("BOOL"))                                        return "true";
-  if (t.includes("INT") || t.includes("SERIAL"))                return "1";
-  if (t.includes("FLOAT") || t.includes("DOUBLE") ||
-      t.includes("DECIMAL") || t.includes("NUMERIC"))           return "0.00";
-  if (t.includes("TIMESTAMP") || t.includes("DATETIME"))        return "CURRENT_TIMESTAMP";
-  if (t.includes("DATE"))                                        return "CURRENT_DATE";
-  if (t.includes("TIME"))                                        return "CURRENT_TIME";
-  if (t.includes("JSON"))                                        return "'{}'";
-  if (t.includes("UUID"))                                        return "gen_random_uuid()";
-  return "'value'";
-}
-
 export function RightPanel() {
   const closeRightPanel = useUiStore((s) => s.closeRightPanel);
   const rightPanelTable = useUiStore((s) => s.rightPanelTable); // "schema.table"
   const databases = useConnectionStore((s) => s.getDatabases());
   const openTableTab = useEditorStore((s) => s.openTableTab);
   const openSqlTab = useEditorStore((s) => s.openSqlTab);
+  const openModal = useModalStore((s) => s.open);
 
   // Resolve the table from schema
+  // rightPanelTable format: "schemaName.tableName" (tabKey from menus.ts)
   const parts = rightPanelTable?.split(".") ?? [];
   const schemaName = parts[0];
   const tableName = parts[1];
+
+  // Server may return table.name as qualified ("schema.table" or "db.schema.table")
+  // so we match on the base (last) segment as well as the full name.
+  // Prefer exact match first so that a short-named table beats a qualified one with the same base.
+  const baseName = (n: string) => n.split(".").pop() ?? n;
 
   let tableInfo = null;
   for (const db of databases) {
     for (const ns of db.schemas) {
       if (ns.name === schemaName) {
-        const t = ns.tables.find((t) => t.name === tableName);
+        const t =
+          ns.tables.find((t) => t.name === tableName) ??
+          ns.tables.find((t) => baseName(t.name) === tableName);
         if (t) { tableInfo = t; break; }
       }
     }
@@ -52,12 +46,12 @@ export function RightPanel() {
 
   function handleGenerateInsert() {
     if (!tableInfo) return;
-    const cols = tableInfo.columns.map((c) => c.name).join(", ");
-    const vals = tableInfo.columns.map((c) => typedDefault(c)).join(", ");
-    openSqlTab(
-      `INSERT INTO ${tableInfo.schema}.${tableInfo.name} (${cols})\nVALUES (${vals});`,
-      `insert_${tableInfo.name}.sql`
-    );
+    // tableInfo.name may be qualified — pass the same schemaName.baseTableName used by RightPanel
+    openModal({
+      kind: "generate-insert",
+      target: `${schemaName}.${tableName}`,
+      payload: { columns: tableInfo.columns },
+    });
   }
 
   function handleViewDDL() {

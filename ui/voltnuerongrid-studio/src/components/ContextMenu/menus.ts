@@ -235,8 +235,10 @@ export function buildTableMenu(
   schemaName: string,
   table: SchemaTable
 ): { items: ContextMenuItem[]; title?: string } {
-  const target = `${dbName}.${schemaName}.${table.name}`;
-  const tabKey = `${schemaName}.${table.name}`;
+  // table.name may be qualified ("schema.table" or "db.schema.table") — use base name only
+  const tableBaseName = table.name.split(".").pop() ?? table.name;
+  const target = `${dbName}.${schemaName}.${tableBaseName}`;
+  const tabKey = `${schemaName}.${tableBaseName}`;
   return {
     title: table.name,
     items: [
@@ -245,13 +247,13 @@ export function buildTableMenu(
         label: "Open Table",
         icon: "👁",
         shortcut: "Enter",
-        onSelect: () => e().openTableTab(table.name, schemaName),
+        onSelect: () => e().openTableTab(tableBaseName, schemaName),
       },
       {
         id: "select100",
         label: "SELECT * LIMIT 100",
         icon: "⌕",
-        onSelect: () => e().openTableTab(table.name, schemaName),
+        onSelect: () => e().openTableTab(tableBaseName, schemaName),
       },
       {
         id: "selectcount",
@@ -259,8 +261,8 @@ export function buildTableMenu(
         icon: "Σ",
         onSelect: () =>
           e().openSqlTab(
-            `SELECT COUNT(*) FROM ${schemaName}.${table.name};`,
-            `count_${table.name}.sql`
+            `SELECT COUNT(*) FROM ${schemaName}.${tableBaseName};`,
+            `count_${tableBaseName}.sql`
           ),
       },
       { id: "sep1", separator: true },
@@ -277,8 +279,8 @@ export function buildTableMenu(
               const cols = table.columns.map((col) => col.name).join(", ");
               const vals = table.columns.map((col) => typedDefault(col.data_type)).join(", ");
               e().openSqlTab(
-                `INSERT INTO ${schemaName}.${table.name} (${cols})\nVALUES (${vals});`,
-                `insert_${table.name}.sql`
+                `INSERT INTO ${schemaName}.${tableBaseName} (${cols})\nVALUES (${vals});`,
+                `insert_${tableBaseName}.sql`
               );
             },
           },
@@ -290,8 +292,8 @@ export function buildTableMenu(
               const cols = table.columns.map((col) => col.name).join(", ");
               const row = `(${table.columns.map((col) => typedDefault(col.data_type)).join(", ")})`;
               e().openSqlTab(
-                `INSERT INTO ${schemaName}.${table.name} (${cols})\nVALUES\n  ${row},\n  ${row},\n  ${row};`,
-                `insert_${table.name}.sql`
+                `INSERT INTO ${schemaName}.${tableBaseName} (${cols})\nVALUES\n  ${row},\n  ${row},\n  ${row};`,
+                `insert_${tableBaseName}.sql`
               );
             },
           },
@@ -309,8 +311,8 @@ export function buildTableMenu(
                 .map((col) => `${col.name} = ?`)
                 .join(" AND ");
               e().openSqlTab(
-                `UPDATE ${schemaName}.${table.name}\nSET\n${sets}\nWHERE ${wh || "1=1"};`,
-                `update_${table.name}.sql`
+                `UPDATE ${schemaName}.${tableBaseName}\nSET\n${sets}\nWHERE ${wh || "1=1"};`,
+                `update_${tableBaseName}.sql`
               );
             },
           },
@@ -324,8 +326,8 @@ export function buildTableMenu(
                 .map((col) => `${col.name} = ?`)
                 .join(" AND ");
               e().openSqlTab(
-                `DELETE FROM ${schemaName}.${table.name}\nWHERE ${wh || "1=1"};`,
-                `delete_${table.name}.sql`
+                `DELETE FROM ${schemaName}.${tableBaseName}\nWHERE ${wh || "1=1"};`,
+                `delete_${tableBaseName}.sql`
               );
             },
           },
@@ -355,8 +357,8 @@ export function buildTableMenu(
         icon: "📊",
         onSelect: () =>
           e().openSqlTab(
-            `SELECT COUNT(*) AS total_rows FROM ${schemaName}.${table.name};`,
-            `analyze_${table.name}.sql`
+            `SELECT COUNT(*) AS total_rows FROM ${schemaName}.${tableBaseName};`,
+            `analyze_${tableBaseName}.sql`
           ),
       },
       { id: "sep3", separator: true },
