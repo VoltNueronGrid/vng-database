@@ -19,3 +19,5 @@ ui/ide-extensions/vscode-cursor/voltnuerongrid-vscode-cursor-0.3.2.vsix
 ui/voltnuerongrid-studio/node_modules/
 ui/voltnuerongrid-studio/dist/
 ui/voltnuerongrid-studio/src-tauri/target/
+ui/voltnuerongrid-studio/playwright-report/
+ui/voltnuerongrid-studio/test-results/
