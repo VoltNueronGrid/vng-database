@@ -221,6 +221,17 @@ export class StudioApiClient {
   private async parse<T>(res: Response): Promise<T> {
     if (!res.ok) {
       const text = await res.text();
+      // Try to extract a human-readable reason from the JSON error body
+      try {
+        const json = JSON.parse(text) as { reason?: string; status?: string };
+        if (json.reason) {
+          throw new Error(`${json.reason}`);
+        }
+      } catch (parseErr) {
+        if (parseErr instanceof Error && parseErr.message !== text) {
+          throw parseErr;
+        }
+      }
       throw new Error(`HTTP ${res.status}: ${text}`);
     }
     return (await res.json()) as T;

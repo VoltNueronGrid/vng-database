@@ -32,7 +32,7 @@ use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
-use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, DdlCatalog};
+use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult, DdlCatalog};
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_store::{InMemoryDurabilityEngine, DurabilityConfig};
@@ -1866,6 +1866,10 @@ struct SqlExecuteResponse {
     oltp_rows: Option<Vec<OltpRowResult>>,
     /// Vectorized OLAP aggregation results from columnar executor (S4-WS3-02).
     olap_agg_results: Option<Vec<OlapVecAggResult>>,
+    /// Column metadata for SELECT results — readable by the UI client.
+    columns: Option<Vec<serde_json::Value>>,
+    /// Row data for SELECT results — readable by the UI client.
+    rows: Option<Vec<serde_json::Value>>,
 }
 
 /// S4-WS3-02: a single result row returned by the physical OLTP executor.
@@ -6722,50 +6726,50 @@ fn extract_update_row_from_sql(
     }
     let row_key = format!("{}:{}", upd.table, key);
     let mut data = std::collections::HashMap::new();
-    data.insert("table".to_string(), upd.table.clone());
+    data.insert("__table".to_string(), upd.table.clone());
     for (col, val) in &upd.assignments {
         data.insert(col.clone(), val.clone());
     }
     Some((row_key, data))
 }
 
-/// Parse a SQL INSERT statement using the tokenizer and return a (row_key, row_data) pair
+/// Parse a SQL INSERT statement using the AST parser and return a (row_key, row_data) pair
 /// suitable for writing into PagedRowStore. Returns None for non-INSERT or unparseable input.
-/// Used by the sql_transaction COMMIT path (S2-WS2-05) to flush rows into storage.
+/// Stores column-value pairs so SELECT can return structured data.
+/// The "__table" meta-key identifies which table the row belongs to.
 fn extract_insert_row_from_sql(
     sql: &str,
 ) -> Option<(String, std::collections::HashMap<String, String>)> {
-    use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
-    let tokens = semantic_tokens(sql);
-    let mut it = tokens.iter();
-    match it.next() {
-        Some(Token::Keyword(k)) if k.eq_ignore_ascii_case("INSERT") => {}
-        _ => return None,
-    }
-    match it.next() {
-        Some(Token::Keyword(k)) if k.eq_ignore_ascii_case("INTO") => {}
-        _ => return None,
-    }
-    let table = match it.next() {
-        Some(Token::Identifier(t)) | Some(Token::Keyword(t)) => t.clone(),
+    use voltnuerongrid_sql::{parse_one, Statement};
+    let ins = match parse_one(sql) {
+        Ok(Statement::Insert(i)) => i,
         _ => return None,
     };
-    // Collect all string literals and numbers — these are the VALUES
-    let mut values: Vec<String> = Vec::new();
-    for tok in &tokens {
-        match tok {
-            Token::StringLiteral(s) => values.push(s.clone()),
-            Token::Number(n) => values.push(n.clone()),
-            _ => {}
-        }
-    }
-    if values.is_empty() {
+    // Strip schema qualifier (public.foo → foo)
+    let table = ins.table.rsplit('.').next().unwrap_or(&ins.table).to_string();
+
+    // Use the first row of values (single-row INSERT)
+    let row_vals = ins.values.first()?;
+    if row_vals.is_empty() {
         return None;
     }
-    let row_key = format!("{}:{}", table, values[0]);
+
     let mut data = std::collections::HashMap::new();
-    data.insert("table".to_string(), table);
-    data.insert("row_values".to_string(), values.join(","));
+    // Store the table name under the meta key __table (used for table-scoped SELECT scans)
+    data.insert("__table".to_string(), table.clone());
+
+    for (i, val) in row_vals.iter().enumerate() {
+        let col = ins
+            .columns
+            .get(i)
+            .map(|c| c.to_ascii_lowercase())
+            .unwrap_or_else(|| format!("col_{i}"));
+        data.insert(col, val.clone());
+    }
+
+    // Row key = table:first_value for uniqueness within the store
+    let first_val = row_vals[0].as_str();
+    let row_key = format!("{table}:{first_val}");
     Some((row_key, data))
 }
 
@@ -7292,6 +7296,8 @@ async fn sql_execute(
                     planner_path: None,
                     oltp_rows: None,
                     olap_agg_results: None,
+                    columns: None,
+                    rows: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -7331,6 +7337,8 @@ async fn sql_execute(
                 planner_path: None,
                 oltp_rows: None,
                 olap_agg_results: None,
+                columns: None,
+                rows: None,
             }),
         ));
         release_sql_data_plane_connection(&state, &connection_id);
@@ -7390,6 +7398,8 @@ async fn sql_execute(
                     planner_path: None,
                     oltp_rows: None,
                     olap_agg_results: None,
+                    columns: None,
+                    rows: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -7403,13 +7413,87 @@ async fn sql_execute(
             for stmt in &ddl_snapshot {
                 if let Some(info) = parse_ddl_info(stmt) {
                     match info.operation {
-                        "create" => { catalog.record_create(&info.object_kind, &info.object_name, stmt, now_ms); }
+                        "create" => {
+                            let result = catalog.record_create(
+                                &info.object_kind,
+                                &info.object_name,
+                                stmt,
+                                now_ms,
+                                info.replace_ok,
+                            );
+                            if result == CatalogResult::AlreadyExists {
+                                drop(catalog);
+                                append_runtime_audit_event(
+                                    &state,
+                                    AuditEventKind::Sql,
+                                    &principal,
+                                    "sql_execute",
+                                    "error",
+                                    json!({
+                                        "route_scope": "sql/execute",
+                                        "error": format!("{} '{}' already exists", info.object_kind, info.object_name),
+                                    }),
+                                );
+                                let err_response = Ok((
+                                    StatusCode::CONFLICT,
+                                    Json(SqlExecuteResponse {
+                                        status: "error",
+                                        route_path: route_path_name(decision.payload.path).to_string(),
+                                        reason: format!(
+                                            "{} '{}' already exists",
+                                            info.object_kind, info.object_name
+                                        ),
+                                        transaction: None,
+                                        olap: None,
+                                        rejected_statement_count: 0,
+                                        udf_results: None,
+                                        udf_guardrail_status: None,
+                                        udf_function_catalog: vec![],
+                                        udf_guard_policies: vec![],
+                                        udf_execution_plan: vec![],
+                                        legacy_agg_results: None,
+                                        planner_path: None,
+                                        oltp_rows: None,
+                                        olap_agg_results: None,
+                                        columns: None,
+                                        rows: None,
+                                    }),
+                                ));
+                                release_sql_data_plane_connection(&state, &connection_id);
+                                return err_response;
+                            }
+                        }
                         "drop" => { catalog.record_drop(&info.object_name); }
                         "alter" => { catalog.record_alter(&info.object_name, stmt, now_ms); }
                         _ => {}
                     }
                 }
             }
+        }
+        // Execute DML (INSERT/UPDATE/DELETE) statements against the row store so data persists.
+        {
+            let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
+            let xid = rs.begin_xid();
+            for stmt in &ddl_snapshot {
+                let upper = stmt.trim_start().to_ascii_uppercase();
+                if upper.starts_with("INSERT") {
+                    if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
+                        let _ = rs.begin_write_intent(xid, &k);
+                        rs.insert(xid, &k, d);
+                    }
+                } else if upper.starts_with("UPDATE") {
+                    if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                        let _ = rs.begin_write_intent(xid, &k);
+                        rs.insert(xid, &k, d);
+                    }
+                } else if upper.starts_with("DELETE") {
+                    if let Some(k) = extract_delete_key_from_sql(stmt) {
+                        let _ = rs.begin_write_intent(xid, &k);
+                        rs.delete(xid, &k);
+                    }
+                }
+            }
+            rs.release_write_intents(xid);
         }
     }
 
@@ -7573,6 +7657,85 @@ async fn sql_execute(
         } else {
             None
         };
+
+    // Build client-visible columns + rows from the row store for any SELECT query.
+    // This is the primary path the UI uses to display query results.
+    let (result_columns, result_rows): (Option<Vec<serde_json::Value>>, Option<Vec<serde_json::Value>>) =
+        if !olap_statements.is_empty() {
+            use voltnuerongrid_sql::{parse_one, Statement};
+            let rs = state.row_store.lock().expect("row_store lock select_result_builder");
+            let snapshot_xid = rs.current_xid();
+            let all_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
+                .scan_at_snapshot(snapshot_xid)
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect();
+            drop(rs);
+            let limit = req.max_rows.unwrap_or(10_000).min(100_000);
+            let mut columns_set: Vec<String> = Vec::new();
+            let mut out_rows: Vec<serde_json::Value> = Vec::new();
+
+            for stmt_str in &olap_statements {
+                if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
+                    // Determine which table to filter on (FROM clause table name)
+                    let filter_table: Option<String> = sel.table.as_deref().map(|f| {
+                        f.split_ascii_whitespace()
+                            .next()
+                            .unwrap_or(f)
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or(f)
+                            .to_ascii_lowercase()
+                    });
+                    // Build WHERE key filter (RHS of `col = 'val'`)
+                    let key_filter: Option<String> = sel.where_clause.as_deref().and_then(|w| {
+                        let eq = w.find('=')?;
+                        let rhs = w[eq + 1..].trim();
+                        let val = rhs.trim_matches('\'').trim_matches('"').trim().to_string();
+                        if val.is_empty() { None } else { Some(val) }
+                    });
+                    for (key, data) in &all_rows {
+                        if out_rows.len() >= limit { break; }
+                        // Filter by table name
+                        let row_table = data.get("__table").map(|s| s.to_ascii_lowercase());
+                        if let Some(ft) = &filter_table {
+                            if row_table.as_deref() != Some(ft.as_str()) { continue; }
+                        }
+                        // Filter by WHERE key
+                        if let Some(kf) = &key_filter {
+                            if !key.contains(kf.as_str()) { continue; }
+                        }
+                        // Build row object (exclude meta keys)
+                        let mut row_obj = serde_json::Map::new();
+                        let mut sorted_keys: Vec<&str> = data.keys()
+                            .filter(|k| !k.starts_with("__"))
+                            .map(|k| k.as_str())
+                            .collect();
+                        sorted_keys.sort();
+                        for col in &sorted_keys {
+                            row_obj.insert((*col).to_string(), serde_json::Value::String(data[*col].clone()));
+                            if !columns_set.contains(&(*col).to_string()) {
+                                columns_set.push((*col).to_string());
+                            }
+                        }
+                        out_rows.push(serde_json::Value::Object(row_obj));
+                    }
+                }
+            }
+            if out_rows.is_empty() {
+                (None, None)
+            } else {
+                columns_set.sort();
+                let cols: Vec<serde_json::Value> = columns_set
+                    .iter()
+                    .map(|c| serde_json::json!({"name": c, "data_type": "text"}))
+                    .collect();
+                (Some(cols), Some(out_rows))
+            }
+        } else {
+            (None, None)
+        };
+
     let response = SqlExecuteResponse {
         status: "ok",
         route_path: route_path_name(decision.payload.path).to_string(),
@@ -7593,6 +7756,8 @@ async fn sql_execute(
         planner_path,
         oltp_rows,
         olap_agg_results,
+        columns: result_columns,
+        rows: result_rows,
     };
     append_runtime_audit_event(
         &state,
@@ -25833,11 +25998,13 @@ mod tests {
         assert!(result.is_some());
         let (key, data) = result.unwrap();
         assert!(key.starts_with("orders:"), "unexpected key: {key}");
-        assert_eq!(data.get("table").map(String::as_str), Some("orders"));
-        assert!(
-            data.get("row_values").unwrap().contains("ord-1"),
-            "row_values should contain first value"
-        );
+        // __table meta key holds the table name
+        assert_eq!(data.get("__table").map(String::as_str), Some("orders"));
+        // Values stored as positional column names (no explicit column list)
+        assert_eq!(data.get("col_0").map(String::as_str), Some("ord-1"),
+            "first positional value should be under col_0");
+        assert_eq!(data.get("col_1").map(String::as_str), Some("500"),
+            "second positional value should be under col_1");
     }
 
     #[test]
@@ -25846,6 +26013,20 @@ mod tests {
         assert!(extract_insert_row_from_sql("UPDATE orders SET x=1").is_none());
         assert!(extract_insert_row_from_sql("COMMIT").is_none());
         assert!(extract_insert_row_from_sql("").is_none());
+    }
+
+    #[test]
+    fn s5_ws4_extract_insert_parses_named_columns() {
+        let result = extract_insert_row_from_sql(
+            "INSERT INTO users (id, name, age) VALUES ('u1', 'Alice', 30)"
+        );
+        assert!(result.is_some());
+        let (key, data) = result.unwrap();
+        assert!(key.starts_with("users:"), "key: {key}");
+        assert_eq!(data.get("__table").map(String::as_str), Some("users"));
+        assert_eq!(data.get("id").map(String::as_str), Some("u1"));
+        assert_eq!(data.get("name").map(String::as_str), Some("Alice"));
+        assert_eq!(data.get("age").map(String::as_str), Some("30"));
     }
 
     #[test]
@@ -25869,7 +26050,7 @@ mod tests {
         assert_eq!(snap.len(), 2, "both inserted rows should be visible");
         let tables: Vec<&str> = snap
             .iter()
-            .filter_map(|(_, d)| d.get("table").map(String::as_str))
+            .filter_map(|(_, d)| d.get("__table").map(String::as_str))
             .collect();
         assert!(
             tables.iter().all(|t| *t == "products"),
@@ -25941,7 +26122,7 @@ mod tests {
         let (key, data) = result.expect("should parse UPDATE");
         assert_eq!(key, "products:p1");
         assert_eq!(data.get("price"), Some(&"42".to_string()));
-        assert_eq!(data.get("table"), Some(&"products".to_string()));
+        assert_eq!(data.get("__table"), Some(&"products".to_string()));
     }
 
     // ── S3-WS1-05: planner routes aggregate query to OLAP ───────────────────

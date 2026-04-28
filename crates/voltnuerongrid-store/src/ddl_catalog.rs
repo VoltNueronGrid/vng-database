@@ -40,6 +40,8 @@ pub enum CatalogResult {
     NotFound,
     /// Object already existed but was `dropped == true`.
     AlreadyDropped,
+    /// Attempted to CREATE a table that already exists (and is active).
+    AlreadyExists,
 }
 
 /// Lightweight in-memory DDL catalog keyed by lower-cased object name.
@@ -53,17 +55,25 @@ impl DdlCatalog {
         Self::default()
     }
 
-    /// Register a CREATE statement. If the name already exists and is active,
-    /// the old entry is replaced (CREATE OR REPLACE semantics); if the entry
-    /// was previously dropped the slot is reused.
+    /// Register a CREATE statement.
+    ///
+    /// If `replace_ok` is true (CREATE OR REPLACE semantics), an existing active
+    /// entry is silently replaced. Otherwise, an active entry triggers
+    /// `AlreadyExists`. Previously dropped entries are always reused.
     pub fn record_create(
         &mut self,
         kind: &str,
         name: &str,
         statement: &str,
         now_ms: u128,
+        replace_ok: bool,
     ) -> CatalogResult {
         let key = name.trim().to_ascii_lowercase();
+        if let Some(existing) = self.entries.get(&key) {
+            if !existing.dropped && !replace_ok {
+                return CatalogResult::AlreadyExists;
+            }
+        }
         let existed = self.entries.contains_key(&key);
         self.entries.insert(
             key,
@@ -149,8 +159,10 @@ pub struct DdlObjectInfo {
     pub operation: &'static str,
     /// Object kind string for [`DdlCatalog`] methods.
     pub object_kind: &'static str,
-    /// Extracted object name (lowercased).
+    /// Extracted object name (lowercased, unqualified base name).
     pub object_name: String,
+    /// True for `CREATE OR REPLACE` statements.
+    pub replace_ok: bool,
 }
 
 /// Try to extract DDL metadata from a SQL statement.
@@ -166,8 +178,9 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
     let clean = |s: &str| -> String {
         // Split at '(' to strip function argument lists (e.g. "compute_tax(x" → "compute_tax")
         let base = s.split('(').next().unwrap_or(s);
-        base.trim_matches(|c: char| c == ')' || c == ';' || c == ',')
-            .to_string()
+        let trimmed = base.trim_matches(|c: char| c == ')' || c == ';' || c == ',');
+        // Strip schema/database qualifiers: "db.schema.table" → "table"
+        trimmed.rsplit('.').next().unwrap_or(trimmed).to_string()
     };
 
     match words.as_slice() {
@@ -175,39 +188,54 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
             operation: "create",
             object_kind: "table",
             object_name: clean(name),
+            replace_ok: false,
         }),
         ["create", "view", name, ..] => Some(DdlObjectInfo {
             operation: "create",
             object_kind: "view",
             object_name: clean(name),
+            replace_ok: false,
         }),
         ["create", "materialized", "view", name, ..] => Some(DdlObjectInfo {
             operation: "create",
             object_kind: "materialized_view",
             object_name: clean(name),
+            replace_ok: false,
         }),
-        ["create", "function", name, ..] | ["create", "or", "replace", "function", name, ..] => {
+        ["create", "function", name, ..] => {
             Some(DdlObjectInfo {
                 operation: "create",
                 object_kind: "function",
                 object_name: clean(name),
+                replace_ok: false,
+            })
+        }
+        ["create", "or", "replace", "function", name, ..] => {
+            Some(DdlObjectInfo {
+                operation: "create",
+                object_kind: "function",
+                object_name: clean(name),
+                replace_ok: true,
             })
         }
         ["create", "or", "replace", "view", name, ..] => Some(DdlObjectInfo {
             operation: "create",
             object_kind: "view",
             object_name: clean(name),
+            replace_ok: true,
         }),
         ["create", "or", "replace", "table", name, ..] => Some(DdlObjectInfo {
             operation: "create",
             object_kind: "table",
             object_name: clean(name),
+            replace_ok: true,
         }),
         ["drop", "table", "if", "exists", name, ..] | ["drop", "table", name, ..] => {
             Some(DdlObjectInfo {
                 operation: "drop",
                 object_kind: "table",
                 object_name: clean(name),
+                replace_ok: false,
             })
         }
         ["drop", "view", "if", "exists", name, ..] | ["drop", "view", name, ..] => {
@@ -215,6 +243,7 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
                 operation: "drop",
                 object_kind: "view",
                 object_name: clean(name),
+                replace_ok: false,
             })
         }
         ["drop", "function", "if", "exists", name, ..] | ["drop", "function", name, ..] => {
@@ -222,12 +251,14 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
                 operation: "drop",
                 object_kind: "function",
                 object_name: clean(name),
+                replace_ok: false,
             })
         }
         ["alter", "table", name, ..] => Some(DdlObjectInfo {
             operation: "alter",
             object_kind: "table",
             object_name: clean(name),
+            replace_ok: false,
         }),
         _ => None,
     }
@@ -248,7 +279,7 @@ mod tests {
         assert_eq!(info.object_name, "orders");
 
         let mut cat = DdlCatalog::new();
-        cat.record_create(&info.object_kind, &info.object_name, sql, 1_000);
+        cat.record_create(&info.object_kind, &info.object_name, sql, 1_000, false);
         assert_eq!(cat.active_count(), 1);
         assert_eq!(cat.get("orders").unwrap().object_kind, "table");
     }
@@ -256,7 +287,7 @@ mod tests {
     #[test]
     fn drop_table_marks_entry_dropped() {
         let mut cat = DdlCatalog::new();
-        cat.record_create("table", "products", "CREATE TABLE products (id INT)", 1_000);
+        cat.record_create("table", "products", "CREATE TABLE products (id INT)", 1_000, false);
         let result = cat.record_drop("products");
         assert_eq!(result, CatalogResult::Dropped);
         assert_eq!(cat.active_count(), 0);
@@ -266,7 +297,7 @@ mod tests {
     #[test]
     fn alter_table_increments_alteration_count() {
         let mut cat = DdlCatalog::new();
-        cat.record_create("table", "users", "CREATE TABLE users (id INT)", 1_000);
+        cat.record_create("table", "users", "CREATE TABLE users (id INT)", 1_000, false);
         cat.record_alter("users", "ALTER TABLE users ADD COLUMN email TEXT", 2_000);
         cat.record_alter("users", "ALTER TABLE users ADD COLUMN age INT", 3_000);
         let entry = cat.get("users").unwrap();
@@ -294,11 +325,64 @@ mod tests {
     #[test]
     fn active_entries_excludes_dropped() {
         let mut cat = DdlCatalog::new();
-        cat.record_create("table", "t1", "CREATE TABLE t1 (id INT)", 1_000);
-        cat.record_create("table", "t2", "CREATE TABLE t2 (id INT)", 2_000);
+        cat.record_create("table", "t1", "CREATE TABLE t1 (id INT)", 1_000, false);
+        cat.record_create("table", "t2", "CREATE TABLE t2 (id INT)", 2_000, false);
         cat.record_drop("t1");
         let active = cat.active_entries();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].object_name, "t2");
+    }
+
+    #[test]
+    fn create_duplicate_returns_already_exists() {
+        let mut cat = DdlCatalog::new();
+        let r1 = cat.record_create("table", "orders", "CREATE TABLE orders (id INT)", 1_000, false);
+        assert_eq!(r1, CatalogResult::Created);
+        let r2 = cat.record_create("table", "orders", "CREATE TABLE orders (id INT, name TEXT)", 2_000, false);
+        assert_eq!(r2, CatalogResult::AlreadyExists);
+        // Original entry should be preserved
+        assert_eq!(cat.active_count(), 1);
+        assert_eq!(cat.get("orders").unwrap().created_at_unix_ms, 1_000);
+    }
+
+    #[test]
+    fn create_or_replace_replaces_existing() {
+        let mut cat = DdlCatalog::new();
+        cat.record_create("table", "orders", "CREATE TABLE orders (id INT)", 1_000, false);
+        let r2 = cat.record_create("table", "orders", "CREATE OR REPLACE TABLE orders (id INT, name TEXT)", 2_000, true);
+        assert_eq!(r2, CatalogResult::Replaced);
+        assert_eq!(cat.active_count(), 1);
+        assert_eq!(cat.get("orders").unwrap().created_at_unix_ms, 2_000);
+    }
+
+    #[test]
+    fn create_after_drop_reuses_slot() {
+        let mut cat = DdlCatalog::new();
+        cat.record_create("table", "orders", "CREATE TABLE orders (id INT)", 1_000, false);
+        cat.record_drop("orders");
+        let r = cat.record_create("table", "orders", "CREATE TABLE orders (id INT)", 3_000, false);
+        assert_eq!(r, CatalogResult::Replaced);
+        assert_eq!(cat.active_count(), 1);
+    }
+
+    #[test]
+    fn parse_ddl_strips_schema_qualifiers() {
+        let info = parse_ddl_info("CREATE TABLE public.orders (id INT)").unwrap();
+        assert_eq!(info.object_name, "orders");
+
+        let info2 = parse_ddl_info("CREATE TABLE db.public.orders (id INT)").unwrap();
+        assert_eq!(info2.object_name, "orders");
+
+        let info3 = parse_ddl_info("DROP TABLE IF EXISTS public.orders").unwrap();
+        assert_eq!(info3.object_name, "orders");
+    }
+
+    #[test]
+    fn parse_ddl_create_or_replace_sets_replace_ok() {
+        let info = parse_ddl_info("CREATE TABLE t (id INT)").unwrap();
+        assert!(!info.replace_ok);
+
+        let info2 = parse_ddl_info("CREATE OR REPLACE TABLE t (id INT)").unwrap();
+        assert!(info2.replace_ok);
     }
 }

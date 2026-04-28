@@ -56,31 +56,34 @@ export function RightPanel() {
 
   function handleViewDDL() {
     if (!tableInfo) return;
+    const baseName = tableInfo.name.split(".").pop() ?? tableInfo.name;
     const cols = tableInfo.columns.map((c) => {
       const pk = c.primary_key ? " PRIMARY KEY" : "";
       const nn = !c.nullable && !c.primary_key ? " NOT NULL" : "";
       return `  ${c.name} ${c.data_type}${pk}${nn}`;
     }).join(",\n");
     openSqlTab(
-      `-- Reconstructed DDL for ${tableInfo.schema}.${tableInfo.name}\nCREATE TABLE ${tableInfo.schema}.${tableInfo.name} (\n${cols}\n);`,
-      `ddl_${tableInfo.name}.sql`
+      `-- Reconstructed DDL for ${tableInfo.schema}.${baseName}\nCREATE TABLE ${tableInfo.schema}.${baseName} (\n${cols}\n);`,
+      `ddl_${baseName}.sql`
     );
   }
 
   function handleAnalyze() {
     if (!tableInfo) return;
+    const baseName = tableInfo.name.split(".").pop() ?? tableInfo.name;
     openSqlTab(
-      `SELECT COUNT(*) AS total_rows FROM ${tableInfo.schema}.${tableInfo.name};`,
-      `analyze_${tableInfo.name}.sql`
+      `SELECT COUNT(*) AS total_rows FROM ${tableInfo.schema}.${baseName};`,
+      `analyze_${baseName}.sql`
     );
   }
 
   function handleTruncate() {
     if (!tableInfo) return;
-    if (!confirm(`Truncate table ${tableInfo.schema}.${tableInfo.name}? This cannot be undone.`)) return;
+    const baseName = tableInfo.name.split(".").pop() ?? tableInfo.name;
+    if (!confirm(`Truncate table ${tableInfo.schema}.${baseName}? This cannot be undone.`)) return;
     openSqlTab(
-      `TRUNCATE TABLE ${tableInfo.schema}.${tableInfo.name};`,
-      `truncate_${tableInfo.name}.sql`
+      `TRUNCATE TABLE ${tableInfo.schema}.${baseName};`,
+      `truncate_${baseName}.sql`
     );
   }
 
