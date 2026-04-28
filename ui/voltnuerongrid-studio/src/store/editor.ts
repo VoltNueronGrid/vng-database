@@ -37,6 +37,14 @@ interface EditorState {
   markSaved(tabId: string): void;
 
   getActiveTab(): Tab | null;
+
+  /** Ref to the active Monaco editor instance — set by SqlEditorPane on mount. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  editorInstance: any | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setEditorInstance(inst: any | null): void;
+  /** Returns the currently selected text if non-empty, otherwise null. */
+  getSelectedSql(): string | null;
 }
 
 export const useEditorStore = create<EditorState>()((set, get) => {
@@ -143,6 +151,21 @@ export const useEditorStore = create<EditorState>()((set, get) => {
     getActiveTab() {
       const { tabs, activeTabId } = get();
       return tabs.find((t) => t.id === activeTabId) ?? null;
+    },
+
+    editorInstance: null,
+    setEditorInstance(inst) {
+      set({ editorInstance: inst });
+    },
+    getSelectedSql() {
+      const inst = get().editorInstance;
+      if (!inst) return null;
+      const selection = inst.getSelection?.();
+      if (!selection) return null;
+      const model = inst.getModel?.();
+      if (!model) return null;
+      const text = model.getValueInRange(selection);
+      return text && text.trim() ? text : null;
     },
   };
 });

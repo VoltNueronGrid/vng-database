@@ -6,6 +6,7 @@ import { useConnectionStore } from "@/store/connection";
 export function Toolbar() {
   const activeTabId = useEditorStore((s) => s.activeTabId);
   const getActiveTab = useEditorStore((s) => s.getActiveTab);
+  const getSelectedSql = useEditorStore((s) => s.getSelectedSql);
   const getDatabases = useConnectionStore((s) => s.getDatabases);
 
   const isExecuting = useQueryStore((s) =>
@@ -19,8 +20,12 @@ export function Toolbar() {
 
   function run() {
     const tab = getActiveTab();
-    if (!tab || !tab.sql.trim()) return;
-    execute(tab.sql);
+    if (!tab) return;
+    // If user has text selected in the editor, run only that selection
+    const selected = getSelectedSql();
+    const sql = selected ?? tab.sql;
+    if (!sql.trim()) return;
+    execute(sql);
   }
 
   const databases = getDatabases();
@@ -32,7 +37,7 @@ export function Toolbar() {
         className="btn primary"
         onClick={run}
         disabled={isExecuting || !activeTabId}
-        title="Run query (⌘Enter)"
+        title="Run query or selection (⌘Enter)"
       >
         <span>{isExecuting ? "⟳" : "▶"}</span>
         {isExecuting ? "Running…" : "Run"}

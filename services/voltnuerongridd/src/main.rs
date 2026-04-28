@@ -7410,6 +7410,7 @@ async fn sql_execute(
         if transaction.as_ref().map(|r| r.touches_catalog).unwrap_or(false) {
             let now_ms = now_unix_ms();
             let mut catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+            let mut ddl_warning: Option<String> = None;
             for stmt in &ddl_snapshot {
                 if let Some(info) = parse_ddl_info(stmt) {
                     match info.operation {
@@ -7422,45 +7423,23 @@ async fn sql_execute(
                                 info.replace_ok,
                             );
                             if result == CatalogResult::AlreadyExists {
-                                drop(catalog);
+                                // Record warning but continue — DML statements in the same
+                                // batch should still execute (e.g. INSERT after CREATE TABLE).
+                                ddl_warning = Some(format!(
+                                    "{} '{}' already exists",
+                                    info.object_kind, info.object_name
+                                ));
                                 append_runtime_audit_event(
                                     &state,
                                     AuditEventKind::Sql,
                                     &principal,
                                     "sql_execute",
-                                    "error",
+                                    "warning",
                                     json!({
                                         "route_scope": "sql/execute",
-                                        "error": format!("{} '{}' already exists", info.object_kind, info.object_name),
+                                        "warning": ddl_warning,
                                     }),
                                 );
-                                let err_response = Ok((
-                                    StatusCode::CONFLICT,
-                                    Json(SqlExecuteResponse {
-                                        status: "error",
-                                        route_path: route_path_name(decision.payload.path).to_string(),
-                                        reason: format!(
-                                            "{} '{}' already exists",
-                                            info.object_kind, info.object_name
-                                        ),
-                                        transaction: None,
-                                        olap: None,
-                                        rejected_statement_count: 0,
-                                        udf_results: None,
-                                        udf_guardrail_status: None,
-                                        udf_function_catalog: vec![],
-                                        udf_guard_policies: vec![],
-                                        udf_execution_plan: vec![],
-                                        legacy_agg_results: None,
-                                        planner_path: None,
-                                        oltp_rows: None,
-                                        olap_agg_results: None,
-                                        columns: None,
-                                        rows: None,
-                                    }),
-                                ));
-                                release_sql_data_plane_connection(&state, &connection_id);
-                                return err_response;
                             }
                         }
                         "drop" => { catalog.record_drop(&info.object_name); }
@@ -7468,6 +7447,46 @@ async fn sql_execute(
                         _ => {}
                     }
                 }
+            }
+            // If the entire batch is DDL-only and we got an AlreadyExists, return 409 now.
+            // If there are DML statements too, we fall through so they still execute.
+            let has_dml = ddl_snapshot.iter().any(|s| {
+                let u = s.trim_start().to_ascii_uppercase();
+                u.starts_with("INSERT")
+                    || u.starts_with("UPDATE")
+                    || u.starts_with("DELETE")
+                    || u.starts_with("SELECT")
+            });
+            if let Some(ref warn_msg) = ddl_warning {
+                if !has_dml {
+                    drop(catalog);
+                    let err_response = Ok((
+                        StatusCode::CONFLICT,
+                        Json(SqlExecuteResponse {
+                            status: "error",
+                            route_path: route_path_name(decision.payload.path).to_string(),
+                            reason: warn_msg.clone(),
+                            transaction: None,
+                            olap: None,
+                            rejected_statement_count: 0,
+                            udf_results: None,
+                            udf_guardrail_status: None,
+                            udf_function_catalog: vec![],
+                            udf_guard_policies: vec![],
+                            udf_execution_plan: vec![],
+                            legacy_agg_results: None,
+                            planner_path: None,
+                            oltp_rows: None,
+                            olap_agg_results: None,
+                            columns: None,
+                            rows: None,
+                        }),
+                    ));
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return err_response;
+                }
+                // Has DML: store the warning to attach to the final response below
+                drop(catalog);
             }
         }
         // Execute DML (INSERT/UPDATE/DELETE) statements against the row store so data persists.

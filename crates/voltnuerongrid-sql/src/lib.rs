@@ -237,6 +237,9 @@ impl SqlAnalyzer {
             .split(';')
             .map(str::trim)
             .filter(|s| !s.is_empty())
+            // Skip statements whose entire content is comments (e.g. `-- create table …`)
+            // normalize_sql_for_match strips -- comments; if nothing remains it's comment-only.
+            .filter(|s| !normalize_sql_for_match(s).is_empty())
             .map(|s| SqlStatement {
                 raw: s.to_string(),
                 kind: Self::classify_statement(s),
@@ -391,6 +394,20 @@ mod tests {
         assert_eq!(parsed[0].kind, SqlStatementKind::Begin);
         assert_eq!(parsed[1].kind, SqlStatementKind::Insert);
         assert_eq!(parsed[3].kind, SqlStatementKind::Commit);
+    }
+
+    #[test]
+    fn parse_batch_skips_comment_only_statements() {
+        // A line comment followed by a real INSERT should yield exactly one statement.
+        let parsed = SqlAnalyzer::parse_batch(
+            "-- create table test (id int, name text);\ninsert into test values (1, 'pavan');",
+        );
+        assert_eq!(parsed.len(), 1, "comment-only fragment must be filtered out");
+        assert_eq!(parsed[0].kind, SqlStatementKind::Insert);
+
+        // Pure comment batch should yield no statements.
+        let parsed_empty = SqlAnalyzer::parse_batch("-- just a comment");
+        assert!(parsed_empty.is_empty());
     }
 
     #[test]

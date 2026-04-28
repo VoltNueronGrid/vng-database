@@ -1,7 +1,7 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { useEditorStore } from "@/store/editor";
 import { useQuery } from "@/hooks/useQuery";
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
 import type { editor as MonacoEditor } from "monaco-editor";
 
 const VNG_DARK_THEME = "vng-dark";
@@ -41,21 +41,30 @@ export function SqlEditorPane() {
   const activeTabId = useEditorStore((s) => s.activeTabId);
   const getActiveTab = useEditorStore((s) => s.getActiveTab);
   const updateSql = useEditorStore((s) => s.updateSql);
+  const setEditorInstance = useEditorStore((s) => s.setEditorInstance);
+  const getSelectedSql = useEditorStore((s) => s.getSelectedSql);
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const { execute } = useQuery(activeTabId ?? "");
+
+  // Clear the editor instance ref when this pane unmounts
+  useEffect(() => {
+    return () => setEditorInstance(null);
+  }, [setEditorInstance]);
 
   const tab = getActiveTab();
 
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    setEditorInstance(editor);
     defineTheme(monaco);
     monaco.editor.setTheme(VNG_DARK_THEME);
 
-    // ⌘Enter / Ctrl+Enter → run query
+    // ⌘Enter / Ctrl+Enter → run selected text if any, otherwise full content
     editor.addCommand(
       monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
       () => {
-        const sql = editor.getValue();
+        const selected = getSelectedSql();
+        const sql = selected ?? editor.getValue();
         if (sql.trim()) execute(sql);
       }
     );
