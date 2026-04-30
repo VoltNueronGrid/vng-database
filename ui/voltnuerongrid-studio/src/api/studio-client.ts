@@ -43,9 +43,11 @@ export interface SqlExecuteResponse {
   rejected_statement_count: number;
   transaction?: SqlTransactionResult;
   olap?: OlapQueryResult;
-  // Future: server will populate these when row-return is implemented
+  // Structured result columns/rows returned by the server SELECT builder
   columns?: Array<{ name: string; data_type: string }>;
   rows?: Array<Record<string, unknown>>;
+  // OLTP point-query rows (key + raw data map) — used as fallback when columns/rows is null
+  oltp_rows?: Array<{ key: string; data: Record<string, string> }>;
 }
 
 // ─── Health ──────────────────────────────────────────────────────────────────
@@ -79,10 +81,20 @@ export interface SchemaTable {
   row_count?: number; // not returned by server yet; reserved for future
 }
 
+export interface SchemaFunction {
+  name: string;
+  schema: string;
+  definition: string;
+  arguments: string;
+  return_type: string;
+  language: string;
+}
+
 export interface SchemaNamespace {
   name: string;
   database: string;
   tables: SchemaTable[];
+  functions?: SchemaFunction[];
 }
 
 export interface SchemaDatabase {

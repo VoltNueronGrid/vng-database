@@ -9,7 +9,7 @@ import {
   buildTableMenu,
   buildColumnMenu,
 } from "@/components/ContextMenu/menus";
-import type { SchemaDatabase, SchemaNamespace, SchemaTable } from "@/api/studio-client";
+import type { SchemaDatabase, SchemaNamespace, SchemaTable, SchemaFunction } from "@/api/studio-client";
 
 function colTypeClass(type: string): string {
   const t = type.toUpperCase();
@@ -80,8 +80,80 @@ function TableNode({ table, schemaName, dbName }: { table: SchemaTable; schemaNa
   );
 }
 
+function FunctionNode({ fn: func, schemaName }: { fn: SchemaFunction; schemaName: string }) {
+  const [open, setOpen] = useState(false);
+  const insertText = useEditorStore((s) => s.insertTextIntoActiveTab);
+
+  const callSnippet = `CALL ${func.name}(${
+    func.arguments
+      ? func.arguments.split(",").map((_arg, i) => `$${i + 1}`).join(", ")
+      : ""
+  })`;
+
+  return (
+    <>
+      <div
+        className="tree-node"
+        style={{ paddingLeft: 0 }}
+        onClick={() => setOpen((o) => !o)}
+        onDoubleClick={() => insertText?.(callSnippet)}
+        title={`Double-click to insert CALL snippet\n\n${func.definition}`}
+      >
+        <span className="tree-indent" />
+        <span className="tree-indent" />
+        <span className="tree-indent" />
+        <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
+        <span className="tree-icon">⚡</span>
+        <span className="tree-label">{func.name}</span>
+        <span className="col-chip" style={{ background: "var(--accent-1, #7c3aed22)", color: "var(--accent, #7c3aed)", fontSize: 10, padding: "1px 5px", borderRadius: 4, marginLeft: 4 }}>
+          fn
+        </span>
+      </div>
+      {open && (
+        <>
+          {/* Arguments */}
+          <div className="tree-node" style={{ paddingLeft: 0 }}>
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
+            <span style={{ width: 14 }} />
+            <span className="tree-label mono" style={{ fontSize: 11, color: "var(--text-2)" }}>({func.arguments || "void"})</span>
+            <span className="col-chip str" style={{ marginLeft: 4 }}>args</span>
+          </div>
+          {/* Return type */}
+          <div className="tree-node" style={{ paddingLeft: 0 }}>
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
+            <span style={{ width: 14 }} />
+            <span className="tree-label mono" style={{ fontSize: 11, color: "var(--text-2)" }}>→ {func.return_type}</span>
+            <span className="col-chip str" style={{ marginLeft: 4 }}>returns</span>
+          </div>
+          {/* Language */}
+          <div className="tree-node" style={{ paddingLeft: 0 }}>
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
+            <span style={{ width: 14 }} />
+            <span className="tree-label mono" style={{ fontSize: 11, color: "var(--text-2)" }}>{func.language}</span>
+            <span className="col-chip str" style={{ marginLeft: 4 }}>lang</span>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 function SchemaNode({ ns, dbName }: { ns: SchemaNamespace; dbName: string }) {
   const [open, setOpen] = useState(true);
+  const functions = ns.functions ?? [];
+  const totalItems = ns.tables.length + functions.length;
   return (
     <>
       <div
@@ -94,11 +166,26 @@ function SchemaNode({ ns, dbName }: { ns: SchemaNamespace; dbName: string }) {
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
         <span className="tree-icon">📁</span>
         <span className="tree-label">{ns.name}</span>
-        <span className="tree-count">{ns.tables.length}</span>
+        <span className="tree-count">{totalItems}</span>
       </div>
       {open && ns.tables.map((t) => (
         <TableNode key={t.name} table={t} schemaName={ns.name} dbName={dbName} />
       ))}
+      {open && functions.length > 0 && (
+        <>
+          {/* Functions section header */}
+          <div className="tree-node" style={{ paddingLeft: 0, opacity: 0.6, pointerEvents: "none" }}>
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-indent" />
+            <span className="tree-icon" style={{ fontSize: 10 }}>⚙</span>
+            <span className="tree-label" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Functions</span>
+          </div>
+          {functions.map((f) => (
+            <FunctionNode key={f.name} fn={f} schemaName={ns.name} />
+          ))}
+        </>
+      )}
     </>
   );
 }

@@ -45,6 +45,8 @@ interface EditorState {
   setEditorInstance(inst: any | null): void;
   /** Returns the currently selected text if non-empty, otherwise null. */
   getSelectedSql(): string | null;
+  /** Insert text at the current cursor position in the active Monaco editor. */
+  insertTextIntoActiveTab(text: string): void;
 }
 
 export const useEditorStore = create<EditorState>()((set, get) => {
@@ -166,6 +168,15 @@ export const useEditorStore = create<EditorState>()((set, get) => {
       if (!model) return null;
       const text = model.getValueInRange(selection);
       return text && text.trim() ? text : null;
+    },
+    insertTextIntoActiveTab(text: string) {
+      const inst = get().editorInstance;
+      if (!inst) return;
+      // Execute an edit at the current cursor position
+      const selection = inst.getSelection?.();
+      if (!selection) return;
+      inst.executeEdits?.("", [{ range: selection, text, forceMoveMarkers: true }]);
+      inst.focus?.();
     },
   };
 });
