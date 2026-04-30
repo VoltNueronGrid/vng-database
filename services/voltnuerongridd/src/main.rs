@@ -19942,11 +19942,37 @@ struct AdminSchemaFunction {
 }
 
 #[derive(Serialize)]
+struct AdminSchemaView {
+    name: String,
+    schema: String,
+    definition: String,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaTrigger {
+    name: String,
+    schema: String,
+    table: String,
+    definition: String,
+}
+
+#[derive(Serialize)]
+struct AdminSchemaEvent {
+    name: String,
+    schema: String,
+    schedule: String,
+    definition: String,
+}
+
+#[derive(Serialize)]
 struct AdminSchemaSchemaEntry {
     name: String,
     database: String,
     tables: Vec<AdminSchemaTable>,
+    views: Vec<AdminSchemaView>,
     functions: Vec<AdminSchemaFunction>,
+    triggers: Vec<AdminSchemaTrigger>,
+    events: Vec<AdminSchemaEvent>,
 }
 
 #[derive(Serialize)]
@@ -20009,6 +20035,18 @@ async fn admin_schema_tree(
 
     tables.sort_by(|a, b| a.name.cmp(&b.name));
 
+    let mut views: Vec<AdminSchemaView> = catalog
+        .active_entries()
+        .iter()
+        .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
+        .map(|e| AdminSchemaView {
+            name: e.object_name.clone(),
+            schema: "public".to_string(),
+            definition: e.original_statement.clone(),
+        })
+        .collect();
+    views.sort_by(|a, b| a.name.cmp(&b.name));
+
     // Build function list from DDL catalog (object_kind == "function")
     let mut functions: Vec<AdminSchemaFunction> = catalog
         .active_entries()
@@ -20048,6 +20086,32 @@ async fn admin_schema_tree(
         .collect();
     functions.sort_by(|a, b| a.name.cmp(&b.name));
 
+    let mut triggers: Vec<AdminSchemaTrigger> = catalog
+        .active_entries()
+        .iter()
+        .filter(|e| e.object_kind == "trigger")
+        .map(|e| AdminSchemaTrigger {
+            name: e.object_name.clone(),
+            schema: "public".to_string(),
+            table: extract_trigger_table_name(&e.original_statement),
+            definition: e.original_statement.clone(),
+        })
+        .collect();
+    triggers.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut events: Vec<AdminSchemaEvent> = catalog
+        .active_entries()
+        .iter()
+        .filter(|e| e.object_kind == "event")
+        .map(|e| AdminSchemaEvent {
+            name: e.object_name.clone(),
+            schema: "public".to_string(),
+            schedule: extract_event_schedule(&e.original_statement),
+            definition: e.original_statement.clone(),
+        })
+        .collect();
+    events.sort_by(|a, b| a.name.cmp(&b.name));
+
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -20060,13 +20124,43 @@ async fn admin_schema_tree(
                 name: "public".to_string(),
                 database: "default".to_string(),
                 tables,
+                views,
                 functions,
+                triggers,
+                events,
             }],
         }],
         timestamp: now_ms,
     };
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+fn extract_trigger_table_name(ddl: &str) -> String {
+    let tokens: Vec<&str> = ddl.split_whitespace().collect();
+    for pair in tokens.windows(2) {
+        if pair[0].eq_ignore_ascii_case("ON") {
+            return pair[1]
+                .trim_matches(|c: char| c == ';' || c == '(' || c == ')')
+                .rsplit('.')
+                .next()
+                .unwrap_or(pair[1])
+                .to_string();
+        }
+    }
+    String::new()
+}
+
+fn extract_event_schedule(ddl: &str) -> String {
+    let upper = ddl.to_ascii_uppercase();
+    if let Some(start) = upper.find("ON SCHEDULE") {
+        let rest = ddl[start + "ON SCHEDULE".len()..].trim();
+        if let Some(end) = rest.to_ascii_uppercase().find(" DO ") {
+            return rest[..end].trim().trim_end_matches(';').to_string();
+        }
+        return rest.trim().trim_end_matches(';').to_string();
+    }
+    String::new()
 }
 
 
@@ -24582,6 +24676,41 @@ mod tests {
             Ok(_) => panic!("expected auth error"),
             Err((status, _)) => assert_eq!(status, StatusCode::UNAUTHORIZED),
         }
+    }
+
+    #[test]
+    fn ws2_admin_schema_tree_returns_views_functions_triggers_and_events() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(Some("secret"));
+        let tenant_headers = tenant_user_headers("admin-acme", "acme");
+
+        for sql in [
+            "CREATE VIEW order_summary AS SELECT * FROM orders",
+            "CREATE FUNCTION compute_tax(x FLOAT) RETURNS FLOAT LANGUAGE sql AS $$ SELECT x $$",
+            "CREATE TRIGGER orders_audit AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION audit_orders()",
+            "CREATE EVENT refresh_cache ON SCHEDULE EVERY 1 HOUR DO CALL warm_cache()",
+        ] {
+            let req = SqlExecuteRequest {
+                sql_batch: sql.to_string(),
+                max_rows: None,
+            };
+            let response = rt
+                .block_on(sql_execute(State(state.clone()), tenant_headers.clone(), Json(req)))
+                .expect("sql execute should succeed");
+            assert_eq!(response.0, StatusCode::OK);
+        }
+
+        let response = rt
+            .block_on(admin_schema_tree(State(state.clone()), admin_headers("secret")))
+            .expect("admin schema tree should succeed");
+
+        assert_eq!(response.0, StatusCode::OK);
+        let body = response.1.0;
+        let schema = &body.databases[0].schemas[0];
+        assert!(schema.views.iter().any(|view| view.name == "order_summary"));
+        assert!(schema.functions.iter().any(|func| func.name == "compute_tax"));
+        assert!(schema.triggers.iter().any(|trigger| trigger.name == "orders_audit" && trigger.table == "orders"));
+        assert!(schema.events.iter().any(|event| event.name == "refresh_cache" && event.schedule == "EVERY 1 HOUR"));
     }
 
     // â”€â”€ REQ-23: ACID transaction tracking tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

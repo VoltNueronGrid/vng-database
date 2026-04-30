@@ -2,6 +2,7 @@ import { useUiStore } from "@/store/ui";
 import { useConnectionStore } from "@/store/connection";
 import { useEditorStore } from "@/store/editor";
 import { useModalStore } from "@/store/modal";
+import type { SchemaTable } from "@/api/studio-client";
 
 function colTypeClass(type: string): string {
   const t = type.toUpperCase();
@@ -32,13 +33,13 @@ export function RightPanel() {
   // Prefer exact match first so that a short-named table beats a qualified one with the same base.
   const baseName = (n: string) => n.split(".").pop() ?? n;
 
-  let tableInfo = null;
+  let tableInfo: SchemaTable | null = null;
   for (const db of databases) {
     for (const ns of db.schemas) {
       if (ns.name === schemaName) {
         const t =
-          ns.tables.find((t) => t.name === tableName) ??
-          ns.tables.find((t) => baseName(t.name) === tableName);
+          ns.tables.find((table) => table.name === tableName) ??
+          ns.tables.find((table) => baseName(table.name) === tableName);
         if (t) { tableInfo = t; break; }
       }
     }
@@ -57,7 +58,7 @@ export function RightPanel() {
   function handleViewDDL() {
     if (!tableInfo) return;
     const baseName = tableInfo.name.split(".").pop() ?? tableInfo.name;
-    const cols = tableInfo.columns.map((c) => {
+    const cols = tableInfo.columns.map((c: SchemaTable["columns"][number]) => {
       const pk = c.primary_key ? " PRIMARY KEY" : "";
       const nn = !c.nullable && !c.primary_key ? " NOT NULL" : "";
       return `  ${c.name} ${c.data_type}${pk}${nn}`;

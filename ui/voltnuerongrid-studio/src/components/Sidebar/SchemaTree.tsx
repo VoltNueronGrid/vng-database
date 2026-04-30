@@ -9,7 +9,21 @@ import {
   buildTableMenu,
   buildColumnMenu,
 } from "@/components/ContextMenu/menus";
-import type { SchemaDatabase, SchemaNamespace, SchemaTable, SchemaFunction } from "@/api/studio-client";
+import type {
+  SchemaDatabase,
+  SchemaNamespace,
+  SchemaTable,
+  SchemaFunction,
+  SchemaView,
+  SchemaTrigger,
+  SchemaEvent,
+} from "@/api/studio-client";
+
+function TreeIndents({ count }: { count: number }) {
+  return Array.from({ length: count }, (_value, index) => (
+    <span key={index} className="tree-indent" />
+  ));
+}
 
 function colTypeClass(type: string): string {
   const t = type.toUpperCase();
@@ -21,7 +35,17 @@ function colTypeClass(type: string): string {
   return "str";
 }
 
-function TableNode({ table, schemaName, dbName }: { table: SchemaTable; schemaName: string; dbName: string }) {
+function TableNode({
+  table,
+  schemaName,
+  dbName,
+  indentLevel = 4,
+}: {
+  table: SchemaTable;
+  schemaName: string;
+  dbName: string;
+  indentLevel?: number;
+}) {
   const [open, setOpen] = useState(false);
   const openRightPanel = useUiStore((s) => s.openRightPanel);
   const openTableTab = useEditorStore((s) => s.openTableTab);
@@ -39,9 +63,7 @@ function TableNode({ table, schemaName, dbName }: { table: SchemaTable; schemaNa
         onDoubleClick={() => openTableTab(tableBaseName, schemaName)}
         onContextMenu={openMenuFor(() => buildTableMenu(dbName, schemaName, table))}
       >
-        <span className="tree-indent" />
-        <span className="tree-indent" />
-        <span className="tree-indent" />
+        <TreeIndents count={indentLevel} />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
         <span className="tree-icon">📋</span>
         <span className="tree-label">{tableBaseName}</span>
@@ -63,10 +85,7 @@ function TableNode({ table, schemaName, dbName }: { table: SchemaTable; schemaNa
           onClick={() => openRightPanel(`${schemaName}.${tableBaseName}`)}
           onContextMenu={openMenuFor(() => buildColumnMenu(dbName, schemaName, tableBaseName, col))}
         >
-          <span className="tree-indent" />
-          <span className="tree-indent" />
-          <span className="tree-indent" />
-          <span className="tree-indent" />
+          <TreeIndents count={indentLevel + 1} />
           <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
           {col.primary_key
             ? <span className="pk-marker" title="Primary key">🔑</span>
@@ -80,7 +99,15 @@ function TableNode({ table, schemaName, dbName }: { table: SchemaTable; schemaNa
   );
 }
 
-function FunctionNode({ fn: func, schemaName }: { fn: SchemaFunction; schemaName: string }) {
+function FunctionNode({
+  fn: func,
+  schemaName,
+  indentLevel = 4,
+}: {
+  fn: SchemaFunction;
+  schemaName: string;
+  indentLevel?: number;
+}) {
   const [open, setOpen] = useState(false);
   const insertText = useEditorStore((s) => s.insertTextIntoActiveTab);
 
@@ -99,9 +126,7 @@ function FunctionNode({ fn: func, schemaName }: { fn: SchemaFunction; schemaName
         onDoubleClick={() => insertText?.(callSnippet)}
         title={`Double-click to insert CALL snippet\n\n${func.definition}`}
       >
-        <span className="tree-indent" />
-        <span className="tree-indent" />
-        <span className="tree-indent" />
+        <TreeIndents count={indentLevel} />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
         <span className="tree-icon">⚡</span>
         <span className="tree-label">{func.name}</span>
@@ -113,10 +138,7 @@ function FunctionNode({ fn: func, schemaName }: { fn: SchemaFunction; schemaName
         <>
           {/* Arguments */}
           <div className="tree-node" style={{ paddingLeft: 0 }}>
-            <span className="tree-indent" />
-            <span className="tree-indent" />
-            <span className="tree-indent" />
-            <span className="tree-indent" />
+            <TreeIndents count={indentLevel + 1} />
             <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
             <span style={{ width: 14 }} />
             <span className="tree-label mono" style={{ fontSize: 11, color: "var(--text-2)" }}>({func.arguments || "void"})</span>
@@ -124,10 +146,7 @@ function FunctionNode({ fn: func, schemaName }: { fn: SchemaFunction; schemaName
           </div>
           {/* Return type */}
           <div className="tree-node" style={{ paddingLeft: 0 }}>
-            <span className="tree-indent" />
-            <span className="tree-indent" />
-            <span className="tree-indent" />
-            <span className="tree-indent" />
+            <TreeIndents count={indentLevel + 1} />
             <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
             <span style={{ width: 14 }} />
             <span className="tree-label mono" style={{ fontSize: 11, color: "var(--text-2)" }}>→ {func.return_type}</span>
@@ -135,10 +154,7 @@ function FunctionNode({ fn: func, schemaName }: { fn: SchemaFunction; schemaName
           </div>
           {/* Language */}
           <div className="tree-node" style={{ paddingLeft: 0 }}>
-            <span className="tree-indent" />
-            <span className="tree-indent" />
-            <span className="tree-indent" />
-            <span className="tree-indent" />
+            <TreeIndents count={indentLevel + 1} />
             <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
             <span style={{ width: 14 }} />
             <span className="tree-label mono" style={{ fontSize: 11, color: "var(--text-2)" }}>{func.language}</span>
@@ -150,10 +166,77 @@ function FunctionNode({ fn: func, schemaName }: { fn: SchemaFunction; schemaName
   );
 }
 
+function NamedObjectNode({
+  icon,
+  name,
+  badge,
+  indentLevel = 4,
+}: {
+  icon: string;
+  name: string;
+  badge?: string;
+  indentLevel?: number;
+}) {
+  return (
+    <div className="tree-node" style={{ paddingLeft: 0 }}>
+      <TreeIndents count={indentLevel} />
+      <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
+      <span className="tree-icon">{icon}</span>
+      <span className="tree-label">{name}</span>
+      {badge && (
+        <span className="col-chip" style={{ fontSize: 10, padding: "1px 5px", borderRadius: 4, marginLeft: 4 }}>
+          {badge}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SectionNode({
+  icon,
+  label,
+  count,
+  indentLevel,
+  defaultOpen = true,
+  children,
+}: {
+  icon: string;
+  label: string;
+  count: number;
+  indentLevel: number;
+  defaultOpen?: boolean;
+  children?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <>
+      <div
+        className="tree-node"
+        style={{ paddingLeft: 0, opacity: 0.75 }}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <TreeIndents count={indentLevel} />
+        <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
+        <span className="tree-icon">{icon}</span>
+        <span className="tree-label" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+          {label}
+        </span>
+        <span className="tree-count" style={{ fontSize: 10 }}>{count}</span>
+      </div>
+      {open && children}
+    </>
+  );
+}
+
 function SchemaNode({ ns, dbName }: { ns: SchemaNamespace; dbName: string }) {
   const [open, setOpen] = useState(true);
+  const views = ns.views ?? [];
   const functions = ns.functions ?? [];
-  const totalItems = ns.tables.length + functions.length;
+  const triggers = ns.triggers ?? [];
+  const events = ns.events ?? [];
+  const totalItems = ns.tables.length + views.length + functions.length + triggers.length + events.length;
+
   return (
     <>
       <div
@@ -161,29 +244,44 @@ function SchemaNode({ ns, dbName }: { ns: SchemaNamespace; dbName: string }) {
         onClick={() => setOpen((o) => !o)}
         onContextMenu={openMenuFor(() => buildSchemaMenu(dbName, ns.name))}
       >
-        <span className="tree-indent" />
-        <span className="tree-indent" />
+        <TreeIndents count={2} />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
         <span className="tree-icon">📁</span>
         <span className="tree-label">{ns.name}</span>
         <span className="tree-count">{totalItems}</span>
       </div>
-      {open && ns.tables.map((t) => (
-        <TableNode key={t.name} table={t} schemaName={ns.name} dbName={dbName} />
-      ))}
-      {open && functions.length > 0 && (
+
+      {open && (
         <>
-          {/* Functions section header */}
-          <div className="tree-node" style={{ paddingLeft: 0, opacity: 0.6, pointerEvents: "none" }}>
-            <span className="tree-indent" />
-            <span className="tree-indent" />
-            <span className="tree-indent" />
-            <span className="tree-icon" style={{ fontSize: 10 }}>⚙</span>
-            <span className="tree-label" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Functions</span>
-          </div>
-          {functions.map((f) => (
-            <FunctionNode key={f.name} fn={f} schemaName={ns.name} />
-          ))}
+          <SectionNode icon="📋" label="Tables" count={ns.tables.length} indentLevel={3}>
+            {ns.tables.map((table) => (
+              <TableNode key={table.name} table={table} schemaName={ns.name} dbName={dbName} indentLevel={4} />
+            ))}
+          </SectionNode>
+
+          <SectionNode icon="👁" label="Views" count={views.length} indentLevel={3} defaultOpen={false}>
+            {views.map((view: SchemaView) => (
+              <NamedObjectNode key={view.name} icon="👁" name={view.name} badge="view" indentLevel={4} />
+            ))}
+          </SectionNode>
+
+          <SectionNode icon="⚡" label="Functions" count={functions.length} indentLevel={3}>
+            {functions.map((func) => (
+              <FunctionNode key={func.name} fn={func} schemaName={ns.name} indentLevel={4} />
+            ))}
+          </SectionNode>
+
+          <SectionNode icon="⛓" label="Triggers" count={triggers.length} indentLevel={3} defaultOpen={false}>
+            {triggers.map((trigger: SchemaTrigger) => (
+              <NamedObjectNode key={trigger.name} icon="⛓" name={trigger.name} badge="trigger" indentLevel={4} />
+            ))}
+          </SectionNode>
+
+          <SectionNode icon="🗓" label="Events" count={events.length} indentLevel={3} defaultOpen={false}>
+            {events.map((event: SchemaEvent) => (
+              <NamedObjectNode key={event.name} icon="🗓" name={event.name} badge="event" indentLevel={4} />
+            ))}
+          </SectionNode>
         </>
       )}
     </>
@@ -199,15 +297,19 @@ function DatabaseNode({ db }: { db: SchemaDatabase }) {
         onClick={() => setOpen((o) => !o)}
         onContextMenu={openMenuFor(() => buildDatabaseMenu(db.name))}
       >
-        <span className="tree-indent" />
+        <TreeIndents count={1} />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
         <span className="tree-icon">🗄</span>
         <span className="tree-label">{db.name}</span>
         <span className="tree-badge">{db.schemas.length} schemas</span>
       </div>
-      {open && db.schemas.map((ns) => (
-        <SchemaNode key={ns.name} ns={ns} dbName={db.name} />
-      ))}
+      {open && (
+        <SectionNode icon="🗂" label="Schemas" count={db.schemas.length} indentLevel={2}>
+          {db.schemas.map((ns) => (
+            <SchemaNode key={ns.name} ns={ns} dbName={db.name} />
+          ))}
+        </SectionNode>
+      )}
     </>
   );
 }
@@ -234,9 +336,11 @@ export function SchemaTree() {
 
   return (
     <div>
-      {databases.map((db) => (
-        <DatabaseNode key={db.name} db={db} />
-      ))}
+      <SectionNode icon="🗄" label="Databases" count={databases.length} indentLevel={0}>
+        {databases.map((db) => (
+          <DatabaseNode key={db.name} db={db} />
+        ))}
+      </SectionNode>
     </div>
   );
 }

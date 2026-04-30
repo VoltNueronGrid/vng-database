@@ -90,11 +90,34 @@ export interface SchemaFunction {
   language: string;
 }
 
+export interface SchemaView {
+  name: string;
+  schema: string;
+  definition?: string;
+}
+
+export interface SchemaTrigger {
+  name: string;
+  schema: string;
+  table?: string;
+  definition?: string;
+}
+
+export interface SchemaEvent {
+  name: string;
+  schema: string;
+  schedule?: string;
+  definition?: string;
+}
+
 export interface SchemaNamespace {
   name: string;
   database: string;
   tables: SchemaTable[];
   functions?: SchemaFunction[];
+  views?: SchemaView[];
+  triggers?: SchemaTrigger[];
+  events?: SchemaEvent[];
 }
 
 export interface SchemaDatabase {

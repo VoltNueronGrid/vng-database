@@ -27,8 +27,14 @@ pub enum SqlStatementKind {
     CreateView,
     CreateMaterializedView,
     CreateFunction,
+    CreateTrigger,
+    CreateEvent,
     AlterTable,
     DropTable,
+    DropView,
+    DropFunction,
+    DropTrigger,
+    DropEvent,
     Begin,
     Commit,
     Rollback,
@@ -219,8 +225,14 @@ impl SqlAnalyzer {
                 SqlStatementKind::CreateMaterializedView
             }
             (Some("CREATE"), Some("FUNCTION"), _) => SqlStatementKind::CreateFunction,
+            (Some("CREATE"), Some("TRIGGER"), _) => SqlStatementKind::CreateTrigger,
+            (Some("CREATE"), Some("EVENT"), _) => SqlStatementKind::CreateEvent,
             (Some("ALTER"), Some("TABLE"), _) => SqlStatementKind::AlterTable,
             (Some("DROP"), Some("TABLE"), _) => SqlStatementKind::DropTable,
+            (Some("DROP"), Some("VIEW"), _) => SqlStatementKind::DropView,
+            (Some("DROP"), Some("FUNCTION"), _) => SqlStatementKind::DropFunction,
+            (Some("DROP"), Some("TRIGGER"), _) => SqlStatementKind::DropTrigger,
+            (Some("DROP"), Some("EVENT"), _) => SqlStatementKind::DropEvent,
             (Some("BEGIN"), _, _) => SqlStatementKind::Begin,
             (Some("COMMIT"), _, _) => SqlStatementKind::Commit,
             // ROLLBACK TO [SAVEPOINT] — must match before bare ROLLBACK
@@ -259,8 +271,14 @@ impl SqlAnalyzer {
                     | SqlStatementKind::CreateView
                     | SqlStatementKind::CreateMaterializedView
                     | SqlStatementKind::CreateFunction
+                    | SqlStatementKind::CreateTrigger
+                    | SqlStatementKind::CreateEvent
                     | SqlStatementKind::AlterTable
                     | SqlStatementKind::DropTable
+                    | SqlStatementKind::DropView
+                    | SqlStatementKind::DropFunction
+                    | SqlStatementKind::DropTrigger
+                    | SqlStatementKind::DropEvent
             ),
             touches_catalog: matches!(
                 kind,
@@ -268,8 +286,14 @@ impl SqlAnalyzer {
                     | SqlStatementKind::CreateView
                     | SqlStatementKind::CreateMaterializedView
                     | SqlStatementKind::CreateFunction
+                    | SqlStatementKind::CreateTrigger
+                    | SqlStatementKind::CreateEvent
                     | SqlStatementKind::AlterTable
                     | SqlStatementKind::DropTable
+                    | SqlStatementKind::DropView
+                    | SqlStatementKind::DropFunction
+                    | SqlStatementKind::DropTrigger
+                    | SqlStatementKind::DropEvent
             ),
             kind,
         }
@@ -419,6 +443,23 @@ mod tests {
         let query = SqlAnalyzer::analyze_statement("select 1");
         assert!(!query.touches_catalog);
         assert!(!query.requires_transaction);
+    }
+
+    #[test]
+    fn analyzes_trigger_and_event_catalog_touch() {
+        let trigger = SqlAnalyzer::analyze_statement(
+            "create trigger users_updated before update on users for each row execute function stamp()",
+        );
+        assert_eq!(trigger.kind, SqlStatementKind::CreateTrigger);
+        assert!(trigger.requires_transaction);
+        assert!(trigger.touches_catalog);
+
+        let event = SqlAnalyzer::analyze_statement(
+            "create event refresh_cache on schedule every 1 hour do call warm_cache()",
+        );
+        assert_eq!(event.kind, SqlStatementKind::CreateEvent);
+        assert!(event.requires_transaction);
+        assert!(event.touches_catalog);
     }
 
     #[test]

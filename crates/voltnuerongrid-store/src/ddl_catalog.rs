@@ -15,7 +15,7 @@ use std::collections::HashMap;
 pub struct DdlCatalogEntry {
     /// Lower-cased canonical name (used as the HashMap key).
     pub object_name: String,
-    /// `"table"`, `"view"`, `"materialized_view"`, or `"function"`.
+    /// `"table"`, `"view"`, `"materialized_view"`, `"function"`, `"trigger"`, or `"event"`.
     pub object_kind: String,
     /// The full DDL statement that created the object.
     pub original_statement: String,
@@ -210,6 +210,18 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
                 replace_ok: false,
             })
         }
+        ["create", "trigger", name, ..] => Some(DdlObjectInfo {
+            operation: "create",
+            object_kind: "trigger",
+            object_name: clean(name),
+            replace_ok: false,
+        }),
+        ["create", "event", name, ..] => Some(DdlObjectInfo {
+            operation: "create",
+            object_kind: "event",
+            object_name: clean(name),
+            replace_ok: false,
+        }),
         ["create", "or", "replace", "function", name, ..] => {
             Some(DdlObjectInfo {
                 operation: "create",
@@ -250,6 +262,22 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
             Some(DdlObjectInfo {
                 operation: "drop",
                 object_kind: "function",
+                object_name: clean(name),
+                replace_ok: false,
+            })
+        }
+        ["drop", "trigger", "if", "exists", name, ..] | ["drop", "trigger", name, ..] => {
+            Some(DdlObjectInfo {
+                operation: "drop",
+                object_kind: "trigger",
+                object_name: clean(name),
+                replace_ok: false,
+            })
+        }
+        ["drop", "event", "if", "exists", name, ..] | ["drop", "event", name, ..] => {
+            Some(DdlObjectInfo {
+                operation: "drop",
+                object_kind: "event",
                 object_name: clean(name),
                 replace_ok: false,
             })
@@ -314,6 +342,23 @@ mod tests {
         let func = parse_ddl_info("CREATE FUNCTION compute_tax(x FLOAT) RETURNS FLOAT AS $$...$$").unwrap();
         assert_eq!(func.object_kind, "function");
         assert_eq!(func.object_name, "compute_tax");
+    }
+
+    #[test]
+    fn create_trigger_and_event_parsed() {
+        let trigger = parse_ddl_info(
+            "CREATE TRIGGER users_updated BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION stamp()",
+        )
+        .unwrap();
+        assert_eq!(trigger.object_kind, "trigger");
+        assert_eq!(trigger.object_name, "users_updated");
+
+        let event = parse_ddl_info(
+            "CREATE EVENT refresh_cache ON SCHEDULE EVERY 1 HOUR DO CALL refresh()",
+        )
+        .unwrap();
+        assert_eq!(event.object_kind, "event");
+        assert_eq!(event.object_name, "refresh_cache");
     }
 
     #[test]
