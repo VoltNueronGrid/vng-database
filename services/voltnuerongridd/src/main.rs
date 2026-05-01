@@ -818,6 +818,120 @@ fn load_ingest_outbox_cursor_store() -> ManagedReplayCursorStore {
     })
 }
 
+// ─── File-backed SQL WAL for DDL + DML persistence ───────────────────────────
+// All CREATE/DROP/ALTER and committed INSERT/UPDATE/DELETE statements are
+// appended here so they can be replayed when the server restarts.
+
+fn ddl_wal_path() -> String {
+    std::env::var("VNG_DDL_WAL_PATH")
+        .unwrap_or_else(|_| "state/ddl.wal".to_string())
+}
+
+fn dml_wal_path() -> String {
+    std::env::var("VNG_DML_WAL_PATH")
+        .unwrap_or_else(|_| "state/dml.wal".to_string())
+}
+
+/// Escape a SQL string to a single line: replace `\` → `\\`, newline → `\n`.
+fn sql_wal_escape(sql: &str) -> String {
+    sql.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")
+}
+
+/// Reverse of `sql_wal_escape`.
+fn sql_wal_unescape(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n')  => result.push('\n'),
+                Some('r')  => result.push('\r'),
+                Some('\\') => result.push('\\'),
+                Some(other) => { result.push('\\'); result.push(other); }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Append one SQL statement to the given WAL file.
+fn append_sql_wal(wal_path: &str, sql: &str) {
+    use std::io::Write;
+    if let Some(parent) = std::path::Path::new(wal_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(wal_path) {
+        let _ = writeln!(f, "{}", sql_wal_escape(sql));
+        let _ = f.flush();
+    }
+}
+
+/// Read all SQL statements from a WAL file (one per line, escaped).
+fn read_sql_wal(wal_path: &str) -> Vec<String> {
+    use std::io::BufRead;
+    let file = match std::fs::File::open(wal_path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    std::io::BufReader::new(file)
+        .lines()
+        .filter_map(|l| l.ok())
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| sql_wal_unescape(&l))
+        .collect()
+}
+
+/// Replay the DDL WAL into a freshly-created `DdlCatalog`.
+fn replay_ddl_wal_into(catalog: &mut DdlCatalog) {
+    let path = ddl_wal_path();
+    let sqls = read_sql_wal(&path);
+    let now_ms = now_unix_ms();
+    for sql in &sqls {
+        if let Some(info) = parse_ddl_info(sql) {
+            match info.operation {
+                "create" => { let _ = catalog.record_create(&info.object_kind, &info.object_name, sql, now_ms, info.replace_ok); }
+                "drop"   => { catalog.record_drop(&info.object_name); }
+                "alter"  => { catalog.record_alter(&info.object_name, sql, now_ms); }
+                _ => {}
+            }
+        }
+    }
+    if !sqls.is_empty() {
+        eprintln!("[vng-wal] replayed {} DDL statement(s) from {}", sqls.len(), path);
+    }
+}
+
+/// Replay the DML WAL into a freshly-created `PagedRowStore`.
+fn replay_dml_wal_into(rs: &mut PagedRowStore) {
+    let path = dml_wal_path();
+    let sqls = read_sql_wal(&path);
+    if sqls.is_empty() {
+        return;
+    }
+    let xid = rs.begin_xid();
+    for sql in &sqls {
+        let upper = sql.trim_start().to_ascii_uppercase();
+        if upper.starts_with("INSERT") {
+            // Use extract_all_insert_rows so schema-qualified names are handled.
+            for (k, d, _) in extract_all_insert_rows(sql) {
+                rs.insert(xid, &k, d);
+            }
+        } else if upper.starts_with("DELETE") {
+            if let Some(k) = extract_delete_key_from_sql(sql) {
+                rs.delete(xid, &k);
+            }
+        } else if upper.starts_with("UPDATE") {
+            if let Some((k, d)) = extract_update_row_from_sql(sql) {
+                rs.insert(xid, &k, d);
+            }
+        }
+    }
+    eprintln!("[vng-wal] replayed {} DML statement(s) from {}", sqls.len(), path);
+}
+
 fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
     let mut matrix = RbacPrivilegeMatrix::new();
 
@@ -5692,9 +5806,17 @@ async fn main() {
         autonomous_mode,
         emergency_stop: Arc::new(emergency_stop),
         guardrails: Arc::new(default_guardrail_rules()),
-        ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
+        ddl_catalog: Arc::new(Mutex::new({
+            let mut cat = DdlCatalog::new();
+            replay_ddl_wal_into(&mut cat);
+            cat
+        })),
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
-        row_store: Arc::new(Mutex::new(PagedRowStore::default())),
+        row_store: Arc::new(Mutex::new({
+            let mut rs = PagedRowStore::default();
+            replay_dml_wal_into(&mut rs);
+            rs
+        })),
         model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
         wal_engine: Arc::new(Mutex::new(InMemoryDurabilityEngine::with_config(DurabilityConfig::default()))),
         chaos_state: Arc::new(Mutex::new(ChaosState::default())),
@@ -6789,6 +6911,90 @@ fn extract_insert_row_from_sql(
     extract_insert_row_from_sql_with_cols(sql, &[])
 }
 
+/// Extract ALL rows from a (possibly multi-row) INSERT statement.
+/// Returns one `(row_key, RowData, single_row_sql)` per VALUES tuple.
+/// Strips `schema.table` qualifiers so the internal SQL parser can handle them.
+fn extract_all_insert_rows(
+    sql: &str,
+) -> Vec<(String, std::collections::HashMap<String, String>, String)> {
+    use voltnuerongrid_sql::{parse_one, Statement};
+    // Strip schema qualifier: "INSERT INTO oltp.customers" → "INSERT INTO customers"
+    let normalized = strip_schema_qualifier_from_insert(sql);
+    let ins = match parse_one(&normalized) {
+        Ok(Statement::Insert(i)) => i,
+        _ => return Vec::new(),
+    };
+    // Preserve original (schema-qualified) table name for WAL
+    let orig_table = {
+        let upper = sql.to_ascii_uppercase();
+        if let Some(into_pos) = upper.find("INTO") {
+            let after = sql[into_pos + 4..].trim_start();
+            let end = after.find(|c: char| c == ' ' || c == '\n' || c == '\t' || c == '(').unwrap_or(after.len());
+            after[..end].to_string()
+        } else {
+            ins.table.clone()
+        }
+    };
+    let unqualified_table = orig_table.rsplit('.').next().unwrap_or(&orig_table).to_string();
+    let mut results = Vec::new();
+    for row_vals in &ins.values {
+        if row_vals.is_empty() {
+            continue;
+        }
+        let mut data = std::collections::HashMap::new();
+        data.insert("__table".to_string(), unqualified_table.clone());
+        for (i, val) in row_vals.iter().enumerate() {
+            let col = if !ins.columns.is_empty() {
+                ins.columns.get(i).map(|c| c.to_ascii_lowercase()).unwrap_or_else(|| format!("col_{i}"))
+            } else {
+                format!("col_{i}")
+            };
+            data.insert(col.clone(), val.clone());
+        }
+        let first_val = &row_vals[0];
+        let row_key = format!("{unqualified_table}:{first_val}");
+        // Build a canonical single-row INSERT for WAL replay (uses original table name)
+        let col_list = if !ins.columns.is_empty() {
+            format!(" ({})", ins.columns.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", "))
+        } else {
+            String::new()
+        };
+        let val_list = row_vals.iter()
+            .map(|v| {
+                let trimmed = v.trim();
+                if trimmed.parse::<f64>().is_ok() { trimmed.to_string() } else { format!("'{}'", trimmed.replace('\'', "''")) }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let single_sql = format!("INSERT INTO {orig_table}{col_list} VALUES ({val_list});");
+        results.push((row_key, data, single_sql));
+    }
+    results
+}
+
+/// Remove `schema.` prefix from table name in INSERT statement so the parser
+/// (which only handles unqualified names) can parse the statement correctly.
+fn strip_schema_qualifier_from_insert(sql: &str) -> String {
+    if !sql.contains('.') {
+        return sql.to_string();
+    }
+    let sql_upper = sql.to_ascii_uppercase();
+    if let Some(into_pos) = sql_upper.find("INTO") {
+        let after_into = into_pos + 4;
+        let ws_len = sql[after_into..].len() - sql[after_into..].trim_start().len();
+        let table_start = after_into + ws_len;
+        let table_text = &sql[table_start..];
+        let table_end = table_text.find(|c: char| c == ' ' || c == '\n' || c == '\t' || c == '(').unwrap_or(table_text.len());
+        let table_name = &table_text[..table_end];
+        if let Some(dot) = table_name.find('.') {
+            let unqualified_start = table_start + dot + 1;
+            let after_table = table_start + table_end;
+            return format!("{}{}{}", &sql[..table_start], &sql[unqualified_start..after_table], &sql[after_table..]);
+        }
+    }
+    sql.to_string()
+}
+
 fn extract_insert_row_from_sql_with_cols(
     sql: &str,
     ddl_col_names: &[String],
@@ -7009,20 +7215,24 @@ async fn sql_transaction(
                 for stmt in &statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
-                        if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
-                            // Register write intent so concurrent conflict checks see this lock.
+                        // Use extract_all_insert_rows to handle multi-row INSERT correctly.
+                        // Each row is individually inserted and individually WAL-persisted.
+                        for (k, d, single_sql) in extract_all_insert_rows(stmt) {
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
+                            append_sql_wal(&dml_wal_path(), &single_sql);
                         }
                     } else if upper.starts_with("DELETE") {
                         if let Some(k) = extract_delete_key_from_sql(stmt) {
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
+                            append_sql_wal(&dml_wal_path(), stmt);
                         }
                     } else if upper.starts_with("UPDATE") {
                         if let Some((k, d)) = extract_update_row_from_sql(stmt) {
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
+                            append_sql_wal(&dml_wal_path(), stmt);
                         }
                     }
                 }
@@ -7548,10 +7758,13 @@ async fn sql_execute(
     let mut transaction = None;
     let mut olap = None;
     let mut rejected_statement_count = 0usize;
+    // Hoisted so the DML WAL/row_store commit block below can access it
+    // regardless of whether touches_catalog is true or false.
+    let mut ddl_snapshot: Vec<String> = Vec::new();
 
     if !transaction_statements.is_empty() {
         // REQ-02: snapshot statements for DDL catalog update after ownership transfer
-        let ddl_snapshot: Vec<String> = transaction_statements.clone();
+        ddl_snapshot = transaction_statements.clone();
         let (status, response) = execute_transaction_statements(transaction_statements);
         rejected_statement_count += response.rejected_statement_count;
         if status != StatusCode::OK {
@@ -7629,10 +7842,19 @@ async fn sql_execute(
                                         "warning": ddl_warning,
                                     }),
                                 );
+                            } else {
+                                // Persist to WAL so this DDL survives a restart.
+                                append_sql_wal(&ddl_wal_path(), stmt);
                             }
                         }
-                        "drop" => { catalog.record_drop(&info.object_name); }
-                        "alter" => { catalog.record_alter(&info.object_name, stmt, now_ms); }
+                        "drop" => {
+                            catalog.record_drop(&info.object_name);
+                            append_sql_wal(&ddl_wal_path(), stmt);
+                        }
+                        "alter" => {
+                            catalog.record_alter(&info.object_name, stmt, now_ms);
+                            append_sql_wal(&ddl_wal_path(), stmt);
+                        }
                         _ => {}
                     }
                 }
@@ -7678,45 +7900,37 @@ async fn sql_execute(
                 drop(catalog);
             }
         }
-        // Execute DML (INSERT/UPDATE/DELETE) statements against the row store so data persists.
-        {
+    }
+    // Execute DML (INSERT/UPDATE/DELETE) against the row store for ALL committed
+    // non-SELECT transactions — pure DML, mixed DDL+DML, etc. Each row is individually
+    // written and appended to the DML WAL so data survives a server restart.
+    if transaction.as_ref().map(|r| r.statements_executed > 0).unwrap_or(false) {
+        let has_dml = ddl_snapshot.iter().any(|s| {
+            let u = s.trim_start().to_ascii_uppercase();
+            u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
+        });
+        if has_dml {
             let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
             let xid = rs.begin_xid();
             for stmt in &ddl_snapshot {
                 let upper = stmt.trim_start().to_ascii_uppercase();
                 if upper.starts_with("INSERT") {
-                    // Look up the target table name so we can fetch DDL column definitions.
-                    // This lets positional VALUES (1, 'foo') use real column names from CREATE TABLE.
-                    let ddl_cols: Vec<String> = {
-                        use voltnuerongrid_sql::{parse_one, Statement};
-                        let table_name = parse_one(stmt)
-                            .ok()
-                            .and_then(|s| if let Statement::Insert(i) = s { Some(i.table) } else { None })
-                            .map(|t| t.rsplit('.').next().unwrap_or(&t).to_ascii_lowercase().to_string())
-                            .unwrap_or_default();
-                        if !table_name.is_empty() {
-                            let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock ddl_cols");
-                            catalog
-                                .get(&table_name)
-                                .map(|e| extract_column_names_from_ddl(&e.original_statement))
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    };
-                    if let Some((k, d)) = extract_insert_row_from_sql_with_cols(stmt, &ddl_cols) {
+                    for (k, d, single_sql) in extract_all_insert_rows(stmt) {
                         let _ = rs.begin_write_intent(xid, &k);
                         rs.insert(xid, &k, d);
+                        append_sql_wal(&dml_wal_path(), &single_sql);
                     }
                 } else if upper.starts_with("UPDATE") {
                     if let Some((k, d)) = extract_update_row_from_sql(stmt) {
                         let _ = rs.begin_write_intent(xid, &k);
                         rs.insert(xid, &k, d);
+                        append_sql_wal(&dml_wal_path(), stmt);
                     }
                 } else if upper.starts_with("DELETE") {
                     if let Some(k) = extract_delete_key_from_sql(stmt) {
                         let _ = rs.begin_write_intent(xid, &k);
                         rs.delete(xid, &k);
+                        append_sql_wal(&dml_wal_path(), stmt);
                     }
                 }
             }
