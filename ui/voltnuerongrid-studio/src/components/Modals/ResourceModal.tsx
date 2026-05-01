@@ -163,13 +163,23 @@ function Footer({ onCancel, onSubmit, label = "Generate SQL", danger = false, di
 function CreateDatabaseForm({ onSubmit }: { onSubmit: RunSqlFn }) {
   const close = useModalStore((s) => s.close);
   const [name, setName] = useState("");
-  const [encoding, setEncoding] = useState("UTF8");
-  const [route, setRoute] = useState("hybrid");
+
+  function handleSubmit() {
+    if (!name.trim()) return;
+    const sql = `CREATE TABLE ${name.trim().toLowerCase()}.public._init (id INT)`;
+    onSubmit(sql, `create-database-${name.trim().toLowerCase()}.sql`);
+    close();
+  }
 
   return (
     <>
+      <div style={{ color: "var(--text-2)", fontSize: 12.5, lineHeight: 1.55, padding: "4px 2px 8px" }}>
+        Creates the new database by placing a system init table inside it.
+        You can also create tables in any database directly by using qualified names like{" "}
+        <code>CREATE TABLE mydb.myschema.customers (...)</code>.
+      </div>
       <div className="form-row">
-        <Field label="Database Name" full>
+        <Field label="Database Name">
           <input
             className="form-input"
             value={name}
@@ -179,31 +189,11 @@ function CreateDatabaseForm({ onSubmit }: { onSubmit: RunSqlFn }) {
           />
         </Field>
       </div>
-      <div className="form-row">
-        <Field label="Encoding">
-          <select className="form-select" value={encoding} onChange={(e) => setEncoding(e.target.value)}>
-            <option>UTF8</option>
-            <option>LATIN1</option>
-            <option>SQL_ASCII</option>
-          </select>
-        </Field>
-        <Field label="Route Hint">
-          <select className="form-select" value={route} onChange={(e) => setRoute(e.target.value)}>
-            <option value="oltp">OLTP</option>
-            <option value="olap">OLAP</option>
-            <option value="hybrid">Hybrid</option>
-          </select>
-        </Field>
-      </div>
       <Footer
         onCancel={close}
-        onSubmit={() => {
-          if (!name) return;
-          onSubmit(
-            `CREATE DATABASE ${name}\n  ENCODING '${encoding}'\n  WITH (route = '${route}');`,
-            `create_${name}.sql`
-          );
-        }}
+        onSubmit={handleSubmit}
+        label="Create Database"
+        disabled={!name.trim()}
       />
     </>
   );

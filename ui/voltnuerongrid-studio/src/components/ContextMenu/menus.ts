@@ -99,18 +99,18 @@ export function buildConnectionMenu(
       },
       { id: "sep3", separator: true },
       {
-        id: "newdb",
-        label: "New Database…",
-        icon: "＋",
-        disabled: !isActive,
-        onSelect: () => m().open({ kind: "create-database" }),
-      },
-      {
         id: "newuser",
         label: "New User…",
         icon: "👤",
         disabled: !isActive,
         onSelect: () => m().open({ kind: "create-user" }),
+      },
+      {
+        id: "newdatabase",
+        label: "New Database…",
+        icon: "🗄",
+        disabled: !isActive,
+        onSelect: () => m().open({ kind: "create-database" }),
       },
       { id: "sep4", separator: true },
       {

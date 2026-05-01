@@ -32,7 +32,7 @@ use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
-use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult, DdlCatalog};
+use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult, DdlCatalog, DdlCatalogEntry};
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_store::{InMemoryDurabilityEngine, DurabilityConfig};
@@ -892,9 +892,9 @@ fn replay_ddl_wal_into(catalog: &mut DdlCatalog) {
     for sql in &sqls {
         if let Some(info) = parse_ddl_info(sql) {
             match info.operation {
-                "create" => { let _ = catalog.record_create(&info.object_kind, &info.object_name, sql, now_ms, info.replace_ok); }
-                "drop"   => { catalog.record_drop(&info.object_name); }
-                "alter"  => { catalog.record_alter(&info.object_name, sql, now_ms); }
+                "create" => { let _ = catalog.record_create(&info.object_kind, &info.database_name, &info.schema_name, &info.object_name, sql, now_ms, info.replace_ok); }
+                "drop"   => { catalog.record_drop(&info.database_name, &info.schema_name, &info.object_name); }
+                "alter"  => { catalog.record_alter(&info.database_name, &info.schema_name, &info.object_name, sql, now_ms); }
                 _ => {}
             }
         }
@@ -5809,6 +5809,19 @@ async fn main() {
         ddl_catalog: Arc::new(Mutex::new({
             let mut cat = DdlCatalog::new();
             replay_ddl_wal_into(&mut cat);
+            // Seed the built-in "metadata" database with system schema markers.
+            // These are virtual entries — not persisted to WAL, recreated each boot.
+            let boot_ms = now_unix_ms();
+            let _ = cat.record_create(
+                "table", "metadata", "system", "_databases",
+                "CREATE TABLE metadata.system._databases (name TEXT, created_at BIGINT)",
+                boot_ms, true,
+            );
+            let _ = cat.record_create(
+                "table", "metadata", "system", "_schemas",
+                "CREATE TABLE metadata.system._schemas (database_name TEXT, schema_name TEXT, created_at BIGINT)",
+                boot_ms, true,
+            );
             cat
         })),
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
@@ -7819,6 +7832,8 @@ async fn sql_execute(
                         "create" => {
                             let result = catalog.record_create(
                                 &info.object_kind,
+                                &info.database_name,
+                                &info.schema_name,
                                 &info.object_name,
                                 stmt,
                                 now_ms,
@@ -7848,11 +7863,11 @@ async fn sql_execute(
                             }
                         }
                         "drop" => {
-                            catalog.record_drop(&info.object_name);
+                            catalog.record_drop(&info.database_name, &info.schema_name, &info.object_name);
                             append_sql_wal(&ddl_wal_path(), stmt);
                         }
                         "alter" => {
-                            catalog.record_alter(&info.object_name, stmt, now_ms);
+                            catalog.record_alter(&info.database_name, &info.schema_name, &info.object_name, stmt, now_ms);
                             append_sql_wal(&ddl_wal_path(), stmt);
                         }
                         _ => {}
@@ -20219,144 +20234,180 @@ async fn admin_schema_tree(
     let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
     let index_mgr = state.index_manager.lock().expect("index lock");
 
-    let mut tables: Vec<AdminSchemaTable> = catalog
-        .active_entries()
-        .iter()
-        .filter(|e| e.object_kind == "table")
-        .map(|e| {
-            let columns = match voltnuerongrid_sql::parse_one(&e.original_statement) {
-                Ok(Statement::CreateTable(stmt)) => stmt
-                    .columns
-                    .iter()
-                    .map(|c| AdminSchemaColumn {
-                        name: c.name.clone(),
-                        data_type: c.data_type.clone(),
-                        nullable: true,
-                        primary_key: false,
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            let indexes = index_mgr
-                .list_indexes()
-                .iter()
-                .filter(|idx| idx.table.eq_ignore_ascii_case(&e.object_name))
-                .map(|idx| AdminSchemaIndex {
-                    name: idx.name.clone(),
-                    columns: vec![idx.column.clone()],
-                    unique: idx.unique,
-                })
-                .collect();
-            AdminSchemaTable {
-                name: e.object_name.clone(),
-                schema: "public".to_string(),
-                columns,
-                indexes,
-            }
-        })
-        .collect();
-
-    tables.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut views: Vec<AdminSchemaView> = catalog
-        .active_entries()
-        .iter()
-        .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
-        .map(|e| AdminSchemaView {
-            name: e.object_name.clone(),
-            schema: "public".to_string(),
-            definition: e.original_statement.clone(),
-        })
-        .collect();
-    views.sort_by(|a, b| a.name.cmp(&b.name));
-
-    // Build function list from DDL catalog (object_kind == "function")
-    let mut functions: Vec<AdminSchemaFunction> = catalog
-        .active_entries()
-        .iter()
-        .filter(|e| e.object_kind == "function")
-        .map(|e| {
-            let def = &e.original_statement;
-            // Extract argument list from the first (…)
-            let arguments = def.find('(')
-                .and_then(|start| def[start + 1..].find(')').map(|end| def[start + 1..start + 1 + end].trim().to_string()))
-                .unwrap_or_default();
-            // Extract RETURNS clause (word after "RETURNS")
-            let return_type = {
-                let upper = def.to_ascii_uppercase();
-                upper.find("RETURNS")
-                    .and_then(|pos| {
-                        def[pos + 7..].split_whitespace().next().map(|s| s.trim_matches(|c: char| !c.is_alphanumeric() && c != '_').to_string())
-                    })
-                    .unwrap_or_else(|| "void".to_string())
-            };
-            // Extract LANGUAGE clause
-            let language = {
-                let upper = def.to_ascii_uppercase();
-                upper.find("LANGUAGE")
-                    .and_then(|pos| def[pos + 8..].split_whitespace().next().map(|s| s.trim().to_ascii_lowercase()))
-                    .unwrap_or_else(|| "sql".to_string())
-            };
-            AdminSchemaFunction {
-                name: e.object_name.clone(),
-                schema: "public".to_string(),
-                definition: def.clone(),
-                arguments,
-                return_type,
-                language,
-            }
-        })
-        .collect();
-    functions.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut triggers: Vec<AdminSchemaTrigger> = catalog
-        .active_entries()
-        .iter()
-        .filter(|e| e.object_kind == "trigger")
-        .map(|e| AdminSchemaTrigger {
-            name: e.object_name.clone(),
-            schema: "public".to_string(),
-            table: extract_trigger_table_name(&e.original_statement),
-            definition: e.original_statement.clone(),
-        })
-        .collect();
-    triggers.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut events: Vec<AdminSchemaEvent> = catalog
-        .active_entries()
-        .iter()
-        .filter(|e| e.object_kind == "event")
-        .map(|e| AdminSchemaEvent {
-            name: e.object_name.clone(),
-            schema: "public".to_string(),
-            schedule: extract_event_schedule(&e.original_statement),
-            definition: e.original_statement.clone(),
-        })
-        .collect();
-    events.sort_by(|a, b| a.name.cmp(&b.name));
-
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
 
-    let response = AdminSchemaTreeResponse {
-        databases: vec![AdminSchemaDatabase {
-            name: "default".to_string(),
-            schemas: vec![AdminSchemaSchemaEntry {
-                name: "public".to_string(),
-                database: "default".to_string(),
-                tables,
-                views,
-                functions,
-                triggers,
-                events,
-            }],
-        }],
-        timestamp: now_ms,
-    };
+    // Group active entries by (database_name, schema_name) using sorted maps for stable output.
+    use std::collections::BTreeMap;
+    let mut db_map: BTreeMap<String, BTreeMap<String, Vec<&DdlCatalogEntry>>> = BTreeMap::new();
+    for entry in catalog.active_entries() {
+        db_map
+            .entry(entry.database_name.clone())
+            .or_default()
+            .entry(entry.schema_name.clone())
+            .or_default()
+            .push(entry);
+    }
+    // Always include "default.public" and "metadata.system" even if empty.
+    db_map
+        .entry("default".to_string())
+        .or_default()
+        .entry("public".to_string())
+        .or_default();
+    db_map
+        .entry("metadata".to_string())
+        .or_default()
+        .entry("system".to_string())
+        .or_default();
 
-    Ok((StatusCode::OK, Json(response)))
+    let databases: Vec<AdminSchemaDatabase> = db_map
+        .into_iter()
+        .map(|(db_name, schema_map)| {
+            let schemas: Vec<AdminSchemaSchemaEntry> = schema_map
+                .into_iter()
+                .map(|(schema_name, entries)| {
+                    let mut tables: Vec<AdminSchemaTable> = entries
+                        .iter()
+                        .filter(|e| e.object_kind == "table")
+                        .map(|e| {
+                            let columns = match voltnuerongrid_sql::parse_one(&e.original_statement) {
+                                Ok(Statement::CreateTable(stmt)) => stmt
+                                    .columns
+                                    .iter()
+                                    .map(|c| AdminSchemaColumn {
+                                        name: c.name.clone(),
+                                        data_type: c.data_type.clone(),
+                                        nullable: true,
+                                        primary_key: false,
+                                    })
+                                    .collect(),
+                                _ => Vec::new(),
+                            };
+                            let indexes = index_mgr
+                                .list_indexes()
+                                .iter()
+                                .filter(|idx| idx.table.eq_ignore_ascii_case(&e.object_name))
+                                .map(|idx| AdminSchemaIndex {
+                                    name: idx.name.clone(),
+                                    columns: vec![idx.column.clone()],
+                                    unique: idx.unique,
+                                })
+                                .collect();
+                            AdminSchemaTable {
+                                name: e.object_name.clone(),
+                                schema: schema_name.clone(),
+                                columns,
+                                indexes,
+                            }
+                        })
+                        .collect();
+                    tables.sort_by(|a, b| a.name.cmp(&b.name));
+
+                    let mut views: Vec<AdminSchemaView> = entries
+                        .iter()
+                        .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
+                        .map(|e| AdminSchemaView {
+                            name: e.object_name.clone(),
+                            schema: schema_name.clone(),
+                            definition: e.original_statement.clone(),
+                        })
+                        .collect();
+                    views.sort_by(|a, b| a.name.cmp(&b.name));
+
+                    let mut functions: Vec<AdminSchemaFunction> = entries
+                        .iter()
+                        .filter(|e| e.object_kind == "function")
+                        .map(|e| {
+                            let def = &e.original_statement;
+                            let arguments = def
+                                .find('(')
+                                .and_then(|start| {
+                                    def[start + 1..].find(')').map(|end| {
+                                        def[start + 1..start + 1 + end].trim().to_string()
+                                    })
+                                })
+                                .unwrap_or_default();
+                            let return_type = {
+                                let upper = def.to_ascii_uppercase();
+                                upper
+                                    .find("RETURNS")
+                                    .and_then(|pos| {
+                                        def[pos + 7..].split_whitespace().next().map(|s| {
+                                            s.trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
+                                                .to_string()
+                                        })
+                                    })
+                                    .unwrap_or_else(|| "void".to_string())
+                            };
+                            let language = {
+                                let upper = def.to_ascii_uppercase();
+                                upper
+                                    .find("LANGUAGE")
+                                    .and_then(|pos| {
+                                        def[pos + 8..]
+                                            .split_whitespace()
+                                            .next()
+                                            .map(|s| s.trim().to_ascii_lowercase())
+                                    })
+                                    .unwrap_or_else(|| "sql".to_string())
+                            };
+                            AdminSchemaFunction {
+                                name: e.object_name.clone(),
+                                schema: schema_name.clone(),
+                                definition: def.clone(),
+                                arguments,
+                                return_type,
+                                language,
+                            }
+                        })
+                        .collect();
+                    functions.sort_by(|a, b| a.name.cmp(&b.name));
+
+                    let mut triggers: Vec<AdminSchemaTrigger> = entries
+                        .iter()
+                        .filter(|e| e.object_kind == "trigger")
+                        .map(|e| AdminSchemaTrigger {
+                            name: e.object_name.clone(),
+                            schema: schema_name.clone(),
+                            table: extract_trigger_table_name(&e.original_statement),
+                            definition: e.original_statement.clone(),
+                        })
+                        .collect();
+                    triggers.sort_by(|a, b| a.name.cmp(&b.name));
+
+                    let mut events: Vec<AdminSchemaEvent> = entries
+                        .iter()
+                        .filter(|e| e.object_kind == "event")
+                        .map(|e| AdminSchemaEvent {
+                            name: e.object_name.clone(),
+                            schema: schema_name.clone(),
+                            schedule: extract_event_schedule(&e.original_statement),
+                            definition: e.original_statement.clone(),
+                        })
+                        .collect();
+                    events.sort_by(|a, b| a.name.cmp(&b.name));
+
+                    AdminSchemaSchemaEntry {
+                        name: schema_name.clone(),
+                        database: db_name.clone(),
+                        tables,
+                        views,
+                        functions,
+                        triggers,
+                        events,
+                    }
+                })
+                .collect();
+            AdminSchemaDatabase {
+                name: db_name,
+                schemas,
+            }
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(AdminSchemaTreeResponse { databases, timestamp: now_ms })))
 }
 
 fn extract_trigger_table_name(ddl: &str) -> String {

@@ -1,0 +1,20 @@
+CREATE TABLE temp_data (x INT)
+CREATE VIEW order_summary AS SELECT * FROM ordersCREATE TABLE orders (id INT, amount FLOAT)
+
+CREATE TABLE orders (id INT, amount FLOAT)
+DROP TABLE temp_data
+CREATE FUNCTION compute_tax(x FLOAT) RETURNS FLOAT LANGUAGE sql AS $$ SELECT x $$
+CREATE TRIGGER orders_audit AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION audit_orders()
+CREATE EVENT refresh_cache ON SCHEDULE EVERY 1 HOUR DO CALL warm_cache()
+CREATE TABLE concurrent_table_0 (id INT PRIMARY KEY, val FLOAT)
+CREATE TABLE concurrent_table_2 (id INT PRIMARY KEY, val FLOAT)
+CREATE TABLE concurrent_table_3 (id INT PRIMARY KEY, val FLOAT)
+CREATE TABLE concurrent_table_1 (id INT PRIMARY KEY, val FLOAT)
+CREATE VIEW order_summary AS SELECT * FROM orders
+CREATE FUNCTION compute_tax(x FLOAT) RETURNS FLOAT LANGUAGE sql AS $$ SELECT x $$
+CREATE TRIGGER orders_audit AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION audit_orders()
+CREATE EVENT refresh_cache ON SCHEDULE EVERY 1 HOUR DO CALL warm_cache()
+CREATE TABLE orders (id INT, amount FLOAT)
+CREATE TABLE temp_data (x INT)
+DROP TABLE temp_data
+CREATE TABLE orders (id INT, amount FLOAT)

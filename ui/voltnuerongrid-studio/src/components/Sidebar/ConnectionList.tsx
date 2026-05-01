@@ -3,6 +3,7 @@ import { useUiStore } from "@/store/ui";
 import { useSchema } from "@/hooks/useSchema";
 import { openMenuFor } from "@/store/contextMenu";
 import { buildConnectionMenu } from "@/components/ContextMenu/menus";
+import { SchemaTree } from "./SchemaTree";
 
 export function ConnectionList() {
   const connections = useConnectionStore((s) => s.connections);
@@ -50,19 +51,25 @@ export function ConnectionList() {
           h?.state === "ok" ? "ok" : h?.state === "error" ? "error" : "none";
         const isVng = c.serverType === "voltnuerongrid";
         return (
-          <div
-            key={c.id}
-            className={`conn-item ${c.id === activeId ? "active" : ""}`}
-            onClick={() => connect(c.id)}
-            onDoubleClick={() => openConnectionPanel(c.id)}
-            onContextMenu={openMenuFor(() => buildConnectionMenu(c, refresh))}
-            title={`${c.host}:${c.port} — right-click for actions`}
-          >
-            <span className={`conn-dot ${dotClass}`} />
-            <span className="conn-item-name">{c.name}</span>
-            <span className={`conn-type-badge ${isVng ? "" : "pg"}`}>
-              {isVng ? "VNG" : c.serverType.toUpperCase().slice(0, 2)}
-            </span>
+          <div key={c.id}>
+            <div
+              className={`conn-item ${c.id === activeId ? "active" : ""}`}
+              onClick={() => connect(c.id)}
+              onDoubleClick={() => openConnectionPanel(c.id)}
+              onContextMenu={openMenuFor(() => buildConnectionMenu(c, refresh))}
+              title={`${c.host}:${c.port} — right-click for actions`}
+            >
+              <span className={`conn-dot ${dotClass}`} />
+              <span className="conn-item-name">{c.name}</span>
+              <span className={`conn-type-badge ${isVng ? "" : "pg"}`}>
+                {isVng ? "VNG" : c.serverType.toUpperCase().slice(0, 2)}
+              </span>
+            </div>
+            {c.id === activeId && (
+              <div className="conn-item-schema">
+                <SchemaTree embedded />
+              </div>
+            )}
           </div>
         );
       })}

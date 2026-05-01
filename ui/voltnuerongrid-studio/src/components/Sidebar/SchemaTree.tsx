@@ -287,7 +287,7 @@ function SchemaNode({ ns, dbName }: { ns: SchemaNamespace; dbName: string }) {
         onClick={() => setOpen((o) => !o)}
         onContextMenu={openMenuFor(() => buildSchemaMenu(dbName, ns.name))}
       >
-        <TreeIndents count={2} />
+        <TreeIndents count={3} />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
         <span className="tree-icon">📁</span>
         <span className="tree-label">{ns.name}</span>
@@ -378,11 +378,14 @@ function DatabaseNode({ db }: { db: SchemaDatabase }) {
   );
 }
 
-export function SchemaTree() {
+export function SchemaTree({ embedded = false }: { embedded?: boolean }) {
+  const activeId = useConnectionStore((s) => s.activeId);
   const schema = useConnectionStore((s) => s.schema);
-  const databases = schema?.databases ?? [];
+  const getDatabases = useConnectionStore((s) => s.getDatabases);
+  const databases = getDatabases();
 
-  if (!schema) {
+  if (!activeId) {
+    if (embedded) return null;
     return (
       <div style={{ padding: "16px 12px", color: "var(--text-3)", fontSize: 12 }}>
         Connect to a server to browse schema.
@@ -390,16 +393,24 @@ export function SchemaTree() {
     );
   }
 
+  if (!schema) {
+    return (
+      <div className={embedded ? "embedded-schema-empty" : undefined} style={{ padding: "16px 12px", color: "var(--text-3)", fontSize: 12 }}>
+        {embedded ? "Loading catalog..." : "Connect to a server to browse schema."}
+      </div>
+    );
+  }
+
   if (databases.length === 0) {
     return (
-      <div style={{ padding: "16px 12px", color: "var(--text-3)", fontSize: 12 }}>
-        No databases found.
+      <div className={embedded ? "embedded-schema-empty" : undefined} style={{ padding: "16px 12px", color: "var(--text-3)", fontSize: 12 }}>
+        {embedded ? "No databases found for this connection." : "No databases found."}
       </div>
     );
   }
 
   return (
-    <div>
+    <div className={embedded ? "embedded-schema-tree" : undefined}>
       <SectionNode icon="🗄" label="Databases" count={databases.length} indentLevel={0}>
         {databases.map((db) => (
           <DatabaseNode key={db.name} db={db} />

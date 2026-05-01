@@ -1,6 +1,5 @@
 import { useUiStore } from "@/store/ui";
 import { ConnectionList } from "./ConnectionList";
-import { SchemaTree } from "./SchemaTree";
 import { UsersPanel } from "./UsersPanel";
 
 export function Sidebar() {
@@ -44,7 +43,6 @@ export function Sidebar() {
         {sidebarTab === "connections" && (
           <>
             <ConnectionList />
-            <SchemaTree />
           </>
         )}
         {sidebarTab === "users" && <UsersPanel />}

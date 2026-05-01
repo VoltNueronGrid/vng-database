@@ -1,0 +1,35 @@
+INSERT INTO orders (id, amount) VALUES ('order:A', 100);
+INSERT INTO items (id, name) VALUES ('item:1', 'alpha');
+INSERT INTO users (id, name) VALUES ('user:conflict', 'alice');INSERT INTO orders (id, total) VALUES ('ord:1', 99);
+
+INSERT INTO items (id, name) VALUES ('item:2', 'beta');
+INSERT INTO orders (id, amount) VALUES ('order:B', 200);
+INSERT INTO cdc_test (id, val) VALUES ('cdc:1', 'alpha');
+INSERT INTO cdc_test (id, val) VALUES ('cdc:2', 'beta');
+INSERT INTO items (id, name) VALUES ('item:1', 'alpha');
+INSERT INTO orders (id, total) VALUES ('ord:1', 99);
+INSERT INTO items (id, name) VALUES ('item:2', 'beta');
+INSERT INTO orders (id, amount) VALUES ('order:A', 100);INSERT INTO users (id, name) VALUES ('user:conflict', 'alice');
+
+INSERT INTO products (id, category) VALUES ('p:1', 'electronics');
+INSERT INTO orders (id, amount) VALUES ('order:B', 200);
+INSERT INTO products (id, category) VALUES ('p:2', 'books');
+INSERT INTO metrics (id, value) VALUES ('m:1', 10);
+INSERT INTO events VALUES ('evt-sync-1', 'login');
+INSERT INTO metrics (id, value) VALUES ('m:2', 20);
+INSERT INTO products (id, category) VALUES ('p:3', 'electronics');
+INSERT INTO metrics VALUES ('m-htap-1', 'cpu', 80);
+INSERT INTO tbl_0 VALUES (0, 'data');
+INSERT INTO tbl_1 VALUES (1, 'data');
+INSERT INTO tbl_2 VALUES (2, 'data');
+INSERT INTO tbl_3 VALUES (3, 'data');
+INSERT INTO orders VALUES (1, 'pending');
+INSERT INTO orders VALUES (1, 'ok');INSERT INTO events VALUES (1, 'start');
+
+DELETE FROM events WHERE id = 1
+UPDATE orders SET status = 'shipped' WHERE id = 1
+INSERT INTO accounts VALUES (1, 'alice', 500.0);
+INSERT INTO orders VALUES (1);
+UPDATE orders SET status='done' WHERE id=1
+INSERT INTO orders (id, amount) VALUES (99, 500);
+UPDATE orders SET amount = 1500 WHERE id = 1

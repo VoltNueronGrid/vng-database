@@ -279,6 +279,11 @@ html, body, #root {
   flex: 1; font-size: 12.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.conn-item-schema {
+  margin: 2px 0 10px 18px;
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+}
 .conn-type-badge {
   font-size: 9px; font-weight: 700; letter-spacing: .05em;
   padding: 1px 5px; border-radius: 99px;
@@ -320,6 +325,12 @@ html, body, #root {
   font-size: 9px; padding: 0 4px; border-radius: 99px;
   background: var(--bg-4); color: var(--text-3);
   margin-right: 8px; flex-shrink: 0;
+}
+.embedded-schema-tree {
+  padding-right: 8px;
+}
+.embedded-schema-empty {
+  padding-left: 8px;
 }
 
 .col-chip {
