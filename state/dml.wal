@@ -1,0 +1,15 @@
+INSERT INTO oltp.customers (customer_id, first_name, last_name, email, phone, date_of_birth) VALUES (1, 'John', 'Doe', 'john.doe@email.com', '+1-555-0101', '1985-03-15');
+INSERT INTO oltp.customers (customer_id, first_name, last_name, email, phone, date_of_birth) VALUES (2, 'Jane', 'Smith', 'jane.smith@email.com', '+1-555-0102', '1990-07-22');
+INSERT INTO oltp.customers (customer_id, first_name, last_name, email, phone, date_of_birth) VALUES (3, 'Bob', 'Johnson', 'bob.johnson@email.com', '+1-555-0103', '1982-11-30');
+INSERT INTO oltp.customers (customer_id, first_name, last_name, email, phone, date_of_birth) VALUES (4, 'Alice', 'Brown', 'alice.brown@email.com', '+1-555-0104', '1995-05-14');
+INSERT INTO oltp.customers (customer_id, first_name, last_name, email, phone, date_of_birth) VALUES (5, 'Charlie', 'Wilson', 'charlie.wilson@email.com', '+1-555-0105', '1988-09-08');
+INSERT INTO oltp.products (product_id, name, description, category, price, cost, sku, stock_quantity) VALUES (1, 'Laptop Pro', 'High-performance business laptop', 'Electronics', 1299.99, 800.00, 'ELEC-LP-001', 50);
+INSERT INTO oltp.products (product_id, name, description, category, price, cost, sku, stock_quantity) VALUES (2, 'Wireless Mouse', 'Ergonomic wireless mouse', 'Electronics', 49.99, 20.00, 'ELEC-WM-002', 200);
+INSERT INTO oltp.products (product_id, name, description, category, price, cost, sku, stock_quantity) VALUES (3, 'Office Chair', 'Executive office chair', 'Furniture', 299.99, 150.00, 'FURN-OC-003', 30);
+INSERT INTO oltp.products (product_id, name, description, category, price, cost, sku, stock_quantity) VALUES (4, 'Desk Lamp', 'LED desk lamp with adjustable brightness', 'Home', 39.99, 15.00, 'HOME-DL-004', 100);
+INSERT INTO oltp.products (product_id, name, description, category, price, cost, sku, stock_quantity) VALUES (5, 'Notebook Set', 'Premium notebook and pen set', 'Office Supplies', 24.99, 8.00, 'OFF-NS-005', 500);
+INSERT INTO oltp.employees (employee_id, first_name, last_name, email, department, position, hire_date, salary) VALUES (1, 'Sarah', 'Miller', 'sarah.miller@company.com', 'Sales', 'Sales Manager', '2020-01-15', 75000.00);
+INSERT INTO oltp.employees (employee_id, first_name, last_name, email, department, position, hire_date, salary) VALUES (2, 'Mike', 'Chen', 'mike.chen@company.com', 'Sales', 'Sales Representative', '2021-03-20', 55000.00);
+INSERT INTO oltp.employees (employee_id, first_name, last_name, email, department, position, hire_date, salary) VALUES (3, 'Lisa', 'Rodriguez', 'lisa.rodriguez@company.com', 'IT', 'System Administrator', '2019-06-10', 85000.00);
+INSERT INTO oltp.employees (employee_id, first_name, last_name, email, department, position, hire_date, salary) VALUES (4, 'David', 'Kim', 'david.kim@company.com', 'HR', 'HR Manager', '2018-02-15', 70000.00);
+INSERT INTO oltp.employees (employee_id, first_name, last_name, email, department, position, hire_date, salary) VALUES (5, 'Emily', 'Wang', 'emily.wang@company.com', 'Marketing', 'Marketing Specialist', '2022-01-08', 60000.00);
