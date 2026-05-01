@@ -1,0 +1,880 @@
+<!-- SECTION 11: REST API REFERENCE -->
+<div class="section" id="api-reference">
+    <h2>11. REST API Reference (70+ Endpoints)</h2>
+
+    <h3>Base URL</h3>
+    <div class="code-block">http://localhost:8080/api/v1</div>
+
+    <h3>11.1 SQL Endpoints</h3>
+
+    <div class="endpoint method-post">
+        POST /sql/transaction
+    </div>
+    <p><strong>Transaction lifecycle control:</strong> Begin, commit, rollback, savepoint.</p>
+    <div class="code-block">{
+  "transaction_id": "tx-123",
+  "action": "begin",
+  "isolation_level": "read_committed"
+}</div>
+
+    <div class="endpoint method-post">
+        POST /sql/pessimistic-lock/acquire
+    </div>
+    <p><strong>Acquire row lock:</strong> Shared, update, exclusive modes.</p>
+    <div class="code-block">{
+  "transaction_id": "tx-123",
+  "key": "users:456",
+  "lock_mode": "exclusive",
+  "timeout_ms": 5000
+}</div>
+
+    <div class="endpoint method-post">
+        POST /sql/pessimistic-lock/release
+    </div>
+    <p><strong>Release held locks.</strong></p>
+
+    <div class="endpoint method-get">
+        GET /sql/pessimistic-lock/metrics
+    </div>
+    <p><strong>View lock contention metrics:</strong> Wait times, conflict counts, timeouts.</p>
+
+    <div class="endpoint method-post">
+        POST /sql/analyze
+    </div>
+    <p><strong>Analyze SQL statement:</strong> Parse, classify, validate.</p>
+    <div class="code-block">{
+  "sql": "SELECT id, name FROM users WHERE status='active'"
+}</div>
+
+    <div class="endpoint method-post">
+        POST /sql/route
+    </div>
+    <p><strong>Route query to OLTP or OLAP:</strong> Get intelligent workload classification.</p>
+    <div class="code-block">{
+  "sql": "SELECT region, SUM(amount) FROM orders GROUP BY region"
+}
+
+Response:
+{
+  "path": "olap",
+  "reason": "analytical pattern detected",
+  "estimated_rows": 25000,
+  "estimated_cost": 15.2
+}</div>
+
+    <div class="endpoint method-post">
+        POST /sql/execute
+    </div>
+    <p><strong>Execute prepared statement:</strong> DML/DDL with transaction context.</p>
+    <div class="code-block">{
+  "sql": "INSERT INTO users(id, name) VALUES($1, $2)",
+  "params": [1, "Alice"],
+  "transaction_id": "tx-123"
+}</div>
+
+    <h3>11.2 Admin Endpoints</h3>
+
+    <div class="endpoint method-get">
+        GET /admin/cluster/topology
+    </div>
+    <p><strong>Cluster topology:</strong> Nodes, roles, active/passive counts.</p>
+
+    <div class="endpoint method-get">
+        GET /admin/schema/tree
+    </div>
+    <p><strong>Schema browser:</strong> Hierarchical schema, table, column listing.</p>
+
+    <div class="endpoint method-post">
+        POST /admin/sql/transactions/control
+    </div>
+    <p><strong>Manage transactions:</strong> List, commit, rollback, kill.</p>
+    <div class="code-block">{
+  "action": "rollback",
+  "transaction_id": "tx-deadlock-victim",
+  "reason": "manual_resolution"
+}</div>
+
+    <div class="endpoint method-post">
+        POST /admin/sql/locks/control
+    </div>
+    <p><strong>Manage locks:</strong> List, kill, deadlock victim selection.</p>
+
+    <div class="endpoint method-post">
+        POST /admin/cluster/nodes/manage
+    </div>
+    <p><strong>Add or remove cluster nodes:</strong> Dynamic scaling.</p>
+    <div class="code-block">{
+  "action": "add",
+  "node_id": "node-4",
+  "role": "follower",
+  "total_cpu_cores": 8
+}</div>
+
+    <h3>11.3 Audit Endpoints</h3>
+
+    <div class="endpoint method-get">
+        GET /audit/events
+    </div>
+    <p><strong>Query audit log:</strong> Filter by date, user, action type.</p>
+
+    <div class="endpoint method-get">
+        GET /audit/chain/verify
+    </div>
+    <p><strong>Verify audit chain integrity:</strong> Cryptographic proof.</p>
+
+    <h3>11.4 Health & SRE Endpoints</h3>
+
+    <div class="endpoint method-get">
+        GET /health
+    </div>
+    <p><strong>Health status (no auth required):</strong> Liveness check.</p>
+
+    <div class="endpoint method-get">
+        GET /sre/reliability/status
+    </div>
+    <p><strong>SRE dashboard:</strong> Service reliability, uptime, error rates.</p>
+
+    <div class="endpoint method-post">
+        POST /sre/rate-limit/check
+    </div>
+    <p><strong>Rate limit enforcement:</strong> Check if request allowed.</p>
+
+    <div class="endpoint method-get">
+        GET /sre/failure/budget/alerts
+    </div>
+    <p><strong>Error budget tracking:</strong> SLO monitoring.</p>
+
+    <h3>11.5 Cluster (Raft) Endpoints</h3>
+
+    <div class="endpoint method-get">
+        GET /cluster/raft/status
+    </div>
+    <p><strong>Raft consensus status:</strong> Current term, leader, log entries.</p>
+
+    <div class="endpoint method-post">
+        POST /cluster/raft/vote
+    </div>
+    <p><strong>Vote request:</strong> Election protocol.</p>
+
+    <div class="endpoint method-post">
+        POST /cluster/raft/append
+    </div>
+    <p><strong>Append entries:</strong> Replication.</p>
+
+    <h3>11.6 Storage Endpoints</h3>
+
+    <div class="endpoint method-post">
+        POST /store/htap/apply
+    </div>
+    <p><strong>Apply mutations:</strong> Row-to-columnar sync.</p>
+
+    <div class="endpoint method-get">
+        GET /store/htap/olap/scan
+    </div>
+    <p><strong>OLAP columnar scan:</strong> Vectorized reads.</p>
+
+    <div class="endpoint method-get">
+        GET /store/htap/lag
+    </div>
+    <p><strong>HTAP replication lag:</strong> Milliseconds behind row store.</p>
+
+    <h3>11.7 Ingest Endpoints</h3>
+
+    <div class="endpoint method-get">
+        GET /ingest/schema/registry
+    </div>
+    <p><strong>Schema registry:</strong> All registered schemas and versions.</p>
+
+    <div class="endpoint method-post">
+        POST /ingest/batch
+    </div>
+    <p><strong>Batch ingest:</strong> CSV/Parquet/JSON upload.</p>
+
+    <h3>11.8 MCP Endpoint</h3>
+
+    <div class="endpoint method-post">
+        POST /mcp/query
+    </div>
+    <p><strong>MCP tool router:</strong> JSON-RPC 2.0 requests.</p>
+    <div class="code-block">{
+  "jsonrpc": "2.0",
+  "id": "req-001",
+  "method": "tools/query",
+  "params": {"sql_query": "SELECT 1"},
+  "headers": {"x_vng_operator_id": "operator-1"}
+}</div>
+
+    <h3>11.9 HTTP Response Codes</h3>
+    <table class="config-table">
+        <tr><th>Code</th><th>Meaning</th></tr>
+        <tr><td>200 OK</td><td>Success</td></tr>
+        <tr><td>201 Created</td><td>Resource created</td></tr>
+        <tr><td>204 No Content</td><td>Success, no response body</td></tr>
+        <tr><td>400 Bad Request</td><td>Invalid input parameters</td></tr>
+        <tr><td>401 Unauthorized</td><td>Missing or invalid credentials</td></tr>
+        <tr><td>403 Forbidden</td><td>Insufficient privilege</td></tr>
+        <tr><td>404 Not Found</td><td>Resource not found</td></tr>
+        <tr><td>409 Conflict</td><td>Data conflict (deadlock, constraint violation)</td></tr>
+        <tr><td>429 Too Many Requests</td><td>Rate limit exceeded</td></tr>
+        <tr><td>500 Internal Server Error</td><td>Server error</td></tr>
+        <tr><td>503 Service Unavailable</td><td>Server starting or overloaded</td></tr>
+    </table>
+</div>
+
+<!-- SECTION 12: CONFIGURATION REFERENCE -->
+<div class="section" id="environment-vars">
+    <h2>12. Configuration Reference</h2>
+
+    <h3>12.1 Environment Variables</h3>
+    <p>Set via <span class="code-inline">.env</span> file or export before running.</p>
+
+    <h4>HTTP Listener</h4>
+    <table class="config-table">
+        <tr><td>VNG_HTTP_PORT</td><td>8080</td><td>HTTP listening port</td></tr>
+        <tr><td>VNG_HTTP_BIND</td><td>0.0.0.0</td><td>Bind address (0.0.0.0 = all interfaces)</td></tr>
+        <tr><td>VNG_HTTP_TLS_CERT</td><td>—</td><td>Path to TLS certificate for HTTPS</td></tr>
+        <tr><td>VNG_HTTP_TLS_KEY</td><td>—</td><td>Path to TLS private key</td></tr>
+        <tr><td>VNG_HTTP_MAX_CONNECTIONS</td><td>1024</td><td>Max concurrent HTTP connections</td></tr>
+        <tr><td>VNG_HTTP_MAX_BODY_BYTES</td><td>104857600</td><td>Max request body size (100 MB default)</td></tr>
+    </table>
+
+    <h4>Native Listener (vng:// Protocol)</h4>
+    <table class="config-table">
+        <tr><td>VNG_NATIVE_ENABLED</td><td>false</td><td>Enable native TCP listener</td></tr>
+        <tr><td>VNG_NATIVE_PORT</td><td>9090</td><td>Native listener port</td></tr>
+        <tr><td>VNG_NATIVE_BIND</td><td>0.0.0.0</td><td>Bind address</td></tr>
+        <tr><td>VNG_NATIVE_TLS_CERT</td><td>—</td><td>TLS certificate path</td></tr>
+        <tr><td>VNG_NATIVE_TLS_KEY</td><td>—</td><td>TLS private key path</td></tr>
+        <tr><td>VNG_NATIVE_MTLS_CA</td><td>—</td><td>CA cert for client certificate validation</td></tr>
+        <tr><td>VNG_NATIVE_BEARER_TOKEN</td><td>—</td><td>Bearer token for authentication</td></tr>
+    </table>
+
+    <h4>Authentication</h4>
+    <table class="config-table">
+        <tr><td>VNG_ADMIN_API_KEY</td><td>—</td><td><strong>[REQUIRED Production]</strong> Admin API key (32+ chars, strong random)</td></tr>
+        <tr><td>VNG_OPERATOR_API_KEY</td><td>—</td><td>Operator-level API key</td></tr>
+        <tr><td>VNG_MCP_DDL_KEY</td><td>—</td><td>Additional key for DDL operations via MCP</td></tr>
+        <tr><td>VNG_MCP_TRANSFER_KEY</td><td>—</td><td>Additional key for data transfer via MCP</td></tr>
+    </table>
+
+    <h4>Storage</h4>
+    <table class="config-table">
+        <tr><td>VNG_DATA_DIR</td><td>./data</td><td>Root directory for data files (separate from binary)</td></tr>
+        <tr><td>VNG_WAL_MAX_MB</td><td>512</td><td>Max WAL file size before rotation</td></tr>
+        <tr><td>VNG_CHECKPOINT_INTERVAL_SECS</td><td>3600</td><td>Checkpoint frequency (1 hour default)</td></tr>
+    </table>
+
+    <h4>Logging</h4>
+    <table class="config-table">
+        <tr><td>VNG_LOG_LEVEL</td><td>info</td><td>error|warn|info|debug|trace</td></tr>
+        <tr><td>VNG_LOG_FORMAT</td><td>text</td><td>text|json (use json for production)</td></tr>
+        <tr><td>VNG_LOG_FILE</td><td>—</td><td>Optional file path for log output</td></tr>
+    </table>
+
+    <h4>Runtime Tuning</h4>
+    <table class="config-table">
+        <tr><td>VNG_WORKER_THREADS</td><td>CPU count</td><td>Async runtime worker threads</td></tr>
+        <tr><td>VNG_QUERY_TIMEOUT_MS</td><td>30000</td><td>Default query timeout (30s)</td></tr>
+        <tr><td>VNG_LOCK_TIMEOUT_MS</td><td>5000</td><td>Default lock acquisition timeout</td></tr>
+        <tr><td>VNG_CONNECTION_POOL_SIZE</td><td>50</td><td>Internal connection pool size</td></tr>
+    </table>
+
+    <h4>Multi-Node / HA</h4>
+    <table class="config-table">
+        <tr><td>VNG_NODE_ID</td><td>node-0</td><td>Unique node identifier</td></tr>
+        <tr><td>VNG_CLUSTER_MODE</td><td>single</td><td>single|multi</td></tr>
+        <tr><td>VNG_RAFT_PEERS</td><td>—</td><td>Comma-separated peer addresses (multi-node only)</td></tr>
+        <tr><td>VNG_GOSSIP_PORT</td><td>7000</td><td>Gossip protocol port</td></tr>
+        <tr><td>VNG_REPLICATION_FACTOR</td><td>3</td><td>Data replication count</td></tr>
+    </table>
+
+    <h4>KMS (Key Management Service)</h4>
+    <table class="config-table">
+        <tr><td>VNG_KMS_PROVIDER</td><td>—</td><td>aws|azure|gcp|oci</td></tr>
+        <tr><td>VNG_KMS_KEY_ID</td><td>—</td><td>KMS key identifier</td></tr>
+        <tr><td>VNG_KMS_REGION</td><td>—</td><td>Cloud region (AWS/GCP)</td></tr>
+        <tr><td>VNG_AWS_KMS_KEY_ARN</td><td>—</td><td>AWS KMS key ARN</td></tr>
+        <tr><td>VNG_AZURE_KEYVAULT_URL</td><td>—</td><td>Azure Key Vault URL</td></tr>
+    </table>
+
+    <h3 id="yaml-config">12.2 YAML Configuration File</h3>
+    <p>Set via <span class="code-inline">VNG_CONFIG_FILE</span> environment variable.</p>
+
+    <div class="code-block">cluster:
+  mode: single|multi
+  replication_factor: 3
+
+network:
+  http_bind: "0.0.0.0:8080"
+  sql_bind: "0.0.0.0:5432"
+  gossip_bind: "0.0.0.0:7000"
+
+storage:
+  data_dir: "/var/lib/voltnuerongrid"
+  wal:
+    max_mb: 512
+    checkpoint_interval_secs: 3600
+
+htap:
+  sync_mode: "near_realtime"  # or on_demand
+  column_compression: true
+
+authentication:
+  three_tier_enabled: true
+  require_tls: false
+
+autonomous:
+  mode: "advisory"  # or supervised, fully_autonomous
+
+cache:
+  enabled: true
+  ttl_seconds: 300
+  max_entries: 10000
+
+monitoring:
+  metrics_enabled: true
+  audit_enabled: true</div>
+
+    <h3>12.3 Example .env for Development</h3>
+    <div class="code-block">VNG_HTTP_PORT=8080
+VNG_HTTP_BIND=127.0.0.1
+VNG_NATIVE_ENABLED=true
+VNG_NATIVE_PORT=9090
+VNG_ADMIN_API_KEY=dev-admin-key-changeme
+VNG_DATA_DIR=./data
+VNG_LOG_LEVEL=debug
+VNG_LOG_FORMAT=text
+VNG_CLUSTER_MODE=single
+VNG_NODE_ID=node-1</div>
+
+    <h3>12.4 Example .env for Production</h3>
+    <div class="code-block">VNG_HTTP_PORT=8080
+VNG_HTTP_BIND=0.0.0.0
+VNG_HTTP_TLS_CERT=/etc/voltnuerongrid/certs/server.crt
+VNG_HTTP_TLS_KEY=/etc/voltnuerongrid/certs/server.key
+
+VNG_NATIVE_ENABLED=true
+VNG_NATIVE_PORT=9090
+VNG_NATIVE_TLS_CERT=/etc/voltnuerongrid/certs/native.crt
+VNG_NATIVE_TLS_KEY=/etc/voltnuerongrid/certs/native.key
+VNG_NATIVE_MTLS_CA=/etc/voltnuerongrid/certs/ca.crt
+VNG_NATIVE_BEARER_TOKEN=$(openssl rand -hex 32)
+
+VNG_ADMIN_API_KEY=$(openssl rand -hex 32)
+VNG_OPERATOR_API_KEY=$(openssl rand -hex 32)
+VNG_MCP_DDL_KEY=$(openssl rand -hex 32)
+VNG_MCP_TRANSFER_KEY=$(openssl rand -hex 32)
+
+VNG_DATA_DIR=/var/lib/voltnuerongrid
+VNG_LOG_LEVEL=info
+VNG_LOG_FORMAT=json
+VNG_LOG_FILE=/var/log/voltnuerongrid/app.log
+
+VNG_CLUSTER_MODE=multi
+VNG_NODE_ID=node-1
+VNG_RAFT_PEERS=10.0.1.10:7000,10.0.1.11:7000,10.0.1.12:7000
+VNG_REPLICATION_FACTOR=3
+
+VNG_KMS_PROVIDER=aws
+VNG_AWS_KMS_KEY_ARN=arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012
+VNG_WORKER_THREADS=16
+VNG_HTTP_MAX_CONNECTIONS=2048</div>
+</div>
+
+<!-- SECTION 13: SECURITY & COMPLIANCE -->
+<div class="section" id="security">
+    <h2>13. Security & Compliance</h2>
+
+    <h3>13.1 Three-Tier Authentication</h3>
+    <div class="diagram">
+        <div class="diagram-title">Authentication Hierarchy</div>
+        <svg width="100%" height="180" viewBox="0 0 600 180" xmlns="http://www.w3.org/2000/svg">
+            <rect x="50" y="20" width="500" height="50" fill="#ef4444" rx="5"/>
+            <text x="300" y="52" text-anchor="middle" fill="white" font-weight="bold">TIER 1: Admin (VNG_ADMIN_API_KEY)</text>
+            <text x="300" y="65" text-anchor="middle" fill="white" font-size="12">Full control, dangerous ops, server mgmt</text>
+
+            <line x1="300" y1="70" x2="300" y2="90" stroke="#666" stroke-width="2"/>
+
+            <rect x="50" y="90" width="500" height="50" fill="#f59e0b" rx="5"/>
+            <text x="300" y="122" text-anchor="middle" fill="white" font-weight="bold">TIER 2: Operator (x-vng-operator-id)</text>
+            <text x="300" y="135" text-anchor="middle" fill="white" font-size="12">Read queries, schema inspection, health</text>
+
+            <line x1="300" y1="140" x2="300" y2="160" stroke="#666" stroke-width="2"/>
+
+            <rect x="50" y="160" width="500" height="50" fill="#10b981" rx="5"/>
+            <text x="300" y="192" text-anchor="middle" fill="white" font-weight="bold">TIER 3: Tenant (x-vng-tenant-id + x-vng-user-id)</text>
+            <text x="300" y="205" text-anchor="middle" fill="white" font-size="12">Data isolation, user-scoped operations</text>
+        </svg>
+    </div>
+
+    <h3>13.2 HTTP Header Authentication</h3>
+    <table class="config-table">
+        <tr><th>Header</th><th>Tier</th><th>Value</th></tr>
+        <tr><td>x-vng-admin-key</td><td>Admin</td><td>API key (32+ chars)</td></tr>
+        <tr><td>x-vng-operator-id</td><td>Operator</td><td>Operator identifier (string)</td></tr>
+        <tr><td>x-vng-tenant-id</td><td>Tenant</td><td>Tenant identifier (string)</td></tr>
+        <tr><td>x-vng-user-id</td><td>Tenant</td><td>User identifier within tenant</td></tr>
+    </table>
+
+    <h3>13.3 RBAC (Role-Based Access Control)</h3>
+    <div class="content-list">
+        <ul>
+            <li><strong>Privilege Actions:</strong> Read, Write, Admin, Execute, Transfer</li>
+            <li><strong>Scope Levels:</strong> Table, Schema, Database, Function</li>
+            <li><strong>Enforcement:</strong> Pre-execution check on every SQL statement</li>
+            <li><strong>Audit:</strong> All access attempts logged to audit trail</li>
+            <li><strong>Never Bypass:</strong> No skip_auth flags, no hardcoded exceptions</li>
+        </ul>
+    </div>
+
+    <h3>13.4 Encryption</h3>
+
+    <h4>In Transit</h4>
+    <div class="content-list">
+        <ul>
+            <li>HTTP Listener: HTTPS with TLS 1.3 (via VNG_HTTP_TLS_CERT/KEY)</li>
+            <li>Native Listener: TLS 1.3 + mTLS (VNG_NATIVE_TLS_CERT/KEY + VNG_NATIVE_MTLS_CA)</li>
+            <li>Node-to-Node: Mutual TLS for Raft and gossip</li>
+            <li>Certificates: Must be signed by trusted CA in production</li>
+        </ul>
+    </div>
+
+    <h4>At Rest</h4>
+    <div class="content-list">
+        <ul>
+            <li>Write-Ahead Log: Transparent encryption via KMS key envelope</li>
+            <li>Data Files: Optional TDE (Transparent Data Encryption)</li>
+            <li>Key Rotation: Online, no service interruption</li>
+            <li>Backup Encryption: Automatic when storing to cloud</li>
+        </ul>
+    </div>
+
+    <h3>13.5 Key Management Service (KMS) Integration</h3>
+    <p>Supported providers: AWS KMS, Azure Key Vault, GCP Cloud KMS, OCI Vault</p>
+    <table class="config-table">
+        <tr><td>AWS KMS</td><td>VNG_KMS_PROVIDER=aws, VNG_AWS_KMS_KEY_ARN=...</td></tr>
+        <tr><td>Azure</td><td>VNG_KMS_PROVIDER=azure, VNG_AZURE_KEYVAULT_URL=...</td></tr>
+        <tr><td>GCP</td><td>VNG_KMS_PROVIDER=gcp, VNG_KMS_KEY_ID=..., VNG_KMS_REGION=...</td></tr>
+        <tr><td>OCI</td><td>VNG_KMS_PROVIDER=oci, VNG_OCI_VAULT_ID=...</td></tr>
+    </table>
+
+    <h3>13.6 Audit Trail</h3>
+    <div class="content-list">
+        <ul>
+            <li><strong>Immutable:</strong> Append-only log, tamper-evident hashing</li>
+            <li><strong>Events:</strong> DDL, DML, AUTH, ADMIN, QUERY</li>
+            <li><strong>Metadata:</strong> Timestamp, user, tenant, session ID, correlation ID, action, status</li>
+            <li><strong>Retention:</strong> Configurable purge policy</li>
+            <li><strong>Export:</strong> JSON format for SIEM/data lake integration</li>
+            <li><strong>Verification:</strong> Cryptographic chain verification</li>
+        </ul>
+    </div>
+
+    <h3>13.7 Security Best Practices</h3>
+    <div class="warning">
+        <strong>Production Security Checklist:</strong><br/>
+        ✅ Set VNG_ADMIN_API_KEY to 32+ character random value<br/>
+        ✅ Generate separate keys for KMS, MCP, operator roles<br/>
+        ✅ Use HTTPS/TLS for all external APIs<br/>
+        ✅ Enable mTLS for node-to-node communication<br/>
+        ✅ Rotate API keys quarterly<br/>
+        ✅ Enable audit logging to external SIEM<br/>
+        ✅ Restrict network access via security groups/firewall<br/>
+        ✅ Never log API keys or sensitive headers<br/>
+        ✅ Use environment variables (never commit secrets)<br/>
+        ✅ Regularly update Rust toolchain and dependencies<br/>
+    </div>
+
+    <h3>13.8 Compliance Features</h3>
+    <div class="content-list">
+        <ul>
+            <li><strong>GDPR:</strong> Data purge endpoint, audit trail, user consent logging</li>
+            <li><strong>HIPAA:</strong> Encryption at rest/transit, audit logging, access controls</li>
+            <li><strong>SOC 2:</strong> Monitoring, alerting, incident response workflows</li>
+            <li><strong>PCI DSS:</strong> Encryption, TLS, no plaintext secrets</li>
+            <li><strong>CCPA:</strong> Data portability, deletion requests, privacy controls</li>
+        </ul>
+    </div>
+</div>
+
+<!-- SECTION 14: PERFORMANCE TUNING -->
+<div class="section" id="performance-tuning">
+    <h2>14. Performance Tuning</h2>
+
+    <h3>14.1 Connection Pooling</h3>
+    <table class="config-table">
+        <tr><td>VNG_CONNECTION_POOL_SIZE</td><td>50</td><td>Connections to maintain in pool</td></tr>
+        <tr><td>VNG_CONNECTION_TIMEOUT_MS</td><td>5000</td><td>Timeout waiting for pool slot</td></tr>
+        <tr><td>VNG_CONNECTION_MAX_AGE_SECS</td><td>3600</td><td>Max connection age before recycling</td></tr>
+    </table>
+
+    <h3>14.2 Query Execution</h3>
+    <table class="config-table">
+        <tr><td>VNG_QUERY_TIMEOUT_MS</td><td>30000</td><td>Default query timeout (30s)</td></tr>
+        <tr><td>VNG_QUERY_MEMORY_LIMIT_MB</td><td>1024</td><td>Max memory per query (1 GB)</td></tr>
+        <tr><td>VNG_PARALLEL_WORKERS</td><td>CPU count</td><td>Parallel execution threads</td></tr>
+        <tr><td>VNG_BATCH_SIZE</td><td>10000</td><td>Rows per batch in streaming results</td></tr>
+    </table>
+
+    <h3>14.3 Locking & Concurrency</h3>
+    <table class="config-table">
+        <tr><td>VNG_LOCK_TIMEOUT_MS</td><td>5000</td><td>Lock acquisition timeout</td></tr>
+        <tr><td>VNG_DEADLOCK_CHECK_INTERVAL_MS</td><td>100</td><td>Deadlock detection frequency</td></tr>
+        <tr><td>VNG_LOCK_ESCALATION_THRESHOLD</td><td>1000</td><td>Rows before escalating to page lock</td></tr>
+    </table>
+
+    <h3>14.4 Caching</h3>
+    <table class="config-table">
+        <tr><td>VNG_CACHE_ENABLED</td><td>true</td><td>Enable result caching</td></tr>
+        <tr><td>VNG_CACHE_TTL_SECS</td><td>300</td><td>Cache entry time-to-live</td></tr>
+        <tr><td>VNG_CACHE_MAX_ENTRIES</td><td>10000</td><td>Maximum cached results</td></tr>
+        <tr><td>VNG_SCHEMA_CACHE_TTL_SECS</td><td>3600</td><td>Schema metadata cache TTL</td></tr>
+    </table>
+
+    <h3>14.5 I/O Optimization</h3>
+    <div class="content-list">
+        <ul>
+            <li><strong>WAL Batch Writes:</strong> Reduce fsync frequency by batching commits</li>
+            <li><strong>Checkpoint Interval:</strong> Balance recovery time vs. I/O load</li>
+            <li><strong>Data Directory:</strong> Place on fast SSD for best performance</li>
+            <li><strong>Separate Disks:</strong> WAL and data on different drives if possible</li>
+            <li><strong>TRIM/Discard:</strong> Enable for SSD wear leveling</li>
+        </ul>
+    </div>
+
+    <h3>14.6 HTAP-Specific Tuning</h3>
+    <table class="config-table">
+        <tr><td>htap.sync_mode</td><td>near_realtime</td><td>Sync frequency: near_realtime | on_demand | batch</td></tr>
+        <tr><td>htap.columnar_compression</td><td>true</td><td>Compress columnar data (ZSTD)</td></tr>
+        <tr><td>htap.vectorization_width</td><td>CPU dependent</td><td>SIMD vector batch size</td></tr>
+    </table>
+
+    <h3>14.7 Monitoring Performance</h3>
+    <div class="code-block">#!/bin/bash
+# Check lock contention
+curl http://localhost:8080/api/v1/sql/pessimistic-lock/metrics \
+  -H "x-vng-admin-key: admin-key" | jq .
+
+# View HTAP sync lag
+curl http://localhost:8080/api/v1/store/htap/lag \
+  -H "x-vng-operator-id: operator-1"
+
+# Query execution metrics
+curl http://localhost:8080/api/v1/sre/reliability/status \
+  -H "x-vng-operator-id: operator-1" | jq .
+
+# Cache hit rates
+curl http://localhost:8080/api/v1/admin/cache/stats \
+  -H "x-vng-admin-key: admin-key"</div>
+
+    <h3>14.8 Bottleneck Identification</h3>
+    <div class="content-list">
+        <ul>
+            <li><strong>High CPU:</strong> Check query complexity, parallel worker count, schema stats</li>
+            <li><strong>High Memory:</strong> Check query_memory_limit, connection pool size, cache size</li>
+            <li><strong>High Disk I/O:</strong> Check WAL batch settings, checkpoint interval</li>
+            <li><strong>Lock Contention:</strong> Check lock metrics, transaction isolation levels</li>
+            <li><strong>Slow Queries:</strong> Use SQL analyze endpoint, check query routing decisions</li>
+        </ul>
+    </div>
+</div>
+
+<!-- SECTION 15: LANGUAGE DRIVERS -->
+<div class="section" id="drivers">
+    <h2>15. Language Drivers & SDKs</h2>
+
+    <h3>15.1 Available Drivers</h3>
+    <table class="config-table">
+        <tr><th>Language</th><th>Status</th><th>Location</th></tr>
+        <tr><td>Rust</td><td>Complete</td><td>drivers/voltnuerongrid-driver-rust</td></tr>
+        <tr><td>Python</td><td>In Progress</td><td>drivers/voltnuerongrid-driver-python</td></tr>
+        <tr><td>Java</td><td>Planned</td><td>drivers/voltnuerongrid-driver-java</td></tr>
+        <tr><td>Node.js</td><td>Planned</td><td>drivers/voltnuerongrid-driver-node</td></tr>
+        <tr><td>TypeScript</td><td>Planned</td><td>drivers/voltnuerongrid-driver-typescript</td></tr>
+        <tr><td>Deno</td><td>Planned</td><td>drivers/voltnuerongrid-driver-deno</td></tr>
+        <tr><td>C</td><td>Planned</td><td>drivers/voltnuerongrid-driver-c</td></tr>
+        <tr><td>Perl</td><td>Planned</td><td>drivers/voltnuerongrid-driver-perl</td></tr>
+    </table>
+
+    <h3>15.2 Rust Driver (Most Complete)</h3>
+    <p>Full-featured driver with built-in connection pooling and dual-transport support.</p>
+
+    <h4>Installation</h4>
+    <div class="code-block">[dependencies]
+voltnuerongrid = "0.1.0"</div>
+
+    <h4>Basic Usage</h4>
+    <div class="code-block">use voltnuerongrid::{Client, Config};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config {
+        base_url: "http://127.0.0.1:8080".into(),
+        tenant_id: "tenant-a".into(),
+        user_id: "user-1".into(),
+        admin_api_key: Some("admin-key".into()),
+        ..Default::default()
+    };
+
+    let client = Client::new(config)?;
+
+    let result = client.query("SELECT * FROM users LIMIT 10").await?;
+
+    println!("Rows: {}", result.rowcount);
+    for row in result.rows {
+        println!("{:?}", row);
+    }
+
+    Ok(())
+}</div>
+
+    <h3>15.3 Features Across Drivers</h3>
+    <div class="content-list">
+        <ul>
+            <li>Connection pooling with configurable pool size</li>
+            <li>Auto-transport resolution (HTTP + native dual-endpoint)</li>
+            <li>Prepared statement support with parameterization</li>
+            <li>Transaction support (begin/commit/rollback)</li>
+            <li>Query timeout configuration</li>
+            <li>Built-in retry logic for transient errors</li>
+            <li>Structured error types</li>
+            <li>Type-safe result sets (where applicable)</li>
+            <li>Async/await support (async languages)</li>
+        </ul>
+    </div>
+
+    <h3>15.4 Connection Configuration (Common Pattern)</h3>
+    <table class="config-table">
+        <tr><td>base_url</td><td>HTTP API endpoint</td><td>http://localhost:8080</td></tr>
+        <tr><td>tenant_id</td><td>Tenant identifier</td><td>tenant-a</td></tr>
+        <tr><td>user_id</td><td>User identifier</td><td>user-1</td></tr>
+        <tr><td>admin_api_key</td><td>Admin authentication</td><td>(optional)</td></tr>
+        <tr><td>operator_id</td><td>Operator authentication</td><td>(optional)</td></tr>
+        <tr><td>pool_size</td><td>Connection pool size</td><td>50</td></tr>
+        <tr><td>timeout_ms</td><td>Request timeout</td><td>30000</td></tr>
+        <tr><td>transport_mode</td><td>auto|http|native</td><td>auto</td></tr>
+    </table>
+</div>
+
+<!-- SECTION 16: TESTING & QA -->
+<div class="section" id="testing">
+    <h2>16. Testing & Quality Assurance</h2>
+
+    <h3>16.1 Test Suites</h3>
+    <table class="config-table">
+        <tr><th>Test Suite</th><th>Type</th><th>Location</th></tr>
+        <tr><td>Unit Tests</td><td>Per-crate tests</td><td>crates/*/tests/</td></tr>
+        <tr><td>Integration Tests</td><td>Service integration</td><td>tests/integration/</td></tr>
+        <tr><td>KPI Tests</td><td>Performance & features</td><td>tests/kpi/</td></tr>
+        <tr><td>Parity Tests</td><td>Legacy compatibility</td><td>tests/parity/</td></tr>
+        <tr><td>Soak Tests</td><td>Long-running stability</td><td>tests/soak/</td></tr>
+        <tr><td>E2E Tests</td><td>Frontend UI tests</td><td>ui/voltnuerongrid-studio/tests/</td></tr>
+    </table>
+
+    <h3>16.2 Running Rust Unit Tests</h3>
+    <div class="code-block"># Test specific crate
+cargo test -p voltnuerongrid-sql
+cargo test -p voltnuerongrid-store
+cargo test -p voltnuerongridd
+
+# Test entire workspace
+cargo test --workspace
+
+# Run with output
+cargo test -- --nocapture
+
+# Run specific test
+cargo test test_name -- --exact</div>
+
+    <h3>16.3 KPI Test Execution</h3>
+    <p>Comprehensive test scenarios in <span class="code-inline">tests/kpi/</span>:</p>
+    <div class="code-block"># List available test scenarios
+ls tests/kpi/scenarios/
+
+# Run gate script for workstream
+cd tests/kpi
+pwsh scripts/run-ws1-gate.ps1
+
+# Check results
+ls results/ | grep -E "ws[0-9]+" | sort</div>
+
+    <h3>16.4 Frontend E2E Tests (Playwright)</h3>
+    <div class="code-block">cd ui/voltnuerongrid-studio
+
+# Run all tests
+npm run test:e2e
+
+# Run specific test file
+npx playwright test tests/e2e/connections.spec.ts
+
+# Run in UI mode
+npx playwright test --ui
+
+# Debug specific test
+npx playwright test tests/e2e/query.spec.ts --debug</div>
+
+    <h3>16.5 Coverage</h3>
+    <div class="code-block"># Generate coverage report (Rust)
+cargo tarpaulin --verbose --workspace --timeout 300
+
+# HTML report
+cargo tarpaulin --out Html --output-dir coverage/</div>
+
+    <h3>16.6 Test Naming Conventions</h3>
+    <div class="content-list">
+        <ul>
+            <li><strong>Unit tests:</strong> `#[test] fn test_function_name()` or `#[tokio::test] async fn test_name()`</li>
+            <li><strong>KPI tests:</strong> `ws{N}_{feature}` (workstream 1-8, feature descriptive)</li>
+            <li><strong>Hardening tests:</strong> `h{NN}_{feature}` (hardening suite)</li>
+            <li><strong>Gate scripts:</strong> `run-{wsN}-gate.ps1` (PowerShell validation)</li>
+        </ul>
+    </div>
+
+    <h3>16.7 Quality Gates</h3>
+    <div class="success">
+        Before merging, ensure:<br/>
+        ✅ All unit tests pass: cargo test --workspace<br/>
+        ✅ Code compiles: cargo check --all<br/>
+        ✅ No clippy warnings: cargo clippy --all<br/>
+        ✅ Formatting: cargo fmt --all -- --check<br/>
+        ✅ Security audit: cargo audit<br/>
+        ✅ E2E tests pass: npm run test:e2e (frontend)<br/>
+    </div>
+</div>
+
+<!-- FINAL SECTION: TROUBLESHOOTING -->
+<div class="section" id="troubleshooting">
+    <h2>17. Troubleshooting & FAQ</h2>
+
+    <h3>17.1 Common Issues</h3>
+
+    <h4>Port Already in Use</h4>
+    <div class="code-block">Error: Address already in use (os error 98)
+
+Solution: Set VNG_HTTP_PORT=8081 (or any free port)</div>
+
+    <h4>rustc Not Found</h4>
+    <div class="code-block">Error: rustc: command not found
+
+Solution: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</div>
+
+    <h4>Health Check Returns 503</h4>
+    <div class="code-block">Error: Service Unavailable
+
+Cause: Server still starting up
+Solution: Wait 2-3 seconds and retry</div>
+
+    <h4>Cluster Nodes Not Forming</h4>
+    <div class="code-block">Check VNG_RAFT_PEERS is correctly set
+Verify network connectivity between nodes
+Check firewall allows port 7000 (gossip)</div>
+
+    <h4>Frontend Cannot Connect to Backend</h4>
+    <div class="code-block">Check voltnuerongrid.baseUrl setting in VS Code
+Verify backend is running: curl http://localhost:8080/health
+Check CORS headers if needed</div>
+
+    <h3>17.2 Performance Issues</h3>
+
+    <h4>Slow Queries</h4>
+    <div class="code-block">1. Use tools/schema to understand table structure
+2. Use POST /api/v1/sql/analyze to see plan
+3. Check lock metrics: GET /api/v1/sql/pessimistic-lock/metrics
+4. Look for missing indexes
+5. Consider HTAP routing: POST /api/v1/sql/route</div>
+
+    <h4>High Lock Contention</h4>
+    <div class="code-block">1. Check lock metrics endpoint
+2. Identify blocking transactions: GET /api/v1/admin/sql/transactions/control
+3. Reduce isolation level if possible
+4. Use NOWAIT or SKIP LOCKED options
+5. Increase VNG_LOCK_TIMEOUT_MS if transient</div>
+
+    <h4>High Memory Usage</h4>
+    <div class="code-block">1. Reduce VNG_QUERY_MEMORY_LIMIT_MB
+2. Decrease VNG_CONNECTION_POOL_SIZE
+3. Reduce VNG_CACHE_MAX_ENTRIES
+4. Check for slow queries consuming memory
+5. Monitor /api/v1/sre/reliability/status</div>
+
+    <h3>17.3 Cluster Issues</h3>
+
+    <h4>Leader Election Stuck</h4>
+    <div class="code-block">Check Raft status: GET /api/v1/cluster/raft/status
+Verify quorum (need 3+ nodes for 3-node cluster)
+Check network connectivity between nodes
+Review logs for Raft error messages</div>
+
+    <h4>Node Replication Lag High</h4>
+    <div class="code-block">Check HTAP sync lag: GET /api/v1/store/htap/lag
+Increase htap.sync_mode from on_demand to near_realtime
+Check network bandwidth between nodes
+Look for slow disk I/O on follower nodes</div>
+
+    <h3>17.4 Security Issues</h3>
+
+    <h4>401 Unauthorized Errors</h4>
+    <div class="code-block">Check auth headers are present:
+- x-vng-admin-key (for admin ops)
+- x-vng-operator-id (for operator ops)
+- x-vng-tenant-id + x-vng-user-id (for tenant ops)</div>
+
+    <h4>403 Forbidden Errors</h4>
+    <div class="code-block">Auth present but insufficient privilege
+- Check role/permission for the operation
+- Verify tenant scoping for tenant operations
+- Ensure admin key is provided for admin endpoints</div>
+
+    <h3>17.5 Getting Help</h3>
+    <div class="content-list">
+        <ul>
+            <li>📖 Check deploy/local/README.md for setup issues</li>
+            <li>📖 Check README-MCP.md for MCP configuration</li>
+            <li>🔍 Review server logs: check VNG_LOG_LEVEL and VNG_LOG_FORMAT</li>
+            <li>🧪 Run curl smoke tests to verify endpoints</li>
+            <li>📊 Collect metrics from /sre/reliability/status for diagnostics</li>
+            <li>💬 Review implementation in crates/voltnuerongrid-*/src/ for details</li>
+        </ul>
+    </div>
+</div>
+
+<!-- FOOTER -->
+<div class="section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; margin-top: 50px;">
+    <h2 style="color: white; border-bottom: 2px solid white;">Documentation Complete</h2>
+    <p>VoltNueronGrid DB v0.1.0 RC | Apache 2.0 License</p>
+    <p style="font-size: 14px; margin-top: 15px;">
+        Repository: <a href="https://github.com/Pavan-Pvj/polap-db" style="color: #00d4ff;">https://github.com/Pavan-Pvj/polap-db</a><br/>
+        Documentation Generated: April 2026<br/>
+        For latest updates, check the project repository.
+    </p>
+</div>
+
+</div> <!-- end main-content -->
+</div> <!-- end container -->
+
+<script>
+    // Simple sidebar anchor highlighting
+    document.querySelectorAll('.sidebar a').forEach(link => {
+        link.addEventListener('click', function() {
+            document.querySelectorAll('.sidebar a').forEach(l => l.classList.remove('active'));
+            this.classList.add('active');
+        });
+    });
+
+    // Highlight on scroll
+    window.addEventListener('scroll', () => {
+        const sections = document.querySelectorAll('.section');
+        sections.forEach(section => {
+            const rect = section.getBoundingClientRect();
+            if (rect.top < 200) {
+                const id = section.id;
+                document.querySelectorAll('.sidebar a').forEach(l => l.classList.remove('active'));
+                const anchor = document.querySelector(`.sidebar a[href="#${id}"]`);
+                if (anchor) anchor.classList.add('active');
+            }
+        });
+    });
+</script>
+
+</body>
+</html>

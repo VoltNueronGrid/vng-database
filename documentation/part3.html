@@ -1,0 +1,461 @@
+<!-- SECTION 8: CLOUD DEPLOYMENT -->
+<div class="section" id="cloud">
+    <h2>8. Cloud Deployment</h2>
+
+    <h3>8.1 Multi-Cloud Strategy</h3>
+    <p>VoltNueronGrid deployment is consistent across AWS, Azure, GCP, and OCI. Each cloud has an overlay in <span class="code-inline">deploy/cloud/</span>:</p>
+    <div class="code-block">deploy/cloud/
+├── aws/
+│   ├── cloudformation/
+│   ├── terraform/
+│   └── README.md
+├── azure/
+│   ├── arm-templates/
+│   ├── terraform/
+│   └── README.md
+├── gcp/
+│   ├── deployment-manager/
+│   ├── terraform/
+│   └── README.md
+└── oci/
+    ├── resource-manager/
+    ├── terraform/
+    └── README.md</div>
+
+    <h3>8.2 AWS Deployment (via Terraform)</h3>
+    <div class="code-block">cd deploy/cloud/aws/terraform
+
+# Initialize Terraform
+terraform init
+
+# Review plan
+terraform plan -var="cluster_size=3" \
+  -var="instance_type=t3.xlarge" \
+  -var="region=us-east-1"
+
+# Apply
+terraform apply -var="cluster_size=3" \
+  -var="instance_type=t3.xlarge" \
+  -var="region=us-east-1"
+
+# Get outputs
+terraform output voltnuerongrid_endpoint</div>
+
+    <h3>8.3 Azure Deployment (via ARM Template)</h3>
+    <div class="code-block">cd deploy/cloud/azure/arm-templates
+
+# Create resource group
+az group create \
+  --name voltnuerongrid-rg \
+  --location eastus
+
+# Deploy
+az deployment group create \
+  --resource-group voltnuerongrid-rg \
+  --template-file azuredeploy.json \
+  --parameters clusterSize=3 vmSize=Standard_D4s_v3
+
+# Get connection string
+az deployment group show \
+  --resource-group voltnuerongrid-rg \
+  --name azuredeploy \
+  --query properties.outputs.connectionString.value</div>
+
+    <h3>8.4 GCP Deployment (via Deployment Manager)</h3>
+    <div class="code-block">cd deploy/cloud/gcp/deployment-manager
+
+# Create deployment
+gcloud deployment-manager deployments create voltnuerongrid-prod \
+  --config=deployment.yaml
+
+# Get outputs
+gcloud deployment-manager deployments describe voltnuerongrid-prod
+
+# Access via kubectl
+gcloud container clusters get-credentials voltnuerongrid-cluster \
+  --zone us-central1-a
+kubectl get pods -n voltnuerongrid</div>
+
+    <h3>8.5 Kubernetes (Any Cloud)</h3>
+    <p>Helm charts available in <span class="code-inline">deploy/helm/</span>:</p>
+    <div class="code-block">cd deploy/helm
+
+# Add Helm repo
+helm repo add voltnuerongrid https://helm.voltnuerongrid.io
+helm repo update
+
+# Install
+helm install voltnuerongrid voltnuerongrid/voltnuerongrid \
+  --namespace voltnuerongrid \
+  --create-namespace \
+  --values values-prod.yaml
+
+# Scale
+kubectl scale statefulset voltnuerongrid \
+  --replicas=5 \
+  -n voltnuerongrid
+
+# Check status
+helm status voltnuerongrid -n voltnuerongrid
+kubectl logs -n voltnuerongrid -l app=voltnuerongrid -f</div>
+
+    <h3>8.6 Production Checklist</h3>
+    <div class="warning">
+        Before deploying to production, verify:
+    </div>
+    <div class="content-list">
+        <ul>
+            <li>✅ VNG_ADMIN_API_KEY set to strong random value (32+ characters)</li>
+            <li>✅ TLS certificates installed for HTTPS</li>
+            <li>✅ KMS provider configured (AWS/Azure/GCP)</li>
+            <li>✅ WAL backed by durable storage (EBS, managed disks, persistent volumes)</li>
+            <li>✅ Data replication factor ≥ 3</li>
+            <li>✅ Database backups configured and tested</li>
+            <li>✅ Monitoring and alerting enabled</li>
+            <li>✅ Audit logging to external SIEM</li>
+            <li>✅ Network security groups / firewall rules configured</li>
+            <li>✅ Connection pooling tuned for expected load</li>
+            <li>✅ Rate limiting and DDoS protection enabled</li>
+            <li>✅ Disaster recovery plan documented</li>
+        </ul>
+    </div>
+</div>
+
+<!-- SECTION 9: IDE EXTENSIONS -->
+<div class="section" id="ide-extensions">
+    <h2>9. IDE Extensions (VS Code & Cursor)</h2>
+
+    <h3>9.1 Overview</h3>
+    <p>Professional database client extension available for VS Code and Cursor IDEs. Features database explorer, SQL editor, query results, and DDL tools.</p>
+
+    <h3>9.2 Installation</h3>
+    <h4>From VS Code Marketplace</h4>
+    <div class="code-block">1. Open VS Code
+2. Press Ctrl+Shift+X (extensions)
+3. Search for "VoltNueronGrid"
+4. Click Install
+    </div>
+
+    <h4>From VSIX Package</h4>
+    <div class="code-block">cd ui/ide-extensions/vscode-cursor
+npm ci
+npm run package
+
+code --install-extension vscode-cursor-0.3.2.vsix</div>
+
+    <h3>9.3 Configuration</h3>
+    <p>Add to VS Code <span class="code-inline">settings.json</span> (Cmd/Ctrl+Shift+P → "Open Settings JSON"):</p>
+    <div class="code-block">{
+  "voltnuerongrid.baseUrl": "http://127.0.0.1:8080",
+  "voltnuerongrid.transportMode": "auto",
+  "voltnuerongrid.nativeEndpoint": "vng://127.0.0.1:9090",
+  "voltnuerongrid.sql.runOnSave": "prompt",
+  "voltnuerongrid.schema.cache.enabled": true,
+  "voltnuerongrid.schema.cache.ttlSeconds": 300,
+  "voltnuerongrid.query.cache.enabled": true,
+  "voltnuerongrid.query.cache.ttlSeconds": 30,
+  "voltnuerongrid.query.cache.maxEntries": 100
+}</div>
+
+    <h3>9.4 Sidebar Navigation</h3>
+    <p>The extension adds a "VoltNueronGrid" activity in the left sidebar with two views:</p>
+    <div class="content-list">
+        <ul>
+            <li><strong>Database Explorer</strong> - Connection management, schema browser, table tree</li>
+            <li><strong>Query History</strong> - Recent queries, search, re-run, favorites</li>
+        </ul>
+    </div>
+
+    <h3>9.5 Commands (40+)</h3>
+    <table class="config-table">
+        <tr><th>Command</th><th>Keybinding</th><th>Purpose</th></tr>
+        <tr><td>vng.newConnection</td><td>—</td><td>Create new database connection</td></tr>
+        <tr><td>vng.manageConnections</td><td>—</td><td>List, edit, delete connections</td></tr>
+        <tr><td>vng.testConnection</td><td>—</td><td>Test connection health</td></tr>
+        <tr><td>vng.connectConnection</td><td>—</td><td>Activate a connection</td></tr>
+        <tr><td>vng.sql.executeSelectionOrFile</td><td>Ctrl+Enter</td><td>Run SQL selection or entire file</td></tr>
+        <tr><td>vng.sql.analyzeSelectionOrFile</td><td>Ctrl+Shift+Enter</td><td>Analyze SQL plan without executing</td></tr>
+        <tr><td>vng.createTableWizard</td><td>Ctrl+Alt+C</td><td>Interactive table creation</td></tr>
+        <tr><td>vng.editTable</td><td>—</td><td>Open table editor for inline editing</td></tr>
+        <tr><td>vng.showTableDDL</td><td>—</td><td>View CREATE TABLE statement</td></tr>
+        <tr><td>vng.generateMockData</td><td>—</td><td>Generate sample rows</td></tr>
+        <tr><td>vng.dumpTableData</td><td>—</td><td>Export table to CSV/JSON</td></tr>
+        <tr><td>vng.dropTable</td><td>—</td><td>Drop table (with confirmation)</td></tr>
+        <tr><td>vng.truncateTable</td><td>—</td><td>Delete all rows</td></tr>
+        <tr><td>vng.refreshSchema</td><td>—</td><td>Reload schema tree</td></tr>
+        <tr><td>vng.quickSwitchConnection</td><td>Ctrl+Shift+D</td><td>Switch active connection</td></tr>
+        <tr><td>vng.refreshQueryHistory</td><td>—</td><td>Reload query history</td></tr>
+        <tr><td>vng.searchQueryHistory</td><td>—</td><td>Find query in history</td></tr>
+        <tr><td>vng.clearQueryHistory</td><td>—</td><td>Clear all history</td></tr>
+        <tr><td>vng.reRunHistoryQuery</td><td>—</td><td>Execute previous query</td></tr>
+        <tr><td>vng.openSettings</td><td>Ctrl+,</td><td>Open extension settings</td></tr>
+    </table>
+
+    <h3>9.6 Right-Click Context Menus</h3>
+    <p>Right-click on schema items in the Database Explorer:</p>
+    <div class="content-list">
+        <ul>
+            <li><strong>On Connection:</strong> Refresh, Connect/Disconnect, Edit, Test, Delete, Show Status, View History, Export JSON, Import Key, Import SQL File</li>
+            <li><strong>On Schema:</strong> Create Table</li>
+            <li><strong>On Table:</strong> Edit, Alter, Show DDL, Generate Mock Data, Dump Structure, Dump Data, Drop, Truncate</li>
+            <li><strong>On Column:</strong> Copy Name, Copy Definition, Add Column</li>
+            <li><strong>On History Entry:</strong> Re-run Query, Copy to Editor</li>
+        </ul>
+    </div>
+
+    <h3>9.7 Editor Commands</h3>
+    <p>Available when editing <span class="code-inline">.sql</span> files in the editor title bar:</p>
+    <div class="content-list">
+        <ul>
+            <li><strong>Execute SQL (Ctrl+Enter)</strong> - Run selected text or entire file</li>
+            <li><strong>Analyze SQL (Ctrl+Shift+Enter)</strong> - Show execution plan</li>
+        </ul>
+    </div>
+
+    <h3>9.8 Table Editor</h3>
+    <p>Double-click a table name to open the inline table editor:</p>
+    <div class="content-list">
+        <ul>
+            <li>View all rows with pagination</li>
+            <li>Inline edit cells (Ctrl+E to edit)</li>
+            <li>Add new rows (Ctrl+Shift+N)</li>
+            <li>Save changes (Ctrl+S)</li>
+            <li>Discard changes (Esc)</li>
+            <li>Refresh data (Ctrl+R)</li>
+        </ul>
+    </div>
+
+    <h3>9.9 Features Walkthrough</h3>
+    <div class="success">
+        <strong>Getting Started:</strong><br/>
+        1. Open VS Code/Cursor<br/>
+        2. Click VoltNueronGrid icon in left sidebar<br/>
+        3. Click "Create Connection"<br/>
+        4. Fill in connection details (host, port, credentials)<br/>
+        5. Right-click connection → "Test Connection"<br/>
+        6. Browse schema by expanding database tree<br/>
+        7. Right-click table → "Edit" to view/edit data<br/>
+        8. Open any .sql file and press Ctrl+Enter to execute<br/>
+    </div>
+</div>
+
+<!-- SECTION 10: MCP INTEGRATION -->
+<div class="section" id="mcp-integration">
+    <h2>10. Model Context Protocol (MCP) Integration</h2>
+
+    <h3>10.1 What is MCP?</h3>
+    <p>MCP (Model Context Protocol) is a standard way to expose database capabilities to AI clients like Claude, Cursor, and VS Code. VoltNueronGrid provides 12 MCP tools with safe read/write boundaries.</p>
+
+    <h3>10.2 Authentication Model</h3>
+    <table class="config-table">
+        <tr><th>Tool</th><th>Auth Required</th><th>Additional Key</th></tr>
+        <tr><td>tools/query</td><td>Operator+</td><td>—</td></tr>
+        <tr><td>tools/schema</td><td>Operator+</td><td>—</td></tr>
+        <tr><td>tools/health</td><td>Operator+</td><td>—</td></tr>
+        <tr><td>tools/benchmark</td><td>Admin</td><td>—</td></tr>
+        <tr><td>tools/ddl_create</td><td>Admin</td><td>ddl_admin_key</td></tr>
+        <tr><td>tools/ddl_drop</td><td>Admin</td><td>ddl_admin_key</td></tr>
+        <tr><td>tools/erd</td><td>Operator+</td><td>—</td></tr>
+        <tr><td>tools/data_transfer</td><td>Admin</td><td>transfer_admin_key</td></tr>
+        <tr><td>tools/cluster_topology</td><td>Admin</td><td>—</td></tr>
+        <tr><td>tools/transaction_admin</td><td>Admin</td><td>—</td></tr>
+        <tr><td>tools/lock_admin</td><td>Admin</td><td>—</td></tr>
+        <tr><td>tools/cluster_node_manage</td><td>Admin</td><td>—</td></tr>
+    </table>
+
+    <h3>10.3 Claude Desktop Configuration</h3>
+    <p>Edit <span class="code-inline">~/Library/Application Support/Claude/claude_desktop_config.json</span> (macOS) or <span class="code-inline">%APPDATA%\Claude\claude_desktop_config.json</span> (Windows):</p>
+    <div class="code-block">{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "-p",
+        "voltnuerongrid-mcp",
+        "--bin",
+        "mcp-stdio-server",
+        "--release"
+      ],
+      "env": {
+        "VNG_ADMIN_API_KEY": "your-admin-key-here",
+        "VNG_OPERATOR_ID": "operator-1",
+        "VNG_MCP_RUNTIME_PROXY": "true",
+        "VNG_RUNTIME_BASE_URL": "http://127.0.0.1:8080"
+      }
+    }
+  }
+}</div>
+
+    <h3>10.4 Cursor Configuration</h3>
+    <p>Add to Cursor MCP settings (same format as Claude Desktop):</p>
+    <div class="code-block">{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "command": "/path/to/target/release/mcp-stdio-server",
+      "env": {
+        "VNG_ADMIN_API_KEY": "your-admin-key-here",
+        "VNG_OPERATOR_ID": "operator-1",
+        "VNG_RUNTIME_BASE_URL": "http://127.0.0.1:8080"
+      }
+    }
+  }
+}</div>
+
+    <h3>10.5 VS Code Configuration</h3>
+    <p>Add to VS Code settings.json:</p>
+    <div class="code-block">{
+  "mcpServers": {
+    "voltnuerongrid": {
+      "command": "cargo",
+      "args": ["run", "-p", "voltnuerongrid-mcp", "--bin", "mcp-stdio-server", "--release"],
+      "env": {
+        "VNG_ADMIN_API_KEY": "your-admin-key-here",
+        "VNG_OPERATOR_ID": "operator-1"
+      }
+    }
+  }
+}</div>
+
+    <h3>10.6 Building the MCP Server</h3>
+    <div class="code-block"># Build stdio server binary
+cargo build -p voltnuerongrid-mcp --bin mcp-stdio-server --release
+
+# Binary location:
+# Linux/macOS: target/release/mcp-stdio-server
+# Windows: target/release/mcp-stdio-server.exe
+
+# Run directly
+./target/release/mcp-stdio-server</div>
+
+    <h3>10.7 MCP Tool Usage Examples</h3>
+
+    <h4>tools/health</h4>
+    <p>Check database health and metrics:</p>
+    <div class="code-block">Request:
+{
+  "method": "tools/health",
+  "params": {
+    "detailed": true
+  }
+}
+
+Response:
+{
+  "status": "healthy",
+  "version": "0.1.0",
+  "uptime_ms": 123456,
+  "node_count": 3,
+  "replication_lag_ms": 0,
+  "active_connections": 42,
+  "memory_usage_mb": 512,
+  "query_cache_hit_rate": 0.85
+}</div>
+
+    <h4>tools/schema</h4>
+    <p>Inspect database schema:</p>
+    <div class="code-block">Request:
+{
+  "method": "tools/schema",
+  "params": {
+    "schema_filter": "public",
+    "table_filter": "users"
+  }
+}
+
+Response:
+{
+  "tables": [
+    {
+      "name": "users",
+      "columns": [
+        {"name": "id", "type": "INT", "nullable": false, "primary_key": true},
+        {"name": "name", "type": "TEXT", "nullable": false}
+      ],
+      "indexes": [
+        {"name": "idx_users_name", "columns": ["name"]}
+      ]
+    }
+  ]
+}</div>
+
+    <h4>tools/query</h4>
+    <p>Execute read-only SQL:</p>
+    <div class="code-block">Request:
+{
+  "method": "tools/query",
+  "params": {
+    "sql_query": "SELECT id, name FROM users LIMIT 10",
+    "timeout_ms": 5000,
+    "max_rows": 1000
+  }
+}
+
+Response:
+{
+  "columns": ["id", "name"],
+  "rows": [
+    ["1", "Alice"],
+    ["2", "Bob"]
+  ],
+  "rowcount": 2,
+  "execution_time_ms": 12
+}</div>
+
+    <h4>tools/ddl_create</h4>
+    <p>Create database objects (requires admin + ddl_admin_key):</p>
+    <div class="code-block">Request:
+{
+  "method": "tools/ddl_create",
+  "params": {
+    "object_type": "table",
+    "object_name": "products",
+    "create_sql": "CREATE TABLE products(id INT PRIMARY KEY, name TEXT NOT NULL)",
+    "ddl_admin_key": "your-ddl-key"
+  }
+}
+
+Response:
+{
+  "success": true,
+  "object_id": "tbl_products_123",
+  "created_at": "2026-04-28T10:30:00Z"
+}</div>
+
+    <h3>10.8 Guardrails</h3>
+    <p>Query safety enforcement on read-only tools:</p>
+    <div class="content-list">
+        <ul>
+            <li>❌ No mutating keywords: DELETE, INSERT, UPDATE, DROP, ALTER, TRUNCATE</li>
+            <li>❌ No multi-statement queries</li>
+            <li>❌ Max query size: 10KB</li>
+            <li>❌ Max result size: 10MB</li>
+            <li>❌ Timeout: max 30 seconds</li>
+            <li>✅ Safe SELECT queries only</li>
+            <li>✅ CTEs, window functions, joins supported</li>
+        </ul>
+    </div>
+
+    <h3>10.9 Docker Deployment of MCP</h3>
+    <div class="code-block"># Build Docker image
+docker build -t voltnuerongrid-mcp:latest \
+  -f Dockerfile.mcp .
+
+# Run as stdio server in container
+docker run -it \
+  -e VNG_ADMIN_API_KEY=admin-key \
+  -e VNG_OPERATOR_ID=operator-1 \
+  voltnuerongrid-mcp:latest \
+  /app/mcp-stdio-server</div>
+
+    <h3>10.10 Validation Checklist</h3>
+    <div class="success">
+        After configuring MCP, validate with:<br/>
+        1. ✅ Call tools/health (should return healthy)<br/>
+        2. ✅ Call tools/schema (should list tables)<br/>
+        3. ✅ Call tools/query with SELECT 1 (should return 1)<br/>
+        4. ✅ Call tools/benchmark with operator auth (should return 403)<br/>
+        5. ✅ Call tools/benchmark with admin auth (should succeed)<br/>
+    </div>
+</div>
+

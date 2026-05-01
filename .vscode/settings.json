@@ -1,3 +1,6 @@
 {
-    "diffEditor.maxComputationTime": 1000000
+    "diffEditor.maxComputationTime": 1000000,
+    "git.path": "/usr/bin/git",
+    "git.useIntegratedAskPass": false,
+    "terminal.integrated.inheritEnv": false
 }

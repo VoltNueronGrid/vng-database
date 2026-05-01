@@ -1,0 +1,497 @@
+<!-- SECTION 4: FRONTEND FEATURES -->
+<div class="section" id="frontend-features">
+    <h2>4. Frontend Features (VoltNueronGrid Studio)</h2>
+
+    <h3>What is Studio?</h3>
+    <p>A professional React-based web UI for VoltNueronGrid database management, SQL development, and monitoring.</p>
+
+    <h3>Technology Stack</h3>
+    <table class="config-table">
+        <tr><td>Framework</td><td>React 18.3.1</td><td>Component-based modern UI</td></tr>
+        <tr><td>Language</td><td>TypeScript 5.6</td><td>Type-safe development</td></tr>
+        <tr><td>Bundler</td><td>Vite 6.0</td><td>HMR, fast builds</td></tr>
+        <tr><td>Editor</td><td>Monaco Editor 4.6</td><td>VS Code-like SQL editor</td></tr>
+        <tr><td>State Management</td><td>Zustand 5.0</td><td>Lightweight store</td></tr>
+        <tr><td>Desktop (Optional)</td><td>Tauri 2.1</td><td>Cross-platform binary</td></tr>
+        <tr><td>Testing</td><td>Playwright 1.59</td><td>E2E test automation</td></tr>
+    </table>
+
+    <h3>Key Features</h3>
+    <div class="content-list">
+        <ul>
+            <li><strong>SQL Editor:</strong> Monaco Editor with syntax highlighting, autocomplete, error detection</li>
+            <li><strong>Query Results:</strong> Tabular display, pagination, export to CSV/JSON</li>
+            <li><strong>Schema Explorer:</strong> Tree view of databases, schemas, tables, columns, indexes</li>
+            <li><strong>Connection Management:</strong> Save profiles, test connections, quick switch</li>
+            <li><strong>Data Import Wizard:</strong> CSV, Parquet, JSON, Excel with preview</li>
+            <li><strong>Data Export Wizard:</strong> Dump tables to various formats</li>
+            <li><strong>DDL Viewer:</strong> View CREATE TABLE, CREATE VIEW, CREATE INDEX statements</li>
+            <li><strong>Table Editor:</strong> Inline editing with row-by-row changes</li>
+            <li><strong>Query History:</strong> Search, re-run, save favorite queries</li>
+            <li><strong>Performance Monitor:</strong> Real-time query metrics, lock contention, cache hit rates</li>
+            <li><strong>Admin Panel:</strong> User management, roles, permissions, audit logs</li>
+            <li><strong>AI Chat Assistant:</strong> MCP-powered database helper</li>
+        </ul>
+    </div>
+
+    <h3>Directory Structure</h3>
+    <div class="code-block">ui/voltnuerongrid-studio/
+├── src/
+│   ├── App.tsx                  # Root component
+│   ├── main.tsx                 # Entry point
+│   ├── api/                     # HTTP client helpers
+│   ├── components/              # Reusable UI components
+│   ├── hooks/                   # Custom React hooks
+│   ├── store/                   # Zustand state stores
+│   ├── styles/                  # CSS/styling
+│   └── types/                   # TypeScript interfaces
+├── src-tauri/                   # Tauri desktop wrapper
+├── tests/                       # Playwright E2E tests
+├── vite.config.ts               # Vite bundler config
+├── tsconfig.json                # TypeScript config
+└── package.json                 # Dependencies
+    </div>
+
+    <h3>Development Servers</h3>
+    <div class="code-block">Vite Dev Server: http://localhost:1420
+API Proxy Target: http://127.0.0.1:8080 (configurable)
+    </div>
+
+    <h3>Build Commands</h3>
+    <table class="config-table">
+        <tr><td>npm run dev</td><td>Development mode with HMR</td></tr>
+        <tr><td>npm run build</td><td>Optimized production build</td></tr>
+        <tr><td>npm run tauri:dev</td><td>Desktop app (dev)</td></tr>
+        <tr><td>npm run tauri:build</td><td>Desktop app (release binary)</td></tr>
+        <tr><td>npm run test:e2e</td><td>Run Playwright tests</td></tr>
+        <tr><td>npm run preview</td><td>Preview production build locally</td></tr>
+    </table>
+
+    <h3>Configuration</h3>
+    <p>Frontend settings in <span class="code-inline">src/config.ts</span> or via VS Code/Cursor extension settings:</p>
+    <table class="config-table">
+        <tr><td>serverUrl</td><td>http://localhost:8080</td><td>Backend API base URL</td></tr>
+        <tr><td>transportMode</td><td>auto | http | native</td><td>Preferred connection protocol</td></tr>
+        <tr><td>nativeUrl</td><td>vng://localhost:9090</td><td>Native protocol endpoint (optional)</td></tr>
+        <tr><td>cacheTTL</td><td>300 (seconds)</td><td>Schema cache expiration</td></tr>
+        <tr><td>autoExecute</td><td>never | prompt | always</td><td>Auto-run .sql files on save/open</td></tr>
+    </table>
+</div>
+
+<!-- SECTION 5: LOCAL SETUP -->
+<div class="section" id="local-setup">
+    <h2>5. Running Locally (Development Setup)</h2>
+
+    <h3>5.1 Prerequisites</h3>
+    <table class="config-table">
+        <tr><th>Tool</th><th>Min Version</th><th>Check Command</th></tr>
+        <tr><td>Rust</td><td>1.75</td><td><span class="code-inline">rustc --version</span></td></tr>
+        <tr><td>Cargo</td><td>1.75</td><td><span class="code-inline">cargo --version</span></td></tr>
+        <tr><td>Node.js</td><td>20 LTS</td><td><span class="code-inline">node --version</span></td></tr>
+        <tr><td>npm</td><td>10</td><td><span class="code-inline">npm --version</span></td></tr>
+        <tr><td>Python</td><td>3.11</td><td><span class="code-inline">python3 --version</span></td></tr>
+        <tr><td>curl</td><td>any</td><td><span class="code-inline">curl --version</span></td></tr>
+    </table>
+
+    <h3>5.2 Install Rust</h3>
+    <div class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env</div>
+
+    <h3>5.3 Clone & Setup</h3>
+    <div class="code-block">git clone https://github.com/Pavan-Pvj/polap-db.git
+cd polap-db
+cp deploy/local/vng.env.example .env
+# Edit .env and set VNG_ADMIN_API_KEY and other values
+source .env</div>
+
+    <h3>5.4 Build Backend</h3>
+    <div class="code-block"># Build just the database service
+cargo build --release -p voltnuerongridd
+
+# Or build the entire workspace (all crates + drivers)
+cargo build --release</div>
+
+    <h3>5.5 Run Backend</h3>
+    <h4>Minimum Configuration (HTTP Only)</h4>
+    <div class="code-block">./target/release/voltnuerongridd</div>
+
+    <div class="note">
+        Default ports: HTTP 8080, Native 9090 (disabled unless VNG_NATIVE_ENABLED=true)
+    </div>
+
+    <h4>With Native Listener Enabled</h4>
+    <div class="code-block">VNG_NATIVE_ENABLED=true \
+VNG_NATIVE_PORT=9090 \
+VNG_ADMIN_API_KEY=changeme \
+./target/release/voltnuerongridd</div>
+
+    <h4>With TLS on Native Listener</h4>
+    <div class="code-block">VNG_NATIVE_ENABLED=true \
+VNG_NATIVE_TLS_CERT=/path/to/server.crt \
+VNG_NATIVE_TLS_KEY=/path/to/server.key \
+VNG_ADMIN_API_KEY=changeme \
+./target/release/voltnuerongridd</div>
+
+    <h3>5.6 Verify Backend</h3>
+    <div class="code-block">curl http://localhost:8080/health
+# Expected: {"status":"ok"}
+
+# SQL analyze
+curl -X POST http://localhost:8080/api/v1/sql/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"SELECT 1"}'
+
+# Schema registry
+curl http://localhost:8080/api/v1/ingest/schema/registry</div>
+
+    <h3>5.7 Build & Run Frontend</h3>
+    <div class="code-block">cd ui/voltnuerongrid-studio
+npm install
+npm run dev</div>
+
+    <div class="success">
+        Frontend will be available at <strong>http://localhost:1420</strong>
+    </div>
+
+    <h3>5.8 Configure Frontend</h3>
+    <p>Edit <span class="code-inline">src/config.ts</span> or use VS Code settings:</p>
+    <div class="code-block">{
+  "voltnuerongrid.baseUrl": "http://127.0.0.1:8080",
+  "voltnuerongrid.transportMode": "auto",
+  "voltnuerongrid.nativeEndpoint": ""
+}</div>
+
+    <h3>5.9 Quick-Start Script</h3>
+    <p>For automated setup:</p>
+    <div class="code-block">bash deploy/local/install.sh</div>
+
+    <p>This script:</p>
+    <div class="content-list">
+        <ul>
+            <li>Checks all prerequisites</li>
+            <li>Copies vng.env.example to .env</li>
+            <li>Builds the release binary</li>
+            <li>Starts the server in background</li>
+            <li>Prints health check URL</li>
+        </ul>
+    </div>
+
+    <h3>5.10 Troubleshooting</h3>
+    <table class="config-table">
+        <tr><td>Port 8080 already in use</td><td>Set VNG_HTTP_PORT=8081</td></tr>
+        <tr><td>rustc not found</td><td>Install Rust via rustup</td></tr>
+        <tr><td>Health check returns 503</td><td>Wait 2-3 seconds and retry</td></tr>
+        <tr><td>Native listener not responding</td><td>Set VNG_NATIVE_ENABLED=true</td></tr>
+        <tr><td>npm dependencies fail</td><td>Delete node_modules and package-lock.json, run npm install again</td></tr>
+    </table>
+</div>
+
+<!-- SECTION 6: SINGLE NODE DEPLOYMENT -->
+<div class="section" id="single-node">
+    <h2>6. Single-Node Deployment</h2>
+
+    <h3>6.1 Docker Compose (Recommended for Local)</h3>
+    <p>File: <span class="code-inline">deploy/local/single-node.yml</span></p>
+    <div class="code-block">version: "3.9"
+
+services:
+  voltnuerongridd:
+    image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+    container_name: voltnuerongridd-single
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # HTTP/gateway
+      - "5432:5432"   # SQL endpoint
+      - "6380:6380"   # Cache compatibility
+    environment:
+      VNG_NODE_ID: node-1
+      VNG_CLUSTER_MODE: single
+      VNG_HTTP_BIND: 0.0.0.0:8080
+      VNG_SQL_BIND: 0.0.0.0:5432
+      VNG_DATA_DIR: /var/lib/voltnuerongrid
+      VNG_CONFIG_FILE: /etc/voltnuerongrid/config.yaml
+    volumes:
+      - voltnuerongrid_data:/var/lib/voltnuerongrid
+      - ./config/single-node-config.yaml:/etc/voltnuerongrid/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  voltnuerongrid_data:</div>
+
+    <h3>6.2 Configuration (YAML)</h3>
+    <p>File: <span class="code-inline">deploy/local/config/single-node-config.yaml</span></p>
+    <div class="code-block">cluster:
+  mode: single
+
+network:
+  http_bind: "0.0.0.0:8080"
+  sql_bind: "0.0.0.0:5432"
+
+storage:
+  data_dir: "/var/lib/voltnuerongrid"
+
+htap:
+  sync_mode: "near_realtime"
+
+autonomous:
+  mode: "advisory"</div>
+
+    <h3>6.3 Startup</h3>
+    <div class="code-block">cd deploy/local
+docker-compose -f single-node.yml up -d
+
+# Check status
+docker-compose -f single-node.yml ps
+
+# View logs
+docker-compose -f single-node.yml logs -f voltnuerongridd
+
+# Stop
+docker-compose -f single-node.yml down</div>
+
+    <h3>6.4 Bare Metal Deployment</h3>
+    <p>For production-like single-node setups without Docker:</p>
+    <div class="code-block">#!/bin/bash
+# 1. Build
+cargo build --release -p voltnuerongridd
+
+# 2. Create data directory
+mkdir -p /var/lib/voltnuerongrid
+
+# 3. Create systemd service (optional)
+cat > /etc/systemd/system/voltnuerongridd.service <<EOF
+[Unit]
+Description=VoltNueronGrid Database Service
+After=network.target
+
+[Service]
+Type=simple
+User=voltnueron
+WorkingDirectory=/opt/voltnuerongrid
+ExecStart=/opt/voltnuerongrid/bin/voltnuerongridd
+Restart=on-failure
+Environment="VNG_DATA_DIR=/var/lib/voltnuerongrid"
+Environment="VNG_ADMIN_API_KEY=changeme"
+Environment="VNG_LOG_LEVEL=info"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 4. Start service
+systemctl daemon-reload
+systemctl enable voltnuerongridd
+systemctl start voltnuerongridd
+
+# 5. Check status
+systemctl status voltnuerongridd</div>
+
+    <h3>6.5 Verification</h3>
+    <div class="code-block"># Health check
+curl http://localhost:8080/health
+
+# List tables
+curl http://localhost:8080/api/v1/admin/schema/tree \
+  -H "x-vng-operator-id: operator-1"
+
+# Execute test query
+curl -X POST http://localhost:8080/api/v1/sql/execute \
+  -H "Content-Type: application/json" \
+  -H "x-vng-tenant-id: tenant-1" \
+  -H "x-vng-user-id: user-1" \
+  -d '{"sql":"SELECT COUNT(*) as count"}'</div>
+</div>
+
+<!-- SECTION 7: MULTI-NODE DEPLOYMENT -->
+<div class="section" id="multi-node">
+    <h2>7. Multi-Node Cluster Deployment</h2>
+
+    <h3>7.1 Architecture</h3>
+    <div class="diagram">
+        <div class="diagram-title">3-Node Raft Cluster with Gossip Protocol</div>
+        <svg width="100%" height="250" viewBox="0 0 800 250" xmlns="http://www.w3.org/2000/svg" style="max-width: 100%;">
+            <!-- Nodes -->
+            <circle cx="150" cy="120" r="40" fill="#667eea"/>
+            <text x="150" y="130" text-anchor="middle" fill="white" font-weight="bold">Node 1</text>
+            <text x="150" y="180" text-anchor="middle" font-size="12" font-weight="bold">Leader</text>
+
+            <circle cx="400" cy="120" r="40" fill="#764ba2"/>
+            <text x="400" y="130" text-anchor="middle" fill="white" font-weight="bold">Node 2</text>
+            <text x="400" y="180" text-anchor="middle" font-size="12" font-weight="bold">Follower</text>
+
+            <circle cx="650" cy="120" r="40" fill="#764ba2"/>
+            <text x="650" y="130" text-anchor="middle" fill="white" font-weight="bold">Node 3</text>
+            <text x="650" y="180" text-anchor="middle" font-size="12" font-weight="bold">Follower</text>
+
+            <!-- Raft connections (bold) -->
+            <line x1="190" y1="110" x2="360" y2="110" stroke="#667eea" stroke-width="3"/>
+            <text x="275" y="100" text-anchor="middle" font-size="11">Raft Consensus</text>
+
+            <line x1="440" y1="110" x2="610" y2="110" stroke="#667eea" stroke-width="3"/>
+
+            <!-- Gossip connections (dashed) -->
+            <line x1="180" y1="140" x2="370" y2="140" stroke="#00d4ff" stroke-width="2" stroke-dasharray="5,5"/>
+            <line x1="430" y1="140" x2="620" y2="140" stroke="#00d4ff" stroke-width="2" stroke-dasharray="5,5"/>
+            <line x1="190" y1="155" x2="610" y2="155" stroke="#00d4ff" stroke-width="2" stroke-dasharray="5,5"/>
+            <text x="400" y="210" text-anchor="middle" font-size="12">Gossip Protocol (Metadata Sync)</text>
+        </svg>
+    </div>
+
+    <h3>7.2 Docker Compose (Multi-Node)</h3>
+    <p>File: <span class="code-inline">deploy/local/multi-node.yml</span></p>
+    <div class="code-block">version: "3.9"
+
+services:
+  voltnuerongridd-1:
+    image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+    container_name: voltnuerongridd-1
+    environment:
+      VNG_NODE_ID: node-1
+      VNG_CLUSTER_MODE: multi
+      VNG_SEEDS: voltnuerongridd-1:7000,voltnuerongridd-2:7000,voltnuerongridd-3:7000
+      VNG_HTTP_BIND: 0.0.0.0:8080
+      VNG_GOSSIP_BIND: 0.0.0.0:7000
+    ports:
+      - "18080:8080"
+    volumes:
+      - vng_node1_data:/var/lib/voltnuerongrid
+      - ./config/multi-node-config.yaml:/etc/voltnuerongrid/config.yaml:ro
+    networks: [vngnet]
+
+  voltnuerongridd-2:
+    image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+    container_name: voltnuerongridd-2
+    environment:
+      VNG_NODE_ID: node-2
+      VNG_CLUSTER_MODE: multi
+      VNG_SEEDS: voltnuerongridd-1:7000,voltnuerongridd-2:7000,voltnuerongridd-3:7000
+      VNG_HTTP_BIND: 0.0.0.0:8080
+      VNG_GOSSIP_BIND: 0.0.0.0:7000
+    ports:
+      - "28080:8080"
+    volumes:
+      - vng_node2_data:/var/lib/voltnuerongrid
+      - ./config/multi-node-config.yaml:/etc/voltnuerongrid/config.yaml:ro
+    networks: [vngnet]
+    depends_on:
+      - voltnuerongridd-1
+
+  voltnuerongridd-3:
+    image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
+    container_name: voltnuerongridd-3
+    environment:
+      VNG_NODE_ID: node-3
+      VNG_CLUSTER_MODE: multi
+      VNG_SEEDS: voltnuerongridd-1:7000,voltnuerongridd-2:7000,voltnuerongridd-3:7000
+      VNG_HTTP_BIND: 0.0.0.0:8080
+      VNG_GOSSIP_BIND: 0.0.0.0:7000
+    ports:
+      - "38080:8080"
+    volumes:
+      - vng_node3_data:/var/lib/voltnuerongrid
+      - ./config/multi-node-config.yaml:/etc/voltnuerongrid/config.yaml:ro
+    networks: [vngnet]
+    depends_on:
+      - voltnuerongridd-1
+
+networks:
+  vngnet:
+
+volumes:
+  vng_node1_data:
+  vng_node2_data:
+  vng_node3_data:</div>
+
+    <h3>7.3 Multi-Node Configuration (YAML)</h3>
+    <div class="code-block">cluster:
+  mode: multi
+  replication_factor: 3
+
+network:
+  http_bind: "0.0.0.0:8080"
+  sql_bind: "0.0.0.0:5432"
+  gossip_bind: "0.0.0.0:7000"
+
+storage:
+  data_dir: "/var/lib/voltnuerongrid"
+
+htap:
+  sync_mode: "near_realtime"
+
+autonomous:
+  mode: "supervised"</div>
+
+    <h3>7.4 Startup & Cluster Formation</h3>
+    <div class="code-block">cd deploy/local
+
+# Start all 3 nodes
+docker-compose -f multi-node.yml up -d
+
+# Wait for cluster formation (30-60 seconds)
+sleep 60
+
+# Verify cluster topology
+curl http://localhost:18080/api/v1/admin/cluster/topology \
+  -H "x-vng-admin-key: admin-key"</div>
+
+    <h3>7.5 Add/Remove Nodes Dynamically</h3>
+    <div class="code-block">#!/bin/bash
+# Add node-4
+curl -X POST http://localhost:18080/api/v1/admin/cluster/nodes/manage \
+  -H "Content-Type: application/json" \
+  -H "x-vng-admin-key: admin-key" \
+  -d '{
+    "action": "add",
+    "node_id": "node-4",
+    "role": "follower",
+    "desired_status": "active",
+    "total_cpu_cores": 8,
+    "total_ram_mb": 16384,
+    "reason": "scale_out_for_peak_load"
+  }'
+
+# Remove node-3 (migrate sessions to node-1)
+curl -X POST http://localhost:18080/api/v1/admin/cluster/nodes/manage \
+  -H "Content-Type: application/json" \
+  -H "x-vng-admin-key: admin-key" \
+  -d '{
+    "action": "remove",
+    "node_id": "node-3",
+    "target_node_id": "node-1",
+    "reason": "scale_in_cost_optimization"
+  }'</div>
+
+    <h3>7.6 Failover Testing</h3>
+    <div class="code-block"># Simulate leader failure
+docker kill voltnuerongridd-1
+
+# Cluster detects failure in ~5 seconds
+sleep 5
+
+# Verify new leader elected
+curl http://localhost:28080/api/v1/admin/cluster/topology \
+  -H "x-vng-admin-key: admin-key"
+
+# Restore original leader
+docker start voltnuerongridd-1</div>
+
+    <h3>7.7 Monitoring Multi-Node Cluster</h3>
+    <div class="code-block"># Check Raft status on each node
+curl http://localhost:18080/api/v1/cluster/raft/status
+curl http://localhost:28080/api/v1/cluster/raft/status
+curl http://localhost:38080/api/v1/cluster/raft/status
+
+# View replication lag
+curl http://localhost:18080/api/v1/store/htap/lag \
+  -H "x-vng-operator-id: operator-1"
+
+# List active transactions across cluster
+curl http://localhost:18080/api/v1/admin/sql/transactions/control \
+  -H "x-vng-admin-key: admin-key" \
+  -d '{"action":"list"}'</div>
+</div>
+
