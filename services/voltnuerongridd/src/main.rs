@@ -15752,6 +15752,15 @@ fn execute_oltp_select(
     let mut results: Vec<OltpRowResult> = Vec::new();
     for stmt_str in statements {
         if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
+            // Honour the SQL-level LIMIT clause: take the min of the parsed LIMIT
+            // and the caller-supplied cap so that `SELECT … LIMIT 20` never returns
+            // more than 20 rows even when `max_rows` is larger.
+            let sql_limit: usize = sel
+                .limit
+                .map(|l| l as usize)
+                .unwrap_or(limit)
+                .min(limit);
+
             // Try to extract a literal key/prefix from `WHERE <col> = '<val>'`
             let prefix: Option<String> = sel.where_clause.as_deref().and_then(|w| {
                 let eq = w.find('=')?;
@@ -15760,7 +15769,7 @@ fn execute_oltp_select(
                 if val.is_empty() { None } else { Some(val.to_string()) }
             });
             let prefix_str = prefix.as_deref().unwrap_or("");
-            let remaining = limit.saturating_sub(results.len());
+            let remaining = sql_limit.saturating_sub(results.len());
             let batch: Vec<OltpRowResult> = all_rows
                 .iter()
                 .filter(|(k, _)| prefix_str.is_empty() || k.contains(prefix_str))
@@ -15768,7 +15777,7 @@ fn execute_oltp_select(
                 .map(|(k, d)| OltpRowResult { key: k.clone(), data: d.clone() })
                 .collect();
             results.extend(batch);
-            if results.len() >= limit {
+            if results.len() >= sql_limit {
                 break;
             }
         }

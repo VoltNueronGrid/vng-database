@@ -14,6 +14,7 @@ const THEME_LABELS: Record<ThemeMode, { icon: string; label: string }> = {
 export function TitleBar() {
   const openConnectionPanel = useUiStore((s) => s.openConnectionPanel);
   const setScreen = useUiStore((s) => s.setScreen);
+  const openSettings = useUiStore((s) => s.openSettings);
   const activeId = useConnectionStore((s) => s.activeId);
   const setActive = useConnectionStore((s) => s.setActive);
   const setSchema = useConnectionStore((s) => s.setSchema);
@@ -157,7 +158,7 @@ export function TitleBar() {
           )}
         </div>
 
-        <button className="titlebar-btn" title="Settings">⚙</button>
+        <button className="titlebar-btn" title="Settings" onClick={openSettings}>⚙</button>
       </div>
     </div>
   );

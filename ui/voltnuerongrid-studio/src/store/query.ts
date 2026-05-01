@@ -10,6 +10,7 @@ export interface QueryResult {
   tabId: string;
   status: string;
   routePath: RoutePath;
+  /** Raw elapsed time in milliseconds as returned by the server. */
   elapsedMs: number;
   rejectedCount: number;
   transactionId?: string;

@@ -3,6 +3,15 @@ import { useQueryStore } from "@/store/query";
 import { useQuery } from "@/hooks/useQuery";
 import { useConnectionStore } from "@/store/connection";
 
+/** Format elapsed ms into an appropriate unit string. */
+function formatElapsed(ms: number): string {
+  if (ms <= 0) return "0 ms";
+  if (ms < 0.001) return "< 1 µs";
+  if (ms < 1) return `${Math.round(ms * 1000)} µs`;
+  if (ms < 1000) return `${ms % 1 === 0 ? ms : ms.toFixed(1)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
 export function Toolbar() {
   const activeTabId = useEditorStore((s) => s.activeTabId);
   const getActiveTab = useEditorStore((s) => s.getActiveTab);
@@ -71,7 +80,7 @@ export function Toolbar() {
       )}
       {result && (
         <span style={{ fontSize: 11, color: "var(--text-3)", marginLeft: 8 }}>
-          {result.elapsedMs} ms
+          {formatElapsed(result.elapsedMs)}
           {result.rowCount > 0 && ` · ${result.rowCount} rows`}
         </span>
       )}

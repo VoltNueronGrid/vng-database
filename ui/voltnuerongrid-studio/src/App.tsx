@@ -11,11 +11,13 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ContextMenu } from "@/components/ContextMenu/ContextMenu";
 import { ResourceModal } from "@/components/Modals/ResourceModal";
 import { Toast } from "@/components/Toast/Toast";
+import { SettingsPanel } from "@/components/Settings/SettingsPanel";
 
 export function App() {
   const screen = useUiStore((s) => s.screen);
   const connectionPanelOpen = useUiStore((s) => s.connectionPanelOpen);
   const rightPanelOpen = useUiStore((s) => s.rightPanelOpen);
+  const settingsPanelOpen = useUiStore((s) => s.settingsPanelOpen);
 
   return (
     <div className="app">
@@ -73,6 +75,12 @@ export function App() {
 
       <ContextMenu />
       <Toast />
+
+      {settingsPanelOpen && (
+        <ErrorBoundary label="SettingsPanel">
+          <SettingsPanel />
+        </ErrorBoundary>
+      )}
     </div>
   );
 }

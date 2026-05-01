@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useConnectionStore } from "@/store/connection";
 import { useUiStore } from "@/store/ui";
 import { useEditorStore } from "@/store/editor";
+import { useSettingsStore } from "@/store/settings";
+import { useToastStore } from "@/store/toast";
 import { openMenuFor } from "@/store/contextMenu";
 import {
   buildDatabaseMenu,
@@ -23,6 +25,34 @@ function TreeIndents({ count }: { count: number }) {
   return Array.from({ length: count }, (_value, index) => (
     <span key={index} className="tree-indent" />
   ));
+}
+
+/**
+ * Returns a stable callback that, given an object name and its DDL definition
+ * string, performs the action configured in Studio Settings:
+ *   • "open_tab"       → open a new unsaved SQL tab containing the DDL
+ *   • "copy_clipboard" → copy the DDL to the clipboard and show a toast
+ */
+function useDdlAction() {
+  const action = useSettingsStore((s) => s.ddlDoubleClickAction);
+  const openSqlTab = useEditorStore((s) => s.openSqlTab);
+  const showToast = useToastStore((s) => s.show);
+
+  return useCallback(
+    (name: string, definition: string | undefined) => {
+      const ddl = definition?.trim() || `-- No DDL available for: ${name}`;
+      if (action === "copy_clipboard") {
+        navigator.clipboard.writeText(ddl).then(
+          () => showToast(`DDL for "${name}" copied to clipboard`, "success"),
+          () => showToast("Failed to copy to clipboard", "error"),
+        );
+      } else {
+        // Default: open_tab
+        openSqlTab(ddl, `${name}.sql`);
+      }
+    },
+    [action, openSqlTab, showToast],
+  );
 }
 
 function colTypeClass(type: string): string {
@@ -109,13 +139,12 @@ function FunctionNode({
   indentLevel?: number;
 }) {
   const [open, setOpen] = useState(false);
-  const insertText = useEditorStore((s) => s.insertTextIntoActiveTab);
-
-  const callSnippet = `CALL ${func.name}(${
-    func.arguments
-      ? func.arguments.split(",").map((_arg, i) => `$${i + 1}`).join(", ")
-      : ""
-  })`;
+  const onDdlAction = useDdlAction();
+  const actionLabel = useSettingsStore((s) =>
+    s.ddlDoubleClickAction === "copy_clipboard"
+      ? "Double-click to copy DDL"
+      : "Double-click to open DDL"
+  );
 
   return (
     <>
@@ -123,8 +152,8 @@ function FunctionNode({
         className="tree-node"
         style={{ paddingLeft: 0 }}
         onClick={() => setOpen((o) => !o)}
-        onDoubleClick={() => insertText?.(callSnippet)}
-        title={`Double-click to insert CALL snippet\n\n${func.definition}`}
+        onDoubleClick={() => onDdlAction(func.name, func.definition)}
+        title={actionLabel}
       >
         <TreeIndents count={indentLevel} />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
@@ -170,15 +199,29 @@ function NamedObjectNode({
   icon,
   name,
   badge,
+  definition,
   indentLevel = 4,
 }: {
   icon: string;
   name: string;
   badge?: string;
+  definition?: string;
   indentLevel?: number;
 }) {
+  const onDdlAction = useDdlAction();
+  const actionLabel = useSettingsStore((s) =>
+    s.ddlDoubleClickAction === "copy_clipboard"
+      ? "Double-click to copy DDL"
+      : "Double-click to open DDL"
+  );
+
   return (
-    <div className="tree-node" style={{ paddingLeft: 0 }}>
+    <div
+      className="tree-node"
+      style={{ paddingLeft: 0 }}
+      title={actionLabel}
+      onDoubleClick={() => onDdlAction(name, definition)}
+    >
       <TreeIndents count={indentLevel} />
       <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
       <span className="tree-icon">{icon}</span>
@@ -261,7 +304,14 @@ function SchemaNode({ ns, dbName }: { ns: SchemaNamespace; dbName: string }) {
 
           <SectionNode icon="👁" label="Views" count={views.length} indentLevel={3} defaultOpen={false}>
             {views.map((view: SchemaView) => (
-              <NamedObjectNode key={view.name} icon="👁" name={view.name} badge="view" indentLevel={4} />
+              <NamedObjectNode
+                key={view.name}
+                icon="👁"
+                name={view.name}
+                badge="view"
+                definition={view.definition}
+                indentLevel={4}
+              />
             ))}
           </SectionNode>
 
@@ -273,13 +323,27 @@ function SchemaNode({ ns, dbName }: { ns: SchemaNamespace; dbName: string }) {
 
           <SectionNode icon="⛓" label="Triggers" count={triggers.length} indentLevel={3} defaultOpen={false}>
             {triggers.map((trigger: SchemaTrigger) => (
-              <NamedObjectNode key={trigger.name} icon="⛓" name={trigger.name} badge="trigger" indentLevel={4} />
+              <NamedObjectNode
+                key={trigger.name}
+                icon="⛓"
+                name={trigger.name}
+                badge="trigger"
+                definition={trigger.definition}
+                indentLevel={4}
+              />
             ))}
           </SectionNode>
 
           <SectionNode icon="🗓" label="Events" count={events.length} indentLevel={3} defaultOpen={false}>
             {events.map((event: SchemaEvent) => (
-              <NamedObjectNode key={event.name} icon="🗓" name={event.name} badge="event" indentLevel={4} />
+              <NamedObjectNode
+                key={event.name}
+                icon="🗓"
+                name={event.name}
+                badge="event"
+                definition={event.definition}
+                indentLevel={4}
+              />
             ))}
           </SectionNode>
         </>

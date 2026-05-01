@@ -5,6 +5,22 @@ import { DataTable } from "./DataTable";
 
 type ResultTab = "results" | "messages" | "explain";
 
+/**
+ * Format a duration given in milliseconds into a human-readable string that
+ * uses the most appropriate unit:
+ *   < 0.001 ms  → "< 1 µs"
+ *   < 1 ms      → e.g. "412 µs"
+ *   < 1 000 ms  → e.g. "47 ms"
+ *   ≥ 1 000 ms  → e.g. "3.2 s"
+ */
+function formatElapsed(ms: number): string {
+  if (ms <= 0) return "0 ms";
+  if (ms < 0.001) return "< 1 µs";
+  if (ms < 1) return `${Math.round(ms * 1000)} µs`;
+  if (ms < 1000) return `${ms % 1 === 0 ? ms : ms.toFixed(1)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
 export function ResultsPane() {
   const [activeTab, setActiveTab] = useState<ResultTab>("results");
   const activeTabId = useEditorStore((s) => s.activeTabId);
@@ -34,7 +50,7 @@ export function ResultsPane() {
             <span className="v">{result.rowCount.toLocaleString()}</span>
             <div className="results-sep" />
             <span>Time</span>
-            <span className="v">{result.elapsedMs} ms</span>
+            <span className="v">{formatElapsed(result.elapsedMs)}</span>
             <div className="results-sep" />
             <span className={`route-badge route-${result.routePath}`}>
               {result.routePath.toUpperCase()}
