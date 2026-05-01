@@ -88,6 +88,14 @@ export function ConnectionPanel() {
     return null;
   }
 
+  async function verifyHttpConnection(client: StudioApiClient) {
+    if (form.mode === "admin") {
+      await client.getSchemaTree();
+      return;
+    }
+    await client.health();
+  }
+
   async function testConnection() {
     // Validate required fields first — don't hit the network if they're missing
     const validationErr = validate();
@@ -113,12 +121,18 @@ export function ConnectionPanel() {
     });
     const start = Date.now();
     try {
-      await client.health();
+      await verifyHttpConnection(client);
       setTestState("ok");
-      setTestMsg(`Connected (${Date.now() - start} ms)`);
+      setTestMsg(
+        `${form.mode === "admin" ? "Authenticated" : "Connected"} (${Date.now() - start} ms)`
+      );
     } catch (e) {
       setTestState("fail");
-      setTestMsg(String(e));
+      setTestMsg(
+        form.mode === "admin"
+          ? `Authentication failed: ${String(e)}`
+          : String(e)
+      );
     }
   }
 
@@ -127,6 +141,21 @@ export function ConnectionPanel() {
     const validationErr = validate();
     if (validationErr) { setError(validationErr); return; }
     setError(null);
+
+    if (form.protocol === "http" && form.mode === "admin") {
+      const client = new StudioApiClient({
+        baseUrl: form.baseUrl,
+        adminApiKey: adminKey,
+        operatorId: form.operatorId,
+      });
+      try {
+        await verifyHttpConnection(client);
+      } catch (e) {
+        setError(`Admin authentication failed: ${String(e)}`);
+        setActiveTab("auth");
+        return;
+      }
+    }
 
     if (existing) {
       updateConnection(form.id, { ...form, adminKey: form.mode === "admin" ? adminKey : undefined });

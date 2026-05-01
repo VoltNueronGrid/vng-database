@@ -215,10 +215,18 @@ export class StudioApiClient {
   private baseUrl(): string {
     // In browser dev mode, use relative paths so Vite proxy handles CORS.
     // In Tauri (production) and when TAURI_INTERNALS is present, use the full URL.
+    // Also use relative paths when running in browser and the connection baseUrl
+    // points to localhost but we're being accessed via a different host (e.g., ngrok)
     const isTauriRuntime =
       typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     const isDevBrowser = import.meta.env.DEV && !isTauriRuntime;
-    return isDevBrowser ? "" : this.conn.baseUrl.replace(/\/$/, "");
+    
+    if (isDevBrowser) {
+      // Always use relative paths in dev browser mode - Vite proxy will handle routing
+      return "";
+    }
+    
+    return this.conn.baseUrl.replace(/\/$/, "");
   }
 
   private headers(): Record<string, string> {

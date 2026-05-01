@@ -30,6 +30,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    allowedHosts: [
+      "ff0d-2405-201-c033-20fa-fcd3-b1ad-2801-5d06.ngrok-free.app",
+      ".ngrok-free.app"
+    ],
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {
