@@ -26,6 +26,7 @@ voltnuerongrid-opt = { path = "../../crates/voltnuerongrid-opt" }
 voltnuerongrid-plugins = { path = "../../crates/voltnuerongrid-plugins" }
 voltnuerongrid-mcp = { path = "../../crates/voltnuerongrid-mcp" }
 voltnuerongrid-driver-rust = { path = "../../drivers/voltnuerongrid-driver-rust" }
+tower-http = { version = "0.3", features = ["cors"] }
 
 [dev-dependencies]
 arrow-array = { version = "53", default-features = false }

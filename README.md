@@ -414,6 +414,7 @@ cargo run -p voltnuerongridd
 cd ui/voltnuerongrid-studio
 npm run dev
 # Opens at http://localhost:1420
+use demo-admin-key as the Admin key
 ```
 
 - Option 2 — Tauri desktop app (native window)

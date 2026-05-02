@@ -2,11 +2,13 @@ import { useCallback } from "react";
 import { StudioApiClient } from "@/api/studio-client";
 import { useConnectionStore } from "@/store/connection";
 import { useQueryStore } from "@/store/query";
+import { useSchema } from "@/hooks/useSchema";
 
 export function useQuery(tabId: string) {
   const getActive = useConnectionStore((s) => s.getActive);
   const getActiveKey = useConnectionStore((s) => s.getActiveKey);
   const { setResult, setExecuting } = useQueryStore();
+  const { refresh } = useSchema();
 
   const execute = useCallback(
     async (sql: string) => {
@@ -81,6 +83,10 @@ export function useQuery(tabId: string) {
           error: null,
           executedAt: Date.now(),
         });
+        // If the executed SQL touched the catalog, refresh the schema tree.
+        if (res.transaction?.touches_catalog) {
+          try { refresh(); } catch (_) {}
+        }
       } catch (err) {
         setResult({
           tabId,

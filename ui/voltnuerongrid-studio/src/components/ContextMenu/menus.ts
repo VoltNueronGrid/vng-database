@@ -8,6 +8,8 @@ import { useUiStore } from "@/store/ui";
 import { useConnectionStore, type ConnectionSettings } from "@/store/connection";
 import { useEditorStore } from "@/store/editor";
 import type { SchemaTable, SchemaColumn } from "@/api/studio-client";
+import { StudioApiClient } from "@/api/studio-client";
+import { useToastStore } from "@/store/toast";
 
 const m = () => useModalStore.getState();
 const u = () => useUiStore.getState();
@@ -38,6 +40,7 @@ export function buildConnectionMenu(
   refreshSchema: () => void
 ): { items: ContextMenuItem[]; title?: string } {
   const isActive = c().activeId === conn.id;
+  const t = () => useToastStore.getState();
   return {
     title: conn.name,
     items: [
@@ -74,7 +77,21 @@ export function buildConnectionMenu(
         id: "test",
         label: "Test Connection",
         icon: "✓",
-        onSelect: () => u().openConnectionPanel(conn.id),
+        onSelect: async () => {
+          // Lightweight test: authenticated getSchemaTree for admin, health otherwise.
+          const key = c().resolvedKeys[conn.id] ?? conn.adminKey;
+          const client = new StudioApiClient({ baseUrl: conn.baseUrl, adminApiKey: conn.mode === "admin" ? key : undefined, operatorId: conn.operatorId });
+          try {
+            if (conn.mode === "admin") {
+              await client.getSchemaTree();
+            } else {
+              await client.health();
+            }
+            t().show("Connection successful", "success");
+          } catch (err) {
+            t().show(`Connection failed: ${String(err)}`, "error");
+          }
+        },
       },
       { id: "sep2", separator: true },
       {

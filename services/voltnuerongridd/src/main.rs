@@ -11,8 +11,11 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{Next, from_fn};
+use axum::http::Request;
+use axum::response::Response;
 use base64::Engine;
-use axum::routing::{get, post};
+use axum::routing::{get, post, options};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -5545,7 +5548,7 @@ struct NativeListenerConfig {
 
 impl NativeListenerConfig {
     fn from_env() -> Self {
-        let enabled = read_env_bool("VNG_NATIVE_LISTENER_ENABLED", false);
+        let enabled = read_env_bool("VNG_NATIVE_LISTENER_ENABLED", true);
         let bind = env::var("VNG_NATIVE_BIND")
             .unwrap_or_else(|_| "127.0.0.1:7542".to_string())
             .trim()
@@ -5809,19 +5812,6 @@ async fn main() {
         ddl_catalog: Arc::new(Mutex::new({
             let mut cat = DdlCatalog::new();
             replay_ddl_wal_into(&mut cat);
-            // Seed the built-in "metadata" database with system schema markers.
-            // These are virtual entries — not persisted to WAL, recreated each boot.
-            let boot_ms = now_unix_ms();
-            let _ = cat.record_create(
-                "table", "metadata", "system", "_databases",
-                "CREATE TABLE metadata.system._databases (name TEXT, created_at BIGINT)",
-                boot_ms, true,
-            );
-            let _ = cat.record_create(
-                "table", "metadata", "system", "_schemas",
-                "CREATE TABLE metadata.system._schemas (database_name TEXT, schema_name TEXT, created_at BIGINT)",
-                boot_ms, true,
-            );
             cat
         })),
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
@@ -5846,6 +5836,37 @@ async fn main() {
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
+
+    async fn add_cors(req: Request<axum::body::Body>, next: Next) -> Response {
+        let mut res = next.run(req).await;
+        res.headers_mut().insert(
+            "Access-Control-Allow-Origin",
+            axum::http::HeaderValue::from_static("*"),
+        );
+        res.headers_mut().insert(
+            "Access-Control-Allow-Methods",
+            axum::http::HeaderValue::from_static("GET,POST,OPTIONS"),
+        );
+        res.headers_mut().insert(
+            "Access-Control-Allow-Headers",
+            axum::http::HeaderValue::from_static("content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id"),
+        );
+        res
+    }
+
+    async fn options_preflight() -> Response {
+        let res = axum::http::Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+            .header(
+                "Access-Control-Allow-Headers",
+                "content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id",
+            )
+            .body(axum::body::Body::empty())
+            .unwrap();
+        res
+    }
 
     let app = Router::new()
         .route("/health", get(health))
@@ -5891,6 +5912,8 @@ async fn main() {
         .route("/api/v1/sre/cache/set", post(sre_cache_set))
         .route("/api/v1/sre/cache/get", get(sre_cache_get))
         .route("/api/v1/sre/cache/invalidate", post(sre_cache_invalidate))
+        .route("/api/*path", options(options_preflight))
+        .layer(from_fn(add_cors))
         .route("/api/v1/sre/cache/rebalance", post(sre_cache_rebalance))
         .route("/api/v1/sre/cache/metrics", get(sre_cache_metrics))
         // REQ-27: Redis-compat cache command interface
@@ -20250,17 +20273,8 @@ async fn admin_schema_tree(
             .or_default()
             .push(entry);
     }
-    // Always include "default.public" and "metadata.system" even if empty.
-    db_map
-        .entry("default".to_string())
-        .or_default()
-        .entry("public".to_string())
-        .or_default();
-    db_map
-        .entry("metadata".to_string())
-        .or_default()
-        .entry("system".to_string())
-        .or_default();
+    // Do not inject synthetic databases/schemas here. Only return what the
+    // catalog actually contains so the UI accurately reflects persisted state.
 
     let databases: Vec<AdminSchemaDatabase> = db_map
         .into_iter()

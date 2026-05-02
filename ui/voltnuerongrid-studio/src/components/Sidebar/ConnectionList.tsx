@@ -15,7 +15,9 @@ export function ConnectionList() {
   const { refresh } = useSchema();
 
   function connect(id: string) {
-    setActive(id);
+    // Toggle: collapse if already active, otherwise activate
+    const currentActive = useConnectionStore.getState().activeId;
+    setActive(currentActive === id ? null : id);
     setScreen("main");
     refresh();
   }

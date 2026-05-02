@@ -1,0 +1,1 @@
+CREATE TABLE smoke_e2e_schema.smoke_table (id INT)
