@@ -82,3 +82,12 @@ CREATE VIEW plugins.v_recent_activity AS\nSELECT\n    at.plugin_id,\n    r.displ
 CREATE TABLE test_table (id INT PRIMARY KEY, name TEXT)
 CREATE TABLE tstdb.public._init (id INT)
 CREATE TABLE smoke_e2e.public.test_table (id INT)
+CREATE TABLE public.multi_insert (id INT, txt TEXT)
+CREATE TABLE public.merge_target (id INT PRIMARY KEY, val TEXT)
+DROP TABLE IF EXISTS public.multi_insert
+DROP TABLE IF EXISTS public.merge_target
+CREATE TABLE IF NOT EXISTS public.merge_target (id INT PRIMARY KEY, val TEXT)
+CREATE TABLE public.multi_insert (id INT, txt TEXT)
+CREATE TABLE public.merge_target (id INT PRIMARY KEY, val TEXT)
+DROP TABLE IF EXISTS public.multi_insert
+DROP TABLE IF EXISTS public.merge_target
