@@ -11,6 +11,7 @@
       /* Brand */
       --brand-cyan:     #00d4ff;
       --brand-cyan-dim: #00d4ff22;
+      --brand-cyan-low: #00d4ff0d; /* subtle hovers / low-emphasis tints */
       --brand-purple:   #9333ea;
       --brand-purple-dim: #9333ea22;
       /* Surfaces */
@@ -46,9 +47,14 @@
       --titlebar-h:  38px;
       --tabbar-h:    36px;
       --statusbar-h: 26px;
+      --right-panel-w: 260px;
       --radius-sm:   4px;
       --radius-md:   7px;
       --radius-lg:   10px;
+      /* Legacy aliases used by component code; do not remove */
+      --r-sm: var(--radius-sm);
+      --r-md: var(--radius-md);
+      --r-lg: var(--radius-lg);
       /* Font */
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
       font-size: 13px;

@@ -15,6 +15,7 @@ tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"
 voltnuerongrid-core = { path = "../../crates/voltnuerongrid-core" }
+voltnuerongrid-config = { path = "../../crates/voltnuerongrid-config" }
 voltnuerongrid-auth = { path = "../../crates/voltnuerongrid-auth" }
 voltnuerongrid-audit = { path = "../../crates/voltnuerongrid-audit" }
 voltnuerongrid-ai = { path = "../../crates/voltnuerongrid-ai" }
@@ -27,6 +28,14 @@ voltnuerongrid-plugins = { path = "../../crates/voltnuerongrid-plugins" }
 voltnuerongrid-mcp = { path = "../../crates/voltnuerongrid-mcp" }
 voltnuerongrid-driver-rust = { path = "../../drivers/voltnuerongrid-driver-rust" }
 tower-http = { version = "0.3", features = ["cors"] }
+
+# Observability — Phase 0.4
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+# Prometheus exposition without pulling the full `prometheus` crate (which is heavy).
+# `metrics` + `metrics-exporter-prometheus` give us a tiny, idiomatic API.
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
 
 [dev-dependencies]
 arrow-array = { version = "53", default-features = false }

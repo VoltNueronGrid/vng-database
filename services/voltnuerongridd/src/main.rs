@@ -55,6 +55,9 @@ use voltnuerongrid_plugins::{
 mod raft;
 use raft::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftNode, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
+pub mod resilience;
+pub mod observability;
+
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -5726,6 +5729,42 @@ fn read_env_u64(name: &str, default: u64) -> u64 {
 
 #[tokio::main]
 async fn main() {
+    // Phase 0.4 — initialise observability before anything else. This sets up
+    // tracing (env-filter) and the Prometheus metrics recorder. See
+    // `observability.rs` for env vars (VNG_LOG, VNG_LOG_FORMAT).
+    observability::init_observability();
+    tracing::info!(target: "vng.boot", "voltnuerongridd starting");
+
+    // Phase 0 — load + validate runtime config. Fail fast if the operator
+    // selected an unsupported backend (e.g. VNG_STORAGE_ENGINE=vng before the
+    // native storage engine is implemented). See `voltnuerongrid-config` and
+    // `gaps-may26-1.md` for the rationale.
+    let cfg_path = env::var("VNG_CONFIG_PATH").unwrap_or_else(|_| "./vng.config.json".to_string());
+    let cfg_file = std::fs::read_to_string(&cfg_path).ok();
+    let runtime_config = match voltnuerongrid_config::RuntimeConfig::from_env_and_file(
+        &voltnuerongrid_config::ProcessEnv,
+        cfg_file.as_deref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(target: "vng.boot", error = %e, "failed to load runtime config");
+            eprintln!("VNG config error: {e}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(e) = runtime_config.validate() {
+        tracing::error!(target: "vng.boot", error = %e, "runtime config rejected");
+        eprintln!("VNG config error: {e}");
+        std::process::exit(2);
+    }
+    tracing::info!(
+        target: "vng.boot",
+        storage_engine = ?runtime_config.storage.engine,
+        sql_engine = ?runtime_config.sql.engine,
+        data_dir = %runtime_config.storage.data_dir,
+        "runtime config validated"
+    );
+
     let node_id = env::var("VNG_NODE_ID")
         .unwrap_or_else(|_| "node-1".to_string())
         .trim()
@@ -5870,6 +5909,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics_handler))
         .route("/api/v1/sql/transaction", post(sql_transaction))
         .route(
             "/api/v1/sql/locks/pessimistic/acquire",
@@ -6828,8 +6868,212 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(dispatcher.dispatch_health(&state))
 }
 
+/// Prometheus scrape endpoint.
+///
+/// Returns the current metrics as Prometheus text-format. Returns an empty
+/// string (not an error) when metrics are disabled — Prometheus tolerates
+/// that and stops scraping after a few zero-byte responses.
+async fn metrics_handler() -> (axum::http::StatusCode, [(axum::http::HeaderName, &'static str); 1], String) {
+    let body = observability::render_metrics();
+    (
+        axum::http::StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+}
+
 /// Parse a SQL DELETE statement and return the row key to tombstone.
 /// Pattern: DELETE FROM <table> WHERE <col> = '<key>'
+/// Demo helper for the studio's "Generate N rows" button.
+///
+/// Recognises `CALL insert_rows('<table>', <count>)` and writes synthetic rows.
+/// This is **not** a real stored-procedure runtime — column values are produced
+/// by name-based heuristics (`*_id` → row index, `*_name` → templated string,
+/// `*_status` → cycle through a fixed list, etc.).
+///
+/// Returns `Some(...)` if the request matched the demo pattern (caller should
+/// short-circuit with that result). Returns `None` if the request is not a
+/// demo CALL — let normal SQL execution take over.
+///
+/// **Tracked gap:** §4.3 in `gaps-may26-1.md`. Replace once `CREATE PROCEDURE`
+/// and the UDF runtime are wired through the SQL parser/executor properly.
+fn try_handle_call_insert_rows_demo(
+    state: &AppState,
+    _headers: &HeaderMap,
+    principal: &RuntimeAccessPrincipal,
+    connection_id: &str,
+    req: &SqlExecuteRequest,
+) -> Option<Result<(StatusCode, Json<SqlExecuteResponse>), (StatusCode, Json<AuthErrorResponse>)>> {
+    let raw = req.sql_batch.trim();
+    let upper = raw.to_ascii_uppercase();
+    if !upper.starts_with("CALL ") {
+        return None;
+    }
+    let inner = raw[5..].trim();
+    let fn_lower = inner.to_ascii_lowercase();
+    if !(fn_lower.starts_with("insert_rows(") || fn_lower.starts_with("insert_rows (")) {
+        return None;
+    }
+    let (open, close) = match (inner.find('('), inner.rfind(')')) {
+        (Some(o), Some(c)) if c > o => (o, c),
+        _ => return None,
+    };
+    let args_str = inner[open + 1..close].trim();
+    let mut parts: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut in_quote = false;
+    for ch in args_str.chars() {
+        match ch {
+            '\'' | '"' => { in_quote = !in_quote; buf.push(ch); }
+            ',' if !in_quote => { parts.push(buf.trim().to_string()); buf.clear(); }
+            _ => buf.push(ch),
+        }
+    }
+    if !buf.trim().is_empty() { parts.push(buf.trim().to_string()); }
+    if parts.len() != 2 {
+        return None;
+    }
+    let table_name = parts[0].trim().trim_matches('\'').trim_matches('"').to_ascii_lowercase();
+    let num_records: usize = parts[1].trim().parse().unwrap_or(0);
+    let start_ms = now_unix_ms();
+
+    // Determine next row id (highest existing rowid for this table + 1).
+    // Lock acquisition uses match-on-Result so a poisoned mutex returns 503
+    // instead of taking the whole service down (fixes pattern from .cursorrules).
+    let existing_max: usize = match state.row_store.lock() {
+        Ok(rs) => {
+            let snap = rs.current_xid();
+            rs.scan_at_snapshot(snap)
+                .iter()
+                .filter(|(k, _)| k.starts_with(&format!("{}:", table_name)))
+                .filter_map(|(k, _)| k.splitn(2, ':').nth(1).and_then(|v| v.parse::<usize>().ok()))
+                .max()
+                .unwrap_or(0)
+        }
+        Err(_) => return Some(Ok(svc_unavailable_sql_response("row_store mutex poisoned"))),
+    };
+    let ddl_cols = match state.ddl_catalog.lock() {
+        Ok(catalog) => catalog
+            .get(&table_name)
+            .map(|e| extract_column_names_from_ddl(&e.original_statement))
+            .unwrap_or_default(),
+        Err(_) => return Some(Ok(svc_unavailable_sql_response("ddl_catalog mutex poisoned"))),
+    };
+    let col_count = if ddl_cols.is_empty() { 3 } else { ddl_cols.len() };
+    let mut inserted = 0usize;
+    for i in 1..=num_records {
+        let row_id = existing_max + i;
+        let key = format!("{}:{}", table_name, row_id);
+        let mut row_data: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        row_data.insert("__table".to_string(), table_name.clone());
+        for col_idx in 0..col_count {
+            let col_name = ddl_cols.get(col_idx).cloned().unwrap_or_else(|| format!("col_{col_idx}"));
+            let val = synthesize_demo_value(&col_name, &table_name, row_id);
+            row_data.insert(col_name, val);
+        }
+        match state.row_store.lock() {
+            Ok(mut rs) => {
+                let xid = rs.begin_xid();
+                rs.insert(xid, &key, row_data);
+                inserted += 1;
+            }
+            Err(_) => return Some(Ok(svc_unavailable_sql_response("row_store mutex poisoned"))),
+        }
+    }
+    let elapsed = now_unix_ms().saturating_sub(start_ms);
+    append_runtime_audit_event(
+        state, AuditEventKind::Sql, principal, "sql_execute", "ok",
+        json!({ "call": "insert_rows", "table": table_name, "inserted": inserted, "demo": true }),
+    );
+    release_sql_data_plane_connection(state, connection_id);
+    let udf_function_catalog = udf_function_catalog_contract();
+    let udf_guard_policies = udf_guard_policy_contract();
+    let udf_execution_plan = build_udf_execution_plan(&req.sql_batch);
+    Some(Ok((StatusCode::OK, Json(SqlExecuteResponse {
+        status: "ok",
+        route_path: "oltp".to_string(),
+        reason: format!("inserted {inserted} demo rows into {table_name}"),
+        transaction: Some(SqlTransactionResponse {
+            status: "committed",
+            transaction_id: format!("call-{start_ms}"),
+            statements_executed: inserted,
+            requires_transaction: false,
+            touches_catalog: false,
+            rejected_statement_count: 0,
+            elapsed_ms: elapsed,
+        }),
+        olap: None,
+        rejected_statement_count: 0,
+        udf_results: None,
+        udf_guardrail_status: Some("passed".to_string()),
+        udf_function_catalog,
+        udf_guard_policies,
+        udf_execution_plan,
+        legacy_agg_results: None,
+        planner_path: None,
+        oltp_rows: None,
+        olap_agg_results: None,
+        columns: None,
+        rows: None,
+    }))))
+}
+
+/// Heuristic value generator for the insert_rows demo.
+/// Pure function — no state, easy to unit-test.
+fn synthesize_demo_value(col_name: &str, table_name: &str, row_id: usize) -> String {
+    if col_name.ends_with("_id") || col_name == "id" {
+        row_id.to_string()
+    } else if col_name.contains("name") {
+        format!("Generated {table_name} {row_id}")
+    } else if col_name.contains("date") || col_name.contains("_at") {
+        format!("2024-{:02}-{:02}", (row_id % 12) + 1, (row_id % 28) + 1)
+    } else if col_name.contains("price") || col_name.contains("amount") || col_name.contains("cost") {
+        format!("{:.2}", 10.0 + (row_id as f64) * 0.5)
+    } else if col_name.contains("qty") || col_name.contains("count") || col_name.contains("level") {
+        ((row_id % 500) + 1).to_string()
+    } else if col_name.contains("email") {
+        format!("gen{row_id}@example.com")
+    } else if col_name.contains("phone") {
+        format!("555-{row_id:04}")
+    } else if col_name.contains("status") {
+        ["active", "pending", "done", "cancelled"][row_id % 4].to_string()
+    } else if col_name.contains("rating") {
+        ((row_id % 5) + 1).to_string()
+    } else if col_name.contains("comment") || col_name.contains("description") || col_name.contains("body") {
+        format!("Auto-generated record {row_id} for {table_name}")
+    } else {
+        format!("value_{row_id}")
+    }
+}
+
+/// Build a 503 SqlExecuteResponse for graceful degradation when an internal
+/// mutex is poisoned (which happens after a panic in a critical section).
+/// Returning 503 instead of expect()-panicking keeps the rest of the service alive.
+fn svc_unavailable_sql_response(reason: &str) -> (StatusCode, Json<SqlExecuteResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(SqlExecuteResponse {
+            status: "error",
+            route_path: "unknown".to_string(),
+            reason: format!("internal state unavailable: {reason}"),
+            transaction: None,
+            olap: None,
+            rejected_statement_count: 0,
+            udf_results: None,
+            udf_guardrail_status: None,
+            udf_function_catalog: udf_function_catalog_contract(),
+            udf_guard_policies: udf_guard_policy_contract(),
+            udf_execution_plan: Vec::new(),
+            legacy_agg_results: None,
+            planner_path: None,
+            oltp_rows: None,
+            olap_agg_results: None,
+            columns: None,
+            rows: None,
+        }),
+    )
+}
+
 fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
     use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
     let tokens = semantic_tokens(sql);
@@ -7555,132 +7799,16 @@ async fn sql_execute(
     let decision = dispatcher.dispatch_sql_execute_route_decision(&envelope);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
 
-    // ── Early CALL intercept ─────────────────────────────────────────────────
-    // Handle CALL insert_rows('<table>', <count>) before routing validation so
-    // the statement is not rejected as "unclassified" (CALL is not in the SQL
-    // classifier vocabulary).
-    {
-        let raw = req.sql_batch.trim();
-        let upper = raw.to_ascii_uppercase();
-        if upper.starts_with("CALL ") {
-            let inner = raw[5..].trim();
-            let fn_lower = inner.to_ascii_lowercase();
-            if fn_lower.starts_with("insert_rows(") || fn_lower.starts_with("insert_rows (") {
-                if let (Some(open), Some(close)) = (inner.find('('), inner.rfind(')')) {
-                    let args_str = inner[open + 1..close].trim();
-                    let mut parts: Vec<String> = Vec::new();
-                    let mut buf = String::new();
-                    let mut in_quote = false;
-                    for ch in args_str.chars() {
-                        match ch {
-                            '\'' | '"' => { in_quote = !in_quote; buf.push(ch); }
-                            ',' if !in_quote => { parts.push(buf.trim().to_string()); buf.clear(); }
-                            _ => buf.push(ch),
-                        }
-                    }
-                    if !buf.trim().is_empty() { parts.push(buf.trim().to_string()); }
-                    if parts.len() == 2 {
-                        let table_name = parts[0].trim().trim_matches('\'').trim_matches('"').to_ascii_lowercase();
-                        let num_records: usize = parts[1].trim().parse().unwrap_or(0);
-                        let start_ms = now_unix_ms();
-                        // Determine next row id
-                        let existing_max: usize = {
-                            let rs = state.row_store.lock().expect("row_store lock early_call");
-                            let snap = rs.current_xid();
-                            rs.scan_at_snapshot(snap)
-                                .iter()
-                                .filter(|(k, _)| k.starts_with(&format!("{}:", table_name)))
-                                .filter_map(|(k, _)| k.splitn(2, ':').nth(1).and_then(|v| v.parse::<usize>().ok()))
-                                .max()
-                                .unwrap_or(0)
-                        };
-                        let ddl_cols = {
-                            let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock early_call");
-                            catalog.get(&table_name)
-                                .map(|e| extract_column_names_from_ddl(&e.original_statement))
-                                .unwrap_or_default()
-                        };
-                        let col_count = if ddl_cols.is_empty() { 3 } else { ddl_cols.len() };
-                        let mut inserted = 0usize;
-                        for i in 1..=num_records {
-                            let row_id = existing_max + i;
-                            let key = format!("{}:{}", table_name, row_id);
-                            let mut row_data: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-                            row_data.insert("__table".to_string(), table_name.clone());
-                            for col_idx in 0..col_count {
-                                let col_name = ddl_cols.get(col_idx).cloned().unwrap_or_else(|| format!("col_{col_idx}"));
-                                let val = if col_name.ends_with("_id") || col_name == "id" {
-                                    row_id.to_string()
-                                } else if col_name.contains("name") {
-                                    format!("Generated {table_name} {row_id}")
-                                } else if col_name.contains("date") || col_name.contains("_at") {
-                                    format!("2024-{:02}-{:02}", (row_id % 12) + 1, (row_id % 28) + 1)
-                                } else if col_name.contains("price") || col_name.contains("amount") || col_name.contains("cost") {
-                                    format!("{:.2}", 10.0 + (row_id as f64) * 0.5)
-                                } else if col_name.contains("qty") || col_name.contains("count") || col_name.contains("level") {
-                                    ((row_id % 500) + 1).to_string()
-                                } else if col_name.contains("email") {
-                                    format!("gen{row_id}@example.com")
-                                } else if col_name.contains("phone") {
-                                    format!("555-{row_id:04}")
-                                } else if col_name.contains("status") {
-                                    ["active", "pending", "done", "cancelled"][row_id % 4].to_string()
-                                } else if col_name.contains("rating") {
-                                    ((row_id % 5) + 1).to_string()
-                                } else if col_name.contains("comment") || col_name.contains("description") || col_name.contains("body") {
-                                    format!("Auto-generated record {row_id} for {table_name}")
-                                } else {
-                                    format!("value_{row_id}")
-                                };
-                                row_data.insert(col_name, val);
-                            }
-                            let mut rs = state.row_store.lock().expect("row_store lock early_call_loop");
-                            let xid = rs.begin_xid();
-                            rs.insert(xid, &key, row_data);
-                            drop(rs);
-                            inserted += 1;
-                        }
-                        let elapsed = now_unix_ms().saturating_sub(start_ms);
-                        append_runtime_audit_event(
-                            &state, AuditEventKind::Sql, &principal, "sql_execute", "ok",
-                            json!({ "call": "insert_rows", "table": table_name, "inserted": inserted }),
-                        );
-                        release_sql_data_plane_connection(&state, &connection_id);
-                        let udf_function_catalog = udf_function_catalog_contract();
-                        let udf_guard_policies = udf_guard_policy_contract();
-                        let udf_execution_plan = build_udf_execution_plan(&req.sql_batch);
-                        return Ok((StatusCode::OK, Json(SqlExecuteResponse {
-                            status: "ok",
-                            route_path: "oltp".to_string(),
-                            reason: format!("inserted {inserted} rows into {table_name}"),
-                            transaction: Some(SqlTransactionResponse {
-                                status: "committed",
-                                transaction_id: format!("call-{start_ms}"),
-                                statements_executed: inserted,
-                                requires_transaction: false,
-                                touches_catalog: false,
-                                rejected_statement_count: 0,
-                                elapsed_ms: elapsed,
-                            }),
-                            olap: None,
-                            rejected_statement_count: 0,
-                            udf_results: None,
-                            udf_guardrail_status: Some("passed".to_string()),
-                            udf_function_catalog,
-                            udf_guard_policies,
-                            udf_execution_plan,
-                            legacy_agg_results: None,
-                            planner_path: None,
-                            oltp_rows: None,
-                            olap_agg_results: None,
-                            columns: None,
-                            rows: None,
-                        })));
-                    }
-                }
-            }
-        }
+    // ── Demo CALL intercept (TODO: replace with real stored-procedure execution) ─
+    // Handle CALL insert_rows('<table>', <count>) for the studio demo button.
+    // This is NOT a real stored-procedure runtime — it is a fixed-name shortcut
+    // that synthesises rows with heuristic values. Once CREATE PROCEDURE / UDF
+    // execution lands, remove this and route through the real catalog.
+    // Tracked as gap §4.3 in gaps-may26-1.md.
+    if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req) {
+        return early;
     }
+
 
     let udf_function_catalog = udf_function_catalog_contract();
     let udf_guard_policies = udf_guard_policy_contract();

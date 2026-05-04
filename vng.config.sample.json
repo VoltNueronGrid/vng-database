@@ -1,0 +1,18 @@
+{
+  "_comment": "Sample runtime config for voltnuerongridd. Copy to vng.config.json next to the binary, or set VNG_CONFIG_PATH to point here. Every field is also overridable by env var (see crates/voltnuerongrid-config/src/lib.rs).",
+
+  "storage": {
+    "_engine_options": "rocksdb (default, supported) | vng (reserved for future)",
+    "engine": "rocksdb",
+    "data_dir": "./data",
+    "max_background_jobs": 4,
+    "wal_fsync_on_commit": true
+  },
+
+  "sql": {
+    "_engine_options": "datafusion (default, supported) | vng (reserved for future)",
+    "engine": "datafusion",
+    "htap_olap_threshold_rows": 100000,
+    "max_result_rows": 1000000
+  }
+}
