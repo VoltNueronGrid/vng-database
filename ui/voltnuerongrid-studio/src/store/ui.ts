@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type Screen = "welcome" | "main" | "dashboard";
-export type SidebarTab = "connections" | "users" | "history" | "saved";
+export type SidebarTab = "connections" | "databases" | "users" | "history" | "saved";
 
 interface UiState {
   screen: Screen;

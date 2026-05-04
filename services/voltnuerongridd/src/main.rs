@@ -493,6 +493,14 @@ struct AppState {
     tde_override: Arc<Mutex<Option<bool>>>,
     /// S10-WS15-02: Per-table CDC cursor positions (table_name → last consumed sequence).
     cdc_cursors: Arc<Mutex<HashMap<String, u64>>>,
+    /// Phase 1.3 — first-class `Database` catalog. Replaces the implicit
+    /// `database_name` string fragment used in `DdlCatalog` keys. New code
+    /// should consult this for existence/uniqueness checks; legacy code
+    /// continues to use `DdlCatalog` keys until the multi-database migration
+    /// completes (see `remaining.md` Phase 1.3).
+    database_catalog: Arc<Mutex<voltnuerongrid_meta::DatabaseCatalog>>,
+    /// Phase 0 — runtime config selected at boot. Read-only after startup.
+    runtime_config: Arc<voltnuerongrid_config::RuntimeConfig>,
 }
 
 #[derive(Clone, Default)]
@@ -5872,6 +5880,12 @@ async fn main() {
         connector_registry: Arc::new(Mutex::new(Vec::new())),
         tde_override: Arc::new(Mutex::new(None)),
         cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
+        // Phase 1.3 — first-class DatabaseCatalog. Empty at boot; populated
+        // via CREATE DATABASE. Future Phase 2 work will restore this from
+        // RocksDB instead of starting empty.
+        database_catalog: Arc::new(Mutex::new(voltnuerongrid_meta::DatabaseCatalog::new())),
+        // Phase 0 — read-only runtime config selected at boot.
+        runtime_config: Arc::new(runtime_config),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -5907,6 +5921,72 @@ async fn main() {
         res
     }
 
+    /// Phase 0.4 follow-up: emit `vng_http_requests_total` for every route, labeled
+    /// by method, route template (when matched), and response status class.
+    /// Also emits `vng_http_request_duration_seconds` as a histogram.
+    /// Skips itself for `/metrics` to avoid recursive label cardinality.
+    async fn track_http_metrics(req: Request<axum::body::Body>, next: Next) -> Response {
+        let method = req.method().clone();
+        let path = req.uri().path().to_string();
+        let started = std::time::Instant::now();
+
+        let response = next.run(req).await;
+
+        // Don't tag the metrics endpoint itself — Prometheus scrapes are
+        // not interesting application traffic and would skew histograms.
+        if path != "/metrics" {
+            let status = response.status().as_u16();
+            // Coarse status class (2xx / 3xx / 4xx / 5xx) keeps cardinality small.
+            let status_class = match status {
+                100..=199 => "1xx",
+                200..=299 => "2xx",
+                300..=399 => "3xx",
+                400..=499 => "4xx",
+                500..=599 => "5xx",
+                _ => "other",
+            };
+            // Coarsen unbounded paths to template-like buckets so we don't
+            // create one time-series per random ID. This is a pragmatic
+            // approximation; a future PR can plug into axum's matched-path
+            // info for precise route templates.
+            let route_label = coarsen_route_for_metrics(&path);
+
+            metrics::counter!(
+                "vng_http_requests_total",
+                "method" => method.as_str().to_string(),
+                "route" => route_label.clone(),
+                "status_class" => status_class,
+            )
+            .increment(1);
+
+            metrics::histogram!(
+                "vng_http_request_duration_seconds",
+                "method" => method.as_str().to_string(),
+                "route" => route_label,
+            )
+            .record(started.elapsed().as_secs_f64());
+        }
+
+        response
+    }
+
+    /// Map a request path to a low-cardinality route label.
+    /// e.g. `/api/v1/admin/databases/foo` → `/api/v1/admin/databases/:name`.
+    /// Conservative: only does well-known transformations; returns the path
+    /// as-is if no rule matches.
+    fn coarsen_route_for_metrics(path: &str) -> String {
+        // Path-id parameters that we know about so far. Add to this list as
+        // routes with dynamic segments are introduced.
+        for (prefix, replacement) in &[
+            ("/api/v1/admin/databases/", "/api/v1/admin/databases/:name"),
+        ] {
+            if path.starts_with(prefix) && path.len() > prefix.len() {
+                return replacement.to_string();
+            }
+        }
+        path.to_string()
+    }
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics_handler))
@@ -5931,6 +6011,12 @@ async fn main() {
         .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/admin/cluster/topology", get(admin_cluster_topology))
         .route("/api/v1/admin/schema/tree", get(admin_schema_tree))
+        // Phase 1.3 — first-class database lifecycle.
+        .route("/api/v1/admin/databases", get(admin_databases_list).post(admin_databases_create))
+        .route("/api/v1/admin/databases/:name", axum::routing::delete(admin_databases_drop))
+        .route("/api/v1/admin/databases/:name/metadata", get(admin_databases_metadata))
+        // Phase 0 — surface the boot-time runtime config (read-only).
+        .route("/api/v1/admin/runtime-config", get(admin_runtime_config))
         .route("/api/v1/admin/sql/transactions/control", post(admin_sql_transaction_control))
         .route("/api/v1/admin/sql/locks/control", post(admin_sql_lock_control))
         .route("/api/v1/admin/cluster/nodes/manage", post(admin_cluster_node_manage))
@@ -5954,6 +6040,7 @@ async fn main() {
         .route("/api/v1/sre/cache/invalidate", post(sre_cache_invalidate))
         .route("/api/*path", options(options_preflight))
         .layer(from_fn(add_cors))
+        .layer(from_fn(track_http_metrics))
         .route("/api/v1/sre/cache/rebalance", post(sre_cache_rebalance))
         .route("/api/v1/sre/cache/metrics", get(sre_cache_metrics))
         // REQ-27: Redis-compat cache command interface
@@ -20376,6 +20463,344 @@ struct AdminSchemaTreeResponse {
     timestamp: u128,
 }
 
+// ─── Phase 1.3 — Database CRUD ─────────────────────────────────────────────
+//
+// HTTP API for first-class database lifecycle management. Sits alongside
+// (and will eventually replace) the implicit `database_name` string used as
+// a key prefix in `DdlCatalog`. See `gaps-may26-1.md` §3.2 for context.
+
+#[derive(Serialize, Clone)]
+struct AdminDatabaseRecord {
+    name: String,
+    owner: Option<String>,
+    description: Option<String>,
+    created_at_ms: u128,
+}
+
+impl From<&voltnuerongrid_meta::Database> for AdminDatabaseRecord {
+    fn from(db: &voltnuerongrid_meta::Database) -> Self {
+        Self {
+            name: db.name.as_str().to_string(),
+            owner: db.owner.clone(),
+            description: db.description.clone(),
+            created_at_ms: db.created_at_ms,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AdminDatabasesListResponse {
+    databases: Vec<AdminDatabaseRecord>,
+    count: usize,
+}
+
+#[derive(Deserialize)]
+struct AdminCreateDatabaseRequest {
+    name: String,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    /// If true, succeed silently when the database already exists.
+    #[serde(default)]
+    if_not_exists: bool,
+}
+
+#[derive(Serialize)]
+struct AdminCreateDatabaseResponse {
+    status: &'static str,
+    database: Option<AdminDatabaseRecord>,
+    /// Set when the request was a no-op (database already existed and `if_not_exists` was true).
+    already_existed: bool,
+}
+
+#[derive(Deserialize, Default)]
+struct AdminDropDatabaseQuery {
+    /// If true, return success when the database does not exist.
+    #[serde(default)]
+    if_exists: bool,
+}
+
+#[derive(Serialize)]
+struct AdminDropDatabaseResponse {
+    status: &'static str,
+    dropped: Option<AdminDatabaseRecord>,
+    /// Set when the request was a no-op (database did not exist and `if_exists` was true).
+    not_found_acceptable: bool,
+}
+
+/// `GET /api/v1/admin/databases` — list all databases.
+async fn admin_databases_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AdminDatabasesListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    let catalog = match state.database_catalog.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            tracing::error!(target: "vng.handler", resource = "database_catalog", "mutex poisoned");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: "database_catalog mutex poisoned".to_string(),
+                }),
+            ));
+        }
+    };
+    let databases: Vec<AdminDatabaseRecord> =
+        catalog.list().into_iter().map(AdminDatabaseRecord::from).collect();
+    let count = databases.len();
+    Ok((
+        StatusCode::OK,
+        Json(AdminDatabasesListResponse { databases, count }),
+    ))
+}
+
+/// `POST /api/v1/admin/databases` — create a new database.
+///
+/// Returns 201 on success, 409 on conflict (unless `if_not_exists` is true,
+/// in which case 200 with `already_existed=true`), 400 on invalid name.
+async fn admin_databases_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AdminCreateDatabaseRequest>,
+) -> Result<(StatusCode, Json<AdminCreateDatabaseResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    let mut catalog = match state.database_catalog.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            tracing::error!(target: "vng.handler", resource = "database_catalog", "mutex poisoned");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: "database_catalog mutex poisoned".to_string(),
+                }),
+            ));
+        }
+    };
+    let now_ms = now_unix_ms() as u128;
+    match catalog.create(
+        &req.name,
+        now_ms,
+        req.owner.as_deref(),
+        req.description.as_deref(),
+    ) {
+        Ok(db) => {
+            let record = AdminDatabaseRecord::from(db);
+            tracing::info!(
+                target: "vng.database",
+                name = %record.name,
+                owner = ?record.owner,
+                "database created"
+            );
+            metrics::counter!(
+                "vng_database_lifecycle_total",
+                "operation" => "create",
+                "status" => "ok",
+            )
+            .increment(1);
+            Ok((
+                StatusCode::CREATED,
+                Json(AdminCreateDatabaseResponse {
+                    status: "ok",
+                    database: Some(record),
+                    already_existed: false,
+                }),
+            ))
+        }
+        Err(voltnuerongrid_meta::DatabaseCatalogError::AlreadyExists { name }) if req.if_not_exists => {
+            // Idempotent path — return current record.
+            let record = catalog.get(&name).map(AdminDatabaseRecord::from);
+            metrics::counter!(
+                "vng_database_lifecycle_total",
+                "operation" => "create",
+                "status" => "noop_exists",
+            )
+            .increment(1);
+            Ok((
+                StatusCode::OK,
+                Json(AdminCreateDatabaseResponse {
+                    status: "ok",
+                    database: record,
+                    already_existed: true,
+                }),
+            ))
+        }
+        Err(voltnuerongrid_meta::DatabaseCatalogError::AlreadyExists { name }) => {
+            metrics::counter!(
+                "vng_database_lifecycle_total",
+                "operation" => "create",
+                "status" => "conflict",
+            )
+            .increment(1);
+            Err((
+                StatusCode::CONFLICT,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: format!("database {name:?} already exists"),
+                }),
+            ))
+        }
+        Err(e) => {
+            metrics::counter!(
+                "vng_database_lifecycle_total",
+                "operation" => "create",
+                "status" => "invalid",
+            )
+            .increment(1);
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: e.to_string(),
+                }),
+            ))
+        }
+    }
+}
+
+/// `DELETE /api/v1/admin/databases/{name}` — drop a database.
+async fn admin_databases_drop(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Query(q): Query<AdminDropDatabaseQuery>,
+) -> Result<(StatusCode, Json<AdminDropDatabaseResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    let mut catalog = match state.database_catalog.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: "database_catalog mutex poisoned".to_string(),
+                }),
+            ));
+        }
+    };
+    match catalog.drop_database(&name, q.if_exists) {
+        Ok(Some(db)) => {
+            let record = AdminDatabaseRecord::from(&db);
+            tracing::info!(target: "vng.database", name = %record.name, "database dropped");
+            metrics::counter!(
+                "vng_database_lifecycle_total",
+                "operation" => "drop",
+                "status" => "ok",
+            )
+            .increment(1);
+            Ok((
+                StatusCode::OK,
+                Json(AdminDropDatabaseResponse {
+                    status: "ok",
+                    dropped: Some(record),
+                    not_found_acceptable: false,
+                }),
+            ))
+        }
+        Ok(None) => {
+            metrics::counter!(
+                "vng_database_lifecycle_total",
+                "operation" => "drop",
+                "status" => "noop_missing",
+            )
+            .increment(1);
+            Ok((
+                StatusCode::OK,
+                Json(AdminDropDatabaseResponse {
+                    status: "ok",
+                    dropped: None,
+                    not_found_acceptable: true,
+                }),
+            ))
+        }
+        Err(voltnuerongrid_meta::DatabaseCatalogError::NotFound { name }) => {
+            metrics::counter!(
+                "vng_database_lifecycle_total",
+                "operation" => "drop",
+                "status" => "not_found",
+            )
+            .increment(1);
+            Err((
+                StatusCode::NOT_FOUND,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: format!("database {name:?} not found"),
+                }),
+            ))
+        }
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: e.to_string(),
+            }),
+        )),
+    }
+}
+
+/// `GET /api/v1/admin/databases/{name}/metadata` — return the static
+/// metadata-schema layout for a database. Phase 1.4 will replace this with
+/// live data-bearing rows; for now this returns the column-list schema so
+/// the Studio can render the metadata browser.
+#[derive(Serialize)]
+struct AdminMetadataLayoutResponse {
+    database: String,
+    schema: &'static str,
+    tables: Vec<voltnuerongrid_meta::MetadataTableSpec>,
+}
+
+async fn admin_databases_metadata(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<(StatusCode, Json<AdminMetadataLayoutResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    let catalog = match state.database_catalog.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: "database_catalog mutex poisoned".to_string(),
+                }),
+            ));
+        }
+    };
+    if !catalog.exists(&name) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: format!("database {name:?} not found"),
+            }),
+        ));
+    }
+    drop(catalog);
+    Ok((
+        StatusCode::OK,
+        Json(AdminMetadataLayoutResponse {
+            database: name.trim().to_ascii_lowercase(),
+            schema: "metadata",
+            tables: voltnuerongrid_meta::metadata_schema_layout(),
+        }),
+    ))
+}
+
+/// `GET /api/v1/admin/runtime-config` — read-only view of the boot-time
+/// runtime configuration (storage engine, SQL engine, tunables). Used by
+/// the Studio settings panel to show what backends are active.
+async fn admin_runtime_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<voltnuerongrid_config::RuntimeConfig>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+    Ok((StatusCode::OK, Json((*state.runtime_config).clone())))
+}
+
 async fn admin_schema_tree(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -21063,6 +21488,10 @@ mod tests {
             connector_registry: Arc::new(Mutex::new(Vec::new())),
             tde_override: Arc::new(Mutex::new(None)),
             cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
+            // Phase 1.3 — DatabaseCatalog (test default: empty).
+            database_catalog: Arc::new(Mutex::new(voltnuerongrid_meta::DatabaseCatalog::new())),
+            // Phase 0 — runtime config (test default).
+            runtime_config: Arc::new(voltnuerongrid_config::RuntimeConfig::default()),
         }
     }
 
