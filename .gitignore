@@ -3,6 +3,18 @@
 #Ignore vscode AI rules
 .github\instructions\codacy.instructions.md
 /target/
+
+# OS / editor scratch
+.DS_Store
+**/.DS_Store
+*.swp
+*.swo
+.idea/
+*.iml
+
+# Backup / scratch lockfile copies
+Cargo.lock.bak
+
 reference/VSCodeUserSetup-x64-1.110.0.exe
 tests/kpi/results/20260304-pr007/reports/final-gate-report.md
 tests/kpi/results/20260304-pr007/reports/final-gate-report.json

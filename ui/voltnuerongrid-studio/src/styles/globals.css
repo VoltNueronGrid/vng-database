@@ -2,33 +2,37 @@
    VoltNueronGrid Studio — Global Stylesheet
    ═══════════════════════════════════════════════════════════════ */
 
-/* ─── Design Tokens ──────────────────────────────────────────── */
+/* ─── Design Tokens ──────────────────────────────────────────────
+   Source of truth: design/studio-design.html
+   Any drift between this block and the design prototype is a bug.
+   When updating, update both files together.
+   ────────────────────────────────────────────────────────────── */
 :root {
   /* Brand */
-  --brand-cyan:      #00d4ff;
-  --brand-cyan-dim:  #00d4ff1a;
-  --brand-cyan-low:  #00d4ff0d;
-  --brand-purple:    #9333ea;
-  --brand-purple-dim:#9333ea1a;
+  --brand-cyan:       #00d4ff;
+  --brand-cyan-dim:   #00d4ff22;
+  --brand-cyan-low:   #00d4ff0d; /* extension over design (used in subtle hovers) */
+  --brand-purple:     #9333ea;
+  --brand-purple-dim: #9333ea22;
 
-  /* Surfaces */
-  --bg-base: #08080f;
-  --bg-1:    #0f0f1a;
-  --bg-2:    #15151f;
-  --bg-3:    #1c1c2a;
-  --bg-4:    #232334;
-  --bg-hover:#25253a;
-  --bg-active:#2a2a40;
+  /* Surfaces — match design/studio-design.html */
+  --bg-base:    #08080f;
+  --bg-1:       #0f0f1a;
+  --bg-2:       #15151f;
+  --bg-3:       #1c1c2a;
+  --bg-4:       #222232;
+  --bg-hover:   #252538;
+  --bg-active:  #2a2a40;
 
-  /* Borders */
-  --border:        #21212e;
-  --border-strong: #2e2e3e;
+  /* Borders — match design */
+  --border:        #252534;
+  --border-strong: #333348;
 
-  /* Text */
-  --text-1: #e4e4f0;
-  --text-2: #a8a8c0;
-  --text-3: #5a5a78;
-  --text-inv:#0a0a14;
+  /* Text — match design */
+  --text-1:   #e4e4f0;
+  --text-2:   #a8a8c0;
+  --text-3:   #6a6a88;
+  --text-inv: #0a0a14;
 
   /* Status */
   --green:  #22c55e;
@@ -37,7 +41,7 @@
   --blue:   #3b82f6;
   --orange: #f97316;
 
-  /* Column type colours */
+  /* Column type colours — match design */
   --type-int:  #60a5fa;
   --type-str:  #34d399;
   --type-bool: #a78bfa;
@@ -45,16 +49,20 @@
   --type-json: #fb7185;
 
   /* Layout */
-  --sidebar-w:    240px;
-  --titlebar-h:   38px;
-  --tabbar-h:     36px;
-  --statusbar-h:  26px;
-  --right-panel-w:260px;
+  --sidebar-w:     240px;
+  --titlebar-h:    38px;
+  --tabbar-h:      36px;
+  --statusbar-h:   26px;
+  --right-panel-w: 260px; /* extension over design (right-panel feature) */
 
-  /* Shape */
-  --r-sm: 4px;
-  --r-md: 7px;
-  --r-lg: 10px;
+  /* Shape — design uses `--radius-*`; we keep `--r-*` as legacy aliases
+     so existing component code (~15 references) continues to compile. */
+  --radius-sm: 4px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --r-sm: var(--radius-sm);
+  --r-md: var(--radius-md);
+  --r-lg: var(--radius-lg);
 
   /* Font */
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;

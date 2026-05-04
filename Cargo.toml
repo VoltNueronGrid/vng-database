@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/voltnuerongrid-core",
+  "crates/voltnuerongrid-config",
   "crates/voltnuerongrid-sql",
   "crates/voltnuerongrid-opt",
   "crates/voltnuerongrid-exec",
