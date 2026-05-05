@@ -1,5 +1,6 @@
 import { useUiStore } from "@/store/ui";
 import { ConnectionList } from "./ConnectionList";
+import { DatabasesPanel } from "./DatabasesPanel";
 import { UsersPanel } from "./UsersPanel";
 
 export function Sidebar() {
@@ -15,6 +16,13 @@ export function Sidebar() {
           title="Connections & Schema"
         >
           Schema
+        </button>
+        <button
+          className={`activity-btn ${sidebarTab === "databases" ? "active" : ""}`}
+          onClick={() => setSidebarTab("databases")}
+          title="Databases (create / drop)"
+        >
+          DBs
         </button>
         <button
           className={`activity-btn ${sidebarTab === "users" ? "active" : ""}`}
@@ -45,6 +53,7 @@ export function Sidebar() {
             <ConnectionList />
           </>
         )}
+        {sidebarTab === "databases" && <DatabasesPanel />}
         {sidebarTab === "users" && <UsersPanel />}
         {sidebarTab === "history" && (
           <div style={{ padding: "16px 12px", color: "var(--text-3)", fontSize: 12 }}>

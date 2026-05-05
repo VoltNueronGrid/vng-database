@@ -9,6 +9,9 @@ pub mod legacy_aggregations;
 pub mod planner;
 pub mod tokenizer;
 
+#[cfg(feature = "sqlparser-adapter")]
+pub mod sqlparser_adapter;
+
 pub use ast::{
     parse_one, ColumnDef, CreateTableStatement, DeleteStatement, InsertStatement,
     JoinClause, OrderByClause, SelectStatement, Statement, UpdateStatement,

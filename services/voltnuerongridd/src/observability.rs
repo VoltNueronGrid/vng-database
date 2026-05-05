@@ -86,6 +86,10 @@ fn init_metrics() {
         "vng_http_requests_total",
         "Total number of HTTP requests received, labeled by route and status."
     );
+    metrics::describe_histogram!(
+        "vng_http_request_duration_seconds",
+        "End-to-end HTTP request duration in seconds, labeled by route and method."
+    );
     metrics::describe_counter!(
         "vng_sql_execute_total",
         "Total number of SQL execute calls, labeled by route_path and status."
@@ -97,6 +101,10 @@ fn init_metrics() {
     metrics::describe_histogram!(
         "vng_sql_execute_duration_ms",
         "Wall-clock duration of SQL execute calls, in milliseconds."
+    );
+    metrics::describe_counter!(
+        "vng_database_lifecycle_total",
+        "Total CREATE/DROP DATABASE operations by status."
     );
 }
 

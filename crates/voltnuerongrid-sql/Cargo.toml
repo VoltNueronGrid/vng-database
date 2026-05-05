@@ -7,3 +7,11 @@ authors.workspace = true
 
 [dependencies]
 voltnuerongrid-core = { path = "../voltnuerongrid-core" }
+# Phase 1.6 — real SQL parsing. Optional behind a feature flag so a future
+# release can ship without the dep when the bespoke VNG parser matures.
+# Default-on (matches `SqlEngine::Datafusion` boot default).
+sqlparser = { version = "0.51", optional = true }
+
+[features]
+default = ["sqlparser-adapter"]
+sqlparser-adapter = ["dep:sqlparser"]

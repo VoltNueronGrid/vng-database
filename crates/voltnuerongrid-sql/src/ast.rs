@@ -297,6 +297,21 @@ pub struct JoinClause {
 /// valid SQL but not yet handled by this parser (e.g. TRUNCATE, EXPLAIN).
 /// Returns `Err(reason)` only for clearly malformed or empty input.
 pub fn parse_one(sql: &str) -> Result<Statement, String> {
+    // Phase 1.6 — try the structural sqlparser-rs adapter first. It returns
+    // `Some(Statement)` for SELECT and transaction-control statements; for
+    // everything else we fall through to the legacy substring-flag parser
+    // (still needed for INSERT / UPDATE / DELETE / DDL until Phase 1.7
+    // widens the adapter).
+    //
+    // The substring flags would otherwise trigger false positives on string
+    // literals and comments — see `gaps-may26-1.md` §3.3.
+    #[cfg(feature = "sqlparser-adapter")]
+    {
+        if let Some(stmt) = crate::sqlparser_adapter::parse_with_sqlparser(sql) {
+            return Ok(stmt);
+        }
+    }
+
     let tokens = semantic_tokens(sql);
     if tokens.is_empty() {
         return Err("empty input".to_string());

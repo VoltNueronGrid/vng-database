@@ -179,6 +179,78 @@ export interface ClusterNode {
   draining: boolean;
 }
 
+// ─── Phase 1.3 — Database lifecycle ──────────────────────────────────────────
+
+export interface DatabaseRecord {
+  name: string;
+  owner: string | null;
+  description: string | null;
+  created_at_ms: number;
+}
+
+export interface DatabasesListResponse {
+  databases: DatabaseRecord[];
+  count: number;
+}
+
+export interface CreateDatabaseRequest {
+  name: string;
+  owner?: string;
+  description?: string;
+  if_not_exists?: boolean;
+}
+
+export interface CreateDatabaseResponse {
+  status: string;
+  database: DatabaseRecord | null;
+  already_existed: boolean;
+}
+
+export interface DropDatabaseResponse {
+  status: string;
+  dropped: DatabaseRecord | null;
+  not_found_acceptable: boolean;
+}
+
+export interface MetadataTableSpec {
+  name: string;
+  columns: string[];
+}
+
+export interface MetadataLayoutResponse {
+  database: string;
+  schema: "metadata";
+  tables: MetadataTableSpec[];
+}
+
+export interface MetadataRowsResponse {
+  database: string;
+  table: string;
+  columns: string[];
+  rows: Array<Record<string, string>>;
+  row_count: number;
+}
+
+// ─── Phase 0 — Runtime config (read-only) ────────────────────────────────────
+
+export interface StorageConfig {
+  engine: "rocksdb" | "vng";
+  data_dir: string;
+  max_background_jobs: number;
+  wal_fsync_on_commit: boolean;
+}
+
+export interface SqlConfig {
+  engine: "datafusion" | "vng";
+  htap_olap_threshold_rows: number;
+  max_result_rows: number;
+}
+
+export interface RuntimeConfigResponse {
+  storage: StorageConfig;
+  sql: SqlConfig;
+}
+
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 export class StudioApiClient {
@@ -198,6 +270,39 @@ export class StudioApiClient {
 
   async getSchemaTree(): Promise<SchemaRegistry> {
     return this.get<SchemaRegistry>("/api/v1/admin/schema/tree");
+  }
+
+  // ── Phase 1.3 — Database lifecycle ────────────────────────────────────────
+
+  async listDatabases(): Promise<DatabasesListResponse> {
+    return this.get<DatabasesListResponse>("/api/v1/admin/databases");
+  }
+
+  async createDatabase(req: CreateDatabaseRequest): Promise<CreateDatabaseResponse> {
+    return this.post<CreateDatabaseResponse>("/api/v1/admin/databases", req);
+  }
+
+  async dropDatabase(name: string, ifExists = false): Promise<DropDatabaseResponse> {
+    const qs = ifExists ? "?if_exists=true" : "";
+    return this.del<DropDatabaseResponse>(
+      `/api/v1/admin/databases/${encodeURIComponent(name)}${qs}`,
+    );
+  }
+
+  async getDatabaseMetadata(name: string): Promise<MetadataLayoutResponse> {
+    return this.get<MetadataLayoutResponse>(
+      `/api/v1/admin/databases/${encodeURIComponent(name)}/metadata`,
+    );
+  }
+
+  async getDatabaseMetadataRows(name: string, table: string): Promise<MetadataRowsResponse> {
+    return this.get<MetadataRowsResponse>(
+      `/api/v1/admin/databases/${encodeURIComponent(name)}/metadata/${encodeURIComponent(table)}`,
+    );
+  }
+
+  async getRuntimeConfig(): Promise<RuntimeConfigResponse> {
+    return this.get<RuntimeConfigResponse>("/api/v1/admin/runtime-config");
   }
 
   async getAuditEvents(maxItems = 100): Promise<AuditEventsResponse> {
@@ -257,6 +362,14 @@ export class StudioApiClient {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(body),
+    });
+    return this.parse<T>(res);
+  }
+
+  private async del<T>(path: string): Promise<T> {
+    const res = await fetch(`${this.baseUrl()}${path}`, {
+      method: "DELETE",
+      headers: this.headers(),
     });
     return this.parse<T>(res);
   }
