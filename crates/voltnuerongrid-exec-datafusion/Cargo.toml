@@ -1,0 +1,39 @@
+[package]
+name = "voltnuerongrid-exec-datafusion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Phase 1.7 — correct OLTP SELECT executor.
+#
+# This crate intentionally does NOT pull in DataFusion yet. DataFusion 35+ has
+# transitive dependencies (icu, blake3, cpufeatures) that require Rust 2024
+# edition support which our current MSRV doesn't have. The crate name is
+# kept aspirational so when the toolchain bumps we can add DataFusion alongside
+# the existing std-only path without renaming.
+#
+# What we deliver today:
+# - A correct, AST-driven SELECT executor over PagedRowStore.
+# - Equality, inequality, range, BETWEEN, IN, IS NULL, AND/OR predicates.
+# - Column projection (SELECT a, b not SELECT *).
+# - ORDER BY (single-column, ASC/DESC).
+# - LIMIT / OFFSET.
+# - Basic aggregates (COUNT, SUM, AVG, MIN, MAX) without GROUP BY.
+#
+# What's deferred to "true DataFusion" once MSRV permits:
+# - JOIN execution.
+# - GROUP BY.
+# - HAVING.
+# - Window functions.
+# - Subqueries.
+# - Real Arrow columnar physical plans.
+
+[dependencies]
+voltnuerongrid-core = { path = "../voltnuerongrid-core" }
+voltnuerongrid-sql  = { path = "../voltnuerongrid-sql" }
+voltnuerongrid-store = { path = "../voltnuerongrid-store" }
+sqlparser = "0.51"
+
+[dev-dependencies]
+

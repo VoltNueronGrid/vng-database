@@ -16209,48 +16209,105 @@ fn execute_oltp_select(
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     limit: usize,
 ) -> Vec<OltpRowResult> {
+    use voltnuerongrid_exec_datafusion::{execute_select, SelectOutput, ExecError};
+
+    let mut results: Vec<OltpRowResult> = Vec::new();
+    for stmt_str in statements {
+        let remaining = limit.saturating_sub(results.len());
+        if remaining == 0 {
+            break;
+        }
+        // Phase 1.7 — try the correct AST-driven executor first.
+        // It returns Unsupported for features it can't handle yet
+        // (JOIN, GROUP BY, subquery), in which case we fall back to the
+        // legacy substring scan to preserve existing behaviour.
+        match execute_select(stmt_str, rs, remaining) {
+            Ok(SelectOutput::Rows(rows)) => {
+                metrics::counter!(
+                    "vng_sql_select_executor_total",
+                    "engine" => "vng_correct",
+                    "outcome" => "ok",
+                ).increment(1);
+                for r in rows {
+                    results.push(OltpRowResult { key: r.key, data: r.data });
+                    if results.len() >= limit { break; }
+                }
+                continue;
+            }
+            Ok(SelectOutput::Aggregate(_)) => {
+                // Aggregate fast-path output isn't representable in the
+                // OltpRowResult wire format. Fall through to legacy which
+                // also doesn't handle this; the legacy_aggregations crate
+                // is invoked separately by the planner.
+                metrics::counter!(
+                    "vng_sql_select_executor_total",
+                    "engine" => "vng_correct",
+                    "outcome" => "aggregate_passthrough",
+                ).increment(1);
+            }
+            Err(ExecError::Unsupported(_)) => {
+                metrics::counter!(
+                    "vng_sql_select_executor_total",
+                    "engine" => "vng_correct",
+                    "outcome" => "unsupported_fallback",
+                ).increment(1);
+                // Fall through to legacy.
+            }
+            Err(_) => {
+                // Not a SELECT, or bad predicate — skip silently (legacy
+                // would have skipped too).
+                continue;
+            }
+        }
+
+        // Legacy substring fallback path.
+        execute_oltp_select_legacy(stmt_str, rs, limit, &mut results);
+    }
+    results
+}
+
+/// Legacy substring-based executor. Kept as a fallback for queries the new
+/// executor doesn't support yet (JOIN / GROUP BY / subquery). To be deleted
+/// once the new executor covers those features.
+///
+/// **Known incorrect:** uses `row_key.contains(prefix_str)` which makes
+/// `WHERE id = 5` match rows 15, 25, 50, 51 etc. The new path is preferred
+/// whenever it can handle the query.
+fn execute_oltp_select_legacy(
+    stmt_str: &str,
+    rs: &voltnuerongrid_store::mvcc::PagedRowStore,
+    limit: usize,
+    results: &mut Vec<OltpRowResult>,
+) {
     use voltnuerongrid_sql::{parse_one, Statement};
     let snapshot_xid = rs.current_xid();
-    // Collect all visible rows once; reuse across multiple SELECT statements.
     let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = rs
         .scan_at_snapshot(snapshot_xid)
         .into_iter()
         .map(|(k, d)| (k.to_string(), d.clone()))
         .collect();
-    let mut results: Vec<OltpRowResult> = Vec::new();
-    for stmt_str in statements {
-        if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
-            // Honour the SQL-level LIMIT clause: take the min of the parsed LIMIT
-            // and the caller-supplied cap so that `SELECT … LIMIT 20` never returns
-            // more than 20 rows even when `max_rows` is larger.
-            let sql_limit: usize = sel
-                .limit
-                .map(|l| l as usize)
-                .unwrap_or(limit)
-                .min(limit);
-
-            // Try to extract a literal key/prefix from `WHERE <col> = '<val>'`
-            let prefix: Option<String> = sel.where_clause.as_deref().and_then(|w| {
-                let eq = w.find('=')?;
-                let rhs = w[eq + 1..].trim();
-                let val = rhs.trim_matches('\'').trim_matches('"').trim();
-                if val.is_empty() { None } else { Some(val.to_string()) }
-            });
-            let prefix_str = prefix.as_deref().unwrap_or("");
-            let remaining = sql_limit.saturating_sub(results.len());
-            let batch: Vec<OltpRowResult> = all_rows
-                .iter()
-                .filter(|(k, _)| prefix_str.is_empty() || k.contains(prefix_str))
-                .take(remaining)
-                .map(|(k, d)| OltpRowResult { key: k.clone(), data: d.clone() })
-                .collect();
-            results.extend(batch);
-            if results.len() >= sql_limit {
-                break;
-            }
-        }
+    if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
+        let sql_limit: usize = sel
+            .limit
+            .map(|l| l as usize)
+            .unwrap_or(limit)
+            .min(limit);
+        let prefix: Option<String> = sel.where_clause.as_deref().and_then(|w| {
+            let eq = w.find('=')?;
+            let rhs = w[eq + 1..].trim();
+            let val = rhs.trim_matches('\'').trim_matches('"').trim();
+            if val.is_empty() { None } else { Some(val.to_string()) }
+        });
+        let prefix_str = prefix.as_deref().unwrap_or("");
+        let remaining = sql_limit.saturating_sub(results.len());
+        let batch: Vec<OltpRowResult> = all_rows
+            .iter()
+            .filter(|(k, _)| prefix_str.is_empty() || k.contains(prefix_str))
+            .take(remaining)
+            .map(|(k, d)| OltpRowResult { key: k.clone(), data: d.clone() })
+            .collect();
+        results.extend(batch);
     }
-    results
 }
 
 fn execute_udf_runtime_scaffold(sql_batch: &str) -> Result<Vec<UdfExecutionResult>, String> {
