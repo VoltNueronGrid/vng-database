@@ -62,4 +62,21 @@ Next:
 7. We need native UI, not just thin client
 8. We need clone schema support with trillion rows per table
 9. Introduce versioning of database resources if possible - new concept
-10. 
+
+
+
+
+====
+
+What's left (recommended next session) - please refer to #remaining.md for details.
+
+Phase 2 — RocksDB is now the highest leverage item. Reasons:
+
+Closes the durability gap (the in-memory "WAL" that uses flush() not fsync).
+Forces the MSRV bump, which unblocks real DataFusion adoption.
+Phase 0's config selector for RocksDB | VNG is already wired and waiting.
+
+The full handoff is in remaining.md on the branch and commit and push to origin.
+
+Caveat (same as last 4 sessions)
+The service main.rs integration was not compile-tested locally — only the new crate and the other workspace crates were. Please complete and fix if any further issues come up.
