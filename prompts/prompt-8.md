@@ -22,3 +22,44 @@ UI:
 Please modify the Backend and Frontend if needed. Use cursor and github copilot instructions and rules.
 
 Please write a remaining.md if you are running out of tokens or hitting session limits.
+
+
+========
+
+
+Storage substrate: are you OK with adopting RocksDB for durable persistence, or do you specifically want a from-scratch Rust storage engine? RocksDB is the realistic path; from-scratch is a year of work.
+- [pavan] - Yes, but I need a configuration, where I can select RocksDB or VNG. Idea is we can start with RocksDB now and later implement our own like Cockroach. Also, RocksDB is written in C++ which means, if we have to fix any issues w.r.t RocksDB, I am not sure how much complex it would be and compatible wit Rust. So, let it be configuration wise with default as RocksDB for now. If user chooses to VNG, we can just mention that it is NOT support for now and will be available in future releases.
+
+SQL engine: are you OK with adopting DataFusion + sqlparser-rs for execution & parsing, or do you want to keep the bespoke pieces? DataFusion would replace voltnuerongrid-exec, voltnuerongrid-opt, and most of the SQL execution surface — big refactor, but turns "doesn't work" into "works correctly" overnight.
+- [pavan] - Yes, but I need a configuration, where I can select DataFusion + sqlparser-rs or VNG. Idea is we can start with DataFusion + sqlparser-rs now and later implement our own logic. So, let it be configuration wise with default as DataFusion + sqlparser-rs for now. If user chooses to VNG, we can just mention that it is NOT support for now and will be available in future releases.
+
+
+Scope priority: if I have to pick ONE of {durable storage, real SQL execution, multi-DB + users, OLAP path, drivers, UI parity} to land first, what do you want to demo end-to-end?
+- [pavan] - If I have to make this a production grade, I need all of them. However, we can go by this priority:
+durable storage
+real SQL execution
+UI parity
+drivers
+multi-DB + users
+OLAP path
+
+Backwards compatibility: are the existing 311 HTTP routes a contract you need to keep, or are some of them legacy / experimental that I can prune in the refactor?
+- [pavan]: Yes, please go ahead
+
+The 33k-line main.rs refactor: can I split it into modules in a separate PR before functional work? It's a prerequisite for clean changes after.
+- [pavan] - Yes, please go ahead and refactor for modular, clean-code, maintainable code, following reusability, OOPs, backward compability and SOLID principles.
+
+
+
+====
+Next:
+1. Drivers should work natively.
+2. Performance is the peak. if possible, generate an idea for fast insertions, fast updates and fast retrivals. combine vector and Sql and nosql concepts if necessary.
+3. Review the code to make sure no gaps and this should be really a performant grade database.
+4. Make sure we support New SQL as well (future requirement)
+5. Make sure we support multi-model
+6. We need database agents
+7. We need native UI, not just thin client
+8. We need clone schema support with trillion rows per table
+9. Introduce versioning of database resources if possible - new concept
+10. 
