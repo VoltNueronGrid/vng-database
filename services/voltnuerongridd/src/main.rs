@@ -6015,6 +6015,7 @@ async fn main() {
         .route("/api/v1/admin/databases", get(admin_databases_list).post(admin_databases_create))
         .route("/api/v1/admin/databases/:name", axum::routing::delete(admin_databases_drop))
         .route("/api/v1/admin/databases/:name/metadata", get(admin_databases_metadata))
+        .route("/api/v1/admin/databases/:name/metadata/:table", get(admin_databases_metadata_rows))
         // Phase 0 — surface the boot-time runtime config (read-only).
         .route("/api/v1/admin/runtime-config", get(admin_runtime_config))
         .route("/api/v1/admin/sql/transactions/control", post(admin_sql_transaction_control))
@@ -20786,6 +20787,297 @@ async fn admin_databases_metadata(
             database: name.trim().to_ascii_lowercase(),
             schema: "metadata",
             tables: voltnuerongrid_meta::metadata_schema_layout(),
+        }),
+    ))
+}
+
+// ─── Phase 1.4 — live metadata.* rows ──────────────────────────────────────
+//
+// Implements `MetadataDataProvider` for the service's `AppState`, then
+// surfaces the rows over HTTP. Once the DataFusion executor lands
+// (Phase 1.7), `SELECT * FROM metadata.tables` will read through this same
+// provider.
+//
+// Design choice: we don't take any locks while building rows — instead we
+// snapshot the catalog under its mutex, drop the lock, then walk the
+// snapshot. This keeps the catalog mutex hold time short.
+
+/// Adapter that lets us pass `&AppState` where a
+/// `voltnuerongrid_meta::MetadataDataProvider` is required.
+struct AppStateMetadataProvider<'a> {
+    state: &'a AppState,
+}
+
+impl<'a> voltnuerongrid_meta::MetadataDataProvider for AppStateMetadataProvider<'a> {
+    fn rows_for(
+        &self,
+        table: voltnuerongrid_meta::MetadataTable,
+        database_name: &voltnuerongrid_meta::DatabaseName,
+    ) -> Vec<voltnuerongrid_meta::MetadataRow> {
+        use voltnuerongrid_meta::{MetadataRow, MetadataTable};
+
+        let db_str = database_name.as_str();
+        let mut out: Vec<MetadataRow> = Vec::new();
+
+        match table {
+            MetadataTable::Databases => {
+                // List ALL databases (this table ignores the per-DB filter —
+                // every database can introspect the global database list).
+                if let Ok(catalog) = self.state.database_catalog.lock() {
+                    for db in catalog.list() {
+                        let mut row = MetadataRow::new();
+                        row.insert("name".to_string(), db.name.as_str().to_string());
+                        row.insert(
+                            "owner".to_string(),
+                            db.owner.clone().unwrap_or_default(),
+                        );
+                        row.insert("created_at_ms".to_string(), db.created_at_ms.to_string());
+                        row.insert(
+                            "description".to_string(),
+                            db.description.clone().unwrap_or_default(),
+                        );
+                        out.push(row);
+                    }
+                }
+            }
+
+            MetadataTable::Tables => {
+                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                    for entry in catalog.active_entries() {
+                        if entry.database_name != db_str {
+                            continue;
+                        }
+                        if entry.object_kind != "table" {
+                            continue;
+                        }
+                        let mut row = MetadataRow::new();
+                        row.insert("database_name".to_string(), entry.database_name.clone());
+                        row.insert("schema_name".to_string(), entry.schema_name.clone());
+                        row.insert("table_name".to_string(), entry.object_name.clone());
+                        row.insert("kind".to_string(), entry.object_kind.clone());
+                        row.insert(
+                            "created_at_ms".to_string(),
+                            entry.created_at_unix_ms.to_string(),
+                        );
+                        out.push(row);
+                    }
+                }
+            }
+
+            MetadataTable::Schemas => {
+                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                    let mut schemas: std::collections::BTreeSet<String> = Default::default();
+                    for entry in catalog.active_entries() {
+                        if entry.database_name == db_str {
+                            schemas.insert(entry.schema_name.clone());
+                        }
+                    }
+                    // Always expose the virtual `metadata` schema so the
+                    // Studio's tree always shows it.
+                    schemas.insert("metadata".to_string());
+                    for schema_name in schemas {
+                        let mut row = MetadataRow::new();
+                        row.insert("database_name".to_string(), db_str.to_string());
+                        row.insert("schema_name".to_string(), schema_name);
+                        out.push(row);
+                    }
+                }
+            }
+
+            MetadataTable::Views => {
+                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                    for entry in catalog.active_entries() {
+                        if entry.database_name != db_str {
+                            continue;
+                        }
+                        if entry.object_kind != "view" && entry.object_kind != "materialized_view" {
+                            continue;
+                        }
+                        let mut row = MetadataRow::new();
+                        row.insert("database_name".to_string(), entry.database_name.clone());
+                        row.insert("schema_name".to_string(), entry.schema_name.clone());
+                        row.insert("view_name".to_string(), entry.object_name.clone());
+                        row.insert("definition".to_string(), entry.original_statement.clone());
+                        out.push(row);
+                    }
+                }
+            }
+
+            MetadataTable::Routines => {
+                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                    for entry in catalog.active_entries() {
+                        if entry.database_name != db_str {
+                            continue;
+                        }
+                        if entry.object_kind != "function" && entry.object_kind != "procedure" {
+                            continue;
+                        }
+                        let mut row = MetadataRow::new();
+                        row.insert("database_name".to_string(), entry.database_name.clone());
+                        row.insert("schema_name".to_string(), entry.schema_name.clone());
+                        row.insert("routine_name".to_string(), entry.object_name.clone());
+                        row.insert("language".to_string(), "sql".to_string());
+                        row.insert("kind".to_string(), entry.object_kind.clone());
+                        out.push(row);
+                    }
+                }
+            }
+
+            MetadataTable::Triggers => {
+                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                    for entry in catalog.active_entries() {
+                        if entry.database_name != db_str {
+                            continue;
+                        }
+                        if entry.object_kind != "trigger" {
+                            continue;
+                        }
+                        let mut row = MetadataRow::new();
+                        row.insert("database_name".to_string(), entry.database_name.clone());
+                        row.insert("schema_name".to_string(), entry.schema_name.clone());
+                        row.insert("trigger_name".to_string(), entry.object_name.clone());
+                        row.insert("table_name".to_string(), String::new());
+                        row.insert("event".to_string(), String::new());
+                        out.push(row);
+                    }
+                }
+            }
+
+            MetadataTable::Settings => {
+                // Surface the boot-time runtime config as setting rows. The
+                // `scope` column distinguishes server-wide settings (`server`)
+                // from per-database overrides (none yet — Phase 2+ work).
+                let cfg = &self.state.runtime_config;
+                let pairs: Vec<(&str, String)> = vec![
+                    ("storage.engine", format!("{:?}", cfg.storage.engine).to_ascii_lowercase()),
+                    ("storage.data_dir", cfg.storage.data_dir.clone()),
+                    (
+                        "storage.max_background_jobs",
+                        cfg.storage.max_background_jobs.to_string(),
+                    ),
+                    (
+                        "storage.wal_fsync_on_commit",
+                        cfg.storage.wal_fsync_on_commit.to_string(),
+                    ),
+                    ("sql.engine", format!("{:?}", cfg.sql.engine).to_ascii_lowercase()),
+                    (
+                        "sql.htap_olap_threshold_rows",
+                        cfg.sql.htap_olap_threshold_rows.to_string(),
+                    ),
+                    ("sql.max_result_rows", cfg.sql.max_result_rows.to_string()),
+                ];
+                for (key, value) in pairs {
+                    let mut row = MetadataRow::new();
+                    row.insert("database_name".to_string(), db_str.to_string());
+                    row.insert("key".to_string(), key.to_string());
+                    row.insert("value".to_string(), value);
+                    row.insert("scope".to_string(), "server".to_string());
+                    out.push(row);
+                }
+            }
+
+            // The remaining tables don't have a backing source yet; return
+            // empty rather than synthesising fake data. Phase 1.6+ work
+            // (real users / roles / indexes) will populate them.
+            MetadataTable::Columns
+            | MetadataTable::Indexes
+            | MetadataTable::Users
+            | MetadataTable::Roles
+            | MetadataTable::Grants => {
+                // Empty — see comment above.
+            }
+        }
+
+        out
+    }
+}
+
+#[derive(Serialize)]
+struct AdminMetadataRowsResponse {
+    database: String,
+    table: String,
+    columns: Vec<&'static str>,
+    rows: Vec<voltnuerongrid_meta::MetadataRow>,
+    row_count: usize,
+}
+
+/// `GET /api/v1/admin/databases/:name/metadata/:table` — return live rows
+/// for a single metadata table. Phase 1.4.
+async fn admin_databases_metadata_rows(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((name, table_str)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<AdminMetadataRowsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+
+    // Validate the database name + existence under one short lock-hold.
+    let db_name = {
+        let parsed = match voltnuerongrid_meta::DatabaseName::parse(&name) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(AuthErrorResponse {
+                        status: "error",
+                        reason: format!("invalid database name: {e}"),
+                    }),
+                ));
+            }
+        };
+        let catalog = match state.database_catalog.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(AuthErrorResponse {
+                        status: "error",
+                        reason: "database_catalog mutex poisoned".to_string(),
+                    }),
+                ));
+            }
+        };
+        if !catalog.exists(parsed.as_str()) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: format!("database {:?} not found", parsed.as_str()),
+                }),
+            ));
+        }
+        parsed
+    };
+
+    let table = match voltnuerongrid_meta::MetadataTable::parse_name(&table_str) {
+        Some(t) => t,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: format!(
+                        "metadata table {table_str:?} does not exist; \
+                         see GET /api/v1/admin/databases/{}/metadata for the list",
+                        db_name.as_str()
+                    ),
+                }),
+            ));
+        }
+    };
+
+    let provider = AppStateMetadataProvider { state: &state };
+    let rows = <AppStateMetadataProvider as voltnuerongrid_meta::MetadataDataProvider>::rows_for(
+        &provider, table, &db_name,
+    );
+    let row_count = rows.len();
+    Ok((
+        StatusCode::OK,
+        Json(AdminMetadataRowsResponse {
+            database: db_name.as_str().to_string(),
+            table: table.name().to_string(),
+            columns: table.columns().to_vec(),
+            rows,
+            row_count,
         }),
     ))
 }

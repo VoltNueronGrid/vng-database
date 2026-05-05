@@ -223,6 +223,14 @@ export interface MetadataLayoutResponse {
   tables: MetadataTableSpec[];
 }
 
+export interface MetadataRowsResponse {
+  database: string;
+  table: string;
+  columns: string[];
+  rows: Array<Record<string, string>>;
+  row_count: number;
+}
+
 // ─── Phase 0 — Runtime config (read-only) ────────────────────────────────────
 
 export interface StorageConfig {
@@ -284,6 +292,12 @@ export class StudioApiClient {
   async getDatabaseMetadata(name: string): Promise<MetadataLayoutResponse> {
     return this.get<MetadataLayoutResponse>(
       `/api/v1/admin/databases/${encodeURIComponent(name)}/metadata`,
+    );
+  }
+
+  async getDatabaseMetadataRows(name: string, table: string): Promise<MetadataRowsResponse> {
+    return this.get<MetadataRowsResponse>(
+      `/api/v1/admin/databases/${encodeURIComponent(name)}/metadata/${encodeURIComponent(table)}`,
     );
   }
 

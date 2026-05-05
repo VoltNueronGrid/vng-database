@@ -352,6 +352,61 @@ impl MetadataTable {
             Self::Settings => &["database_name", "key", "value", "scope"],
         }
     }
+
+    /// Resolve a table name (case-insensitive) to a [`MetadataTable`] variant.
+    /// Returns `None` for unknown names. Used by the HTTP layer to validate
+    /// `/api/v1/admin/databases/{db}/metadata/{table}` paths.
+    pub fn parse_name(input: &str) -> Option<Self> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            "databases" => Some(Self::Databases),
+            "schemas" => Some(Self::Schemas),
+            "tables" => Some(Self::Tables),
+            "columns" => Some(Self::Columns),
+            "indexes" => Some(Self::Indexes),
+            "views" => Some(Self::Views),
+            "routines" => Some(Self::Routines),
+            "triggers" => Some(Self::Triggers),
+            "users" => Some(Self::Users),
+            "roles" => Some(Self::Roles),
+            "grants" => Some(Self::Grants),
+            "settings" => Some(Self::Settings),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for MetadataTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MetadataDataProvider — Phase 1.4
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A row in a metadata table. Keys are column names from
+/// [`MetadataTable::columns`]. All values are stringified — this is sufficient
+/// for the HTTP response shape and the Studio's metadata browser. The
+/// DataFusion executor (Phase 1.7) will read these rows into typed
+/// `RecordBatch`es using the column-list schema.
+pub type MetadataRow = std::collections::HashMap<String, String>;
+
+/// Live-data provider for the `metadata` virtual schema.
+///
+/// Implementations live alongside whatever owns the underlying state — the
+/// service implements this over `AppState` so `metadata.tables` reads from
+/// `state.ddl_catalog`, `metadata.databases` reads from `state.database_catalog`,
+/// etc.
+///
+/// All methods are read-only; metadata writes go through their natural DDL
+/// (CREATE TABLE, GRANT, etc.). The `Settings` table is the one exception
+/// and is exposed via separate setter routes.
+pub trait MetadataDataProvider: Send + Sync {
+    /// Return all rows for `table` filtered to `database_name`.
+    /// `Self::Databases` is the only table that ignores the `database_name`
+    /// filter (it lists *all* databases).
+    fn rows_for(&self, table: MetadataTable, database_name: &DatabaseName) -> Vec<MetadataRow>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,5 +573,59 @@ mod tests {
         let original_len = names.len();
         names.dedup();
         assert_eq!(names.len(), original_len, "duplicate metadata table name");
+    }
+
+    #[test]
+    fn metadata_table_parse_roundtrips_for_all_variants() {
+        // Every variant's name() must be parseable back to the same variant.
+        for t in MetadataTable::ALL {
+            let parsed = MetadataTable::parse_name(t.name())
+                .unwrap_or_else(|| panic!("name {:?} should round-trip", t.name()));
+            assert_eq!(parsed, *t);
+        }
+    }
+
+    #[test]
+    fn metadata_table_parse_is_case_insensitive() {
+        assert_eq!(MetadataTable::parse_name("Tables"), Some(MetadataTable::Tables));
+        assert_eq!(MetadataTable::parse_name("USERS"), Some(MetadataTable::Users));
+        assert_eq!(MetadataTable::parse_name("  grants  "), Some(MetadataTable::Grants));
+    }
+
+    #[test]
+    fn metadata_table_parse_rejects_unknown() {
+        assert_eq!(MetadataTable::parse_name("not_a_real_table"), None);
+        assert_eq!(MetadataTable::parse_name(""), None);
+    }
+
+    #[test]
+    fn metadata_table_display_matches_name() {
+        for t in MetadataTable::ALL {
+            assert_eq!(format!("{}", t), t.name());
+        }
+    }
+
+    // ── MetadataDataProvider ────────────────────────────────────────────────
+
+    /// Stub provider used to assert the trait is object-safe and usable
+    /// behind dyn dispatch.
+    struct StubProvider;
+    impl MetadataDataProvider for StubProvider {
+        fn rows_for(&self, table: MetadataTable, database_name: &DatabaseName) -> Vec<MetadataRow> {
+            let mut row = MetadataRow::new();
+            row.insert("table".to_string(), table.name().to_string());
+            row.insert("db".to_string(), database_name.as_str().to_string());
+            vec![row]
+        }
+    }
+
+    #[test]
+    fn metadata_provider_is_object_safe_and_callable() {
+        let provider: Box<dyn MetadataDataProvider> = Box::new(StubProvider);
+        let db = DatabaseName::parse("hr").unwrap();
+        let rows = provider.rows_for(MetadataTable::Tables, &db);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("table").map(String::as_str), Some("tables"));
+        assert_eq!(rows[0].get("db").map(String::as_str), Some("hr"));
     }
 }
