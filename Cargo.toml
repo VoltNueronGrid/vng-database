@@ -6,6 +6,7 @@ members = [
   "crates/voltnuerongrid-sql",
   "crates/voltnuerongrid-opt",
   "crates/voltnuerongrid-exec",
+  "crates/voltnuerongrid-exec-datafusion",
   "crates/voltnuerongrid-store",
   "crates/voltnuerongrid-meta",
   "crates/voltnuerongrid-ingest",
