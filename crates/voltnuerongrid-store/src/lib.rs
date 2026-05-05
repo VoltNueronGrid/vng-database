@@ -11,6 +11,7 @@ pub mod ddl_catalog;
 pub mod htap_sync;
 pub mod index;
 pub mod mvcc;
+pub mod rocksdb_engine;
 // S7-001/002: trigger framework
 pub mod triggers;
 // S7-003: trigger emitters
@@ -168,7 +169,7 @@ impl InMemoryDurabilityEngine {
     }
 }
 
-fn now_epoch_millis() -> u128 {
+pub(crate) fn now_epoch_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock before epoch")

@@ -222,3 +222,73 @@ curl -s http://127.0.0.1:8080/metrics | grep vng_sql_select_executor_total
 To push from Claude's sandbox, give it the GitHub PAT in the chat.
 Working directory: `/home/claude/vng-database/`.
 The sandbox is ephemeral — wiped at session end.
+
+---
+
+## Updated next-session ordering (v5 — 2026-05-04 addendum)
+
+1. **`cargo check --workspace` on rustc 1.86+** — verify the Phase 1.7
+   `voltnuerongrid-exec-datafusion` integration in `services/voltnuerongridd/src/main.rs`
+   compiles, since the previous sandbox couldn't (rustc 1.75).
+2. **Phase 2 — RocksDB durable storage:**
+   - Add `rocksdb = "0.21"` to `voltnuerongrid-store` (forces MSRV bump → unblocks DataFusion).
+   - Implement `RocksDbDurabilityEngine` against the existing `DurabilityEngine` trait.
+   - Drive selection via the Phase 0 config selector
+     (`state.runtime_config.storage.engine`) — already wired, defaulting to RocksDB.
+   - Add a kill -9 / restart crash-recovery CI test.
+   - Keep the in-memory engine for unit tests.
+
+### 2026-05-04 sanity-check note
+`cargo check --workspace` on rustc 1.95.0 surfaced **no** Phase 1.7 wiring
+issues — `voltnuerongrid-exec-datafusion` is correctly imported into
+`services/voltnuerongridd/src/main.rs`. The 13 errors that did appear were
+unrelated pre-existing drift: every `AuthErrorResponse` literal in the admin
+database-catalog handlers (lines ~20602 onward) had to gain `locale` and
+`localized_message` fields after the struct grew them. Fixed in this session.
+Workspace is now clean (one unrelated unused-variable warning in
+`sqlparser_adapter.rs:274`).
+
+### 2026-05-04 — Phase 2 (RocksDB) initial landing
+
+What landed in this session (`crates/voltnuerongrid-store`):
+
+- `rocksdb = "0.22"` workspace dependency (transitive: librocksdb-sys 8.10).
+- New module `rocksdb_engine` with `RocksDbDurabilityEngine`:
+  - 3 column families: `cf_kv` (latest values), `cf_wal` (be-seq → record),
+    `cf_checkpoints` (be-id → manifest).
+  - `append_mutation` issues a single `WriteBatch` covering kv + wal,
+    submitted with `WriteOptions::set_sync(wal_fsync_on_commit)` so
+    durability matches `RuntimeConfig.storage.wal_fsync_on_commit`. **This
+    closes the flush()/fsync() durability gap.**
+  - `force_checkpoint`, `maybe_checkpoint`, `latest_checkpoint`, `wal_records`,
+    `wal_len`, `latest_sequence`, `checkpoint_count`, `get` mirror the
+    in-memory engine's API with `Result` return types.
+  - 6 unit tests, including:
+    - `survives_drop_and_reopen_like_sigkill` — the kill -9 substitute:
+      writes 3 rows, drops the engine without graceful close, reopens at
+      the same path, asserts all rows + sequence + wal records survived,
+      and that the next write continues at sequence=4.
+    - `checkpoint_id_persists_across_reopen` — guards against the obvious
+      regression where reopen restarts checkpoint_id at 1.
+- Workspace test count: 90 passing in `voltnuerongrid-store` (was 84 + 6 new).
+
+What is **NOT** done yet (next-next session):
+
+1. **Cut `services/voltnuerongridd/src/main.rs` over to the new engine.**
+   The file holds `wal_engine: Arc<Mutex<InMemoryDurabilityEngine>>` and
+   has ~80 call sites that touch `wal.wal_records()`. A direct switch to
+   `Arc<Mutex<RocksDbDurabilityEngine>>` would require either:
+   - Refactoring those 80 call sites to handle `Result<Vec<WalRecord>, _>`,
+     **or**
+   - Introducing a `BoxedDurabilityEngine` enum that `unwrap()`s rocksdb
+     errors at the boundary and returns `&[WalRecord]`-shaped views.
+   Recommend the second path: add `BoxedDurabilityEngine` in
+   `voltnuerongrid-store/src/lib.rs` with delegating methods that match
+   the in-memory API exactly, dispatch on `state.runtime_config.storage.engine`
+   at boot, and migrate the 2 construction sites
+   (`main.rs:5871` and `main.rs:21861`).
+2. **Real kill -9 CI test** — the unit test simulates SIGKILL via drop;
+   add a `tests/` integration test that spawns the binary, kills it with
+   `kill -9`, restarts it, and verifies row survival end-to-end via HTTP.
+3. **Remove the two `wal_engine`-touching tests** that hardcode the
+   in-memory type once main.rs is migrated.

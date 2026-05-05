@@ -20602,6 +20602,8 @@ async fn admin_databases_list(
                 Json(AuthErrorResponse {
                     status: "error",
                     reason: "database_catalog mutex poisoned".to_string(),
+                    locale: "en".to_string(),
+                    localized_message: "Database catalog temporarily unavailable".to_string(),
                 }),
             ));
         }
@@ -20634,6 +20636,8 @@ async fn admin_databases_create(
                 Json(AuthErrorResponse {
                     status: "error",
                     reason: "database_catalog mutex poisoned".to_string(),
+                    locale: "en".to_string(),
+                    localized_message: "Database catalog temporarily unavailable".to_string(),
                 }),
             ));
         }
@@ -20698,6 +20702,8 @@ async fn admin_databases_create(
                 Json(AuthErrorResponse {
                     status: "error",
                     reason: format!("database {name:?} already exists"),
+                    locale: "en".to_string(),
+                    localized_message: format!("Database {name:?} already exists"),
                 }),
             ))
         }
@@ -20708,11 +20714,14 @@ async fn admin_databases_create(
                 "status" => "invalid",
             )
             .increment(1);
+            let msg = e.to_string();
             Err((
                 StatusCode::BAD_REQUEST,
                 Json(AuthErrorResponse {
                     status: "error",
-                    reason: e.to_string(),
+                    reason: msg.clone(),
+                    locale: "en".to_string(),
+                    localized_message: msg,
                 }),
             ))
         }
@@ -20735,6 +20744,8 @@ async fn admin_databases_drop(
                 Json(AuthErrorResponse {
                     status: "error",
                     reason: "database_catalog mutex poisoned".to_string(),
+                    locale: "en".to_string(),
+                    localized_message: "Database catalog temporarily unavailable".to_string(),
                 }),
             ));
         }
@@ -20786,16 +20797,23 @@ async fn admin_databases_drop(
                 Json(AuthErrorResponse {
                     status: "error",
                     reason: format!("database {name:?} not found"),
+                    locale: "en".to_string(),
+                    localized_message: format!("Database {name:?} not found"),
                 }),
             ))
         }
-        Err(e) => Err((
-            StatusCode::BAD_REQUEST,
-            Json(AuthErrorResponse {
-                status: "error",
-                reason: e.to_string(),
-            }),
-        )),
+        Err(e) => {
+            let msg = e.to_string();
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: msg.clone(),
+                    locale: "en".to_string(),
+                    localized_message: msg,
+                }),
+            ))
+        }
     }
 }
 
@@ -20824,6 +20842,8 @@ async fn admin_databases_metadata(
                 Json(AuthErrorResponse {
                     status: "error",
                     reason: "database_catalog mutex poisoned".to_string(),
+                    locale: "en".to_string(),
+                    localized_message: "Database catalog temporarily unavailable".to_string(),
                 }),
             ));
         }
@@ -20834,6 +20854,8 @@ async fn admin_databases_metadata(
             Json(AuthErrorResponse {
                 status: "error",
                 reason: format!("database {name:?} not found"),
+                locale: "en".to_string(),
+                localized_message: format!("Database {name:?} not found"),
             }),
         ));
     }
@@ -21077,6 +21099,8 @@ async fn admin_databases_metadata_rows(
                     Json(AuthErrorResponse {
                         status: "error",
                         reason: format!("invalid database name: {e}"),
+                        locale: "en".to_string(),
+                        localized_message: format!("Invalid database name: {e}"),
                     }),
                 ));
             }
@@ -21089,6 +21113,8 @@ async fn admin_databases_metadata_rows(
                     Json(AuthErrorResponse {
                         status: "error",
                         reason: "database_catalog mutex poisoned".to_string(),
+                        locale: "en".to_string(),
+                        localized_message: "Database catalog temporarily unavailable".to_string(),
                     }),
                 ));
             }
@@ -21099,6 +21125,8 @@ async fn admin_databases_metadata_rows(
                 Json(AuthErrorResponse {
                     status: "error",
                     reason: format!("database {:?} not found", parsed.as_str()),
+                    locale: "en".to_string(),
+                    localized_message: format!("Database {:?} not found", parsed.as_str()),
                 }),
             ));
         }
@@ -21115,6 +21143,11 @@ async fn admin_databases_metadata_rows(
                     reason: format!(
                         "metadata table {table_str:?} does not exist; \
                          see GET /api/v1/admin/databases/{}/metadata for the list",
+                        db_name.as_str()
+                    ),
+                    locale: "en".to_string(),
+                    localized_message: format!(
+                        "Metadata table {table_str:?} does not exist for database {}",
                         db_name.as_str()
                     ),
                 }),
