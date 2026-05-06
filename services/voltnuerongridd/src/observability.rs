@@ -110,6 +110,14 @@ fn init_metrics() {
         "vng_durability_engine_boot",
         "Increments once at process boot, labeled by chosen durability engine kind."
     );
+    metrics::describe_counter!(
+        "vng_wal_replay_total",
+        "SQL statements replayed at boot, by kind (ddl|dml) and source (engine|text_wal)."
+    );
+    metrics::describe_counter!(
+        "vng_wal_append_total",
+        "SQL statements appended to durable WAL, by kind (ddl|dml)."
+    );
 }
 
 static METRICS_HANDLE: std::sync::OnceLock<metrics_exporter_prometheus::PrometheusHandle> =

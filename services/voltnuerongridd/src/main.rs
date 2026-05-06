@@ -883,6 +883,40 @@ fn append_sql_wal(wal_path: &str, sql: &str) {
     }
 }
 
+/// Phase 2.1 — write a SQL statement to BOTH the durability engine (RocksDB
+/// or in-memory) AND the legacy text WAL file. The dual-write phase exists
+/// during the migration window: future deployments that boot from a
+/// post-migration RocksDB store can have the text WAL files removed and
+/// this helper will silently degrade to engine-only.
+///
+/// Call this from every handler that previously called `append_sql_wal` —
+/// the engine path becomes the source of truth, the text WAL stays as a
+/// migration safety net.
+fn persist_sql_statement(
+    state: &AppState,
+    kind: voltnuerongrid_store::SqlWalKind,
+    sql: &str,
+) {
+    // 1. Engine — durable on RocksDB, in-memory for the test harness.
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        let _ = wal.append_sql(kind, sql);
+    } else {
+        tracing::error!(target: "vng.wal", "wal_engine mutex poisoned in persist_sql_statement");
+    }
+    // 2. Legacy text WAL — kept during the migration. Once all production
+    // deployments have switched to engine-backed replay, this branch can
+    // be removed (and the text-WAL path helpers + replay_*_wal_into).
+    let path = match kind {
+        voltnuerongrid_store::SqlWalKind::Ddl => ddl_wal_path(),
+        voltnuerongrid_store::SqlWalKind::Dml => dml_wal_path(),
+    };
+    append_sql_wal(&path, sql);
+    metrics::counter!(
+        "vng_wal_append_total",
+        "kind" => kind.as_str(),
+    ).increment(1);
+}
+
 /// Read all SQL statements from a WAL file (one per line, escaped).
 fn read_sql_wal(wal_path: &str) -> Vec<String> {
     use std::io::BufRead;
@@ -975,23 +1009,135 @@ fn build_durability_engine(
     }
 }
 
+// ─── Phase 2.1: engine-first replay helpers ─────────────────────────────────
+//
+// Boot replay precedence:
+// 1. If the durability engine persists SQL streams (RocksDB) AND has any
+//    statements in the requested kind, drive replay from there.
+// 2. Otherwise, fall back to the legacy text WAL files. The first successful
+//    engine-backed replay (after migration) lets the operator delete the
+//    text files.
+//
+// The engine-first path is the reason for the SqlWalKind extension to the
+// trait. Once all deployments have migrated, the legacy path can be removed.
+
+/// Replay DDL into a freshly-created catalog. Prefers the durability engine,
+/// falls back to the legacy text WAL.
+fn replay_ddl_into(
+    catalog: &mut DdlCatalog,
+    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    use voltnuerongrid_store::SqlWalKind;
+    let now_ms = now_unix_ms();
+    // Engine-first.
+    let stmts_from_engine: Vec<String> = {
+        let guard = engine.lock().expect("wal_engine lock for replay_ddl");
+        if guard.persists_sql() && guard.sql_count(SqlWalKind::Ddl) > 0 {
+            guard.iter_sql(SqlWalKind::Ddl)
+        } else {
+            Vec::new()
+        }
+    };
+    if !stmts_from_engine.is_empty() {
+        for sql in &stmts_from_engine {
+            apply_ddl_to_catalog(catalog, sql, now_ms);
+        }
+        eprintln!(
+            "[vng-wal] replayed {} DDL statement(s) from durability engine",
+            stmts_from_engine.len()
+        );
+        metrics::counter!(
+            "vng_wal_replay_total",
+            "kind" => "ddl",
+            "source" => "engine",
+        ).increment(stmts_from_engine.len() as u64);
+        return;
+    }
+    // Fallback to legacy text WAL.
+    replay_ddl_wal_into(catalog);
+}
+
+/// Replay DML into a freshly-created row store. Prefers the durability
+/// engine, falls back to the legacy text WAL.
+fn replay_dml_into(
+    rs: &mut PagedRowStore,
+    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    use voltnuerongrid_store::SqlWalKind;
+    let stmts_from_engine: Vec<String> = {
+        let guard = engine.lock().expect("wal_engine lock for replay_dml");
+        if guard.persists_sql() && guard.sql_count(SqlWalKind::Dml) > 0 {
+            guard.iter_sql(SqlWalKind::Dml)
+        } else {
+            Vec::new()
+        }
+    };
+    if !stmts_from_engine.is_empty() {
+        let xid = rs.begin_xid();
+        for sql in &stmts_from_engine {
+            apply_dml_to_rowstore(rs, xid, sql);
+        }
+        eprintln!(
+            "[vng-wal] replayed {} DML statement(s) from durability engine",
+            stmts_from_engine.len()
+        );
+        metrics::counter!(
+            "vng_wal_replay_total",
+            "kind" => "dml",
+            "source" => "engine",
+        ).increment(stmts_from_engine.len() as u64);
+        return;
+    }
+    replay_dml_wal_into(rs);
+}
+
+/// Apply a single DDL statement to the catalog. Extracted from
+/// `replay_ddl_wal_into` so both replay paths share the logic.
+fn apply_ddl_to_catalog(catalog: &mut DdlCatalog, sql: &str, now_ms: u128) {
+    if let Some(info) = parse_ddl_info(sql) {
+        match info.operation {
+            "create" => { let _ = catalog.record_create(&info.object_kind, &info.database_name, &info.schema_name, &info.object_name, sql, now_ms, info.replace_ok); }
+            "drop"   => { catalog.record_drop(&info.database_name, &info.schema_name, &info.object_name); }
+            "alter"  => { catalog.record_alter(&info.database_name, &info.schema_name, &info.object_name, sql, now_ms); }
+            _ => {}
+        }
+    }
+}
+
+/// Apply a single DML statement to the row store. Extracted from
+/// `replay_dml_wal_into` so both replay paths share the logic.
+fn apply_dml_to_rowstore(rs: &mut PagedRowStore, xid: voltnuerongrid_store::mvcc::Xid, sql: &str) {
+    let upper = sql.trim_start().to_ascii_uppercase();
+    if upper.starts_with("INSERT") {
+        for (k, d, _) in extract_all_insert_rows(sql) {
+            rs.insert(xid, &k, d);
+        }
+    } else if upper.starts_with("DELETE") {
+        if let Some(k) = extract_delete_key_from_sql(sql) {
+            rs.delete(xid, &k);
+        }
+    } else if upper.starts_with("UPDATE") {
+        if let Some((k, d)) = extract_update_row_from_sql(sql) {
+            rs.insert(xid, &k, d);
+        }
+    }
+}
+
 /// Replay the DDL WAL into a freshly-created `DdlCatalog`.
 fn replay_ddl_wal_into(catalog: &mut DdlCatalog) {
     let path = ddl_wal_path();
     let sqls = read_sql_wal(&path);
     let now_ms = now_unix_ms();
     for sql in &sqls {
-        if let Some(info) = parse_ddl_info(sql) {
-            match info.operation {
-                "create" => { let _ = catalog.record_create(&info.object_kind, &info.database_name, &info.schema_name, &info.object_name, sql, now_ms, info.replace_ok); }
-                "drop"   => { catalog.record_drop(&info.database_name, &info.schema_name, &info.object_name); }
-                "alter"  => { catalog.record_alter(&info.database_name, &info.schema_name, &info.object_name, sql, now_ms); }
-                _ => {}
-            }
-        }
+        apply_ddl_to_catalog(catalog, sql, now_ms);
     }
     if !sqls.is_empty() {
         eprintln!("[vng-wal] replayed {} DDL statement(s) from {}", sqls.len(), path);
+        metrics::counter!(
+            "vng_wal_replay_total",
+            "kind" => "ddl",
+            "source" => "text_wal",
+        ).increment(sqls.len() as u64);
     }
 }
 
@@ -1004,23 +1150,14 @@ fn replay_dml_wal_into(rs: &mut PagedRowStore) {
     }
     let xid = rs.begin_xid();
     for sql in &sqls {
-        let upper = sql.trim_start().to_ascii_uppercase();
-        if upper.starts_with("INSERT") {
-            // Use extract_all_insert_rows so schema-qualified names are handled.
-            for (k, d, _) in extract_all_insert_rows(sql) {
-                rs.insert(xid, &k, d);
-            }
-        } else if upper.starts_with("DELETE") {
-            if let Some(k) = extract_delete_key_from_sql(sql) {
-                rs.delete(xid, &k);
-            }
-        } else if upper.starts_with("UPDATE") {
-            if let Some((k, d)) = extract_update_row_from_sql(sql) {
-                rs.insert(xid, &k, d);
-            }
-        }
+        apply_dml_to_rowstore(rs, xid, sql);
     }
     eprintln!("[vng-wal] replayed {} DML statement(s) from {}", sqls.len(), path);
+    metrics::counter!(
+        "vng_wal_replay_total",
+        "kind" => "dml",
+        "source" => "text_wal",
+    ).increment(sqls.len() as u64);
 }
 
 fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
@@ -5948,13 +6085,13 @@ async fn main() {
         guardrails: Arc::new(default_guardrail_rules()),
         ddl_catalog: Arc::new(Mutex::new({
             let mut cat = DdlCatalog::new();
-            replay_ddl_wal_into(&mut cat);
+            replay_ddl_into(&mut cat, &wal_engine);
             cat
         })),
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
         row_store: Arc::new(Mutex::new({
             let mut rs = PagedRowStore::default();
-            replay_dml_wal_into(&mut rs);
+            replay_dml_into(&mut rs, &wal_engine);
             rs
         })),
         model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
@@ -7678,19 +7815,19 @@ async fn sql_transaction(
                         for (k, d, single_sql) in extract_all_insert_rows(stmt) {
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
-                            append_sql_wal(&dml_wal_path(), &single_sql);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                         }
                     } else if upper.starts_with("DELETE") {
                         if let Some(k) = extract_delete_key_from_sql(stmt) {
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
-                            append_sql_wal(&dml_wal_path(), stmt);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     } else if upper.starts_with("UPDATE") {
                         if let Some((k, d)) = extract_update_row_from_sql(stmt) {
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
-                            append_sql_wal(&dml_wal_path(), stmt);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     }
                 }
@@ -8188,16 +8325,16 @@ async fn sql_execute(
                                 );
                             } else {
                                 // Persist to WAL so this DDL survives a restart.
-                                append_sql_wal(&ddl_wal_path(), stmt);
+                                persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
                             }
                         }
                         "drop" => {
                             catalog.record_drop(&info.database_name, &info.schema_name, &info.object_name);
-                            append_sql_wal(&ddl_wal_path(), stmt);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
                         }
                         "alter" => {
                             catalog.record_alter(&info.database_name, &info.schema_name, &info.object_name, stmt, now_ms);
-                            append_sql_wal(&ddl_wal_path(), stmt);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
                         }
                         _ => {}
                     }
@@ -8262,19 +8399,19 @@ async fn sql_execute(
                     for (k, d, single_sql) in extract_all_insert_rows(stmt) {
                         let _ = rs.begin_write_intent(xid, &k);
                         rs.insert(xid, &k, d);
-                        append_sql_wal(&dml_wal_path(), &single_sql);
+                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                     }
                 } else if upper.starts_with("UPDATE") {
                     if let Some((k, d)) = extract_update_row_from_sql(stmt) {
                         let _ = rs.begin_write_intent(xid, &k);
                         rs.insert(xid, &k, d);
-                        append_sql_wal(&dml_wal_path(), stmt);
+                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                     }
                 } else if upper.starts_with("DELETE") {
                     if let Some(k) = extract_delete_key_from_sql(stmt) {
                         let _ = rs.begin_write_intent(xid, &k);
                         rs.delete(xid, &k);
-                        append_sql_wal(&dml_wal_path(), stmt);
+                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                     }
                 }
             }

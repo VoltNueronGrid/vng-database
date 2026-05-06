@@ -43,7 +43,8 @@ use std::sync::Mutex;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch, WriteOptions};
 
 use crate::{
-    now_epoch_millis, CheckpointManifest, DurabilityConfig, DurabilityEngine, WalRecord,
+    now_epoch_millis, CheckpointManifest, DurabilityConfig, DurabilityEngine, SqlWalKind,
+    WalRecord,
 };
 
 /// Default cap on the in-memory recent-WAL tail buffer.
@@ -52,6 +53,10 @@ const DEFAULT_WAL_TAIL_CAP: usize = 1024;
 /// Column family names.
 const CF_WAL: &str = "wal";
 const CF_META: &str = "meta";
+/// Phase 2.1 — SQL statement stream. Keys are big-endian
+/// `[kind_byte (1)] [seq (8)]` so the per-kind range can be iterated
+/// efficiently with a 1-byte prefix bound.
+const CF_SQL: &str = "sql";
 
 // Meta keys.
 const META_LATEST_SEQUENCE: &[u8]               = b"latest_sequence";
@@ -59,6 +64,36 @@ const META_CHECKPOINT_COUNT: &[u8]              = b"checkpoint_count";
 const META_LATEST_CHECKPOINT_ID: &[u8]          = b"latest_checkpoint_id";
 const META_LATEST_CHECKPOINT_LAST_SEQ: &[u8]    = b"latest_checkpoint_last_seq";
 const META_LATEST_CHECKPOINT_ENTRY_COUNT: &[u8] = b"latest_checkpoint_entry_count";
+// Phase 2.1 — per-kind SQL stream sequence counters. Persisted so
+// `append_sql` keeps incrementing across reopens.
+const META_SQL_DDL_SEQUENCE: &[u8] = b"sql_ddl_sequence";
+const META_SQL_DML_SEQUENCE: &[u8] = b"sql_dml_sequence";
+
+/// Single-byte tag for SqlWalKind in CF_SQL keys. Stable wire format.
+const SQL_KIND_DDL: u8 = b'd';
+const SQL_KIND_DML: u8 = b'm';
+
+fn sql_kind_tag(kind: SqlWalKind) -> u8 {
+    match kind {
+        SqlWalKind::Ddl => SQL_KIND_DDL,
+        SqlWalKind::Dml => SQL_KIND_DML,
+    }
+}
+
+fn sql_kind_seq_meta_key(kind: SqlWalKind) -> &'static [u8] {
+    match kind {
+        SqlWalKind::Ddl => META_SQL_DDL_SEQUENCE,
+        SqlWalKind::Dml => META_SQL_DML_SEQUENCE,
+    }
+}
+
+/// Encode a CF_SQL key: 1-byte kind tag + 8-byte big-endian sequence.
+fn sql_key(kind: SqlWalKind, seq: u64) -> [u8; 9] {
+    let mut k = [0u8; 9];
+    k[0] = sql_kind_tag(kind);
+    k[1..].copy_from_slice(&seq.to_be_bytes());
+    k
+}
 
 #[derive(Debug)]
 pub enum RocksDbEngineError {
@@ -103,6 +138,9 @@ struct HotState {
     wal_tail_cap: usize,
     /// Records since the last checkpoint (for `maybe_checkpoint` threshold).
     wal_since_checkpoint: usize,
+    /// Phase 2.1 — last assigned sequence per SqlWalKind.
+    sql_ddl_sequence: u64,
+    sql_dml_sequence: u64,
 }
 
 impl RocksDbDurabilityEngine {
@@ -128,6 +166,7 @@ impl RocksDbDurabilityEngine {
         let cfs = vec![
             ColumnFamilyDescriptor::new(CF_WAL,  Options::default()),
             ColumnFamilyDescriptor::new(CF_META, Options::default()),
+            ColumnFamilyDescriptor::new(CF_SQL,  Options::default()),
         ];
         let db = DB::open_cf_descriptors(&db_opts, path.as_ref(), cfs)?;
 
@@ -148,6 +187,16 @@ impl RocksDbDurabilityEngine {
             None => 0,
         };
 
+        // Phase 2.1 — restore per-kind SQL sequence counters.
+        let sql_ddl_sequence = match db.get_cf(&cf_meta, META_SQL_DDL_SEQUENCE)? {
+            Some(b) => decode_u64(&b).unwrap_or(0),
+            None => 0,
+        };
+        let sql_dml_sequence = match db.get_cf(&cf_meta, META_SQL_DML_SEQUENCE)? {
+            Some(b) => decode_u64(&b).unwrap_or(0),
+            None => 0,
+        };
+
         // Hydrate the wal_tail ring with the last DEFAULT_WAL_TAIL_CAP records.
         let wal_tail = read_recent_wal_records(&db, DEFAULT_WAL_TAIL_CAP)?;
 
@@ -163,6 +212,14 @@ impl RocksDbDurabilityEngine {
             state: Mutex::new(HotState {
                 sequence: latest_sequence,
                 checkpoint_count,
+                wal_tail,
+                wal_tail_cap: DEFAULT_WAL_TAIL_CAP,
+                wal_since_checkpoint,
+                sql_ddl_sequence,
+                sql_dml_sequence,
+            }),
+        })
+    }
                 wal_tail,
                 wal_tail_cap: DEFAULT_WAL_TAIL_CAP,
                 wal_since_checkpoint,
@@ -346,6 +403,132 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
     fn engine_kind(&self) -> &'static str {
         "rocksdb"
     }
+
+    // ── Phase 2.1: SQL stream persistence ────────────────────────────────
+
+    fn append_sql(&mut self, kind: SqlWalKind, sql: &str) -> u64 {
+        let mut state = self.state.lock().expect("rocksdb engine state mutex");
+        let seq = match kind {
+            SqlWalKind::Ddl => {
+                state.sql_ddl_sequence += 1;
+                state.sql_ddl_sequence
+            }
+            SqlWalKind::Dml => {
+                state.sql_dml_sequence += 1;
+                state.sql_dml_sequence
+            }
+        };
+
+        let cf_sql = self
+            .db
+            .cf_handle(CF_SQL)
+            .expect("sql CF missing — engine improperly opened");
+        let cf_meta = self
+            .db
+            .cf_handle(CF_META)
+            .expect("meta CF missing — engine improperly opened");
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(&cf_sql, sql_key(kind, seq), sql.as_bytes());
+        // Persist the new per-kind counter atomically with the SQL row so
+        // a crash between them can't leave the counter behind the data.
+        batch.put_cf(&cf_meta, sql_kind_seq_meta_key(kind), encode_u64(seq));
+
+        let mut wo = WriteOptions::default();
+        wo.set_sync(self.sync_writes && self.config.wal_enabled);
+        if let Err(e) = self.db.write_opt(batch, &wo) {
+            panic!("rocksdb write failed on append_sql: {e}");
+        }
+        seq
+    }
+
+    fn iter_sql(&self, kind: SqlWalKind) -> Vec<String> {
+        let cf_sql = match self.db.cf_handle(CF_SQL) {
+            Some(cf) => cf,
+            None => return Vec::new(),
+        };
+        let lower = sql_key(kind, 1);
+        let upper_kind_only = [sql_kind_tag(kind) + 1, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut out = Vec::new();
+        for kv in self.db.iterator_cf(
+            &cf_sql,
+            rocksdb::IteratorMode::From(&lower, rocksdb::Direction::Forward),
+        ) {
+            let (k, v) = match kv {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+            // Stop when the key tag changes (different kind).
+            if k.first().copied() != Some(sql_kind_tag(kind)) {
+                break;
+            }
+            if k.as_ref() >= &upper_kind_only[..] {
+                break;
+            }
+            if let Ok(s) = std::str::from_utf8(&v) {
+                out.push(s.to_string());
+            }
+        }
+        out
+    }
+
+    fn sql_count(&self, kind: SqlWalKind) -> usize {
+        let state = self.state.lock().expect("rocksdb engine state mutex");
+        match kind {
+            SqlWalKind::Ddl => state.sql_ddl_sequence as usize,
+            SqlWalKind::Dml => state.sql_dml_sequence as usize,
+        }
+    }
+
+    fn clear_sql(&mut self, kind: SqlWalKind) {
+        let cf_sql = match self.db.cf_handle(CF_SQL) {
+            Some(cf) => cf,
+            None => return,
+        };
+        let cf_meta = match self.db.cf_handle(CF_META) {
+            Some(cf) => cf,
+            None => return,
+        };
+        let mut state = self.state.lock().expect("rocksdb engine state mutex");
+        let upper_seq = match kind {
+            SqlWalKind::Ddl => state.sql_ddl_sequence,
+            SqlWalKind::Dml => state.sql_dml_sequence,
+        };
+        if upper_seq == 0 {
+            return;
+        }
+
+        let mut batch = WriteBatch::default();
+        // Delete the prefix range — kind tag spans seq 1..=upper_seq.
+        for seq in 1..=upper_seq {
+            batch.delete_cf(&cf_sql, sql_key(kind, seq));
+        }
+        // Reset the counter.
+        batch.put_cf(&cf_meta, sql_kind_seq_meta_key(kind), encode_u64(0));
+
+        let mut wo = WriteOptions::default();
+        wo.set_sync(self.sync_writes);
+        if let Err(e) = self.db.write_opt(batch, &wo) {
+            tracing_or_eprintln(format!("rocksdb clear_sql failed: {e}"));
+            return;
+        }
+        match kind {
+            SqlWalKind::Ddl => state.sql_ddl_sequence = 0,
+            SqlWalKind::Dml => state.sql_dml_sequence = 0,
+        };
+    }
+
+    fn persists_sql(&self) -> bool {
+        true
+    }
+}
+
+// Inline tracing-or-stderr helper. The store crate doesn't depend on
+// `tracing` (Phase 0 kept it limited to the service crate), so this falls
+// back to `eprintln!`. The service-side metrics + tracing instrumentation
+// covers the production observability story.
+fn tracing_or_eprintln(msg: String) {
+    eprintln!("[vng-rocksdb] {}", msg);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -577,6 +760,82 @@ mod tests {
         let p = unique_path();
         let e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
         assert_eq!(e.engine_kind(), "rocksdb");
+        cleanup(&p);
+    }
+
+    // ── Phase 2.1: SQL stream persistence ────────────────────────────────────
+
+    #[test]
+    fn append_sql_persists_per_kind_sequences() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        let s1 = e.append_sql(SqlWalKind::Ddl, "CREATE TABLE t(id INT)");
+        let s2 = e.append_sql(SqlWalKind::Ddl, "ALTER TABLE t ADD COLUMN n TEXT");
+        assert_eq!(s1, 1);
+        assert_eq!(s2, 2);
+        let m1 = e.append_sql(SqlWalKind::Dml, "INSERT INTO t (id) VALUES (1)");
+        assert_eq!(m1, 1, "DML stream is independent");
+        cleanup(&p);
+    }
+
+    #[test]
+    fn iter_sql_returns_only_requested_kind() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        e.append_sql(SqlWalKind::Ddl, "ddl-1");
+        e.append_sql(SqlWalKind::Dml, "dml-1");
+        e.append_sql(SqlWalKind::Ddl, "ddl-2");
+        e.append_sql(SqlWalKind::Dml, "dml-2");
+        let ddl = e.iter_sql(SqlWalKind::Ddl);
+        let dml = e.iter_sql(SqlWalKind::Dml);
+        assert_eq!(ddl, vec!["ddl-1", "ddl-2"]);
+        assert_eq!(dml, vec!["dml-1", "dml-2"]);
+        cleanup(&p);
+    }
+
+    /// Phase 2.1 regression: SQL stream survives kill -9 + reopen.
+    #[test]
+    fn sql_stream_survives_drop_and_reopen() {
+        let p = unique_path();
+        // Session 1.
+        {
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+            e.append_sql(SqlWalKind::Ddl, "CREATE TABLE t(id INT)");
+            e.append_sql(SqlWalKind::Dml, "INSERT INTO t (id) VALUES (5)");
+            // No graceful shutdown — engine drops here.
+        }
+        // Session 2 — verify content + per-kind counters persisted.
+        {
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("reopen");
+            assert_eq!(e.iter_sql(SqlWalKind::Ddl), vec!["CREATE TABLE t(id INT)"]);
+            assert_eq!(e.iter_sql(SqlWalKind::Dml), vec!["INSERT INTO t (id) VALUES (5)"]);
+            // New appends continue from the persisted seq, not reset to 1.
+            let next = e.append_sql(SqlWalKind::Ddl, "ALTER TABLE t ADD n TEXT");
+            assert_eq!(next, 2, "DDL seq must continue from 1 → 2");
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn clear_sql_truncates_only_named_kind() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        e.append_sql(SqlWalKind::Ddl, "x");
+        e.append_sql(SqlWalKind::Dml, "y");
+        e.clear_sql(SqlWalKind::Ddl);
+        assert!(e.iter_sql(SqlWalKind::Ddl).is_empty());
+        assert_eq!(e.iter_sql(SqlWalKind::Dml), vec!["y"]);
+        // Counter resets so next append starts at 1 again.
+        let next = e.append_sql(SqlWalKind::Ddl, "fresh");
+        assert_eq!(next, 1);
+        cleanup(&p);
+    }
+
+    #[test]
+    fn persists_sql_reports_true_for_rocksdb() {
+        let p = unique_path();
+        let e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        assert!(e.persists_sql());
         cleanup(&p);
     }
 }
