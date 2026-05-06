@@ -20,6 +20,7 @@ members = [
   "drivers/voltnuerongrid-driver-rust",
   "drivers/voltnuerongrid-driver-c",
   "tools/voltnuerongrid-audit-companion",
+  "tools/voltnuerongrid-migrate",
   "tests/soak",
   "tests/benchmarks",
 ]

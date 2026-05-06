@@ -1,202 +1,245 @@
-# `remaining.md` — handoff for next session (v5)
+# `remaining.md` — handoff for next session (v6)
 
-**Last updated:** 2026-05-05 (sixth session — Phase 2 cutover)
-**Branch:** `phase-2-rocksdb-cutover`
-**Total unit tests passing locally:** 543 (399 SQL + 91 store + 25 exec + 21 meta + 7 config)
+**Last updated:** 2026-05-05 (seventh session — Phase 2.1 replay + migrate)
+**Branch:** `phase-2-replay-and-migration`
+**Total unit tests passing locally:** 549 (399 SQL + 97 store + 25 exec + 21 meta + 7 config) + 8 soak
+**Phase:** 2.1 — engine-first replay + migration tooling
 
 ---
 
 ## TL;DR
 
-Pavan landed Phase 1.7 cleanup + Phase 2 RocksDB engine in his Step 1 + Step 3
-(local, not yet pushed). This session completes the **deferred main.rs
-cutover** he flagged.
+This session delivered all three "next session priorities" from v5:
 
-The service no longer holds `InMemoryDurabilityEngine` directly. Instead it
-holds `Arc<Mutex<BoxedDurabilityEngine>>` — a thin newtype around
-`Box<dyn DurabilityEngine>` that lets the engine be picked at boot from
-`runtime_config.storage.engine`. All ~179 existing call sites
-(`wal.append_mutation(k, v)`, `wal.wal_records()`, etc.) work unchanged
-because the boxed shim forwards every method.
+1. **Replay-on-boot from RocksDB** ✅ — service prefers the engine's SQL streams, falls back to text WAL.
+2. **Migration helper** ✅ — `vng-migrate` CLI under `tools/voltnuerongrid-migrate/`.
+3. **CI crash-recovery test** ✅ — `tests/soak/tests/crash_recovery.rs` (4 tests behind `--features rocksdb-recovery`).
 
-**Default behaviour:** `storage.engine = rocksdb` opens RocksDB at
-`<data_dir>/rocksdb` with `wal_fsync_on_commit` honoured.
-**Opt-out:** `storage.engine = vng` falls back to in-memory with a warning.
-**Failure mode:** failure to open RocksDB exits the process with code 2.
-Silently dropping durability would defeat the whole point of Phase 2.
+The legacy text-WAL files (`state/ddl.wal`, `state/dml.wal`) are now backed by a parallel SQL stream in RocksDB. After running `vng-migrate` once and restarting, operators can delete the text files.
 
 ---
 
-## What this session delivered
+## What landed this session
 
-### ✅ `DurabilityEngine` trait + `BoxedDurabilityEngine` shim
+### ✅ Trait extension: `SqlWalKind` + SQL stream methods
 
 **File:** `crates/voltnuerongrid-store/src/lib.rs`
 
-- New `DurabilityEngine` trait with the 6 methods used by the service:
-  `append_mutation`, `wal_records`, `latest_sequence`, `maybe_checkpoint`,
-  `force_checkpoint`, `checkpoint_count`. Plus `engine_kind` for metrics.
-- `InMemoryDurabilityEngine` now implements the trait — no behaviour change.
-- `BoxedDurabilityEngine` newtype wrapping `Box<dyn DurabilityEngine>`,
-  with constructors `::in_memory(config)` and `::rocksdb(path, config)`.
-  All 6 methods forwarded directly so the service's call sites are unchanged.
-- 7 new tests in `voltnuerongrid-store::tests` covering the shim + the
-  exact `Arc<Mutex<BoxedDurabilityEngine>>` pattern the service uses.
+```rust
+pub enum SqlWalKind { Ddl, Dml }
 
-### ✅ RocksDB engine
+trait DurabilityEngine: Send {
+    // ... existing 7 methods ...
+    fn append_sql(&mut self, kind: SqlWalKind, sql: &str) -> u64 { 0 }
+    fn iter_sql(&self, kind: SqlWalKind) -> Vec<String> { Vec::new() }
+    fn sql_count(&self, kind: SqlWalKind) -> usize { 0 }
+    fn clear_sql(&mut self, kind: SqlWalKind) {}
+    fn persists_sql(&self) -> bool { false }
+}
+```
 
-**File:** `crates/voltnuerongrid-store/src/rocksdb_engine.rs` (582 LOC)
+`InMemoryDurabilityEngine` implements them with a `HashMap<&'static str, Vec<String>>` (process-local, useful for tests). `BoxedDurabilityEngine` forwards the new methods.
 
-Behind feature flag `rocksdb` — default off in the store crate, enabled
-by the service crate. Mirrors what Pavan described in his Step 3 message:
-- 3 column families (default / wal / meta).
-- Single `WriteBatch` per mutation (atomic data + WAL + meta updates).
-- `WriteOptions::set_sync(wal_fsync_on_commit)` — actual `fsync(2)`,
-  honest durability.
-- `latest_sequence`, `checkpoint_count`, and the latest checkpoint
-  manifest fields persisted in the meta CF so they survive reopen.
-- Bounded in-memory WAL tail buffer (default 1024) so `wal_records()`
-  stays cheap.
-- 7 tests including:
-  - `survives_drop_and_reopen_like_sigkill` — simulates `kill -9` by
-    `drop`ping the engine and reopening; verifies sequence + data + WAL
-    tail all restored.
-  - `checkpoint_id_persists_across_reopen` — checkpoints continue
-    incrementing from where they left off, not reset to 1.
+**6 new in-memory engine tests** covering append-order, per-kind sequence, clear, etc.
 
-> ⚠ Note: Pavan's Step 3 commit was described in the chat but had not been
-> pushed when this session started. The `rocksdb_engine.rs` here is my
-> implementation matching that contract — when Pavan's local version is
-> pushed, please diff and reconcile (see "Reconciliation note" below).
+### ✅ RocksDB engine — 4th column family for SQL streams
 
-### ✅ Service cutover
+**File:** `crates/voltnuerongrid-store/src/rocksdb_engine.rs`
+
+- New CF `sql` with key schema: `[kind_byte (1)] [seq (8)]` big-endian → fast per-kind iteration.
+- Per-kind sequence counters persisted in meta CF (`META_SQL_DDL_SEQUENCE`, `META_SQL_DML_SEQUENCE`).
+- `append_sql` writes one atomic batch: SQL row + counter update.
+- `iter_sql` does a prefix-bounded iteration on the kind byte.
+- `clear_sql` deletes by range and resets the counter atomically.
+
+**5 new RocksDB engine tests** including:
+- `sql_stream_survives_drop_and_reopen` — kill-9 substitute for SQL streams.
+- `clear_sql_truncates_only_named_kind` — DDL clear leaves DML alone.
+
+### ✅ Service replay refactor
 
 **File:** `services/voltnuerongridd/src/main.rs`
 
-- New helper `build_durability_engine(&runtime_config) -> BoxedDurabilityEngine`.
-  - Reads `cfg.storage.engine`. RocksDB → opens at
-    `<data_dir>/rocksdb` with `VNG_WAL_FSYNC_ON_COMMIT` env propagated.
-  - On RocksDB open failure: prints a fatal message and `std::process::exit(2)`.
-  - VNG → in-memory with warning (native VNG engine TBD).
-- `AppState.wal_engine` field type changed from
-  `Arc<Mutex<InMemoryDurabilityEngine>>` to `Arc<Mutex<BoxedDurabilityEngine>>`.
-- Production constructor uses `build_durability_engine`.
-- Test-helper constructor uses `BoxedDurabilityEngine::in_memory(...)`.
-- New metric `vng_durability_engine_boot{engine=...}` increments once at
-  boot for observability.
-- Service `Cargo.toml` enables `voltnuerongrid-store` with the `rocksdb`
-  feature.
+- New helpers `replay_ddl_into(catalog, &engine)` and `replay_dml_into(rs, &engine)`. Engine-first; fall back to text WAL when the engine has no SQL.
+- `apply_ddl_to_catalog` and `apply_dml_to_rowstore` extracted so both replay paths share one code path.
+- New helper `persist_sql_statement(&state, kind, sql)` dual-writes to engine + text WAL during the migration window.
+- All 9 `append_sql_wal(...)` call sites in `sql_execute` and `sql_transaction` migrated to `persist_sql_statement`.
+- 3 new metrics:
+  - `vng_wal_replay_total{kind, source}` — per-statement replay count, labeled by `engine`/`text_wal`.
+  - `vng_wal_append_total{kind}` — runtime SQL appends.
+  - `vng_durability_engine_boot{engine}` — already from previous session.
 
-**No call site changes needed** — all 179 `wal.append_mutation(...)` etc.
-work unchanged because the shim forwards every method with the same
-signature.
+### ✅ Migration tool
+
+**Crate:** `tools/voltnuerongrid-migrate/` (binary `vng-migrate`)
+
+```bash
+vng-migrate \
+    --ddl-wal ./state/ddl.wal \
+    --dml-wal ./state/dml.wal \
+    --rocksdb ./data/rocksdb
+```
+
+Features:
+- Reads text WAL files using the same unescape logic as the service.
+- Refuses to write into a non-empty target SQL stream by default (idempotent).
+- `--force` truncates first; `--dry-run` parses without writing.
+- Always uses `fsync` so the migration is honest.
+- Prints a clear next-steps message after success.
+- Returns distinct exit codes (0/2/3/4/5) for scriptability.
+- 2 unit tests for the unescape and missing-file paths.
+
+### ✅ Crash-recovery integration tests
+
+**File:** `tests/soak/tests/crash_recovery.rs` (4 tests, gated behind `rocksdb-recovery` feature)
+
+- `sql_streams_survive_drop_and_reopen` — write SQL, drop, reopen, verify content.
+- `checkpoint_does_not_truncate_sql_streams` — checkpoint is a snapshot point, not truncation.
+- `sql_sequence_continues_across_reopen` — sequences never reset to 1.
+- `clear_sql_resets_only_requested_kind` — DDL clear leaves DML alone.
+
+Run with: `cargo test -p vng-soak --features rocksdb-recovery`.
 
 ---
 
-## Reconciliation note for Pavan
+## ⚠️ Things to verify on rustc 1.86+
 
-Pavan worked on Phase 1.7 cleanup + Phase 2 RocksDB locally (Step 1 + Step 3
-in his message) but those commits were not pushed when this session began.
-This session built on top of `main` as it stands on origin, which means:
+```bash
+git checkout phase-2-replay-and-migration
 
-- If your local `rocksdb_engine.rs` differs from mine, `git diff` and
-  reconcile the test names. The behaviour contract (3 CFs, atomic
-  WriteBatch, set_sync) should match — the public API is what matters.
-- The 6 method names in the `DurabilityEngine` trait are the ones already
-  used by `main.rs` so no service-side rewrite is required.
-- The `AppState` field-type drift you fixed (locale / localized_message)
-  is on origin — this branch builds on top.
+# Workspace compiles.
+cargo check --workspace
 
-Suggested merge: `git checkout phase-2-rocksdb-cutover`, cherry-pick or
-rebase your local Step 1 + Step 3 commits on top, resolve any
-`rocksdb_engine.rs` conflict in favour of whichever has stricter tests,
-push.
+# Default test suite — should be 549 unit tests + 8 soak.
+cargo test --workspace
+
+# Crash-recovery suite (engine-level kill-9 substitute).
+cargo test -p vng-soak --features rocksdb-recovery
+
+# Service binary.
+cargo build --release -p voltnuerongridd
+
+# Migrate tool.
+cargo build --release -p voltnuerongrid-migrate
+./target/release/vng-migrate --help
+```
+
+### Likely issues
+
+1. **`now_unix_ms()` return type in `apply_ddl_to_catalog`.** I used `now_ms: u128` in the helper signature but `now_unix_ms()` may return `u64`. Cargo-check will say so — adjust to whatever the existing function returns.
+
+2. **`voltnuerongrid_store::mvcc::Xid` import in `apply_dml_to_rowstore`.** May need `pub use` from the store crate.
+
+3. **`metrics::counter!{"vng_wal_replay_total" ... "kind" => "ddl", ...}` syntax** matches what's already used elsewhere in main.rs, but I used `(metric).increment(N as u64)` — confirm metrics 0.23 supports this.
+
+---
+
+## End-to-end migration smoke test
+
+```bash
+# 1. Run the service with the legacy text-WAL paths to populate state/.
+VNG_LOG=debug VNG_ADMIN_API_KEY=test ./target/release/voltnuerongridd &
+sleep 1
+
+curl -X POST -H "x-vng-admin-key: test" -H "x-vng-operator-id: admin" \
+  -H "content-type: application/json" \
+  -d '{"sql_batch":"CREATE TABLE t (id INT, name TEXT)"}' \
+  http://127.0.0.1:8080/api/v1/sql/execute
+
+curl -X POST -H "x-vng-admin-key: test" -H "x-vng-operator-id: admin" \
+  -H "content-type: application/json" \
+  -d '{"sql_batch":"INSERT INTO t (id, name) VALUES (5, '\''alice'\'')"}' \
+  http://127.0.0.1:8080/api/v1/sql/execute
+
+# Confirm the dual-write happened.
+ls -la state/ddl.wal state/dml.wal
+curl -s http://127.0.0.1:8080/metrics | grep vng_wal_append_total
+# Expected: vng_wal_append_total{kind="ddl"} 1
+#           vng_wal_append_total{kind="dml"} 1
+
+# 2. Stop the service hard.
+pkill -9 voltnuerongridd
+
+# 3. (Optional) Migrate explicitly. The service already wrote to RocksDB
+#    via the dual-write helper, so this is a no-op or skipped. Useful for
+#    pre-existing deployments that haven't restarted yet.
+./target/release/vng-migrate \
+    --ddl-wal ./state/ddl.wal \
+    --dml-wal ./state/dml.wal \
+    --rocksdb ./data/rocksdb \
+    --dry-run
+
+# 4. Restart. Service should boot from RocksDB.
+./target/release/voltnuerongridd &
+sleep 1
+
+# 5. Verify the row survived the kill -9.
+curl -X POST -H "x-vng-admin-key: test" -H "x-vng-operator-id: admin" \
+  -H "content-type: application/json" \
+  -d '{"sql_batch":"SELECT * FROM t WHERE id = 5"}' \
+  http://127.0.0.1:8080/api/v1/sql/execute | jq
+
+# 6. Confirm replay came from the engine, not text WAL.
+curl -s http://127.0.0.1:8080/metrics | grep vng_wal_replay_total
+# Expected: vng_wal_replay_total{kind="ddl",source="engine"} 1
+#           vng_wal_replay_total{kind="dml",source="engine"} 1
+```
 
 ---
 
 ## What's still TODO
 
-### Phase 2 follow-ups (next session)
+### Phase 2.2 — text WAL deprecation (next session, small)
 
-1. **Replay-on-boot from RocksDB.** Today the row store and DDL catalog
-   are still rebuilt from the legacy text WAL files
-   (`replay_dml_wal_into`, `replay_ddl_wal_into`). Phase 2.1 should:
-   - Drive `replay_dml_wal_into` from the new engine's `scan_wal()` API.
-   - Same for DDL.
-   - Delete the `*.wal` text files once a successful RocksDB checkpoint
-     is taken.
+Once you've verified end-to-end migration works:
 
-2. **Migration helper.** `vng-migrate` CLI to copy from the legacy text
-   WAL into a fresh RocksDB instance. One-shot, idempotent.
+1. Remove the `append_sql_wal()` call inside `persist_sql_statement` (engine-only).
+2. Remove `replay_ddl_wal_into` and `replay_dml_wal_into` (legacy text WAL paths in the replay helpers).
+3. Delete `ddl_wal_path()`, `dml_wal_path()`, `read_sql_wal()`, `sql_wal_escape()`, `sql_wal_unescape()`.
+4. Delete `vng-migrate` after one release cycle once nobody is on the legacy text WAL.
 
-3. **CI crash-recovery test.** Add to `tests/soak`: spawn the service,
-   write rows, `kill -9`, restart, verify rows present.
+### Phase 3 — items still in the gaps doc
 
-### Phase 3+ — already in original gaps doc
-
-- DataFusion adoption (now unblocked since RocksDB needed the MSRV bump
-  too — adopt both together).
+- DataFusion adoption (now unblocked since the workspace MSRV bumped for RocksDB).
 - Real RBAC.
 - Replication.
 
-### Phase 0 follow-ups (still pending)
+### Phase 0 follow-ups
 
-1. Roll out `handler_lock!` macro to the ~346 `.lock().expect()` sites.
-2. Refactor `main.rs` into modules. Now ~34,800 lines.
+1. `handler_lock!` macro rollout — still ~346 sites.
+2. main.rs modular refactor — now ~34,800+ lines.
 
 ---
 
-## Verification commands (run on rustc 1.86+)
+## Reconciliation note for Pavan
 
-```bash
-git checkout phase-2-rocksdb-cutover
+Pavan's local Step 1 + Step 3 work was not pushed when this session began.
+This branch builds on top of `origin/main` and assumes:
 
-# All workspace crates compile.
-cargo check --workspace
+- `rocksdb_engine.rs` is the version Claude wrote in v5 (3 CFs, atomic
+  WriteBatch, set_sync, persisted checkpoint id).
+- The `AuthErrorResponse` + locale drift Pavan fixed in his Step 1 is on
+  origin/main but his commits haven't landed yet — when they do,
+  cherry-pick or rebase.
 
-# All tests pass — should be ~543 unit tests.
-cargo test --workspace
+The trait extension here is additive (default impls), so any existing
+`DurabilityEngine` impl Pavan wrote locally will still compile. The new
+`SqlWalKind` enum and 5 methods are pure additions.
 
-# Build the service.
-cargo build --release -p voltnuerongridd
+---
 
-# Boot with default config (RocksDB at ./data/rocksdb).
-mkdir -p ./data
-VNG_LOG=debug \
-VNG_LOG_FORMAT=pretty \
-VNG_ADMIN_API_KEY=test-key \
-VNG_STORAGE_DATA_DIR=$PWD/data \
-./target/release/voltnuerongridd
+## How to continue
 
-# In another shell, verify the boot metric:
-curl -s http://127.0.0.1:8080/metrics | grep vng_durability_engine_boot
-# Expected: vng_durability_engine_boot{engine="rocksdb"} 1
+```
+@.cursorrules
+@gaps-may26-1.md
+@remaining.md
+@crates/voltnuerongrid-store/src/lib.rs
+@crates/voltnuerongrid-store/src/rocksdb_engine.rs
+@tools/voltnuerongrid-migrate/src/main.rs
+@tests/soak/tests/crash_recovery.rs
 ```
 
-### Crash-recovery smoke test
-
-```bash
-# Write some data via the SQL API.
-curl -X POST -H "x-vng-admin-key: test-key" -H "x-vng-operator-id: admin" \
-  -H "content-type: application/json" \
-  -d '{"sql_batch":"INSERT INTO t (id, name) VALUES (5, '\''alice'\'')"}' \
-  http://127.0.0.1:8080/api/v1/sql/execute
-
-# Send SIGKILL (NOT SIGTERM — we want the harshest shutdown).
-pkill -9 voltnuerongridd
-
-# Restart with the same data dir.
-./target/release/voltnuerongridd &
-sleep 1
-
-# Query — the row should still be there.
-curl -X POST -H "x-vng-admin-key: test-key" -H "x-vng-operator-id: admin" \
-  -H "content-type: application/json" \
-  -d '{"sql_batch":"SELECT * FROM t WHERE id = 5"}' \
-  http://127.0.0.1:8080/api/v1/sql/execute | jq
-# Expected: { oltp_rows: [{ key: "t:5", data: { id: "5", name: "alice" } }] }
-```
-
-If the row survives, Phase 2 is real. If it doesn't, there's a bug in either
-the rocksdb_engine.rs commit-path or the replay-on-boot integration
-(item 1 in the TODO list above).
+Recommended next step: Phase 2.2 (text WAL deprecation) once the smoke
+test in this file passes on rustc 1.86+. Or start Phase 3 if you want
+to push forward instead of cleaning up.

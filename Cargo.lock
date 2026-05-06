@@ -2533,6 +2533,9 @@ version = "0.1.0"
 [[package]]
 name = "vng-soak"
 version = "0.1.0"
+dependencies = [
+ "voltnuerongrid-store",
+]
 
 [[package]]
 name = "voltnuerongrid-ai"
@@ -2658,6 +2661,14 @@ dependencies = [
  "serde",
  "serde_json",
  "voltnuerongrid-core",
+]
+
+[[package]]
+name = "voltnuerongrid-migrate"
+version = "0.1.0"
+dependencies = [
+ "voltnuerongrid-core",
+ "voltnuerongrid-store",
 ]
 
 [[package]]
