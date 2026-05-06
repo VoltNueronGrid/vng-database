@@ -23,7 +23,7 @@ voltnuerongrid-audit = { path = "../../crates/voltnuerongrid-audit" }
 voltnuerongrid-ai = { path = "../../crates/voltnuerongrid-ai" }
 voltnuerongrid-exec = { path = "../../crates/voltnuerongrid-exec" }
 voltnuerongrid-sql = { path = "../../crates/voltnuerongrid-sql" }
-voltnuerongrid-store = { path = "../../crates/voltnuerongrid-store" }
+voltnuerongrid-store = { path = "../../crates/voltnuerongrid-store", features = ["rocksdb"] }
 voltnuerongrid-ingest = { path = "../../crates/voltnuerongrid-ingest" }
 voltnuerongrid-opt = { path = "../../crates/voltnuerongrid-opt" }
 voltnuerongrid-plugins = { path = "../../crates/voltnuerongrid-plugins" }

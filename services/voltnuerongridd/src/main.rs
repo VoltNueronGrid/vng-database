@@ -38,7 +38,7 @@ use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult, DdlCatalog, DdlCatalogEntry};
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
-use voltnuerongrid_store::{InMemoryDurabilityEngine, DurabilityConfig};
+use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
 use voltnuerongrid_mcp::{McpRequest, McpServerCapabilities, process_request};
 use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
 use voltnuerongrid_ingest::{
@@ -478,7 +478,7 @@ struct AppState {
     /// Maps model_id → request count in current window.
     ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
     /// S2-WS2-02: WAL durability engine — records every committed DML mutation.
-    wal_engine: Arc<Mutex<InMemoryDurabilityEngine>>,
+    wal_engine: Arc<Mutex<BoxedDurabilityEngine>>,
     /// S7-WS6-04: Chaos/game-day fault injection state.
     chaos_state: Arc<Mutex<ChaosState>>,
     /// S8-WS10-02: Driver wire protocol session registry.
@@ -896,6 +896,83 @@ fn read_sql_wal(wal_path: &str) -> Vec<String> {
         .filter(|l| !l.trim().is_empty())
         .map(|l| sql_wal_unescape(&l))
         .collect()
+}
+
+/// Phase 2 — pick the durability engine based on `runtime_config.storage`.
+///
+/// Selection rules:
+/// - `StorageEngine::Rocksdb` (default) → open RocksDB at the configured
+///   `data_dir`. The `wal_fsync_on_commit` flag is propagated via the
+///   `VNG_WAL_FSYNC_ON_COMMIT` env var (the engine reads it directly to
+///   keep its open() signature stable across feature flags).
+///   On failure to open RocksDB the process **exits**, not falls back to
+///   in-memory. Silently degrading durability would defeat the whole
+///   point of Phase 2; an obvious crash is preferred.
+/// - `StorageEngine::Vng` → currently mapped to in-memory with a warning,
+///   because the native VNG engine is not yet shipped.
+fn build_durability_engine(
+    cfg: &voltnuerongrid_config::RuntimeConfig,
+) -> BoxedDurabilityEngine {
+    use voltnuerongrid_config::StorageEngine;
+
+    let durability_cfg = DurabilityConfig {
+        wal_enabled: true,
+        checkpoint_interval_seconds: 60,
+        max_wal_records_before_checkpoint: 1_000,
+    };
+
+    match cfg.storage.engine {
+        StorageEngine::Rocksdb => {
+            // Propagate the fsync flag to the rocksdb engine via env var so
+            // its open() signature can stay simple (the engine reads it once
+            // at boot — main.rs sets it before construction).
+            std::env::set_var(
+                "VNG_WAL_FSYNC_ON_COMMIT",
+                if cfg.storage.wal_fsync_on_commit { "1" } else { "0" },
+            );
+            let path = std::path::PathBuf::from(&cfg.storage.data_dir).join("rocksdb");
+            tracing::info!(
+                target: "vng.durability",
+                path = %path.display(),
+                fsync = cfg.storage.wal_fsync_on_commit,
+                "opening RocksDB durability engine"
+            );
+            match BoxedDurabilityEngine::rocksdb(&path, durability_cfg) {
+                Ok(engine) => {
+                    tracing::info!(
+                        target: "vng.durability",
+                        kind = engine.engine_kind(),
+                        latest_sequence = engine.latest_sequence(),
+                        checkpoint_count = engine.checkpoint_count(),
+                        "durability engine opened"
+                    );
+                    engine
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[vng-durability] FATAL: failed to open RocksDB at {}: {}",
+                        path.display(),
+                        e
+                    );
+                    eprintln!(
+                        "[vng-durability] refusing to fall back to in-memory — \
+                         silently dropping durability would mask data loss. \
+                         Fix the path or set storage.engine = vng to opt out."
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+        StorageEngine::Vng => {
+            tracing::warn!(
+                target: "vng.durability",
+                "storage.engine = vng — native VNG engine is not yet implemented; \
+                 falling back to non-durable in-memory engine. Set \
+                 storage.engine = rocksdb for production durability."
+            );
+            BoxedDurabilityEngine::in_memory(durability_cfg)
+        }
+    }
 }
 
 /// Replay the DDL WAL into a freshly-created `DdlCatalog`.
@@ -5815,6 +5892,19 @@ async fn main() {
         .parse()
         .unwrap_or_else(|_| "127.0.0.1:8080".parse().expect("fallback socket parse"));
 
+    // Phase 2 — pick the durability engine from runtime_config.
+    // RocksDB by default; falls back to in-memory only if explicitly
+    // configured with `storage.engine = vng` (native engine not yet shipped)
+    // or if the rocksdb open fails (which we surface and exit on, not
+    // silently degrade — silently dropping durability would violate the
+    // whole point of Phase 2).
+    let wal_engine_boxed = build_durability_engine(&runtime_config);
+    metrics::counter!(
+        "vng_durability_engine_boot",
+        "engine" => wal_engine_boxed.engine_kind().to_string(),
+    ).increment(1);
+    let wal_engine = Arc::new(Mutex::new(wal_engine_boxed));
+
     let state = AppState {
         node_id: node_id.clone(),
         cluster_mode,
@@ -5868,7 +5958,7 @@ async fn main() {
             rs
         })),
         model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
-        wal_engine: Arc::new(Mutex::new(InMemoryDurabilityEngine::with_config(DurabilityConfig::default()))),
+        wal_engine,
         chaos_state: Arc::new(Mutex::new(ChaosState::default())),
         olap_store: Arc::new(Mutex::new(HashMap::new())),
         audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
@@ -21825,7 +21915,7 @@ mod tests {
             acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
             row_store: Arc::new(Mutex::new(PagedRowStore::default())),
             model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
-            wal_engine: Arc::new(Mutex::new(InMemoryDurabilityEngine::with_config(DurabilityConfig::default()))),
+            wal_engine: Arc::new(Mutex::new(BoxedDurabilityEngine::in_memory(DurabilityConfig::default()))),
             chaos_state: Arc::new(Mutex::new(ChaosState::default())),
             olap_store: Arc::new(Mutex::new(HashMap::new())),
             audit_log_path: None,
