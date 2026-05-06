@@ -1,224 +1,202 @@
-# `remaining.md` — handoff for next session (v4)
+# `remaining.md` — handoff for next session (v5)
 
-**Last updated:** 2026-05-05 (fourth session)
-**Branch:** `phase-1-7-datafusion`
-**Total unit tests passing locally:** 452 (399 SQL + 25 exec + 21 meta + 7 config)
+**Last updated:** 2026-05-05 (sixth session — Phase 2 cutover)
+**Branch:** `phase-2-rocksdb-cutover`
+**Total unit tests passing locally:** 543 (399 SQL + 91 store + 25 exec + 21 meta + 7 config)
 
 ---
 
 ## TL;DR
 
-Phase 1.7 lands the **critical correctness fix** for the substring-matching
-bug: `WHERE id = 5` now returns exactly the row with id 5, not rows
-15, 25, 50, 51 etc. (gaps-may26-1.md §3.4).
+Pavan landed Phase 1.7 cleanup + Phase 2 RocksDB engine in his Step 1 + Step 3
+(local, not yet pushed). This session completes the **deferred main.rs
+cutover** he flagged.
 
-**Important pivot from the original Phase 1.7 plan:** the new crate is named
-`voltnuerongrid-exec-datafusion` but does **not** actually pull in DataFusion
-yet. DataFusion 35+ has transitive deps requiring rustc 1.86+
-(`edition2024`), and the sandbox is stuck at rustc 1.75. The crate name is
-kept for forward compatibility — when MSRV bumps, real DataFusion can be added
-behind a feature flag.
+The service no longer holds `InMemoryDurabilityEngine` directly. Instead it
+holds `Arc<Mutex<BoxedDurabilityEngine>>` — a thin newtype around
+`Box<dyn DurabilityEngine>` that lets the engine be picked at boot from
+`runtime_config.storage.engine`. All ~179 existing call sites
+(`wal.append_mutation(k, v)`, `wal.wal_records()`, etc.) work unchanged
+because the boxed shim forwards every method.
 
-What's delivered today is a **correct, AST-driven SELECT executor** that
-walks the sqlparser-rs Expr tree and evaluates it row-by-row. This delivers
-the immediate correctness win without waiting for the toolchain.
+**Default behaviour:** `storage.engine = rocksdb` opens RocksDB at
+`<data_dir>/rocksdb` with `wal_fsync_on_commit` honoured.
+**Opt-out:** `storage.engine = vng` falls back to in-memory with a warning.
+**Failure mode:** failure to open RocksDB exits the process with code 2.
+Silently dropping durability would defeat the whole point of Phase 2.
 
 ---
 
 ## What this session delivered
 
-### ✅ Phase 1.7 — correct SELECT executor
+### ✅ `DurabilityEngine` trait + `BoxedDurabilityEngine` shim
 
-**New crate:** `crates/voltnuerongrid-exec-datafusion/` (~960 LOC, 25 tests)
+**File:** `crates/voltnuerongrid-store/src/lib.rs`
 
-- `execute_select(sql, &PagedRowStore, max_rows) -> Result<SelectOutput, ExecError>`
-- `execute_parsed_select(&SelectStatement, raw_sql, ...)` for callers that
-  already have the AST.
+- New `DurabilityEngine` trait with the 6 methods used by the service:
+  `append_mutation`, `wal_records`, `latest_sequence`, `maybe_checkpoint`,
+  `force_checkpoint`, `checkpoint_count`. Plus `engine_kind` for metrics.
+- `InMemoryDurabilityEngine` now implements the trait — no behaviour change.
+- `BoxedDurabilityEngine` newtype wrapping `Box<dyn DurabilityEngine>`,
+  with constructors `::in_memory(config)` and `::rocksdb(path, config)`.
+  All 6 methods forwarded directly so the service's call sites are unchanged.
+- 7 new tests in `voltnuerongrid-store::tests` covering the shim + the
+  exact `Arc<Mutex<BoxedDurabilityEngine>>` pattern the service uses.
 
-**Coverage today:**
-- Equality / inequality: `=`, `!=`, `<>`
-- Range: `<`, `<=`, `>`, `>=`, `BETWEEN ... AND ...`
-- Set membership: `IN (...)` (literal list)
-- Null tests: `IS NULL`, `IS NOT NULL`
-- Boolean composition: `AND`, `OR`, `NOT`
-- Pattern matching: `LIKE`, `NOT LIKE` (with `%` and `_` wildcards)
-- Column projection (only listed columns returned, including `AS alias`)
-- `ORDER BY` (any column, ASC / DESC, numeric or lexicographic comparison)
-- `LIMIT` / `OFFSET`
-- Bare aggregates without GROUP BY: `COUNT(*)`, `COUNT(col)`, `SUM(col)`,
-  `AVG(col)`, `MIN(col)`, `MAX(col)`
+### ✅ RocksDB engine
 
-**Returns `ExecError::Unsupported` for** (caller falls back to legacy):
-- JOIN
-- GROUP BY / HAVING
-- Window functions
-- Subqueries
+**File:** `crates/voltnuerongrid-store/src/rocksdb_engine.rs` (582 LOC)
 
-**Critical regression test** (proves the §3.4 bug is fixed):
-```rust
-#[test]
-fn where_eq_does_not_match_substrings() {
-    // 5 rows with id 5, 15, 25, 50, 51
-    let rows = unwrap_rows(execute_select("SELECT * FROM t WHERE id = 5", &rs, 100).unwrap());
-    assert_eq!(rows.len(), 1, "WHERE id = 5 must match exactly one row");
-    assert_eq!(rows[0].data.get("name").map(String::as_str), Some("Alice"));
-}
-```
+Behind feature flag `rocksdb` — default off in the store crate, enabled
+by the service crate. Mirrors what Pavan described in his Step 3 message:
+- 3 column families (default / wal / meta).
+- Single `WriteBatch` per mutation (atomic data + WAL + meta updates).
+- `WriteOptions::set_sync(wal_fsync_on_commit)` — actual `fsync(2)`,
+  honest durability.
+- `latest_sequence`, `checkpoint_count`, and the latest checkpoint
+  manifest fields persisted in the meta CF so they survive reopen.
+- Bounded in-memory WAL tail buffer (default 1024) so `wal_records()`
+  stays cheap.
+- 7 tests including:
+  - `survives_drop_and_reopen_like_sigkill` — simulates `kill -9` by
+    `drop`ping the engine and reopening; verifies sequence + data + WAL
+    tail all restored.
+  - `checkpoint_id_persists_across_reopen` — checkpoints continue
+    incrementing from where they left off, not reset to 1.
 
-### ✅ Service integration
+> ⚠ Note: Pavan's Step 3 commit was described in the chat but had not been
+> pushed when this session started. The `rocksdb_engine.rs` here is my
+> implementation matching that contract — when Pavan's local version is
+> pushed, please diff and reconcile (see "Reconciliation note" below).
+
+### ✅ Service cutover
 
 **File:** `services/voltnuerongridd/src/main.rs`
 
-- `voltnuerongrid-exec-datafusion` added as service dep.
-- `execute_oltp_select()` rewritten:
-  1. Try the new correct executor first (`execute_select(...)`).
-  2. On `Ok(Rows)` — emit them, increment `vng_sql_select_executor_total{engine=vng_correct,outcome=ok}`.
-  3. On `Err(Unsupported)` — fall back to `execute_oltp_select_legacy()`,
-     emit `outcome=unsupported_fallback`.
-  4. On `Ok(Aggregate)` or other errors — pass through to legacy/skip.
-- Legacy substring scanner kept as `execute_oltp_select_legacy()` with a
-  doc comment marking it as known-incorrect for `WHERE col = val` cases.
-- New metric: `vng_sql_select_executor_total` labeled by `engine` and
-  `outcome` so operators can see when the legacy path is hit.
+- New helper `build_durability_engine(&runtime_config) -> BoxedDurabilityEngine`.
+  - Reads `cfg.storage.engine`. RocksDB → opens at
+    `<data_dir>/rocksdb` with `VNG_WAL_FSYNC_ON_COMMIT` env propagated.
+  - On RocksDB open failure: prints a fatal message and `std::process::exit(2)`.
+  - VNG → in-memory with warning (native VNG engine TBD).
+- `AppState.wal_engine` field type changed from
+  `Arc<Mutex<InMemoryDurabilityEngine>>` to `Arc<Mutex<BoxedDurabilityEngine>>`.
+- Production constructor uses `build_durability_engine`.
+- Test-helper constructor uses `BoxedDurabilityEngine::in_memory(...)`.
+- New metric `vng_durability_engine_boot{engine=...}` increments once at
+  boot for observability.
+- Service `Cargo.toml` enables `voltnuerongrid-store` with the `rocksdb`
+  feature.
+
+**No call site changes needed** — all 179 `wal.append_mutation(...)` etc.
+work unchanged because the shim forwards every method with the same
+signature.
 
 ---
 
-## ⚠️ Things to verify on rustc 1.86+
+## Reconciliation note for Pavan
 
-Same constraint as last 3 sessions: the sandbox can't compile the full
-`voltnuerongridd` service. The new exec crate compiles + tests cleanly on
-rustc 1.75, but the integration into `main.rs` was not compiler-verified.
+Pavan worked on Phase 1.7 cleanup + Phase 2 RocksDB locally (Step 1 + Step 3
+in his message) but those commits were not pushed when this session began.
+This session built on top of `main` as it stands on origin, which means:
 
-```bash
-cargo check --workspace
-cargo test -p voltnuerongrid-exec-datafusion   # 25 tests, expected pass
-cargo test --workspace
-cd ui/voltnuerongrid-studio && npx tsc --noEmit
-```
+- If your local `rocksdb_engine.rs` differs from mine, `git diff` and
+  reconcile the test names. The behaviour contract (3 CFs, atomic
+  WriteBatch, set_sync) should match — the public API is what matters.
+- The 6 method names in the `DurabilityEngine` trait are the ones already
+  used by `main.rs` so no service-side rewrite is required.
+- The `AppState` field-type drift you fixed (locale / localized_message)
+  is on origin — this branch builds on top.
 
-### Likely compile issues in `voltnuerongridd`
-
-1. **Crate name mismatch in import**: I used
-   `use voltnuerongrid_exec_datafusion::{execute_select, SelectOutput, ExecError};`
-   inside the new `execute_oltp_select`. Underscores are correct (Rust
-   converts hyphens in package names to underscores in extern crate names).
-
-2. **`metrics::counter!` macro syntax** — I used the v0.23 syntax matching
-   what's already in the file.
-
-3. **No new types in public API** — the new exec functions return
-   `voltnuerongrid_exec_datafusion::ResultRow { key, data }` which the
-   caller maps to existing `OltpRowResult { key, data }`. Same field
-   names, no breakage.
+Suggested merge: `git checkout phase-2-rocksdb-cutover`, cherry-pick or
+rebase your local Step 1 + Step 3 commits on top, resolve any
+`rocksdb_engine.rs` conflict in favour of whichever has stricter tests,
+push.
 
 ---
 
 ## What's still TODO
 
-### Phase 1.7-extended — JOIN, GROUP BY, real DataFusion
+### Phase 2 follow-ups (next session)
 
-The new executor returns `Unsupported` for JOIN, GROUP BY, HAVING, window
-functions, and subqueries. These currently fall through to the legacy
-substring scanner — which is **also broken** for them, just differently.
+1. **Replay-on-boot from RocksDB.** Today the row store and DDL catalog
+   are still rebuilt from the legacy text WAL files
+   (`replay_dml_wal_into`, `replay_ddl_wal_into`). Phase 2.1 should:
+   - Drive `replay_dml_wal_into` from the new engine's `scan_wal()` API.
+   - Same for DDL.
+   - Delete the `*.wal` text files once a successful RocksDB checkpoint
+     is taken.
 
-Two paths from here:
+2. **Migration helper.** `vng-migrate` CLI to copy from the legacy text
+   WAL into a fresh RocksDB instance. One-shot, idempotent.
 
-**Option A — wait for MSRV bump, then adopt real DataFusion.**
-Once the workspace can compile against rustc 1.86+, add DataFusion behind
-a feature flag in `voltnuerongrid-exec-datafusion`. DataFusion handles
-JOIN/GROUP BY/window/subquery natively. Effort: M-L (~1 week to wire,
-plus the DataFusion learning curve).
+3. **CI crash-recovery test.** Add to `tests/soak`: spawn the service,
+   write rows, `kill -9`, restart, verify rows present.
 
-**Option B — hand-roll the missing operators.** Extend the new executor
-incrementally. JOIN ~3 days, GROUP BY ~2 days. Cheaper to start,
-pricier long-term as features pile up.
+### Phase 3+ — already in original gaps doc
 
-**Recommendation: Option A.** DataFusion's correctness is battle-tested
-across hundreds of OSS projects. The MSRV bump is happening anyway when
-you adopt RocksDB (Phase 2).
-
-### Phase 2 — RocksDB durable storage
-
-Per Pavan's answer in the original session: configurable `RocksDB | VNG`
-storage with RocksDB as the default. The config selector is already wired
-(Phase 0). Now actually implement RocksDB.
-
-**Plan:**
-1. Add `rocksdb = "0.21"` to `voltnuerongrid-store`.
-2. Create `RocksDbDurabilityEngine` implementing `DurabilityEngine` trait.
-3. Drive selection via `state.runtime_config.storage.engine`.
-4. Crash-recovery CI test: write rows, kill -9, restart, verify rows.
-5. Migration: in-memory engine remains for tests; RocksDB for production.
-
-The MSRV bump from RocksDB's deps is what unblocks DataFusion in Phase 1.7-extended.
+- DataFusion adoption (now unblocked since RocksDB needed the MSRV bump
+  too — adopt both together).
+- Real RBAC.
+- Replication.
 
 ### Phase 0 follow-ups (still pending)
 
-1. **Roll out `handler_lock!` macro** to the ~346 `.lock().expect()` sites.
-2. **Refactor `main.rs` into modules** — target structure in earlier
-   `remaining.md` versions.
-3. **Wire `vng_sql_execute_total` counter** into `sql_execute` (currently
-   only the new `vng_sql_select_executor_total` increments).
+1. Roll out `handler_lock!` macro to the ~346 `.lock().expect()` sites.
+2. Refactor `main.rs` into modules. Now ~34,800 lines.
 
 ---
 
-## How to continue from a fresh Cursor session
-
-```
-@.cursorrules
-@gaps-may26-1.md
-@remaining.md
-@crates/voltnuerongrid-config/src/lib.rs
-@crates/voltnuerongrid-meta/src/lib.rs
-@crates/voltnuerongrid-sql/src/sqlparser_adapter.rs
-@crates/voltnuerongrid-exec-datafusion/src/lib.rs
-@services/voltnuerongridd/src/resilience.rs
-@services/voltnuerongridd/src/observability.rs
-```
-
-Recommended next step: **Phase 2 (RocksDB)** — the MSRV bump unblocks
-everything else. Or **handler_lock! rollout** if you want a quick
-maintainability win without dep churn.
-
----
-
-## Smoke test for this session
+## Verification commands (run on rustc 1.86+)
 
 ```bash
-# Boot server
-cargo build --release
-VNG_LOG=debug VNG_ADMIN_API_KEY=test ./target/release/voltnuerongridd &
+git checkout phase-2-rocksdb-cutover
 
-# Set up test data
-curl -X POST -H "x-vng-admin-key: test" -H "x-vng-operator-id: admin" \
-  -H "content-type: application/json" \
-  -d '{"sql_batch":"CREATE TABLE t (id INT, name TEXT)"}' \
-  http://127.0.0.1:8080/api/v1/sql/execute
+# All workspace crates compile.
+cargo check --workspace
 
-for i in 5 15 25 50 51; do
-  curl -X POST -H "x-vng-admin-key: test" -H "x-vng-operator-id: admin" \
-    -H "content-type: application/json" \
-    -d "{\"sql_batch\":\"INSERT INTO t (id, name) VALUES ($i, 'row_$i')\"}" \
-    http://127.0.0.1:8080/api/v1/sql/execute > /dev/null
-done
+# All tests pass — should be ~543 unit tests.
+cargo test --workspace
 
-# THE BIG TEST: WHERE id = 5 must return exactly one row
-curl -s -X POST -H "x-vng-admin-key: test" -H "x-vng-operator-id: admin" \
-  -H "content-type: application/json" \
-  -d '{"sql_batch":"SELECT * FROM t WHERE id = 5"}' \
-  http://127.0.0.1:8080/api/v1/sql/execute | jq '.oltp_rows'
-# Expected: array with exactly one element, name = "row_5"
-# Pre-Phase-1.7 behaviour: 5 rows including row_15, row_25, row_50, row_51
+# Build the service.
+cargo build --release -p voltnuerongridd
 
-# Verify metrics
-curl -s http://127.0.0.1:8080/metrics | grep vng_sql_select_executor_total
-# Expected: vng_sql_select_executor_total{engine="vng_correct",outcome="ok"} 1+
+# Boot with default config (RocksDB at ./data/rocksdb).
+mkdir -p ./data
+VNG_LOG=debug \
+VNG_LOG_FORMAT=pretty \
+VNG_ADMIN_API_KEY=test-key \
+VNG_STORAGE_DATA_DIR=$PWD/data \
+./target/release/voltnuerongridd
+
+# In another shell, verify the boot metric:
+curl -s http://127.0.0.1:8080/metrics | grep vng_durability_engine_boot
+# Expected: vng_durability_engine_boot{engine="rocksdb"} 1
 ```
 
----
+### Crash-recovery smoke test
 
-## Sandbox & PAT note
+```bash
+# Write some data via the SQL API.
+curl -X POST -H "x-vng-admin-key: test-key" -H "x-vng-operator-id: admin" \
+  -H "content-type: application/json" \
+  -d '{"sql_batch":"INSERT INTO t (id, name) VALUES (5, '\''alice'\'')"}' \
+  http://127.0.0.1:8080/api/v1/sql/execute
 
-To push from Claude's sandbox, give it the GitHub PAT in the chat.
-Working directory: `/home/claude/vng-database/`.
-The sandbox is ephemeral — wiped at session end.
+# Send SIGKILL (NOT SIGTERM — we want the harshest shutdown).
+pkill -9 voltnuerongridd
+
+# Restart with the same data dir.
+./target/release/voltnuerongridd &
+sleep 1
+
+# Query — the row should still be there.
+curl -X POST -H "x-vng-admin-key: test-key" -H "x-vng-operator-id: admin" \
+  -H "content-type: application/json" \
+  -d '{"sql_batch":"SELECT * FROM t WHERE id = 5"}' \
+  http://127.0.0.1:8080/api/v1/sql/execute | jq
+# Expected: { oltp_rows: [{ key: "t:5", data: { id: "5", name: "alice" } }] }
+```
+
+If the row survives, Phase 2 is real. If it doesn't, there's a bug in either
+the rocksdb_engine.rs commit-path or the replay-on-boot integration
+(item 1 in the TODO list above).

@@ -106,6 +106,10 @@ fn init_metrics() {
         "vng_database_lifecycle_total",
         "Total CREATE/DROP DATABASE operations by status."
     );
+    metrics::describe_counter!(
+        "vng_durability_engine_boot",
+        "Increments once at process boot, labeled by chosen durability engine kind."
+    );
 }
 
 static METRICS_HANDLE: std::sync::OnceLock<metrics_exporter_prometheus::PrometheusHandle> =

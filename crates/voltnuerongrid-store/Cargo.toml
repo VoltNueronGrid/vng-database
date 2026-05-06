@@ -7,3 +7,14 @@ authors.workspace = true
 
 [dependencies]
 voltnuerongrid-core = { path = "../voltnuerongrid-core" }
+# Phase 2 — durable storage backend.
+# Optional dep so the trait + in-memory engine still compile on minimal builds.
+# Enable with `--features rocksdb`. The service crate enables it by default via
+# its own `[features]` block (see services/voltnuerongridd/Cargo.toml).
+rocksdb = { version = "0.22", optional = true, default-features = false, features = ["snappy"] }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[features]
+default = []
+rocksdb = ["dep:rocksdb", "dep:serde", "dep:serde_json"]
