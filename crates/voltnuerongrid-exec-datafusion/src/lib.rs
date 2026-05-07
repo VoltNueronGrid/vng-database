@@ -697,6 +697,12 @@ fn agg_minmax(rows: &[(String, RowData)], col: &str, want_min: bool) -> Aggregat
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3: DataFusion executor for JOIN / GROUP BY / window / subquery
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(feature = "datafusion")]
+pub mod datafusion;
+
 #[cfg(test)]
 mod tests {
     use super::*;
