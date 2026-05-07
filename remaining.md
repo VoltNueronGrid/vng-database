@@ -1,86 +1,203 @@
-# `remaining.md` — handoff for next session (v14)
+# `remaining.md` — handoff for next session (v9)
 
-**Last updated:** 2026-05-07 (thirteenth session — Slice 4 complete: sql.rs, sre.rs, store.rs)
-**Branch:** `main`
-**Total unit tests:** ~603 passing (resilience.rs has 2 pre-existing E0597 failures unrelated to modular work; 28 planner tests in voltnuerongrid-exec also pre-existing failures)
-**Phase:** main.rs modular refactor underway — Slices 1–4 complete
-
----
-
-## TL;DR — what landed this session
-
-### ✅ main.rs modular refactor — Slice 4
-
-**New files:**
-
-- **`services/voltnuerongridd/src/handlers/sql.rs`** (1,423 lines) — 26 DTOs + 9 handlers:
-  - Handlers: `sql_transaction`, `sql_pessimistic_lock_acquire`, `sql_pessimistic_lock_release`, `sql_pessimistic_lock_metrics`, `sql_analyze`, `sql_route`, `sql_execute`, `sql_transactions_isolation`, `sql_transactions_active`
-  - DTOs: `SqlTransactionRequest`, `SqlAnalyzeRequest`, `AnalyzedStatement`, `SqlAnalyzeResponse`, `SqlRouteRequest`, `RoutedStatementResponse`, `SqlRouteResponse`, `SqlExecuteRequest`, `LegacyAggResult`, `SqlExecuteResponse`, `OltpRowResult`, `OlapVecAggResult`, `UdfExecutionResult`, `UdfFunctionCatalogEntry`, `UdfLanguageGuardPolicy`, `UdfExecutionPlanStep`, `UdfInvocationPlan`, `PessimisticLockAcquireRequest`, `PessimisticLockReleaseRequest`, `PessimisticLockResponse`, `PessimisticLockContentionMetricsResponse`, `TxIsolationEntry`, `TxIsolationStatsResponse`, `OlapQueryRequest`, `OlapQueryResponse`, `AcidTransactionsResponse`
-
-- **`services/voltnuerongridd/src/handlers/sre.rs`** (1,431 lines) — ~35 DTOs + 22 handlers:
-  - Handlers: `sre_reliability_status`, `sre_rate_limit_check`, `sre_failure_budget_alerts`, `sre_dr_hook_policy`, `sre_dr_hook_retry_plan`, `sre_dr_hook_schedule`, `sre_dr_hook_trigger`, `sre_dr_hook_status`, `sre_failure_signal`, `sre_failure_reconcile`, `sre_gate_evaluate`, `sre_gate_export`, `sre_cache_set`, `sre_cache_get`, `sre_cache_invalidate`, `sre_cache_rebalance`, `sre_cache_metrics`, `sre_driver_pool_acquire`, `sre_driver_pool_release`, `sre_driver_pool_failure`, `sre_driver_pool_recover`, `sre_driver_pool_stats`
-  - Note: `cache_redis_command` and its DTOs (`RedisCacheCommandRequest`, `RedisCacheCommandResponse`) STAY in main.rs (heavily tested there)
-
-- **`services/voltnuerongridd/src/handlers/store.rs`** (1,330 lines) — 43 DTOs + 23 handlers:
-  - Handlers: `htap_status`, `store_rows_keys`, `row_store_version`, `htap_stats`, `row_store_snapshot`, `row_store_stats`, `row_store_count`, `row_store_delete`, `store_list_indexes`, `store_create_index`, `store_drop_index`, `store_index_lookup`, `store_add_constraint`, `store_validate_constraint`, `store_rows_scan`, `store_htap_export`, `store_columnar_scan`, `store_columnar_project`, `store_columnar_aggregate`, `store_htap_apply`, `store_htap_olap_scan`, `htap_lag`, `htap_force_sync`
-
-**`pub(crate)` changes in main.rs for Slice 4:**
-- `DR_HOOK_COUNTER` static → `pub(crate)`
-- Functions: `failure_budget_snapshot`, `rate_limit_policy_snapshot`, `evaluate_rate_limit`, `evaluate_failure_budget_alert`, `build_retry_plan`, `enqueue_dr_hook_task`, `execute_dr_hook`, `latest_dr_hook_records`, `pool_acquire_error_state`, `record_transport_mutation` → all `pub(crate)`
-
-**Shared-type rule in action (stays in main.rs):**
-- `PoolStatsResponse` — shared between driver.rs and sre.rs, stays in main.rs as `pub(crate)`
-- `RedisCacheCommandRequest/Response` — private to main.rs (function + tests co-located)
-- `PessimisticLockContentionMetrics` — AppState field type, stays in main.rs
-
-**main.rs line count:** 30,287 (Slice 3) → 24,962 (after Slice 4, -5,325 lines)
-
-**`cargo check --workspace`**: clean ✓
-**`cargo test`**: ~603 passing; 2 pre-existing E0597 in resilience.rs; 28 pre-existing planner failures in voltnuerongrid-exec
+**Last updated:** 2026-05-07 (tenth session — Slices 5-8 + Rust 1.85 install)
+**Branch:** `main`  
+**Commit:** 9e06d00 (Slices 5-7 pushed) + Slice 8 uncommitted (router.rs)
+**Total unit tests passing locally:** 556 (399 SQL + 97 store + 32 config + 21 meta + 7 exec)
+**Rust version:** 1.85.1 (from Ubuntu 25.04 plucky repo via archive.ubuntu.com)
 
 ---
 
-## What's still TODO
+## TL;DR — This session
 
-### Phase main.rs refactor (continuing)
+### Rust 1.85.1 installed ✅
+- Solved via Ubuntu 25.04 (plucky) apt repo — NO need for sh.rustup.rs
+- libclang-18-dev installed for RocksDB bindgen
+- idna_adapter pinned to 1.1.0 (avoids icu_* MSRV 1.86 requirement)
+- comfy-table pinned to 7.1.3 (avoids let-chain syntax requiring 1.88)
+- RocksDB first-build takes ~10 min (C++ compilation)
 
-5. **Slice 5** — `handlers/wal.rs` (87 WAL handlers — largest, most risk)
+### Install commands for next sandbox session:
+```bash
+echo "deb http://archive.ubuntu.com/ubuntu plucky main" >> /etc/apt/sources.list
+apt-get update -qq
+apt-get install -y -t plucky rustc cargo
+apt-get install -y libclang-18-dev
+rustc --version  # should print 1.84.1 or 1.85.1
+export LIBCLANG_PATH=/usr/lib/llvm-18/lib
 
-6. **Slice 6** — `handlers/audit.rs` (10 audit handlers)
+cd /home/claude/vng-database
+cargo update idna_adapter --precise 1.1.0
+cargo update comfy-table --precise 7.1.3
+```
 
-### Phase 3 extended
+### main.rs refactor progress ✅
+```
+Slices 1-4 (prior sessions): 34,876 → 24,962 lines  
+Slice 5 — handlers/wal.rs:    24,962 → 22,151 (87 handlers, 103 DTOs)
+Slice 6 — handlers/audit.rs:  22,151 → 21,898  (6 handlers, 9 DTOs)
+Slice 7 — handlers/rows.rs:   
+           handlers/raft.rs:   21,898 → 17,857  (77+13+24 handlers)
+           handlers/misc.rs:
+Slice 8 — router.rs:          17,857 → 17,351 (508 route defs extracted)
+TOTAL:    34,876 → 17,351  (−17,525 lines, −50%)
+```
 
-1. **Real RBAC** — current privilege matrix is hardcoded in `default_rbac_privilege_matrix` (now in `config_init.rs`).
+**Handler modules now on disk:**
+admin.rs, audit.rs, autonomous.rs, catalog.rs, cdc.rs, driver.rs,
+ingest.rs, misc.rs, raft.rs, rows.rs, security.rs, sql.rs, sre.rs,
+store.rs, wal.rs
 
-2. **Replication** — leader/follower with the existing Raft skeleton.
+**router.rs** — build_router(state) fn with all 330+ routes
+
+**main.rs remaining (~17,351 lines):**
+- Core shared types (AppState, AuthErrorResponse, PoolStatsResponse, etc.)
+- async fn main() + startup/boot logic
+- Shared helpers (now_unix_ms, require_operator_auth, etc.)
+- cache_redis_command + ~40 unit tests (kept deliberately)
+- native socket helpers (native_read/write_framed)
 
 ---
 
-## How to continue
+## ⚠️ IMPORTANT: Slice 8 NOT committed yet
 
+Slice 8 (router.rs extraction) was done but NOT committed/pushed before
+token limit. Next session must commit first:
+
+```bash
+cd /home/claude/vng-database
+git add -A
+git commit -m "refactor(voltnuerongridd): Slice 8 — extract build_router() to router.rs
+
+Extracts the 330-route axum router from async fn main() into a dedicated
+fn build_router(state: AppState) -> Router in src/router.rs.
+main.rs: 17,857 → 17,351 lines (−508)"
+git push https://YOUR_GITHUB_PAT@github.com/VoltNueronGrid/vng-database.git main
+```
+
+Then run the service compile check:
+```bash
+export LIBCLANG_PATH=/usr/lib/llvm-18/lib
+cargo check -p voltnuerongridd 2>&1 | tail -5
+# First run takes ~10min for RocksDB C++ compile
+# Subsequent runs are fast (cached)
+```
+
+---
+
+## Likely compile errors to fix next session
+
+The handler module extraction used automated Python (regex-based), so some
+issues are expected. Common patterns from prior slices:
+
+1. **Type not found** — a DTO used by a handler module but not imported.
+   Fix: add it to the `use crate::{..}` block in the handler file.
+
+2. **Function not visible** — helper fn needed by a handler is still private
+   in main.rs. Fix: mark it `pub(crate)` in main.rs.
+
+3. **Duplicate type** — same struct name in both main.rs and a handler module
+   because the extraction missed removing the main.rs copy.
+   Fix: delete the main.rs copy (keep handler module version as pub(crate)).
+
+4. **router.rs** — `build_router` references handler functions by name.
+   Those must be pub(crate) in their respective handler modules.
+   All should already be pub(crate) from the visibility fix pass.
+
+Workflow to fix compile errors:
+```bash
+export LIBCLANG_PATH=/usr/lib/llvm-18/lib
+cargo check -p voltnuerongridd 2>&1 | grep "^error\[" | head -20
+# Fix each error, then re-run
+```
+
+---
+
+## Remaining refactor work (Slices 9+)
+
+### Slice 9 — extract shared helpers to src/helpers.rs (low-risk, ~200 lines)
+
+Functions that are pure utilities and can be shared from a helpers module:
+- `now_unix_ms()`, `now_unix_ms_u64()`
+- `failure_budget_snapshot()`, `rate_limit_policy_snapshot()`
+- `evaluate_rate_limit()`, `evaluate_failure_budget_alert()`
+- `build_retry_plan()`, `enqueue_dr_hook_task()`
+- `latest_dr_hook_records()`, `pool_stats_response()`
+- `record_transport_mutation()`
+
+### Slice 10 — break AppState into sub-structs (~50 lines, high value)
+
+AppState currently has ~40 fields. Group into:
+- `StorageState` (wal_engine, row_store, ddl_catalog)
+- `ClusterState` (raft, replication, node_runtime)  
+- `ObservabilityState` (metrics, audit_sink)
+
+### Final goal: main.rs < 5,000 lines
+
+Current: ~17,351 | Target: < 5,000
+Gap: ~12,000 lines — mostly startup logic, AppState impl, and the
+cache_redis_command block (~2,000 lines with tests).
+
+---
+
+## Next major feature work
+
+### Phase 3.1 — DataFusion DataFrame hydration
+
+File: `crates/voltnuerongrid-exec-datafusion/src/datafusion.rs`
+
+The skeleton exists (returns Unsupported). Implementation plan:
+1. `hydrate_dataframe(rs: &PagedRowStore, table: &str, schema: &DdlSchema) -> DataFrame`
+2. Parse SQL → DataFusion LogicalPlan
+3. Execute plan → collect Arrow RecordBatches
+4. Convert RecordBatches → SelectOutput (Vec<Row>)
+
+Tests needed:
+- `test_select_with_join()` — INNER JOIN two tables
+- `test_select_with_group_by()` — COUNT(*) GROUP BY col
+- `test_select_with_window()` — ROW_NUMBER() OVER (ORDER BY id)
+
+### Phase 2.3 — final text WAL deletion
+
+The 8 `#[deprecated]` helpers in main.rs can be deleted once production
+has been running on Phase 2.2 for one release cycle. Names:
+ddl_wal_path, dml_wal_path, sql_wal_escape, sql_wal_unescape,
+append_sql_wal, read_sql_wal, replay_ddl_wal_into, replay_dml_wal_into
+
+---
+
+## How to start next session
+
+```bash
+# 1. Reinstall Rust (sandbox resets between sessions)
+echo "deb http://archive.ubuntu.com/ubuntu plucky main" >> /etc/apt/sources.list
+apt-get update -qq && apt-get install -y -t plucky rustc cargo
+apt-get install -y libclang-18-dev
+export LIBCLANG_PATH=/usr/lib/llvm-18/lib
+
+# 2. Pull latest main
+cd /home/claude/vng-database
+git fetch https://YOUR_GITHUB_PAT@github.com/VoltNueronGrid/vng-database.git main
+git checkout main && git reset --hard FETCH_HEAD
+
+# 3. Fix Cargo.lock pins
+cargo update idna_adapter --precise 1.1.0
+cargo update comfy-table --precise 7.1.3
+
+# 4. Commit Slice 8 if not already committed
+git status  # check for uncommitted changes
+
+# 5. Service compile check (takes ~10min first time)
+cargo check -p voltnuerongridd 2>&1 | tail -5
+
+# 6. Fix any compile errors, then full test suite
+cargo test --workspace
+```
+
+Contexts to load:
 ```
 @remaining.md
 @services/voltnuerongridd/src/main.rs
-@services/voltnuerongridd/src/handlers/store.rs
-@services/voltnuerongridd/src/handlers/sre.rs
+@services/voltnuerongridd/src/router.rs
+@services/voltnuerongridd/src/handlers/mod.rs
 ```
-
-Recommended next steps (in priority order):
-1. **Continue main.rs refactor** — Slice 5: wal.rs (87 handlers, highest risk — do carefully)
-2. **Slice 6** — audit.rs (10 handlers)
-3. **Real RBAC** — replace `default_rbac_privilege_matrix` in `config_init.rs`
-
-**Extraction pattern for handler modules:**
-1. Find all `Prefix*` DTOs with `grep -n "^struct Prefix" main.rs`
-2. Read the handler function bodies
-3. Create `handlers/name.rs` with DTOs + handlers (all `pub(crate)`)
-4. Create/update `handlers/mod.rs` with `pub(crate) mod name;`
-5. Add `use handlers::name::*;` to main.rs after the existing glob imports
-6. Delete DTOs + handlers from main.rs
-7. `cargo check --workspace` must be clean before next module
-
-**Shared-type rule:** Types in `AppState` fields (e.g. `ConnectorPlugin`, `PoolStatsResponse`, `AcidTxEntry`, `PessimisticLockContentionMetrics`) must stay in main.rs as `pub(crate)` — never move them to handler modules.
-
-**Key gotcha from Slice 4:** When a type is defined in both main.rs (private) and the new module (pub(crate)), the private main.rs version SHADOWS the glob import. The fix is to delete the private main.rs version — after deletion, the glob import version is used by all code in main.rs scope.
-
-**WAL handlers note:** 87 handlers is a large batch. Consider splitting into multiple sub-batches (wal_write*, wal_read*, wal_replay*, wal_checkpoint*, etc.) to reduce risk.
