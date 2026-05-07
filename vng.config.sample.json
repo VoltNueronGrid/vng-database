@@ -6,7 +6,10 @@
     "engine": "rocksdb",
     "data_dir": "./data",
     "max_background_jobs": 4,
-    "wal_fsync_on_commit": true
+    "wal_fsync_on_commit": true,
+
+    "_legacy_text_wal_comment": "Phase 2.2: defaults to false (engine is canonical). Set to true ONLY if you need to roll back to a pre-Phase-2.1 binary that still reads the text WAL. Will be removed entirely in 0.3.0.",
+    "legacy_text_wal": false
   },
 
   "sql": {
