@@ -703,6 +703,77 @@ fn agg_minmax(rows: &[(String, RowData)], col: &str, want_min: bool) -> Aggregat
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Table-name extraction (used by service dispatch for DataFusion routing)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Return every base table name referenced in `sql` (FROM clause + all JOINs,
+/// including nested joins and UNION branches). Aliases are stripped; subquery
+/// aliases are not counted as table names. Duplicates are removed and the list
+/// is sorted for determinism.
+///
+/// Used by the service to decide which per-table row slices to pass to
+/// [`datafusion::execute_select_from_rows`] for multi-table queries.
+pub fn collect_query_table_names(sql: &str) -> Vec<String> {
+    use sqlparser::ast as sa;
+    use sqlparser::dialect::GenericDialect;
+    use sqlparser::parser::Parser;
+
+    let Ok(stmts) = Parser::parse_sql(&GenericDialect {}, sql) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    for stmt in &stmts {
+        if let sa::Statement::Query(q) = stmt {
+            collect_from_set_expr(&q.body, &mut names);
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn collect_from_set_expr(expr: &sqlparser::ast::SetExpr, out: &mut Vec<String>) {
+    use sqlparser::ast as sa;
+    match expr {
+        sa::SetExpr::Select(sel) => {
+            for twj in &sel.from {
+                collect_table_factor(&twj.relation, out);
+                for join in &twj.joins {
+                    collect_table_factor(&join.relation, out);
+                }
+            }
+        }
+        sa::SetExpr::Query(q) => collect_from_set_expr(&q.body, out),
+        sa::SetExpr::SetOperation { left, right, .. } => {
+            collect_from_set_expr(left, out);
+            collect_from_set_expr(right, out);
+        }
+        _ => {}
+    }
+}
+
+fn collect_table_factor(factor: &sqlparser::ast::TableFactor, out: &mut Vec<String>) {
+    use sqlparser::ast as sa;
+    match factor {
+        sa::TableFactor::Table { name, .. } => {
+            if let Some(ident) = name.0.last() {
+                out.push(ident.value.clone());
+            }
+        }
+        sa::TableFactor::Derived { subquery, .. } => {
+            collect_from_set_expr(&subquery.body, out);
+        }
+        sa::TableFactor::NestedJoin { table_with_joins, .. } => {
+            collect_table_factor(&table_with_joins.relation, out);
+            for join in &table_with_joins.joins {
+                collect_table_factor(&join.relation, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1043,5 +1114,64 @@ mod tests {
         assert!(glob_like("", "%"));
         assert!(glob_like("anything", "%"));
         assert!(!glob_like("", "_"));
+    }
+
+    // ── collect_query_table_names ────────────────────────────────────────────
+
+    #[test]
+    fn table_names_single_table() {
+        let names = collect_query_table_names("SELECT id, name FROM users WHERE id = 1");
+        assert_eq!(names, vec!["users"]);
+    }
+
+    #[test]
+    fn table_names_inner_join() {
+        let names = collect_query_table_names(
+            "SELECT o.id, c.name FROM orders o JOIN customers c ON o.cid = c.id"
+        );
+        assert_eq!(names, vec!["customers", "orders"]);
+    }
+
+    #[test]
+    fn table_names_triple_join() {
+        let names = collect_query_table_names(
+            "SELECT o.id, c.name, p.title \
+             FROM orders o \
+             JOIN customers c ON o.cid = c.id \
+             JOIN products p ON o.pid = p.id"
+        );
+        assert_eq!(names, vec!["customers", "orders", "products"]);
+    }
+
+    #[test]
+    fn table_names_left_join() {
+        let names = collect_query_table_names(
+            "SELECT u.name, r.role FROM users u LEFT JOIN roles r ON u.role_id = r.id"
+        );
+        assert_eq!(names, vec!["roles", "users"]);
+    }
+
+    #[test]
+    fn table_names_union() {
+        let names = collect_query_table_names(
+            "SELECT id FROM active_users UNION ALL SELECT id FROM archived_users"
+        );
+        assert_eq!(names, vec!["active_users", "archived_users"]);
+    }
+
+    #[test]
+    fn table_names_subquery_not_counted() {
+        // The derived table alias `sub` should NOT appear; `orders` should.
+        let names = collect_query_table_names(
+            "SELECT * FROM orders o WHERE o.id IN (SELECT id FROM orders WHERE amount > 100)"
+        );
+        // `orders` appears twice in AST but dedup keeps one.
+        assert_eq!(names, vec!["orders"]);
+    }
+
+    #[test]
+    fn table_names_empty_on_bad_sql() {
+        let names = collect_query_table_names("this is not sql !@#");
+        assert_eq!(names, Vec::<String>::new());
     }
 }

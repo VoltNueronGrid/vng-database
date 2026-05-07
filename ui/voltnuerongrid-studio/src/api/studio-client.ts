@@ -238,9 +238,6 @@ export interface StorageConfig {
   data_dir: string;
   max_background_jobs: number;
   wal_fsync_on_commit: boolean;
-  /** Phase 2.2 — opt-in legacy text WAL writes alongside the durability engine.
-   *  Default false. Will be removed in 0.3.0. */
-  legacy_text_wal?: boolean;
 }
 
 export interface SqlConfig {

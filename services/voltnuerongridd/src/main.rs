@@ -20,7 +20,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use voltnuerongrid_auth::{
-    ConfiguredKmsProviderAdapter, KmsKeyProvider, KmsKeyResolution, KmsProviderChain,
+    ConfiguredKmsProviderAdapter, KmsKeyResolution,
     PrivilegeAction, RbacPrivilegeMatrix, ResourceGrant, SecurityConfigContract,
 };
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
@@ -29,13 +29,12 @@ use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{
     eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale,
 };
-use voltnuerongrid_sql::ast::Statement;
 use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
 use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
-use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult, DdlCatalog, DdlCatalogEntry};
+use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult, DdlCatalog};
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
@@ -46,30 +45,42 @@ use voltnuerongrid_ingest::{
     ReplayCursorStore, StreamDirection,
 };
 use voltnuerongrid_opt::DistributedCacheManager;
-use voltnuerongrid_plugins::{
-    AttestationType, ConnectorPackageMetadata, PluginLifecycleManager,
-    PluginManifestSignature, ProvenanceAttestation, ProvenanceChain,
-    SbomEntry, SbomInspectionResult, SignedPluginManifest,
-};
+use voltnuerongrid_plugins::PluginLifecycleManager;
 
 mod raft;
 use raft::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftNode, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 pub mod resilience;
 pub mod observability;
+pub(crate) mod auth;
+pub(crate) mod config_init;
+pub(crate) mod audit_helpers;
+pub(crate) mod handlers;
+use auth::*;
+use config_init::*;
+use audit_helpers::*;
+use handlers::cdc::*;
+use handlers::catalog::*;
+use handlers::autonomous::*;
+use handlers::security::*;
+use handlers::admin::*;
+use handlers::driver::*;
+use handlers::ingest::*;
+use handlers::sql::*;
+use handlers::sre::*;
+use handlers::store::*;
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
-static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
+pub(crate) static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
 static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// REQ-22 / WS22: Gate-export counters (incremented in `acquire_pessimistic_lock` for trend artifacts).
 static WS22_GATE_DEADLOCK_DETECTIONS: AtomicU64 = AtomicU64::new(0);
 static WS22_GATE_SCAN_CAP_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
-/// S8-WS10-02: Counter for issuing deterministic driver session tokens.
-static DRIVER_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+pub(crate) static DRIVER_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 const DEADLOCK_SCAN_MAX_HOPS: usize = 8;
 
-const CONTROL_PLANE_OPERATOR_ROLES: [OperatorRole; 4] = [
+pub(crate) const CONTROL_PLANE_OPERATOR_ROLES: [OperatorRole; 4] = [
     OperatorRole::Dba,
     OperatorRole::Sre,
     OperatorRole::Security,
@@ -112,9 +123,9 @@ enum AcidTxState {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct AcidTxEntry {
+pub(crate) struct AcidTxEntry {
     transaction_id: String,
-    assigned_node_id: String,
+    pub(crate) assigned_node_id: String,
     state: AcidTxState,
     isolation_level: String,
     started_at_unix_ms: u128,
@@ -136,8 +147,8 @@ struct AcidTxEntry {
 }
 
 #[derive(Default)]
-struct AcidTransactionRegistry {
-    transactions: HashMap<String, AcidTxEntry>,
+pub(crate) struct AcidTransactionRegistry {
+    pub(crate) transactions: HashMap<String, AcidTxEntry>,
 }
 
 impl AcidTransactionRegistry {
@@ -182,7 +193,7 @@ impl AcidTransactionRegistry {
         self.transactions.get(tx_id)?.row_store_snapshot_xid
     }
 
-    fn commit(&mut self, tx_id: &str, now_ms: u128) -> bool {
+    pub(crate) fn commit(&mut self, tx_id: &str, now_ms: u128) -> bool {
         if let Some(entry) = self.transactions.get_mut(tx_id) {
             if entry.state == AcidTxState::Active {
                 entry.state = AcidTxState::Committed;
@@ -194,7 +205,7 @@ impl AcidTransactionRegistry {
         false
     }
 
-    fn rollback(&mut self, tx_id: &str, now_ms: u128) -> bool {
+    pub(crate) fn rollback(&mut self, tx_id: &str, now_ms: u128) -> bool {
         if let Some(entry) = self.transactions.get_mut(tx_id) {
             if entry.state == AcidTxState::Active {
                 entry.state = AcidTxState::RolledBack;
@@ -286,18 +297,18 @@ impl AcidTransactionRegistry {
         None
     }
 
-    fn active_transactions(&self) -> Vec<&AcidTxEntry> {
+    pub(crate) fn active_transactions(&self) -> Vec<&AcidTxEntry> {
         self.transactions
             .values()
             .filter(|e| e.state == AcidTxState::Active)
             .collect()
     }
 
-    fn all_transactions(&self) -> Vec<&AcidTxEntry> {
+    pub(crate) fn all_transactions(&self) -> Vec<&AcidTxEntry> {
         self.transactions.values().collect()
     }
 
-    fn reassign_active_node(&mut self, source_node_id: &str, target_node_id: &str) -> usize {
+    pub(crate) fn reassign_active_node(&mut self, source_node_id: &str, target_node_id: &str) -> usize {
         let mut reassigned = 0usize;
         for entry in self.transactions.values_mut() {
             if entry.state == AcidTxState::Active && entry.assigned_node_id == source_node_id {
@@ -317,213 +328,115 @@ enum DeadlockScanOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ClusterNodeRuntime {
-    node_id: String,
-    role: String,
-    status: String,
-    total_cpu_cores: u32,
-    total_ram_mb: u64,
-    draining: bool,
-    last_heartbeat_ms: u64,
+pub(crate) struct ClusterNodeRuntime {
+    pub(crate) node_id: String,
+    pub(crate) role: String,
+    pub(crate) status: String,
+    pub(crate) total_cpu_cores: u32,
+    pub(crate) total_ram_mb: u64,
+    pub(crate) draining: bool,
+    pub(crate) last_heartbeat_ms: u64,
 }
 
-#[derive(Debug, Serialize)]
-struct ClusterTopologyNodeEntry {
-    node_id: String,
-    role: String,
-    status: String,
-    total_cpu_cores: u32,
-    total_ram_mb: u64,
-    used_cpu_pct: f64,
-    used_ram_mb: u64,
-    active_sessions: usize,
-    passive_sessions: usize,
-    live_transactions: usize,
-    total_transactions: usize,
-    live_locks: usize,
-    draining: bool,
-    last_heartbeat_ms: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct AdminClusterTopologyResponse {
-    status: &'static str,
-    leader_node_id: String,
-    total_nodes: usize,
-    active_nodes: usize,
-    passive_nodes: usize,
-    dead_nodes: usize,
-    active_sessions: usize,
-    passive_sessions: usize,
-    live_transactions: usize,
-    total_transactions: usize,
-    live_locks: usize,
-    nodes: Vec<ClusterTopologyNodeEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AdminTransactionControlRequest {
-    action: String,
-    transaction_id: Option<String>,
-    reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct AdminTransactionControlResponse {
-    status: &'static str,
-    action: String,
-    affected_count: usize,
-    active_count: usize,
-    transactions: Vec<AcidTxEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AdminLockControlRequest {
-    action: String,
-    lock_id: Option<String>,
-    transaction_id: Option<String>,
-    reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct AdminLockControlResponse {
-    status: &'static str,
-    action: String,
-    released_lock_count: usize,
-    active_lock_count: usize,
-    locks: Vec<PessimisticLockRecord>,
-    affected_transactions: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AdminClusterNodeManageRequest {
-    action: String,
-    node_id: String,
-    role: Option<String>,
-    desired_status: Option<String>,
-    total_cpu_cores: Option<u32>,
-    total_ram_mb: Option<u64>,
-    target_node_id: Option<String>,
-    reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct AdminClusterNodeManageResponse {
-    status: &'static str,
-    action: String,
-    node_id: String,
-    cluster_size: usize,
-    migrated_transactions: usize,
-    migrated_sessions: usize,
-    message: String,
-}
 
 #[derive(Clone)]
-struct AppState {
-    node_id: String,
-    cluster_mode: String,
-    admin_api_key: Option<String>,
-    security_config: Arc<SecurityConfigContract>,
-    allowed_operator_roles: Arc<HashSet<OperatorRole>>,
-    operator_role_bindings: Arc<HashMap<String, OperatorRole>>,
-    tenant_user_bindings: Arc<HashMap<String, TenantUserBinding>>,
-    rbac_privilege_matrix: Arc<RbacPrivilegeMatrix>,
-    kms_runtime: Arc<Mutex<KmsRuntimeState>>,
-    leader_node_id: Arc<Mutex<String>>,
-    cluster_nodes: Arc<Mutex<HashMap<String, ClusterNodeRuntime>>>,
-    audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
-    action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
-    dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
-    dr_hook_policy_state: Arc<Mutex<DrHookPolicyState>>,
-    dr_hook_policy_config: Arc<DrHookPolicyConfig>,
-    dr_hook_state_path: Option<String>,
-    dr_hook_queue: Arc<Mutex<VecDeque<DrHookScheduledTask>>>,
-    cluster_failure_signals: Arc<Mutex<Vec<ClusterFailureSignal>>>,
-    sync_origin: Arc<Mutex<RowStoreSyncOrigin>>,
-    replication_transport: Arc<Mutex<InMemoryReplicationTransport>>,
-    replica_replay_states: Arc<Mutex<HashMap<String, ReplicaReplayState>>>,
-    pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
-    pessimistic_lock_waits: Arc<Mutex<HashMap<String, String>>>,
-    pessimistic_lock_metrics: PessimisticLockContentionMetrics,
-    index_manager: Arc<Mutex<IndexManager>>,
-    constraint_manager: Arc<Mutex<ConstraintManager>>,
-    ingest_csv_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
-    ingest_json_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
-    ingest_parquet_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
-    ingest_excel_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
-    ingest_outbox_streams: Arc<Mutex<HashMap<String, String>>>,
-    ingest_event_bus: Arc<Mutex<ManagedEventBusTransport>>,
-    ingest_outbox_cursors: Arc<Mutex<ManagedReplayCursorStore>>,
-    distributed_cache: Arc<Mutex<DistributedCacheManager>>,
-    driver_pool: Arc<Mutex<ConnectionPoolManager>>,
-    plugin_lifecycle: Arc<Mutex<PluginLifecycleManager>>,
-    autonomous_mode: AutonomousMode,
-    emergency_stop: Arc<AtomicEmergencyStop>,
-    guardrails: Arc<Vec<GuardrailRule>>,
-    ddl_catalog: Arc<Mutex<DdlCatalog>>,
-    acid_transactions: Arc<Mutex<AcidTransactionRegistry>>,
+pub(crate) struct AppState {
+    pub(crate) node_id: String,
+    pub(crate) cluster_mode: String,
+    pub(crate) admin_api_key: Option<String>,
+    pub(crate) security_config: Arc<SecurityConfigContract>,
+    pub(crate) allowed_operator_roles: Arc<HashSet<OperatorRole>>,
+    pub(crate) operator_role_bindings: Arc<HashMap<String, OperatorRole>>,
+    pub(crate) tenant_user_bindings: Arc<HashMap<String, TenantUserBinding>>,
+    pub(crate) rbac_privilege_matrix: Arc<RbacPrivilegeMatrix>,
+    pub(crate) kms_runtime: Arc<Mutex<KmsRuntimeState>>,
+    pub(crate) leader_node_id: Arc<Mutex<String>>,
+    pub(crate) cluster_nodes: Arc<Mutex<HashMap<String, ClusterNodeRuntime>>>,
+    pub(crate) audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
+    pub(crate) action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
+    pub(crate) dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
+    pub(crate) dr_hook_policy_state: Arc<Mutex<DrHookPolicyState>>,
+    pub(crate) dr_hook_policy_config: Arc<DrHookPolicyConfig>,
+    pub(crate) dr_hook_state_path: Option<String>,
+    pub(crate) dr_hook_queue: Arc<Mutex<VecDeque<DrHookScheduledTask>>>,
+    pub(crate) cluster_failure_signals: Arc<Mutex<Vec<ClusterFailureSignal>>>,
+    pub(crate) sync_origin: Arc<Mutex<RowStoreSyncOrigin>>,
+    pub(crate) replication_transport: Arc<Mutex<InMemoryReplicationTransport>>,
+    pub(crate) replica_replay_states: Arc<Mutex<HashMap<String, ReplicaReplayState>>>,
+    pub(crate) pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
+    pub(crate) pessimistic_lock_waits: Arc<Mutex<HashMap<String, String>>>,
+    pub(crate) pessimistic_lock_metrics: PessimisticLockContentionMetrics,
+    pub(crate) index_manager: Arc<Mutex<IndexManager>>,
+    pub(crate) constraint_manager: Arc<Mutex<ConstraintManager>>,
+    pub(crate) ingest_csv_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
+    pub(crate) ingest_json_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
+    pub(crate) ingest_parquet_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
+    pub(crate) ingest_excel_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
+    pub(crate) ingest_outbox_streams: Arc<Mutex<HashMap<String, String>>>,
+    pub(crate) ingest_event_bus: Arc<Mutex<ManagedEventBusTransport>>,
+    pub(crate) ingest_outbox_cursors: Arc<Mutex<ManagedReplayCursorStore>>,
+    pub(crate) distributed_cache: Arc<Mutex<DistributedCacheManager>>,
+    pub(crate) driver_pool: Arc<Mutex<ConnectionPoolManager>>,
+    pub(crate) plugin_lifecycle: Arc<Mutex<PluginLifecycleManager>>,
+    pub(crate) autonomous_mode: AutonomousMode,
+    pub(crate) emergency_stop: Arc<AtomicEmergencyStop>,
+    pub(crate) guardrails: Arc<Vec<GuardrailRule>>,
+    pub(crate) ddl_catalog: Arc<Mutex<DdlCatalog>>,
+    pub(crate) acid_transactions: Arc<Mutex<AcidTransactionRegistry>>,
     /// MVCC page-based row store (S2-WS2-04: PagedRowStore scaffold).
-    row_store: Arc<Mutex<PagedRowStore>>,
+    pub(crate) row_store: Arc<Mutex<PagedRowStore>>,
     /// S9-WS8-02: AI model gateway isolation policy.
-    model_gateway_policy: Arc<Mutex<ModelGatewayPolicy>>,
+    pub(crate) model_gateway_policy: Arc<Mutex<ModelGatewayPolicy>>,
     /// S4-WS3-04: In-memory OLAP replica — receives mutations via `POST /api/v1/store/htap/apply`.
     /// Maps primary_key → row data (last-writer-wins).
-    olap_store: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
+    pub(crate) olap_store: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
     /// S9-WS8A-02: Optional path to a JSON-lines audit log file.
     /// Resolved from `VNG_AUDIT_LOG_PATH` env var at start-up.
-    audit_log_path: Option<String>,
+    pub(crate) audit_log_path: Option<String>,
     /// S7-WS6-02: Raft consensus node state (single-node scaffold).
-    raft_state: Arc<Mutex<RaftNode>>,
+    pub(crate) raft_state: Arc<Mutex<RaftNode>>,
     /// S9-WS8-02: Per-model-identity request counters for rate limiting.
     /// Maps model_id → request count in current window.
-    ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
+    pub(crate) ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
     /// S2-WS2-02: WAL durability engine — records every committed DML mutation.
-    wal_engine: Arc<Mutex<BoxedDurabilityEngine>>,
+    pub(crate) wal_engine: Arc<Mutex<BoxedDurabilityEngine>>,
     /// S7-WS6-04: Chaos/game-day fault injection state.
-    chaos_state: Arc<Mutex<ChaosState>>,
+    pub(crate) chaos_state: Arc<Mutex<ChaosState>>,
     /// S8-WS10-02: Driver wire protocol session registry.
-    driver_sessions: Arc<Mutex<HashMap<String, DriverSession>>>,
+    pub(crate) driver_sessions: Arc<Mutex<HashMap<String, DriverSession>>>,
     /// S5-WS4A-02: Broker adapter flush counters (broker_type → flush_count).
-    broker_flush_counts: Arc<Mutex<HashMap<String, u64>>>,
+    pub(crate) broker_flush_counts: Arc<Mutex<HashMap<String, u64>>>,
     /// S9-WS8-02: Sliding-window rate limiter — per-model window start timestamp (ms).
-    ai_rate_window_starts: Arc<Mutex<HashMap<String, u64>>>,
+    pub(crate) ai_rate_window_starts: Arc<Mutex<HashMap<String, u64>>>,
     /// S5-E4A-01: Connector SDK runtime registry.
-    connector_registry: Arc<Mutex<Vec<ConnectorPlugin>>>,
+    pub(crate) connector_registry: Arc<Mutex<Vec<ConnectorPlugin>>>,
     /// S6-WS5-04: TDE runtime toggle override.
-    tde_override: Arc<Mutex<Option<bool>>>,
+    pub(crate) tde_override: Arc<Mutex<Option<bool>>>,
     /// S10-WS15-02: Per-table CDC cursor positions (table_name → last consumed sequence).
-    cdc_cursors: Arc<Mutex<HashMap<String, u64>>>,
+    pub(crate) cdc_cursors: Arc<Mutex<HashMap<String, u64>>>,
     /// Phase 1.3 — first-class `Database` catalog. Replaces the implicit
     /// `database_name` string fragment used in `DdlCatalog` keys. New code
     /// should consult this for existence/uniqueness checks; legacy code
     /// continues to use `DdlCatalog` keys until the multi-database migration
     /// completes (see `remaining.md` Phase 1.3).
-    database_catalog: Arc<Mutex<voltnuerongrid_meta::DatabaseCatalog>>,
+    pub(crate) database_catalog: Arc<Mutex<voltnuerongrid_meta::DatabaseCatalog>>,
     /// Phase 0 — runtime config selected at boot. Read-only after startup.
-    runtime_config: Arc<voltnuerongrid_config::RuntimeConfig>,
+    pub(crate) runtime_config: Arc<voltnuerongrid_config::RuntimeConfig>,
 }
 
 #[derive(Clone, Default)]
-struct KmsRuntimeState {
-    providers: Vec<ConfiguredKmsProviderAdapter>,
-    unavailable_envs: HashSet<String>,
-    last_resolution: Option<KmsKeyResolution>,
-    last_error: Option<String>,
-    last_simulation_note: Option<String>,
+pub(crate) struct KmsRuntimeState {
+    pub(crate) providers: Vec<ConfiguredKmsProviderAdapter>,
+    pub(crate) unavailable_envs: HashSet<String>,
+    pub(crate) last_resolution: Option<KmsKeyResolution>,
+    pub(crate) last_error: Option<String>,
+    pub(crate) last_simulation_note: Option<String>,
 }
 
-struct KmsEvaluationSnapshot {
-    status: &'static str,
-    resolution_state: &'static str,
-    resolution: Option<KmsKeyResolution>,
-    unavailable_envs: Vec<String>,
-    last_simulation_note: Option<String>,
-    last_error: Option<String>,
-}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum AutonomousMode {
+pub(crate) enum AutonomousMode {
     Disabled,
     Advisory,
     Supervised,
@@ -531,7 +444,7 @@ enum AutonomousMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum OperatorRole {
+pub(crate) enum OperatorRole {
     Dba,
     Sre,
     Security,
@@ -539,7 +452,7 @@ enum OperatorRole {
 }
 
 impl OperatorRole {
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "dba" | "admin" => Some(Self::Dba),
             "sre" => Some(Self::Sre),
@@ -549,7 +462,7 @@ impl OperatorRole {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Dba => "dba",
             Self::Sre => "sre",
@@ -560,26 +473,26 @@ impl OperatorRole {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct OperatorIdentity {
-    operator_id: String,
-    role: OperatorRole,
+pub(crate) struct OperatorIdentity {
+    pub(crate) operator_id: String,
+    pub(crate) role: OperatorRole,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct TenantUserBinding {
-    tenant_id: String,
-    role: String,
+pub(crate) struct TenantUserBinding {
+    pub(crate) tenant_id: String,
+    pub(crate) role: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct TenantUserIdentity {
-    user_id: String,
-    tenant_id: String,
-    role: String,
+pub(crate) struct TenantUserIdentity {
+    pub(crate) user_id: String,
+    pub(crate) tenant_id: String,
+    pub(crate) role: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum RuntimeAccessPrincipal {
+pub(crate) enum RuntimeAccessPrincipal {
     Operator(OperatorIdentity),
     TenantUser(TenantUserIdentity),
 }
@@ -625,324 +538,22 @@ impl AtomicEmergencyStop {
     }
 }
 
-fn default_allowed_operator_roles() -> HashSet<OperatorRole> {
-    CONTROL_PLANE_OPERATOR_ROLES.into_iter().collect()
-}
-
-fn load_allowed_operator_roles() -> HashSet<OperatorRole> {
-    let parsed = env::var("VNG_ALLOWED_OPERATOR_ROLES")
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .filter_map(|entry| OperatorRole::parse(entry.trim()))
-                .collect::<HashSet<_>>()
-        })
-        .unwrap_or_default();
-
-    if parsed.is_empty() {
-        default_allowed_operator_roles()
-    } else {
-        parsed
-    }
-}
-
-fn default_operator_role_bindings() -> HashMap<String, OperatorRole> {
-    HashMap::from([
-        ("platform-admin".to_string(), OperatorRole::Dba),
-        ("admin".to_string(), OperatorRole::Dba),
-        ("automation".to_string(), OperatorRole::Sre),
-        ("auto_sre".to_string(), OperatorRole::Sre),
-        ("security-bot".to_string(), OperatorRole::Security),
-        ("autopilot".to_string(), OperatorRole::AiOperator),
-    ])
-}
-
-fn default_tenant_user_bindings() -> HashMap<String, TenantUserBinding> {
-    HashMap::from([
-        (
-            "analyst-acme".to_string(),
-            TenantUserBinding {
-                tenant_id: "acme".to_string(),
-                role: "tenant_analyst".to_string(),
-            },
-        ),
-        (
-            "admin-acme".to_string(),
-            TenantUserBinding {
-                tenant_id: "acme".to_string(),
-                role: "tenant_admin".to_string(),
-            },
-        ),
-    ])
-}
-
-fn load_operator_role_bindings(
-    allowed_roles: &HashSet<OperatorRole>,
-) -> HashMap<String, OperatorRole> {
-    let parsed = env::var("VNG_OPERATOR_ROLE_BINDINGS")
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .filter_map(|entry| {
-                    let (operator_id, role) = entry.split_once(':')?;
-                    let operator_id = operator_id.trim();
-                    let role = OperatorRole::parse(role.trim())?;
-                    if operator_id.is_empty() || !allowed_roles.contains(&role) {
-                        return None;
-                    }
-                    Some((operator_id.to_string(), role))
-                })
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
-
-    if parsed.is_empty() {
-        default_operator_role_bindings()
-            .into_iter()
-            .filter(|(_, role)| allowed_roles.contains(role))
-            .collect()
-    } else {
-        parsed
-    }
-}
-
-fn load_runtime_security_config(allowed_operator_roles: &HashSet<OperatorRole>) -> SecurityConfigContract {
-    let mut configured_roles = allowed_operator_roles
-        .iter()
-        .map(|role| role.as_str().to_string())
-        .collect::<Vec<_>>();
-    configured_roles.sort();
-
-    let kms_failover_key_ref_envs = env::var("VNG_KMS_FAILOVER_KEY_REF_ENVS")
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .filter(|values| !values.is_empty())
-        .unwrap_or_else(|| {
-            vec![
-                "VNG_KMS_KEY_URI_REGION_B".to_string(),
-                "VNG_KMS_KEY_URI_REGION_C".to_string(),
-            ]
-        });
-
-    let config = SecurityConfigContract {
-        admin_api_key_env: env::var("VNG_ADMIN_API_KEY_ENV")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "VNG_ADMIN_API_KEY".to_string()),
-        admin_header_name: env::var("VNG_ADMIN_HEADER_NAME")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "x-vng-admin-key".to_string()),
-        tls_required: false,
-        mtls_required: false,
-        encryption_at_rest_required: true,
-        kms_key_ref_env: env::var("VNG_KMS_KEY_REF_ENV")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "VNG_KMS_KEY_URI".to_string()),
-        kms_failover_key_ref_envs,
-        allowed_operator_roles: configured_roles,
-        token_ttl_seconds: env::var("VNG_TOKEN_TTL_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(300),
-    };
-
-    config
-        .validate()
-        .unwrap_or_else(|error| panic!("invalid runtime security config: {error}"));
-    config
-}
-
-fn load_kms_runtime_state(config: &SecurityConfigContract) -> KmsRuntimeState {
-    let mut provider_index = BTreeMap::<String, usize>::new();
-    let mut providers = Vec::<ConfiguredKmsProviderAdapter>::new();
-    for env_name in config.kms_key_candidates() {
-        if let Ok(value) = env::var(&env_name) {
-            if !value.trim().is_empty() {
-                let candidate = ConfiguredKmsProviderAdapter::from_key_ref(value.trim());
-                let provider_name = candidate.provider_name().to_string();
-                let provider_slot = *provider_index.entry(provider_name.clone()).or_insert_with(|| {
-                    providers.push(candidate);
-                    providers.len() - 1
-                });
-                providers[provider_slot].register_key_ref(&env_name, value.trim());
-            }
-        }
-    }
-
-    KmsRuntimeState {
-        providers,
-        unavailable_envs: HashSet::new(),
-        last_resolution: None,
-        last_error: None,
-        last_simulation_note: None,
-    }
-}
-
-fn load_ingest_event_bus() -> ManagedEventBusTransport {
-    let broker_mode = env::var("VNG_INGEST_OUTBOX_BROKER_MODE")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "file_wal".to_string());
-    let broker_target = env::var("VNG_INGEST_EXTERNAL_BROKER_TARGET")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let subject_prefix = env::var("VNG_INGEST_EXTERNAL_BROKER_SUBJECT_PREFIX")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let wal_path = env::var("VNG_INGEST_OUTBOX_WAL_PATH")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "state/ingest-outbox-runtime.wal".to_string());
-    ManagedEventBusTransport::from_broker_mode_with_target(
-        &broker_mode,
-        &wal_path,
-        broker_target.as_deref(),
-        subject_prefix.as_deref(),
-    )
-    .unwrap_or_else(|error| {
-        panic!(
-            "failed to initialize ingest event bus broker {broker_mode} with state {wal_path}: {error}"
-        )
-    })
-}
-
-fn load_ingest_outbox_cursor_store() -> ManagedReplayCursorStore {
-    let wal_path = env::var("VNG_INGEST_OUTBOX_CURSOR_WAL_PATH")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "state/ingest-outbox-cursors.wal".to_string());
-    ManagedReplayCursorStore::wal_backed(&wal_path).unwrap_or_else(|error| {
-        panic!("failed to initialize ingest outbox cursor store at {wal_path}: {error}")
-    })
-}
-
-// ─── File-backed SQL WAL for DDL + DML persistence ───────────────────────────
-// All CREATE/DROP/ALTER and committed INSERT/UPDATE/DELETE statements are
-// appended here so they can be replayed when the server restarts.
-
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-fn ddl_wal_path() -> String {
-    std::env::var("VNG_DDL_WAL_PATH")
-        .unwrap_or_else(|_| "state/ddl.wal".to_string())
-}
-
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-fn dml_wal_path() -> String {
-    std::env::var("VNG_DML_WAL_PATH")
-        .unwrap_or_else(|_| "state/dml.wal".to_string())
-}
-
-/// Escape a SQL string to a single line: replace `\` → `\\`, newline → `\n`.
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-fn sql_wal_escape(sql: &str) -> String {
-    sql.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")
-}
-
-/// Reverse of `sql_wal_escape`.
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-fn sql_wal_unescape(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n')  => result.push('\n'),
-                Some('r')  => result.push('\r'),
-                Some('\\') => result.push('\\'),
-                Some(other) => { result.push('\\'); result.push(other); }
-                None => result.push('\\'),
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
-/// Append one SQL statement to the given WAL file.
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-fn append_sql_wal(wal_path: &str, sql: &str) {
-    use std::io::Write;
-    if let Some(parent) = std::path::Path::new(wal_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(wal_path) {
-        let _ = writeln!(f, "{}", sql_wal_escape(sql));
-        let _ = f.flush();
-    }
-}
-
-/// Phase 2.1 — write a SQL statement to BOTH the durability engine (RocksDB
-/// or in-memory) AND the legacy text WAL file. The dual-write phase exists
-/// during the migration window: future deployments that boot from a
-/// post-migration RocksDB store can have the text WAL files removed and
-/// this helper will silently degrade to engine-only.
-///
-/// Call this from every handler that previously called `append_sql_wal` —
-/// the engine path becomes the source of truth, the text WAL stays as a
-/// migration safety net.
-#[allow(deprecated)]
-fn persist_sql_statement(
+/// Write a SQL statement to the durability engine (RocksDB or in-memory).
+/// The engine is the single source of truth from Phase 2.2 onward.
+pub(crate) fn persist_sql_statement(
     state: &AppState,
     kind: voltnuerongrid_store::SqlWalKind,
     sql: &str,
 ) {
-    // 1. Engine — durable on RocksDB, in-memory for the test harness.
-    //    This is the source of truth from Phase 2.2 onward.
     if let Ok(mut wal) = state.wal_engine.lock() {
         let _ = wal.append_sql(kind, sql);
     } else {
         tracing::error!(target: "vng.wal", "wal_engine mutex poisoned in persist_sql_statement");
     }
-    // 2. Legacy text WAL — only when explicitly opted in via
-    //    `storage.legacy_text_wal = true` (or VNG_LEGACY_TEXT_WAL=1).
-    //    Default is OFF as of Phase 2.2 — the engine is canonical.
-    //    Operators who need to roll back to a pre-Phase-2.1 binary can
-    //    enable this; everyone else can ignore it.
-    if state.runtime_config.storage.legacy_text_wal {
-        let path = match kind {
-            voltnuerongrid_store::SqlWalKind::Ddl => ddl_wal_path(),
-            voltnuerongrid_store::SqlWalKind::Dml => dml_wal_path(),
-        };
-        append_sql_wal(&path, sql);
-    }
     metrics::counter!(
         "vng_wal_append_total",
         "kind" => kind.as_str(),
-        "text_wal" => if state.runtime_config.storage.legacy_text_wal { "yes" } else { "no" },
     ).increment(1);
-}
-
-/// Read all SQL statements from a WAL file (one per line, escaped).
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-fn read_sql_wal(wal_path: &str) -> Vec<String> {
-    use std::io::BufRead;
-    let file = match std::fs::File::open(wal_path) {
-        Ok(f) => f,
-        Err(_) => return Vec::new(),
-    };
-    std::io::BufReader::new(file)
-        .lines()
-        .filter_map(|l| l.ok())
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| sql_wal_unescape(&l))
-        .collect()
 }
 
 /// Phase 2 — pick the durability engine based on `runtime_config.storage`.
@@ -1034,9 +645,7 @@ fn build_durability_engine(
 // The engine-first path is the reason for the SqlWalKind extension to the
 // trait. Once all deployments have migrated, the legacy path can be removed.
 
-/// Replay DDL into a freshly-created catalog. Prefers the durability engine,
-/// falls back to the legacy text WAL.
-#[allow(deprecated)]
+/// Replay DDL into a freshly-created catalog from the durability engine.
 fn replay_ddl_into(
     catalog: &mut DdlCatalog,
     engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
@@ -1044,13 +653,7 @@ fn replay_ddl_into(
     use voltnuerongrid_store::SqlWalKind;
     let now_ms = now_unix_ms();
 
-    // Phase 2.2 — auto-migrate-on-boot. If the engine has no DDL but the
-    // text WAL file exists, migrate it into the engine before replaying.
-    // This makes the upgrade path zero-touch for operators: they don't have
-    // to run vng-migrate manually before restarting.
-    auto_migrate_text_to_engine(engine, SqlWalKind::Ddl, &ddl_wal_path());
-
-    let stmts_from_engine: Vec<String> = {
+    let stmts: Vec<String> = {
         let guard = engine.lock().expect("wal_engine lock for replay_ddl");
         if guard.persists_sql() && guard.sql_count(SqlWalKind::Ddl) > 0 {
             guard.iter_sql(SqlWalKind::Ddl)
@@ -1058,40 +661,27 @@ fn replay_ddl_into(
             Vec::new()
         }
     };
-    if !stmts_from_engine.is_empty() {
-        for sql in &stmts_from_engine {
-            apply_ddl_to_catalog(catalog, sql, now_ms);
-        }
-        eprintln!(
-            "[vng-wal] replayed {} DDL statement(s) from durability engine",
-            stmts_from_engine.len()
-        );
+    for sql in &stmts {
+        apply_ddl_to_catalog(catalog, sql, now_ms);
+    }
+    if !stmts.is_empty() {
+        eprintln!("[vng-wal] replayed {} DDL statement(s) from durability engine", stmts.len());
         metrics::counter!(
             "vng_wal_replay_total",
             "kind" => "ddl",
             "source" => "engine",
-        ).increment(stmts_from_engine.len() as u64);
-        return;
+        ).increment(stmts.len() as u64);
     }
-    // Final fallback to legacy text WAL replay (engines that don't persist
-    // SQL — e.g. in-memory tests with the auto-migrate skipped because the
-    // file doesn't exist).
-    replay_ddl_wal_into(catalog);
 }
 
-/// Replay DML into a freshly-created row store. Prefers the durability
-/// engine, falls back to the legacy text WAL.
-#[allow(deprecated)]
+/// Replay DML into a freshly-created row store from the durability engine.
 fn replay_dml_into(
     rs: &mut PagedRowStore,
     engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
 ) {
     use voltnuerongrid_store::SqlWalKind;
 
-    // Phase 2.2 — auto-migrate-on-boot for DML.
-    auto_migrate_text_to_engine(engine, SqlWalKind::Dml, &dml_wal_path());
-
-    let stmts_from_engine: Vec<String> = {
+    let stmts: Vec<String> = {
         let guard = engine.lock().expect("wal_engine lock for replay_dml");
         if guard.persists_sql() && guard.sql_count(SqlWalKind::Dml) > 0 {
             guard.iter_sql(SqlWalKind::Dml)
@@ -1099,104 +689,22 @@ fn replay_dml_into(
             Vec::new()
         }
     };
-    if !stmts_from_engine.is_empty() {
-        let xid = rs.begin_xid();
-        for sql in &stmts_from_engine {
-            apply_dml_to_rowstore(rs, xid, sql);
-        }
-        eprintln!(
-            "[vng-wal] replayed {} DML statement(s) from durability engine",
-            stmts_from_engine.len()
-        );
-        metrics::counter!(
-            "vng_wal_replay_total",
-            "kind" => "dml",
-            "source" => "engine",
-        ).increment(stmts_from_engine.len() as u64);
-        return;
-    }
-    replay_dml_wal_into(rs);
-}
-
-/// Phase 2.2 — auto-migrate the legacy text WAL into the durability engine
-/// if (and only if) the engine has no statements of the given kind AND the
-/// text file exists. Returns silently if either condition fails (idempotent).
-///
-/// The migration writes a `.migrated` marker file so subsequent boots skip
-/// the migrate step even if the text file is left in place by the operator.
-#[allow(deprecated)]
-fn auto_migrate_text_to_engine(
-    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
-    kind: voltnuerongrid_store::SqlWalKind,
-    text_wal_path: &str,
-) {
-    use std::path::Path;
-    use voltnuerongrid_store::SqlWalKind as Kind;
-
-    let marker_path = format!("{text_wal_path}.migrated");
-    if Path::new(&marker_path).exists() {
-        return; // already migrated this file
-    }
-    if !Path::new(text_wal_path).exists() {
-        return; // nothing to migrate
-    }
-
-    // Check the engine — if it already has SQL of this kind, the operator
-    // probably ran vng-migrate or already booted with this engine. Don't
-    // double-import, but still drop the marker so we don't re-check.
-    {
-        let guard = match engine.lock() {
-            Ok(g) => g,
-            Err(_) => {
-                eprintln!("[vng-wal] auto-migrate: engine mutex poisoned, skipping");
-                return;
-            }
-        };
-        if !guard.persists_sql() {
-            return; // in-memory engine, no point migrating
-        }
-        if guard.sql_count(kind) > 0 {
-            // Engine already populated; mark and return.
-            let _ = std::fs::write(&marker_path, b"already had SQL on first boot\n");
-            return;
-        }
-    }
-
-    let stmts = read_sql_wal(text_wal_path);
     if stmts.is_empty() {
-        let _ = std::fs::write(&marker_path, b"empty text WAL\n");
         return;
     }
-
-    let mut migrated = 0u64;
-    {
-        let mut guard = engine.lock().expect("wal_engine lock for auto_migrate");
-        for sql in &stmts {
-            let _ = guard.append_sql(kind, sql);
-            migrated += 1;
-        }
+    let xid = rs.begin_xid();
+    for sql in &stmts {
+        apply_dml_to_rowstore(rs, xid, sql);
     }
-    eprintln!(
-        "[vng-wal] auto-migrated {} {} statement(s) from {} into durability engine",
-        migrated,
-        match kind { Kind::Ddl => "DDL", Kind::Dml => "DML" },
-        text_wal_path
-    );
+    eprintln!("[vng-wal] replayed {} DML statement(s) from durability engine", stmts.len());
     metrics::counter!(
-        "vng_wal_auto_migrate_total",
-        "kind" => kind.as_str(),
-    ).increment(migrated);
-
-    // Drop a marker so we don't try again on next boot. Keep the original
-    // text WAL untouched — operators may want it as a sanity-check backup.
-    let _ = std::fs::write(
-        &marker_path,
-        format!("auto-migrated {migrated} statement(s) at boot\n").as_bytes(),
-    );
+        "vng_wal_replay_total",
+        "kind" => "dml",
+        "source" => "engine",
+    ).increment(stmts.len() as u64);
 }
 
-/// Apply a single DDL statement to the catalog. Extracted from
-/// `replay_ddl_wal_into` so both replay paths share the logic.
+/// Apply a single DDL statement to the catalog.
 fn apply_ddl_to_catalog(catalog: &mut DdlCatalog, sql: &str, now_ms: u128) {
     if let Some(info) = parse_ddl_info(sql) {
         match info.operation {
@@ -1208,8 +716,7 @@ fn apply_ddl_to_catalog(catalog: &mut DdlCatalog, sql: &str, now_ms: u128) {
     }
 }
 
-/// Apply a single DML statement to the row store. Extracted from
-/// `replay_dml_wal_into` so both replay paths share the logic.
+/// Apply a single DML statement to the row store.
 fn apply_dml_to_rowstore(rs: &mut PagedRowStore, xid: voltnuerongrid_store::mvcc::Xid, sql: &str) {
     let upper = sql.trim_start().to_ascii_uppercase();
     if upper.starts_with("INSERT") {
@@ -1225,47 +732,6 @@ fn apply_dml_to_rowstore(rs: &mut PagedRowStore, xid: voltnuerongrid_store::mvcc
             rs.insert(xid, &k, d);
         }
     }
-}
-
-/// Replay the DDL WAL into a freshly-created `DdlCatalog`.
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-#[allow(deprecated)]
-fn replay_ddl_wal_into(catalog: &mut DdlCatalog) {
-    let path = ddl_wal_path();
-    let sqls = read_sql_wal(&path);
-    let now_ms = now_unix_ms();
-    for sql in &sqls {
-        apply_ddl_to_catalog(catalog, sql, now_ms);
-    }
-    if !sqls.is_empty() {
-        eprintln!("[vng-wal] replayed {} DDL statement(s) from {}", sqls.len(), path);
-        metrics::counter!(
-            "vng_wal_replay_total",
-            "kind" => "ddl",
-            "source" => "text_wal",
-        ).increment(sqls.len() as u64);
-    }
-}
-
-/// Replay the DML WAL into a freshly-created `PagedRowStore`.
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-#[allow(deprecated)]
-fn replay_dml_wal_into(rs: &mut PagedRowStore) {
-    let path = dml_wal_path();
-    let sqls = read_sql_wal(&path);
-    if sqls.is_empty() {
-        return;
-    }
-    let xid = rs.begin_xid();
-    for sql in &sqls {
-        apply_dml_to_rowstore(rs, xid, sql);
-    }
-    eprintln!("[vng-wal] replayed {} DML statement(s) from {}", sqls.len(), path);
-    metrics::counter!(
-        "vng_wal_replay_total",
-        "kind" => "dml",
-        "source" => "text_wal",
-    ).increment(sqls.len() as u64);
 }
 
 fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
@@ -1581,59 +1047,12 @@ fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
     matrix
 }
 
-#[derive(Clone, Serialize)]
-struct GuardrailRule {
-    action: String,
-    required_mode: AutonomousMode,
-    scope: String,
-    rationale: String,
-}
-
-#[derive(Serialize)]
-struct AutonomousGuardrailsResponse {
-    status: &'static str,
-    autonomous_mode: AutonomousMode,
-    emergency_stop_enabled: bool,
-    policy_matrix: Vec<GuardrailRule>,
-}
-
-#[derive(Deserialize)]
-struct EmergencyStopRequest {
-    enabled: bool,
-    reason: Option<String>,
-    requested_by: Option<String>,
-}
-
-#[derive(Serialize)]
-struct EmergencyStopResponse {
-    status: &'static str,
-    emergency_stop_enabled: bool,
-    reason: String,
-    requested_by: String,
-}
-
-#[derive(Deserialize)]
-struct AuthorizeActionRequest {
-    action: String,
-    scope: Option<String>,
-}
-
-#[derive(Serialize)]
-struct AuthorizeActionResponse {
-    status: &'static str,
-    action: String,
-    requested_scope: String,
-    decision: &'static str,
-    reason: String,
-    trace_id: String,
-}
-
 #[derive(Debug, Serialize)]
-struct AuthErrorResponse {
-    status: &'static str,
-    reason: String,
-    locale: String,
-    localized_message: String,
+pub(crate) struct AuthErrorResponse {
+    pub(crate) status: &'static str,
+    pub(crate) reason: String,
+    pub(crate) locale: String,
+    pub(crate) localized_message: String,
 }
 
 #[derive(Serialize)]
@@ -1645,14 +1064,14 @@ struct HealthResponse {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TransportKind {
+pub(crate) enum TransportKind {
     Http,
     Native,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CanonicalCommandName {
+pub(crate) enum CanonicalCommandName {
     Health,
     SqlAnalyze,
     SqlRoute,
@@ -1663,30 +1082,30 @@ enum CanonicalCommandName {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-struct CanonicalCommandEnvelope<TPayload> {
-    request_id: String,
-    transport: TransportKind,
-    command: CanonicalCommandName,
-    session_context: Option<String>,
-    transport_metadata: std::collections::HashMap<String, String>,
-    payload: TPayload,
+pub(crate) struct CanonicalCommandEnvelope<TPayload> {
+    pub(crate) request_id: String,
+    pub(crate) transport: TransportKind,
+    pub(crate) command: CanonicalCommandName,
+    pub(crate) session_context: Option<String>,
+    pub(crate) transport_metadata: std::collections::HashMap<String, String>,
+    pub(crate) payload: TPayload,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-struct CanonicalSuccess<TPayload> {
-    payload: TPayload,
-    request_id: String,
-    transport: TransportKind,
+pub(crate) struct CanonicalSuccess<TPayload> {
+    pub(crate) payload: TPayload,
+    pub(crate) request_id: String,
+    pub(crate) transport: TransportKind,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-struct CanonicalError {
-    request_id: String,
-    transport: TransportKind,
-    kind: &'static str,
-    message: String,
+pub(crate) struct CanonicalError {
+    pub(crate) request_id: String,
+    pub(crate) transport: TransportKind,
+    pub(crate) kind: &'static str,
+    pub(crate) message: String,
 }
 
 #[allow(dead_code)]
@@ -1794,12 +1213,12 @@ impl NativeAdapter {
 }
 
 #[derive(Debug, Clone)]
-struct SqlTransactionGatewayContext {
-    statements: Vec<String>,
-    isolation_level: Option<String>,
+pub(crate) struct SqlTransactionGatewayContext {
+    pub(crate) statements: Vec<String>,
+    pub(crate) isolation_level: Option<String>,
 }
 
-fn extract_request_id(headers: &HeaderMap, fallback: &str) -> String {
+pub(crate) fn extract_request_id(headers: &HeaderMap, fallback: &str) -> String {
     headers
         .get("x-request-id")
         .and_then(|value| value.to_str().ok())
@@ -1808,7 +1227,7 @@ fn extract_request_id(headers: &HeaderMap, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn build_http_envelope<TPayload>(
+pub(crate) fn build_http_envelope<TPayload>(
     headers: &HeaderMap,
     command: CanonicalCommandName,
     payload: TPayload,
@@ -1965,12 +1384,12 @@ impl TransportGateway {
 }
 
 #[derive(Debug, Clone, Default)]
-struct CommandDispatcher {
+pub(crate) struct CommandDispatcher {
     gateway: TransportGateway,
 }
 
 impl CommandDispatcher {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             gateway: TransportGateway::new(),
         }
@@ -1988,28 +1407,28 @@ impl CommandDispatcher {
         self.gateway.health_response(transport, state)
     }
 
-    fn dispatch_sql_analyze(
+    pub(crate) fn dispatch_sql_analyze(
         &self,
         envelope: &CanonicalCommandEnvelope<SqlAnalyzeRequest>,
     ) -> CanonicalSuccess<SqlAnalyzeResponse> {
         self.gateway.sql_analyze_response(envelope)
     }
 
-    fn dispatch_sql_route(
+    pub(crate) fn dispatch_sql_route(
         &self,
         envelope: &CanonicalCommandEnvelope<SqlRouteRequest>,
     ) -> CanonicalSuccess<SqlRouteResponse> {
         self.gateway.sql_route_response(envelope)
     }
 
-    fn dispatch_sql_execute_route_decision(
+    pub(crate) fn dispatch_sql_execute_route_decision(
         &self,
         envelope: &CanonicalCommandEnvelope<SqlExecuteRequest>,
     ) -> CanonicalSuccess<voltnuerongrid_exec::BatchRouteDecision> {
         self.gateway.sql_execute_route_decision(envelope)
     }
 
-    fn dispatch_sql_transaction_context(
+    pub(crate) fn dispatch_sql_transaction_context(
         &self,
         envelope: &CanonicalCommandEnvelope<SqlTransactionRequest>,
     ) -> CanonicalSuccess<SqlTransactionGatewayContext> {
@@ -2222,122 +1641,6 @@ impl NativeAdapter {
     }
 }
 
-#[derive(Clone, Deserialize)]
-struct SqlTransactionRequest {
-    statements: Vec<String>,
-    /// Requested isolation level: "read_committed" (default), "repeatable_read", "serializable"
-    isolation_level: Option<String>,
-}
-
-#[derive(Clone, Deserialize)]
-struct SqlAnalyzeRequest {
-    sql_batch: String,
-}
-
-#[derive(Serialize)]
-struct AnalyzedStatement {
-    statement: String,
-    kind: String,
-    requires_transaction: bool,
-    touches_catalog: bool,
-    accepted: bool,
-}
-
-#[derive(Serialize)]
-struct SqlAnalyzeResponse {
-    status: &'static str,
-    total_statements: usize,
-    rejected_statements: usize,
-    statements: Vec<AnalyzedStatement>,
-}
-
-#[derive(Clone, Deserialize)]
-struct SqlRouteRequest {
-    sql_batch: String,
-}
-
-#[derive(Serialize)]
-struct RoutedStatementResponse {
-    statement: String,
-    /// Routing path from `HtapQueryRouter` (heuristic).
-    path: String,
-    /// Cost-model recommended path from `QueryPlanner` (S3-WS1-05).
-    planner_path: String,
-    estimated_rows: u64,
-    relative_cost: f64,
-}
-
-#[derive(Serialize)]
-struct SqlRouteResponse {
-    status: &'static str,
-    route_path: String,
-    reason: String,
-    statements: Vec<RoutedStatementResponse>,
-    /// Aggregate planner cost across all statements in the batch.
-    batch_estimated_rows: u64,
-    batch_relative_cost: f64,
-}
-
-#[derive(Clone, Deserialize)]
-struct SqlExecuteRequest {
-    sql_batch: String,
-    max_rows: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct LegacyAggResult {
-    /// Aggregate function name (e.g. `"SUM"`, `"COUNT"`).
-    aggregation: String,
-    /// Computed result; `None` when evaluation errored.
-    result: Option<f64>,
-    /// Error message when evaluation failed.
-    error: Option<String>,
-    /// Indicates this result came through the legacy aggregation routing path.
-    source: &'static str,
-}
-
-#[derive(Serialize)]
-struct SqlExecuteResponse {
-    status: &'static str,
-    route_path: String,
-    reason: String,
-    transaction: Option<SqlTransactionResponse>,
-    olap: Option<OlapQueryResponse>,
-    rejected_statement_count: usize,
-    udf_results: Option<Vec<UdfExecutionResult>>,
-    udf_guardrail_status: Option<String>,
-    udf_function_catalog: Vec<UdfFunctionCatalogEntry>,
-    udf_guard_policies: Vec<UdfLanguageGuardPolicy>,
-    udf_execution_plan: Vec<UdfExecutionPlanStep>,
-    legacy_agg_results: Option<Vec<LegacyAggResult>>,
-    /// Dominant cost-model recommended path for the batch (S3-WS1-05).
-    planner_path: Option<String>,
-    /// Physical OLTP executor results: actual rows from PagedRowStore for point-read SELECT (S4-WS3-02).
-    oltp_rows: Option<Vec<OltpRowResult>>,
-    /// Vectorized OLAP aggregation results from columnar executor (S4-WS3-02).
-    olap_agg_results: Option<Vec<OlapVecAggResult>>,
-    /// Column metadata for SELECT results — readable by the UI client.
-    columns: Option<Vec<serde_json::Value>>,
-    /// Row data for SELECT results — readable by the UI client.
-    rows: Option<Vec<serde_json::Value>>,
-}
-
-/// S4-WS3-02: a single result row returned by the physical OLTP executor.
-#[derive(Serialize)]
-struct OltpRowResult {
-    key: String,
-    data: std::collections::HashMap<String, String>,
-}
-
-/// S4-WS3-02: a single vectorized aggregation result from the OLAP columnar executor.
-#[derive(Serialize)]
-struct OlapVecAggResult {
-    column: String,
-    op: String,
-    value: String,
-    row_count: usize,
-}
-
 // ─── S2-WS2-02: WAL durability + recovery types ──────────────────────────────
 
 /// Response for `GET /api/v1/store/wal/status`.
@@ -2400,67 +1703,14 @@ struct ChaosInjectRequest {
 // ─── S8-WS10-02: Driver wire protocol structs ─────────────────────────────────
 
 #[derive(Debug, Clone)]
-struct DriverSession {
-    driver_name: String,
-    driver_version: String,
-    connected_at_ms: u64,
-    assigned_node_id: String,
-    pooled_connection_id: Option<String>,
+pub(crate) struct DriverSession {
+    pub(crate) driver_name: String,
+    pub(crate) driver_version: String,
+    pub(crate) connected_at_ms: u64,
+    pub(crate) assigned_node_id: String,
+    pub(crate) pooled_connection_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct DriverProtocolInfo {
-    protocol_version: &'static str,
-    encoding: &'static str,
-    auth_modes: Vec<String>,
-    supported_statements: Vec<String>,
-    max_batch_size: usize,
-}
-
-#[derive(Debug, Deserialize)]
-struct DriverConnectRequest {
-    driver_name: String,
-    driver_version: String,
-    requested_capabilities: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize)]
-struct DriverConnectResponse {
-    status: &'static str,
-    session_token: String,
-    negotiated_capabilities: Vec<String>,
-    max_batch_size: usize,
-}
-
-// ─── S8-WS10-02: Driver disconnect structs ────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct DriverDisconnectRequest {
-    session_token: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DriverDisconnectResponse {
-    status: &'static str,
-    session_token: String,
-    disconnected: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct DriverSessionInfo {
-    session_token: String,
-    driver_name: String,
-    driver_version: String,
-    connected_at_ms: u64,
-    assigned_node_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DriverSessionListResponse {
-    status: &'static str,
-    session_count: usize,
-    sessions: Vec<DriverSessionInfo>,
-}
 
 // ─── S7-WS6-02: Raft log entries response ─────────────────────────────────────
 
@@ -2676,152 +1926,6 @@ struct WalReplayCountResponse {
     op_filter: Option<String>,
 }
 
-// ─── S10-WS15-02: CDC change-data-capture structs ─────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-struct CdcEvent {
-    sequence: u64,
-    op: String,
-    table_name: String,
-    key: String,
-    payload: String,
-    captured_at_ms: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct CdcStreamResponse {
-    status: &'static str,
-    event_count: usize,
-    events: Vec<CdcEvent>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct CdcStreamFilterQuery {
-    table: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct CdcStreamFilterResponse {
-    status: &'static str,
-    table_filter: Option<String>,
-    event_count: usize,
-    events: Vec<CdcEvent>,
-}
-
-/// Query params for `GET /api/v1/store/cdc/stream/latest`.
-#[derive(Debug, Deserialize, Default)]
-struct CdcLatestQuery {
-    limit: Option<usize>,
-}
-
-/// Response for `GET /api/v1/store/cdc/stream/latest`.
-#[derive(Serialize)]
-struct CdcLatestResponse {
-    status: &'static str,
-    event_count: usize,
-    limit_applied: usize,
-    events: Vec<CdcEvent>,
-}
-
-// ─── S10-WS15-02: CDC cursor tracking structs ─────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct CdcCursorQuery {
-    table: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CdcCursorAdvanceRequest {
-    table_name: String,
-    position: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct CdcCursorResponse {
-    status: &'static str,
-    table_name: String,
-    cursor_position: u64,
-}
-
-// ─── S10-WS15-02: CDC cursor list structs ────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct CdcCursorEntry {
-    table_name: String,
-    cursor_position: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct CdcCursorListResponse {
-    status: &'static str,
-    cursor_count: usize,
-    cursors: Vec<CdcCursorEntry>,
-}
-
-// ─── S10-WS15-02: CDC cursor rewind struct ────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct CdcCursorRewindRequest {
-    table_name: String,
-}
-
-// ─── S10-WS15-02: CDC aggregate metrics response ─────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct CdcMetricsResponse {
-    status: &'static str,
-    total_events: usize,
-    insert_count: usize,
-    delete_count: usize,
-    tables_seen: usize,
-}
-
-// ─── S5-WS4A-02: Broker adapter structs ───────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct BrokerAdapterInfo {
-    broker_type: String,
-    enabled: bool,
-    flush_count: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct BrokerAdapterStatus {
-    status: &'static str,
-    adapters: Vec<BrokerAdapterInfo>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BrokerFlushRequest {
-    broker_type: String,
-    max_events: Option<usize>,
-}
-
-#[derive(Debug, Serialize)]
-struct BrokerFlushResponse {
-    status: &'static str,
-    broker_type: String,
-    events_flushed: usize,
-    total_flush_count: u64,
-}
-
-/// Response for `GET /api/v1/ingest/outbox/broker/health`.
-#[derive(Serialize)]
-struct BrokerHealthEntry {
-    broker_type: &'static str,
-    flush_count: u64,
-    wal_len: usize,
-    healthy: bool,
-}
-
-#[derive(Serialize)]
-struct BrokerHealthResponse {
-    status: &'static str,
-    broker_count: usize,
-    brokers: Vec<BrokerHealthEntry>,
-}
-
-/// Response for `GET /api/v1/cluster/chaos/status`.
 #[derive(Serialize)]
 struct ChaosStatusResponse {
     status: &'static str,
@@ -2847,220 +1951,25 @@ struct ChaosHistoryResponse {
     events: Vec<ChaosEvent>,
 }
 
-#[derive(Debug, Serialize)]
-struct UdfExecutionResult {
-    language: &'static str,
-    function: &'static str,
-    input: String,
-    output: String,
-}
-
-#[derive(Serialize)]
-struct UdfFunctionCatalogEntry {
-    name: &'static str,
-    language: &'static str,
-    deterministic: bool,
-    status: &'static str,
-}
-
-#[derive(Serialize)]
-struct UdfLanguageGuardPolicy {
-    language: &'static str,
-    blocked_tokens: Vec<&'static str>,
-    max_input_bytes: usize,
-}
-
-#[derive(Serialize)]
-struct UdfExecutionPlanStep {
-    statement: String,
-    route_path: String,
-    udf_invocations: Vec<UdfInvocationPlan>,
-}
-
-#[derive(Serialize)]
-struct UdfInvocationPlan {
-    function: &'static str,
-    language: &'static str,
-    guard_policy: &'static str,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct SqlTransactionResponse {
-    status: &'static str,
-    transaction_id: String,
-    statements_executed: usize,
-    requires_transaction: bool,
-    touches_catalog: bool,
-    rejected_statement_count: usize,
-    elapsed_ms: u128,
-}
-
-#[derive(Deserialize)]
-struct PessimisticLockAcquireRequest {
-    transaction_id: String,
-    resource: String,
-    owner: Option<String>,
-    ttl_ms: Option<u64>,
-    wait_timeout_ms: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct PessimisticLockReleaseRequest {
-    transaction_id: String,
-    resource: String,
+pub(crate) struct SqlTransactionResponse {
+    pub(crate) status: &'static str,
+    pub(crate) transaction_id: String,
+    pub(crate) statements_executed: usize,
+    pub(crate) requires_transaction: bool,
+    pub(crate) touches_catalog: bool,
+    pub(crate) rejected_statement_count: usize,
+    pub(crate) elapsed_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct PessimisticLockRecord {
-    lock_id: String,
-    transaction_id: String,
+pub(crate) struct PessimisticLockRecord {
+    pub(crate) lock_id: String,
+    pub(crate) transaction_id: String,
     resource: String,
     owner: String,
     acquired_unix_ms: u128,
     expires_unix_ms: u128,
-}
-
-#[derive(Serialize)]
-struct PessimisticLockResponse {
-    status: &'static str,
-    lock_state: &'static str,
-    reason: String,
-    lock: Option<PessimisticLockRecord>,
-}
-
-#[derive(Serialize)]
-struct PessimisticLockContentionMetricsResponse {
-    status: &'static str,
-    deadlock_detections: u64,
-    scan_cap_timeouts: u64,
-    wait_timeouts: u64,
-    lock_grants: u64,
-    lock_conflicts: u64,
-    lock_releases: u64,
-    contention_ratio: f64,
-}
-
-// â”€â”€ WS2 Index + Constraint types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-#[derive(Deserialize)]
-struct CreateIndexRequest {
-    name: String,
-    table: String,
-    column: String,
-    unique: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct CreateIndexResponse {
-    status: &'static str,
-    index_name: String,
-    table: String,
-    column: String,
-    unique: bool,
-}
-
-#[derive(Deserialize)]
-struct DropIndexRequest {
-    name: String,
-}
-
-#[derive(Serialize)]
-struct DropIndexResponse {
-    status: &'static str,
-    dropped: String,
-}
-
-#[derive(Serialize)]
-struct IndexListEntry {
-    name: String,
-    table: String,
-    column: String,
-    kind: String,
-    unique: bool,
-}
-
-#[derive(Serialize)]
-struct ListIndexesResponse {
-    status: &'static str,
-    indexes: Vec<IndexListEntry>,
-}
-
-// S5-WS4-03 / S2-WS2-04: MVCC row store scan structs
-#[derive(Deserialize)]
-struct StoreRowsScanRequest {
-    /// MVCC snapshot Xid to read at. Defaults to current head Xid.
-    snapshot_xid: Option<u64>,
-    /// Optional key prefix filter (empty string matches all).
-    key_prefix: Option<String>,
-    /// Maximum rows returned (capped at 10 000; default 1 000).
-    limit: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct StoreRowEntry {
-    key: String,
-    data: std::collections::HashMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct StoreRowsScanResponse {
-    status: &'static str,
-    snapshot_xid: u64,
-    row_count: usize,
-    rows: Vec<StoreRowEntry>,
-}
-
-// ─── S2-WS2-04: Row store snapshot export structs ────────────────────────────
-
-#[derive(Serialize)]
-struct RowSnapshotEntry {
-    key: String,
-    payload: std::collections::HashMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct RowSnapshotResponse {
-    status: &'static str,
-    snapshot_xid: u64,
-    row_count: usize,
-    rows: Vec<RowSnapshotEntry>,
-}
-
-/// Response for `GET /api/v1/store/rows/stats`.
-#[derive(Serialize)]
-struct RowStoreStatsResponse {
-    status: &'static str,
-    current_xid: u64,
-    total_pages: usize,
-    total_rows: usize,
-    total_visible_rows: usize,
-}
-
-// S4-WS3-04: HTAP sync export structs
-#[derive(Deserialize)]
-struct StoreHtapExportRequest {
-    /// Export mutations with sequence > this value (0 = export all).
-    since_sequence: Option<u64>,
-    /// Maximum mutations to return (capped at 5 000; default 500).
-    max_items: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct HtapMutationEntry {
-    sequence: u64,
-    table: String,
-    primary_key: String,
-    payload_json: String,
-    op: String,
-}
-
-#[derive(Serialize)]
-struct StoreHtapExportResponse {
-    status: &'static str,
-    since_sequence: u64,
-    mutation_count: usize,
-    checkpoint_last_sequence: u64,
-    mutations: Vec<HtapMutationEntry>,
 }
 
 // S9-WS8A-02: audit chain verify response
@@ -3072,70 +1981,6 @@ struct AuditChainVerifyResponse {
     genesis_hash: &'static str,
 }
 
-// S4-WS3-03: columnar scan response (vectorized OLAP executor)
-#[derive(Serialize)]
-struct ColumnarScanColumn {
-    name: String,
-    type_hint: String,
-    row_count: usize,
-    sample_values: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct ColumnarScanResponse {
-    status: &'static str,
-    rows_scanned: usize,
-    columns_materialized: usize,
-    elapsed_us: u128,
-    columns: Vec<ColumnarScanColumn>,
-}
-
-// ─── S4-WS3-02: Columnar projection query/response ───────────────────────────
-
-#[derive(Debug, Deserialize, Default)]
-struct ColumnarProjectQuery {
-    /// Comma-separated list of column names to project; empty = all columns.
-    columns: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ColumnarProjectResponse {
-    status: &'static str,
-    rows_scanned: usize,
-    columns_projected: usize,
-    elapsed_us: u128,
-    columns: Vec<ColumnarScanColumn>,
-}
-
-// ─── S4-WS3-03: Columnar aggregate query/response ───────────────────────────
-
-#[derive(Debug, Deserialize, Default)]
-struct ColumnarAggregateQuery {
-    /// Column name to aggregate; defaults to the first column in the batch.
-    column: Option<String>,
-    /// Aggregation operation: "count" (default), "sum", "avg", "min", "max".
-    op: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ColumnarAggregateResponse {
-    status: &'static str,
-    op: String,
-    column: String,
-    result: String,
-    rows_scanned: usize,
-}
-
-// ─── S6-WS5-04: TDE override status response ─────────────────────────────────
-
-/// Response for `GET /api/v1/security/tde/override-status`.
-#[derive(Serialize)]
-struct TdeOverrideStatusResponse {
-    status: &'static str,
-    override_set: bool,
-    override_value: Option<bool>,
-    effective_tde_active: bool,
-}
 
 // ─── S9-WS8A-01: Audit CLI summary response ──────────────────────────────────
 
@@ -3147,167 +1992,6 @@ struct AuditCliSummaryResponse {
     chain_valid: bool,
     last_event_kind: String,
     export_hint: &'static str,
-}
-
-// S6-WS5-03: TLS runtime status
-#[derive(Serialize)]
-struct SecurityTlsStatusResponse {
-    status: &'static str,
-    tls_required: bool,
-    mtls_required: bool,
-    cert_source: String,
-    key_source: String,
-    cert_present: bool,
-    key_present: bool,
-    cert_pair_configured: bool,
-    cert_rotation_supported: bool,
-    note: &'static str,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct TlsCertRotateRequest {
-    reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct TlsCertRotateResponse {
-    status: &'static str,
-    rotation_initiated: bool,
-    cert_source: String,
-    key_source: String,
-    cert_present: bool,
-    key_present: bool,
-    preflight_ok: bool,
-    reason: String,
-}
-
-// ─── S6-WS5-03: TLS certificate info struct ─────────────────────────────────
-
-#[derive(Serialize)]
-struct TlsCertInfoResponse {
-    status: &'static str,
-    cert_source: String,
-    key_source: String,
-    cert_present: bool,
-    key_present: bool,
-    preflight_ok: bool,
-    tls_required: bool,
-    mtls_required: bool,
-    cert_rotation_supported: bool,
-}
-
-// S6-WS5-04: TDE runtime status
-#[derive(Serialize)]
-struct SecurityTdeStatusResponse {
-    status: &'static str,
-    encryption_at_rest_required: bool,
-    tde_active: bool,
-    key_env_var: String,
-    key_resolved: bool,
-    note: &'static str,
-}
-
-// S9-WS8-02: model gateway policy
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ModelGatewayPolicy {
-    /// When true, autonomous AI actions are validated against policy constraints.
-    isolation_enabled: bool,
-    /// Allowlist of model identifiers (empty = allow all).
-    allowed_models: Vec<String>,
-    /// Maximum tokens per request (0 = unlimited).
-    max_tokens_per_request: u64,
-    /// Requests-per-minute rate limit (0 = unlimited).
-    rate_limit_rpm: u32,
-}
-
-impl Default for ModelGatewayPolicy {
-    fn default() -> Self {
-        Self {
-            isolation_enabled: true,
-            allowed_models: Vec::new(),
-            max_tokens_per_request: 4096,
-            rate_limit_rpm: 60,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct AiPolicyResponse {
-    status: &'static str,
-    policy: ModelGatewayPolicy,
-}
-
-#[derive(Deserialize)]
-struct AiPolicyUpdateRequest {
-    isolation_enabled: Option<bool>,
-    allowed_models: Option<Vec<String>>,
-    max_tokens_per_request: Option<u64>,
-    rate_limit_rpm: Option<u32>,
-}
-
-// ─── S4-WS3-04: HTAP OLAP consumer structs ───────────────────────────────────
-
-#[derive(Deserialize)]
-struct OlapApplyMutation {
-    sequence: u64,
-    primary_key: String,
-    payload_json: String,
-    op: String, // "insert" | "update" | "delete"
-}
-
-#[derive(Deserialize)]
-struct StoreHtapApplyRequest {
-    mutations: Vec<OlapApplyMutation>,
-}
-
-#[derive(Serialize)]
-struct StoreHtapApplyResponse {
-    status: &'static str,
-    applied_count: usize,
-    last_applied_sequence: u64,
-}
-
-#[derive(Serialize)]
-struct OlapScanRow {
-    key: String,
-    data: HashMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct StoreHtapOlapScanResponse {
-    status: &'static str,
-    row_count: usize,
-    rows: Vec<OlapScanRow>,
-}
-
-/// Response for `GET /api/v1/store/htap/lag`.
-#[derive(Serialize)]
-struct HtapLagResponse {
-    status: &'static str,
-    sync_origin_pending: usize,
-    olap_row_count: usize,
-    estimated_lag_mutations: usize,
-}
-
-// ─── S4-WS3-04: HTAP force-sync response ────────────────────────────────────
-
-#[derive(Serialize)]
-struct HtapForceSyncResponse {
-    status: &'static str,
-    mutations_applied: usize,
-    olap_row_count_after: usize,
-}
-
-// ─── S4-WS3-04: HTAP detailed status response ───────────────────────────────
-
-#[derive(Serialize)]
-struct HtapStatusResponse {
-    status: &'static str,
-    sync_origin_pending: usize,
-    olap_row_count: usize,
-    last_sync_ms: u64,
-    sync_lag_estimate: i64,
-    is_synchronized: bool,
 }
 
 // ─── S7-WS6-02: Raft snapshot response ───────────────────────────────────────
@@ -3323,33 +2007,27 @@ struct RaftSnapshotResponse {
     fencing_token: u64,
 }
 
-// ─── S2-WS2-04: Row store prefix count structs ───────────────────────────────
-
-#[derive(Deserialize, Default)]
-struct RowCountQuery {
-    key_prefix: Option<String>,
-}
+// ─── S7-WS6-02: Raft commit progress struct ──────────────────────────────────
 
 #[derive(Serialize)]
-struct RowCountResponse {
+struct RaftCommitProgressResponse {
     status: &'static str,
-    snapshot_xid: u64,
-    key_prefix: Option<String>,
-    count: usize,
+    commit_index: u64,
+    last_applied: u64,
+    log_length: usize,
+    uncommitted: usize,
 }
 
-// ─── S2-WS2-04: Row store delete-by-key structs ──────────────────────────────
+// ─── S7-WS6-02: Raft election status response ─────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-struct RowDeleteRequest {
-    key: String,
-}
-
-#[derive(Serialize)]
-struct RowDeleteResponse {
+#[derive(Debug, Serialize)]
+struct RaftElectionStatusResponse {
     status: &'static str,
-    key: String,
-    deleted: bool,
+    role: RaftRole,
+    ticks_since_heartbeat: u64,
+    election_timeout_ticks: u64,
+    remaining_ticks: u64,
+    is_election_pending: bool,
 }
 
 // ─── S9-WS8A-02: Audit export struct ─────────────────────────────────────────
@@ -3401,7 +2079,7 @@ struct AuditPurgeResponse {
 // ─── S5-E4A-01: Connector SDK runtime structs ───────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ConnectorPlugin {
+pub(crate) struct ConnectorPlugin {
     connector_id: String,
     connector_type: String,
     version: String,
@@ -3409,85 +2087,6 @@ struct ConnectorPlugin {
     registered_at_ms: u64,
 }
 
-#[derive(Deserialize)]
-struct ConnectorRegisterRequest {
-    connector_id: String,
-    connector_type: String,
-    version: String,
-    signed: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct ConnectorRegisterResponse {
-    status: &'static str,
-    connector_id: String,
-    registered_at_ms: u64,
-}
-
-#[derive(Serialize)]
-struct ConnectorListResponse {
-    status: &'static str,
-    connector_count: usize,
-    connectors: Vec<ConnectorPlugin>,
-}
-
-// ─── S5-E4A-01: Connector get-by-id structs ─────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct ConnectorGetQuery {
-    id: String,
-}
-
-#[derive(Serialize)]
-struct ConnectorGetResponse {
-    status: &'static str,
-    found: bool,
-    connector: Option<ConnectorPlugin>,
-}
-
-// ─── S5-E4A-01: Connector deregister structs ─────────────────────────────────
-
-#[derive(Deserialize)]
-struct ConnectorDeregisterRequest {
-    connector_id: String,
-}
-
-#[derive(Serialize)]
-struct ConnectorDeregisterResponse {
-    status: &'static str,
-    connector_id: String,
-    removed: bool,
-}
-
-// ─── S5-E4A-01: Connector update structs ─────────────────────────────────────
-
-#[derive(Deserialize)]
-struct ConnectorUpdateRequest {
-    connector_id: String,
-    version: Option<String>,
-    signed: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct ConnectorUpdateResponse {
-    status: &'static str,
-    connector_id: String,
-    updated: bool,
-}
-
-// ─── S11-WS1-10: Row store keys structs ─────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct StoreRowsKeysQuery {
-    prefix: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct StoreRowsKeysResponse {
-    status: &'static str,
-    total_keys: usize,
-    keys: Vec<String>,
-}
 
 // ─── S11-WS1-10: WAL truncate structs ───────────────────────────────────────
 
@@ -3502,25 +2101,6 @@ struct WalTruncateResponse {
     records_removed: usize,
     new_record_count: usize,
     truncated: bool,
-}
-
-// ─── S11-WS1-11: Row store version structs ──────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct RowStoreVersionResponse {
-    status: &'static str,
-    current_xid: u64,
-    page_count: usize,
-    total_rows: usize,
-}
-
-// ─── S11-WS1-11: HTAP stats structs ─────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct HtapStatsResponse {
-    status: &'static str,
-    table_count: usize,
-    total_entries: usize,
 }
 
 // ─── S11-WS1-12: Connector health structs ───────────────────────────────────
@@ -3551,27 +2131,6 @@ struct RowsPageStatsResponse {
     total_rows: usize,
     visible_rows: usize,
     current_xid: u64,
-}
-
-// ─── S11-WS1-13: Ingest schema fields structs ───────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct IngestSchemaFieldsQuery {
-    schema_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SchemaFieldEntry {
-    field_name: String,
-    field_type: String,
-}
-
-#[derive(Debug, Serialize)]
-struct IngestSchemaFieldsResponse {
-    status: &'static str,
-    schema_id: String,
-    field_count: usize,
-    fields: Vec<SchemaFieldEntry>,
 }
 
 // ─── S11-WS1-13: WAL sequence info structs ───────────────────────────────────
@@ -4844,19 +3403,6 @@ struct RaftFenceResponse {
     current_term: u64,
 }
 
-// ─── S6-WS5-04: TDE toggle structs ────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct TdeToggleRequest {
-    enable: bool,
-}
-
-#[derive(Serialize)]
-struct TdeToggleResponse {
-    status: &'static str,
-    tde_active: bool,
-    override_applied: bool,
-}
 
 // ─── S7-WS6-02: Raft endpoint structs ────────────────────────────────────────
 
@@ -4866,413 +3412,6 @@ struct RaftStatusResponse {
     raft: RaftStatusSnapshot,
 }
 
-#[derive(Deserialize)]
-struct IndexLookupRequest {
-    index_name: String,
-    value: String,
-}
-
-#[derive(Serialize)]
-struct IndexLookupResponse {
-    status: &'static str,
-    index_name: String,
-    value: String,
-    row_keys: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct AddConstraintRequest {
-    name: String,
-    table: String,
-    column: String,
-    kind: String,
-}
-
-#[derive(Serialize)]
-struct AddConstraintResponse {
-    status: &'static str,
-    constraint_name: String,
-    table: String,
-    column: String,
-    kind: String,
-}
-
-#[derive(Deserialize)]
-struct ValidateConstraintRequest {
-    table: String,
-    column: String,
-    value: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ValidateConstraintResponse {
-    status: &'static str,
-    valid: bool,
-    violation: Option<String>,
-}
-
-// â”€â”€ WS4 Ingest types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-#[derive(Deserialize)]
-struct IngestCsvRequest {
-    connector_id: String,
-    csv_data: String,
-}
-
-#[derive(Serialize)]
-struct IngestCsvResponse {
-    status: &'static str,
-    connector_id: String,
-    records_parsed: usize,
-}
-
-#[derive(Deserialize)]
-struct IngestJsonRequest {
-    connector_id: String,
-    key_field: String,
-    ndjson_data: String,
-}
-
-#[derive(Serialize)]
-struct IngestJsonResponse {
-    status: &'static str,
-    connector_id: String,
-    records_parsed: usize,
-}
-
-#[derive(Deserialize)]
-struct IngestParquetRequest {
-    connector_id: String,
-    /// Standard base64 (RFC 4648) encoded Parquet file bytes.
-    parquet_data_base64: String,
-}
-
-#[derive(Serialize)]
-struct IngestParquetResponse {
-    status: &'static str,
-    connector_id: String,
-    records_parsed: usize,
-}
-
-#[derive(Deserialize)]
-struct IngestExcelRequest {
-    connector_id: String,
-    /// Standard base64 (RFC 4648) encoded `.xlsx` workbook bytes.
-    xlsx_data_base64: String,
-}
-
-#[derive(Serialize)]
-struct IngestExcelResponse {
-    status: &'static str,
-    connector_id: String,
-    records_parsed: usize,
-}
-
-// REQ-07: chunked ingest
-#[derive(Deserialize)]
-struct IngestChunkedRequest {
-    connector_id: String,
-    /// JSON-serialized record payloads â€” one per element
-    records: Vec<String>,
-    chunk_target_rows: Option<usize>,
-    max_in_flight_tasks: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct IngestChunkedResponse {
-    status: &'static str,
-    connector_id: String,
-    total_records: usize,
-    chunk_count: usize,
-    tasks_dispatched: usize,
-    chunks_succeeded: usize,
-    chunks_failed: usize,
-}
-
-#[derive(Serialize)]
-struct IngestStatusResponse {
-    status: &'static str,
-    csv_connectors: usize,
-    json_connectors: usize,
-    parquet_connectors: usize,
-    excel_connectors: usize,
-    total_records_loaded: usize,
-}
-
-// ─── S5-WS4-03: Ingest schema registry structs ──────────────────────────────
-
-#[derive(Serialize)]
-struct IngestSchemaColumn {
-    name: String,
-    inferred_type: &'static str,
-}
-
-#[derive(Serialize)]
-struct IngestSchemaEntry {
-    connector_id: String,
-    format: String,
-    row_count: usize,
-    columns: Vec<IngestSchemaColumn>,
-}
-
-#[derive(Serialize)]
-struct IngestSchemaRegistryResponse {
-    status: &'static str,
-    connector_count: usize,
-    entries: Vec<IngestSchemaEntry>,
-}
-
-fn collect_ingest_schema_registry_response(state: &AppState) -> IngestSchemaRegistryResponse {
-    let csv_map = state.ingest_csv_records.lock().expect("csv schema lock");
-    let json_map = state.ingest_json_records.lock().expect("json schema lock");
-    let mut entries: Vec<IngestSchemaEntry> = Vec::new();
-    for (connector_id, records) in csv_map.iter() {
-        let columns = ingest_infer_columns(records);
-        entries.push(IngestSchemaEntry {
-            connector_id: connector_id.clone(),
-            format: "csv".to_string(),
-            row_count: records.len(),
-            columns,
-        });
-    }
-    for (connector_id, records) in json_map.iter() {
-        let columns = ingest_infer_columns(records);
-        entries.push(IngestSchemaEntry {
-            connector_id: connector_id.clone(),
-            format: "json".to_string(),
-            row_count: records.len(),
-            columns,
-        });
-    }
-    let connector_count = entries.len();
-    drop(csv_map);
-    drop(json_map);
-    IngestSchemaRegistryResponse {
-        status: "ok",
-        connector_count,
-        entries,
-    }
-}
-
-// ─── S5-WS4-03: Ingest schema list (format-filtered) structs ─────────────────
-
-#[derive(Debug, Deserialize, Default)]
-struct IngestSchemaListQuery {
-    format: Option<String>,
-}
-
-#[derive(Serialize)]
-struct IngestSchemaListResponse {
-    status: &'static str,
-    format_filter: Option<String>,
-    connector_count: usize,
-    entries: Vec<IngestSchemaEntry>,
-}
-
-// ─── S5-WS4-03: Ingest format detection structs ──────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct IngestFormatDetectRequest {
-    sample_data: String,
-}
-
-#[derive(Serialize)]
-struct IngestFormatDetectResponse {
-    status: &'static str,
-    detected_format: String,
-    confidence: f64,
-    field_count: usize,
-}
-
-// ─── S5-WS4-04: Connector validation structs ──────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct IngestConnectorValidateRequest {
-    connector_id: String,
-    format: String,
-    config_json: String,
-}
-
-#[derive(Serialize)]
-struct IngestConnectorValidateResponse {
-    status: &'static str,
-    valid: bool,
-    issues: Vec<String>,
-}
-
-// ─── S2-WS2-05: Transaction isolation stats structs ──────────────────────────
-
-#[derive(Serialize)]
-struct TxIsolationEntry {
-    transaction_id: String,
-    isolation_level: String,
-    snapshot_xid: Option<u64>,
-    statement_count: usize,
-}
-
-#[derive(Serialize)]
-struct TxIsolationStatsResponse {
-    status: &'static str,
-    active_count: usize,
-    transactions: Vec<TxIsolationEntry>,
-}
-
-// ─── S7-WS6-02: Raft commit progress struct ──────────────────────────────────
-
-#[derive(Serialize)]
-struct RaftCommitProgressResponse {
-    status: &'static str,
-    commit_index: u64,
-    last_applied: u64,
-    log_length: usize,
-    uncommitted: usize,
-}
-
-// ─── S7-WS6-02: Raft election status response ─────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct RaftElectionStatusResponse {
-    status: &'static str,
-    role: RaftRole,
-    ticks_since_heartbeat: u64,
-    election_timeout_ticks: u64,
-    remaining_ticks: u64,
-    is_election_pending: bool,
-}
-
-// ─── S8-WS10-02: Driver health struct ────────────────────────────────────────
-
-#[derive(Serialize)]
-struct DriverHealthResponse {
-    status: &'static str,
-    active_sessions: usize,
-    pool_circuit_breaker: String,
-    pool_active_connections: usize,
-    pool_total_acquired: u64,
-    healthy: bool,
-}
-
-// ─── S8-WS10-02: Driver query structs ─────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct DriverQueryRequest {
-    session_token: String,
-    sql: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DriverQueryResponse {
-    status: &'static str,
-    session_token: String,
-    sql: String,
-    rows_returned: usize,
-    executed_at_ms: u64,
-}
-
-// ─── S8-WS10-02: Driver session ping structs ─────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct DriverPingRequest {
-    session_token: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DriverPingResponse {
-    status: &'static str,
-    session_token: String,
-    pinged_at_ms: u64,
-}
-
-#[derive(Serialize)]
-struct IngestOutboxStatusResponse {
-    status: &'static str,
-    broker_mode: String,
-    broker_target: Option<String>,
-    stream_count: usize,
-    total_events: usize,
-    last_event_id: Option<u64>,
-    streams: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct IngestOutboxReplayRequest {
-    connector_id: String,
-    consumer_id: Option<String>,
-    max_items: Option<usize>,
-    acknowledge: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct IngestOutboxReplayEventResponse {
-    replay_key: String,
-    event_id: u64,
-    stream_name: String,
-    origin: String,
-    payload_json: String,
-}
-
-#[derive(Serialize)]
-struct IngestOutboxReplayResponse {
-    status: &'static str,
-    delivery_state: &'static str,
-    stream_name: String,
-    consumer_id: String,
-    delivered_count: usize,
-    cursor_before_ack: Option<u64>,
-    cursor_after_ack: Option<u64>,
-    acknowledged: bool,
-    events: Vec<IngestOutboxReplayEventResponse>,
-}
-
-#[derive(Serialize)]
-struct SecurityKmsStatusResponse {
-    status: &'static str,
-    resolution_state: &'static str,
-    encryption_at_rest_required: bool,
-    configured_envs: Vec<String>,
-    unavailable_envs: Vec<String>,
-    selected_env: Option<String>,
-    key_ref: Option<String>,
-    failover_used: bool,
-    last_simulation_note: Option<String>,
-    last_error: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SecurityKmsOutageSimulateRequest {
-    unavailable_envs: Vec<String>,
-    note: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SecurityKmsOutageReconcileRequest {
-    note: Option<String>,
-}
-
-#[derive(Serialize)]
-struct SecurityKmsOutageResponse {
-    status: &'static str,
-    resolution_state: &'static str,
-    unavailable_envs: Vec<String>,
-    selected_env: Option<String>,
-    key_ref: Option<String>,
-    failover_used: bool,
-    note: String,
-}
-
-#[derive(Deserialize)]
-struct OlapQueryRequest {
-    query: String,
-    max_rows: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct OlapQueryResponse {
-    status: &'static str,
-    query_signature: String,
-    elapsed_ms: u128,
-    rows: usize,
-}
 
 #[derive(Serialize)]
 struct FailoverStatusResponse {
@@ -5333,18 +3472,6 @@ struct AuditEventsResponse {
 }
 
 #[derive(Deserialize)]
-struct AutonomousActionRecordsQuery {
-    max_items: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct AutonomousActionRecordsResponse {
-    status: &'static str,
-    total_records: usize,
-    records: Vec<AutonomousActionExecutionRecord>,
-}
-
-#[derive(Deserialize)]
 struct I18nMessagesQuery {
     locale: Option<String>,
 }
@@ -5356,370 +3483,19 @@ struct I18nMessagesResponse {
     messages: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Serialize)]
-struct SreReliabilityStatusResponse {
-    status: &'static str,
-    service_health: &'static str,
-    failure_budget: FailureBudgetSnapshot,
-    rate_limit_policy: RateLimitPolicySnapshot,
-}
-
-#[derive(Serialize, Clone, Copy)]
-struct FailureBudgetSnapshot {
-    window_minutes: u32,
-    error_budget_percent: f64,
-    consumed_percent: f64,
-    remaining_percent: f64,
-    burn_rate: f64,
-}
-
-#[derive(Serialize, Clone, Copy)]
-struct RateLimitPolicySnapshot {
-    requests_per_minute: u32,
-    burst_limit: u32,
-    current_minute_count: u32,
-    allowed: bool,
-}
-
-#[derive(Deserialize)]
-struct RateLimitCheckRequest {
-    current_minute_count: u32,
-    requested_units: Option<u32>,
-}
-
-#[derive(Serialize)]
-struct RateLimitCheckResponse {
-    status: &'static str,
-    allowed: bool,
-    remaining_units: u32,
-    reason: String,
-}
-
-#[derive(Deserialize)]
-struct FailureBudgetAlertQuery {
-    consumed_percent: Option<f64>,
-    burn_rate: Option<f64>,
-}
-
-#[derive(Serialize)]
-struct FailureBudgetAlertResponse {
-    status: &'static str,
-    alert_state: &'static str,
-    severity: &'static str,
-    threshold_percent: f64,
-    consumed_percent: f64,
-    burn_rate: f64,
-    recommended_action: &'static str,
-}
-
-#[derive(Deserialize)]
-struct DrHookTriggerRequest {
-    hook: String,
-    scope: Option<String>,
-    dry_run: Option<bool>,
-}
-
-#[derive(Clone, Serialize)]
-struct DrHookExecutionRecord {
-    execution_id: String,
-    hook: String,
-    scope: String,
-    status: &'static str,
-    dry_run: bool,
-    policy_decision: &'static str,
-    cooldown_remaining_ms: u64,
-    retry_backoff_ms: u64,
-    retry_attempt: u32,
-    details: String,
-}
-
-#[derive(Default)]
-struct DrHookPolicyState {
-    hooks: HashMap<String, DrHookRuntimeState>,
-}
-
-#[derive(Clone, Default, Serialize, Deserialize)]
-struct DrHookRuntimeState {
-    last_attempt_unix_ms: u128,
-    consecutive_failures: u32,
-    last_status: String,
-}
-
-#[derive(Clone)]
-struct DrHookPolicyConfig {
-    min_mode: AutonomousMode,
-    cooldown_seconds: u64,
-    max_retries: u32,
-    base_backoff_ms: u64,
-    max_backoff_ms: u64,
-    allowed_hooks: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct DrHookPolicyResponse {
-    status: &'static str,
-    policy: DrHookPolicyContract,
-}
-
-#[derive(Serialize)]
-struct DrHookPolicyContract {
-    min_mode: AutonomousMode,
-    cooldown_seconds: u64,
-    max_retries: u32,
-    base_backoff_ms: u64,
-    max_backoff_ms: u64,
-    allowed_hooks: Vec<String>,
-    tracked_hooks: usize,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct DrHookPolicyStateSnapshot {
-    hooks: HashMap<String, DrHookRuntimeState>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct DrHookPolicyStateEnvelope {
-    schema_version: u32,
-    written_unix_ms: u128,
-    checksum_hex: String,
-    snapshot: DrHookPolicyStateSnapshot,
-}
-
-#[derive(Deserialize)]
-struct DrHookRetryPlanQuery {
-    hook: String,
-    attempts: Option<u32>,
-}
-
-#[derive(Serialize)]
-struct DrHookRetryPlanResponse {
-    status: &'static str,
-    hook: String,
-    accepted: bool,
-    reason: String,
-    steps: Vec<DrHookRetryPlanStep>,
-}
-
-#[derive(Serialize)]
-struct DrHookRetryPlanStep {
-    attempt: u32,
-    recommended_backoff_ms: u64,
-    jitter_range_ms: u64,
-}
-
-#[derive(Deserialize)]
-struct DrHookScheduleRequest {
-    hook: String,
-    scope: Option<String>,
-    dry_run: Option<bool>,
-    reason: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct DrHookScheduledTask {
-    task_id: String,
-    hook: String,
-    scope: String,
-    dry_run: bool,
-    requested_by: String,
-    reason: String,
-    enqueued_unix_ms: u128,
-}
-
-#[derive(Serialize)]
-struct DrHookScheduleResponse {
-    status: &'static str,
-    task: DrHookScheduledTask,
-    queue_depth: usize,
-}
-
-#[derive(Deserialize)]
-struct FailureSignalRequest {
-    node_id: String,
-    transport: String,
-    failure_type: String,
-    severity: String,
-    message: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct ClusterFailureSignal {
-    signal_id: String,
-    node_id: String,
-    transport: String,
-    failure_type: String,
-    severity: String,
-    message: String,
-    observed_unix_ms: u128,
-    resolved: bool,
-    resolved_by: Option<String>,
-    resolved_unix_ms: Option<u128>,
-    resolution_note: Option<String>,
-}
-
-#[derive(Serialize)]
-struct FailureSignalResponse {
-    status: &'static str,
-    signal: ClusterFailureSignal,
-    queued_remediation_task: Option<DrHookScheduledTask>,
-}
-
-#[derive(Deserialize)]
-struct FailureReconcileRequest {
-    signal_ids: Option<Vec<String>>,
-    resolve_all_critical: Option<bool>,
-    note: Option<String>,
-}
-
-#[derive(Serialize)]
-struct FailureReconcileResponse {
-    status: &'static str,
-    resolved_count: usize,
-    unresolved_critical_count: usize,
-}
-
-#[derive(Serialize)]
-struct SreGateEvaluationResponse {
-    status: &'static str,
-    gate_result: &'static str,
-    criteria: Vec<SreGateCriterion>,
-    recommended_actions: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct SreGateCriterion {
-    name: String,
-    passed: bool,
-    detail: String,
-}
-
-#[derive(Deserialize)]
-struct SreGateExportRequest {
-    output_path: Option<String>,
-}
-
-#[derive(Serialize)]
-struct SreGateExportResponse {
-    status: &'static str,
-    output_path: String,
-    gate_result: &'static str,
-}
-
-#[derive(Serialize)]
-struct DrHookTriggerResponse {
-    status: &'static str,
-    execution: DrHookExecutionRecord,
-}
-
-#[derive(Deserialize)]
-struct DrHookStatusQuery {
-    max_items: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct DrHookStatusResponse {
-    status: &'static str,
-    total_records: usize,
-    records: Vec<DrHookExecutionRecord>,
-}
-
-#[derive(Deserialize)]
-struct CacheSetRequest {
-    partition_id: String,
-    key: String,
-    value: serde_json::Value,
-    ttl_ms: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct CacheGetQuery {
-    partition_id: String,
-    key: String,
-}
-
-#[derive(Deserialize)]
-struct CacheInvalidateRequest {
-    partition_id: String,
-    key: String,
-}
-
-#[derive(Serialize)]
-struct CacheWriteResponse {
-    status: &'static str,
-    partition_id: String,
-    key: String,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct CacheGetResponse {
-    status: &'static str,
-    partition_id: String,
-    key: String,
-    hit: bool,
-    value: Option<serde_json::Value>,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct CacheInvalidateResponse {
-    status: &'static str,
-    partition_id: String,
-    key: String,
-    removed: bool,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct CacheRebalanceResponse {
-    status: &'static str,
-    partition_count: usize,
-    rebalanced_partitions: usize,
-    entries_evicted: usize,
-}
-
-#[derive(Serialize)]
-struct CachePartitionMetricsResponse {
-    partition_id: String,
-    entry_count: usize,
-    total_hits: u64,
-    total_misses: u64,
-    total_evictions: u64,
-    circuit_breaker_state: String,
-    hit_ratio: f64,
-    last_rebalance_ms: Option<u64>,
-}
-
-#[derive(Serialize)]
-struct CacheMetricsResponse {
-    status: &'static str,
-    partition_count: usize,
-    total_entries: usize,
-    partitions: Vec<CachePartitionMetricsResponse>,
-}
-
-// REQ-27: Redis-compat cache command interface ---------------------------------
-
+// REQ-27: Redis-compat cache command DTOs (function + tests stay in main.rs)
 #[derive(Deserialize)]
 struct RedisCacheCommandRequest {
-    /// Redis command name (case-insensitive): GET | SET | DEL | EXISTS | KEYS | FLUSH | PING |
-    /// EXPIRE | INCR | DECR | INCRBY | DECRBY | MGET | MSET | GETSET | LPUSH | RPUSH | LLEN | LRANGE
     cmd: String,
-    partition_id: Option<String>,
     key: Option<String>,
     value: Option<serde_json::Value>,
+    partition_id: Option<String>,
     ttl_ms: Option<u64>,
-    /// Numeric delta for INCR/DECR/INCRBY/DECRBY (defaults to Â±1.0)
-    delta: Option<f64>,
-    /// New TTL in milliseconds for EXPIRE command (overrides ttl_ms if present)
     expire_ms: Option<u64>,
-    /// Multiple keys for MGET; keyâ†’value mapping (JSON object) for MSET
+    delta: Option<f64>,
     keys: Option<Vec<String>>,
-    /// LRANGE start index (inclusive, negative = from tail)
     start: Option<i64>,
-    /// LRANGE stop index (inclusive, negative = from tail)
     stop: Option<i64>,
-    /// Hash field name for HSET / HGET / HDEL
     field: Option<String>,
 }
 
@@ -5735,32 +3511,8 @@ struct RedisCacheCommandResponse {
     error: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct PoolAcquireRequest {
-    now_ms: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct PoolReleaseRequest {
-    connection_id: String,
-    now_ms: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct PoolFailureRequest {
-    connection_id: String,
-    error: Option<String>,
-    now_ms: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct PoolRecoverRequest {
-    now_ms: Option<u64>,
-    prune_unhealthy: Option<bool>,
-}
-
 #[derive(Serialize)]
-struct PoolStatsResponse {
+pub(crate) struct PoolStatsResponse {
     total_connections: usize,
     idle_connections: usize,
     active_connections: usize,
@@ -5774,90 +3526,6 @@ struct PoolStatsResponse {
     total_circuit_opens: u64,
 }
 
-#[derive(Serialize)]
-struct PoolAcquireResponse {
-    status: &'static str,
-    acquire_state: &'static str,
-    connection_id: Option<String>,
-    error: Option<String>,
-    stats: PoolStatsResponse,
-}
-
-#[derive(Serialize)]
-struct PoolReleaseResponse {
-    status: &'static str,
-    released: bool,
-    stats: PoolStatsResponse,
-}
-
-#[derive(Serialize)]
-struct PoolFailureResponse {
-    status: &'static str,
-    marked_failed: bool,
-    stats: PoolStatsResponse,
-}
-
-#[derive(Serialize)]
-struct PoolRecoverResponse {
-    status: &'static str,
-    circuit_recovered: bool,
-    pruned_unhealthy: usize,
-    stats: PoolStatsResponse,
-}
-
-#[derive(Deserialize)]
-struct SignedProvenanceRegistrationRequest {
-    plugin_id: String,
-    plugin_version: String,
-    checksum_sha256: String,
-    display_name: Option<String>,
-    owner: Option<String>,
-    license: Option<String>,
-    capabilities: Option<Vec<String>>,
-    schema_version: Option<String>,
-    signature_algorithm: String,
-    signature_key_id: String,
-    signature_base64: String,
-    revoked_key_ids: Option<Vec<String>>,
-    attestations: Vec<SignedProvenanceAttestationRequest>,
-    sbom_entries: Option<Vec<SignedProvenanceSbomEntryRequest>>,
-}
-
-#[derive(Deserialize)]
-struct SignedProvenanceAttestationRequest {
-    attester_id: String,
-    attested_at_ms: Option<u64>,
-    attestation_type: String,
-    payload_digest_sha256: String,
-    signature_base64: String,
-    passed: bool,
-}
-
-#[derive(Clone, Deserialize)]
-struct SignedProvenanceSbomEntryRequest {
-    component_name: String,
-    component_version: String,
-    license: String,
-    checksum_sha256: String,
-    source_url: Option<String>,
-}
-
-#[derive(Serialize)]
-struct SignedProvenanceRegistrationResponse {
-    status: &'static str,
-    registration_state: &'static str,
-    plugin_id: String,
-    plugin_version: String,
-    chain_complete: bool,
-    chain_digest: String,
-    attestation_count: usize,
-    passed_attestations: usize,
-    sbom_approved: bool,
-    sbom_license_violations: usize,
-    sbom_missing_checksums: usize,
-    audit_records_total: usize,
-    error: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 struct NativeListenerConfig {
@@ -7320,7 +4988,7 @@ async fn metrics_handler() -> (axum::http::StatusCode, [(axum::http::HeaderName,
 ///
 /// **Tracked gap:** §4.3 in `gaps-may26-1.md`. Replace once `CREATE PROCEDURE`
 /// and the UDF runtime are wired through the SQL parser/executor properly.
-fn try_handle_call_insert_rows_demo(
+pub(crate) fn try_handle_call_insert_rows_demo(
     state: &AppState,
     _headers: &HeaderMap,
     principal: &RuntimeAccessPrincipal,
@@ -7497,7 +5165,7 @@ fn svc_unavailable_sql_response(reason: &str) -> (StatusCode, Json<SqlExecuteRes
     )
 }
 
-fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
+pub(crate) fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
     use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
     let tokens = semantic_tokens(sql);
     let upper = sql.trim_start().to_ascii_uppercase();
@@ -7520,7 +5188,7 @@ fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
 
 /// Parse a SQL UPDATE statement and return (row_key, row_data) for MVCC insert (new version).
 /// Pattern: UPDATE <table> SET col=val [WHERE col='key']
-fn extract_update_row_from_sql(
+pub(crate) fn extract_update_row_from_sql(
     sql: &str,
 ) -> Option<(String, std::collections::HashMap<String, String>)> {
     use voltnuerongrid_sql::ast::{parse_one, Statement};
@@ -7560,7 +5228,7 @@ fn extract_update_row_from_sql(
 
 /// Extract ordered column names from a CREATE TABLE DDL statement.
 /// Returns `vec!["id", "name", ...]` or an empty Vec if parsing fails.
-fn extract_column_names_from_ddl(ddl: &str) -> Vec<String> {
+pub(crate) fn extract_column_names_from_ddl(ddl: &str) -> Vec<String> {
     // Find the column list between the first '(' and last ')'
     let open = ddl.find('(');
     let close = ddl.rfind(')');
@@ -7608,7 +5276,7 @@ fn extract_column_names_from_ddl(ddl: &str) -> Vec<String> {
 /// The "__table" meta-key identifies which table the row belongs to.
 /// `ddl_col_names` provides ordered real column names from the CREATE TABLE DDL; used as
 /// fallback when the INSERT has no explicit column list.
-fn extract_insert_row_from_sql(
+pub(crate) fn extract_insert_row_from_sql(
     sql: &str,
 ) -> Option<(String, std::collections::HashMap<String, String>)> {
     extract_insert_row_from_sql_with_cols(sql, &[])
@@ -7617,7 +5285,7 @@ fn extract_insert_row_from_sql(
 /// Extract ALL rows from a (possibly multi-row) INSERT statement.
 /// Returns one `(row_key, RowData, single_row_sql)` per VALUES tuple.
 /// Strips `schema.table` qualifiers so the internal SQL parser can handle them.
-fn extract_all_insert_rows(
+pub(crate) fn extract_all_insert_rows(
     sql: &str,
 ) -> Vec<(String, std::collections::HashMap<String, String>, String)> {
     use voltnuerongrid_sql::{parse_one, Statement};
@@ -7742,1113 +5410,6 @@ fn extract_insert_row_from_sql_with_cols(
     Some((row_key, data))
 }
 
-async fn sql_transaction(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<SqlTransactionRequest>,
-) -> Result<(StatusCode, Json<SqlTransactionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_sql_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Execute,
-        "sql/transaction",
-    )?;
-    let dispatcher = CommandDispatcher::new();
-    let envelope = build_http_envelope(
-        &headers,
-        CanonicalCommandName::SqlTransaction,
-        req.clone(),
-        "http-sql-transaction",
-    );
-    let tx_context = dispatcher.dispatch_sql_transaction_context(&envelope);
-    let statements = tx_context.payload.statements;
-    let requested_isolation_level = tx_context.payload.isolation_level;
-    let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/transaction")?;
-    // REQ-23: ACID transaction state machine tracking
-    {
-        let now_ms = now_unix_ms();
-        let tx_id = {
-            let identity = match &principal {
-                RuntimeAccessPrincipal::Operator(op) => op.operator_id.clone(),
-                RuntimeAccessPrincipal::TenantUser(tu) => tu.user_id.clone(),
-            };
-            format!("tx-{}-{}", identity, now_ms)
-        };
-        let has_begin = statements.iter().any(|s| {
-            matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Begin)
-        });
-        let has_commit = statements.iter().any(|s| {
-            matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Commit)
-        });
-        let has_rollback = statements.iter().any(|s| {
-            matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Rollback)
-        });
-        let iso_level = requested_isolation_level
-            .as_deref()
-            .unwrap_or("read_committed")
-            .to_string();
-        let mut acid = state.acid_transactions.lock().expect("acid_tx lock");
-        if has_begin {
-            acid.begin(&tx_id, &state.node_id, &iso_level, now_ms);
-        }
-        for stmt in &statements {
-            let upper = stmt.to_ascii_uppercase();
-            let kind = SqlAnalyzer::classify_statement(stmt);
-            // REQ-23: wire SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT
-            match kind {
-                SqlStatementKind::Savepoint => {
-                    // Extract savepoint name: SAVEPOINT <name>
-                    if let Some(sp_name) = stmt.split_ascii_whitespace().nth(1) {
-                        acid.add_savepoint(&tx_id, sp_name);
-                    }
-                }
-                SqlStatementKind::ReleaseSavepoint => {
-                    // Extract savepoint name: RELEASE SAVEPOINT <name>
-                    if let Some(sp_name) = stmt.split_ascii_whitespace().nth(2) {
-                        acid.release_savepoint(&tx_id, sp_name);
-                    }
-                }
-                SqlStatementKind::RollbackToSavepoint => {
-                    // Extract savepoint name: ROLLBACK TO [SAVEPOINT] <name>
-                    // Tokens: ROLLBACK(0) TO(1) [SAVEPOINT(2)] name(2 or 3)
-                    let tokens: Vec<&str> = stmt.split_ascii_whitespace().collect();
-                    let sp_name = if tokens.get(2).map(|t| t.to_ascii_uppercase()) == Some("SAVEPOINT".to_string()) {
-                        tokens.get(3).copied()
-                    } else {
-                        tokens.get(2).copied()
-                    };
-                    if let Some(sp) = sp_name {
-                        acid.rollback_to_savepoint(&tx_id, sp);
-                    }
-                }
-                _ => {}
-            }
-            // REQ-23: extract modified table for conflict detection
-            // UPDATE <table> SET ... â†’ token index 1; INSERT INTO <table> / DELETE FROM <table> â†’ index 2
-            let affected = if upper.starts_with("UPDATE ") {
-                stmt.split_ascii_whitespace()
-                    .nth(1)
-                    .map(|t| t.trim_end_matches(|c: char| c == '(' || c == ' ').to_string())
-            } else if upper.starts_with("INSERT INTO ") || upper.starts_with("DELETE FROM ") {
-                stmt.split_ascii_whitespace()
-                    .nth(2)
-                    .map(|t| t.trim_end_matches(|c: char| c == '(' || c == ' ').to_string())
-            } else {
-                None
-            };
-            acid.record_statement(&tx_id, affected);
-        }
-        if has_commit {
-            // REQ-23: abort with 409 if a serializable write conflict is detected
-            if let Some(conflict_table) = acid.check_serializable_conflict(&tx_id) {
-                acid.rollback(&tx_id, now_ms);
-                drop(acid);
-                let locale = locale_from_headers(&headers);
-                let localized = I18nCatalog::message(locale, "unauthorized");
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(AuthErrorResponse {
-                        status: "error",
-                        reason: format!("serializable_write_conflict:{conflict_table}"),
-                        locale: locale.as_str().to_string(),
-                        localized_message: localized.message.to_string(),
-                    }),
-                ));
-            }
-            // S2-WS2-05: write-write conflict detection using row-store snapshot xid.
-            // Collect keys about to be written and check for concurrent modifications.
-            {
-                let mut write_keys: Vec<String> = Vec::new();
-                for stmt in &statements {
-                    let upper = stmt.trim_start().to_ascii_uppercase();
-                    if upper.starts_with("INSERT") {
-                        if let Some((k, _)) = extract_insert_row_from_sql(stmt) {
-                            write_keys.push(k);
-                        }
-                    } else if upper.starts_with("UPDATE") {
-                        if let Some((k, _)) = extract_update_row_from_sql(stmt) {
-                            write_keys.push(k);
-                        }
-                    } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
-                            write_keys.push(k);
-                        }
-                    }
-                }
-                if !write_keys.is_empty() {
-                    let rs = state.row_store.lock().expect("row_store lock conflict check");
-                    let snapshot_xid = acid.row_store_snapshot_xid(&tx_id)
-                        .unwrap_or(0);
-                    for key in &write_keys {
-                        if rs.was_modified_after(key, snapshot_xid) {
-                            drop(rs);
-                            acid.rollback(&tx_id, now_ms);
-                            drop(acid);
-                            let locale = locale_from_headers(&headers);
-                            let localized = I18nCatalog::message(locale, "unauthorized");
-                            let canonical_error = CanonicalError {
-                                request_id: tx_context.request_id.clone(),
-                                transport: tx_context.transport,
-                                kind: "conflict",
-                                message: format!("write_write_conflict:{key}"),
-                            };
-                            return Err((
-                                StatusCode::CONFLICT,
-                                Json(AuthErrorResponse {
-                                    status: "error",
-                                    reason: canonical_error.message,
-                                    locale: locale.as_str().to_string(),
-                                    localized_message: localized.message.to_string(),
-                                }),
-                            ));
-                        }
-                    }
-                }
-            }
-            acid.commit(&tx_id, now_ms);
-            // S2-WS2-05: flush committed DML (INSERT/UPDATE/DELETE) into PagedRowStore.
-            // Write intents are registered before each write and released after the flush
-            // so that concurrent transactions see the in-progress lock via begin_write_intent.
-            {
-                let mut rs = state.row_store.lock().expect("row_store lock");
-                // Record snapshot xid before allocating the write xid
-                let snapshot_xid = rs.current_xid();
-                acid.set_row_store_snapshot(&tx_id, snapshot_xid);
-                let xid = rs.begin_xid();
-                for stmt in &statements {
-                    let upper = stmt.trim_start().to_ascii_uppercase();
-                    if upper.starts_with("INSERT") {
-                        // Use extract_all_insert_rows to handle multi-row INSERT correctly.
-                        // Each row is individually inserted and individually WAL-persisted.
-                        for (k, d, single_sql) in extract_all_insert_rows(stmt) {
-                            let _ = rs.begin_write_intent(xid, &k);
-                            rs.insert(xid, &k, d);
-                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
-                        }
-                    } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
-                            let _ = rs.begin_write_intent(xid, &k);
-                            rs.delete(xid, &k);
-                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
-                        }
-                    } else if upper.starts_with("UPDATE") {
-                        if let Some((k, d)) = extract_update_row_from_sql(stmt) {
-                            let _ = rs.begin_write_intent(xid, &k);
-                            rs.insert(xid, &k, d);
-                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
-                        }
-                    }
-                }
-                // S2-WS2-02: record committed DML mutations in the WAL engine for
-                // durability and recovery replay.
-                {
-                    let mut wal = state.wal_engine.lock().expect("wal_engine lock");
-                    for stmt in &req.statements {
-                        let upper = stmt.trim_start().to_ascii_uppercase();
-                        if upper.starts_with("INSERT") {
-                            if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
-                                let val = serde_json::to_string(&d).unwrap_or_default();
-                                wal.append_mutation(&k, &val);
-                            }
-                        } else if upper.starts_with("DELETE") {
-                            if let Some(k) = extract_delete_key_from_sql(stmt) {
-                                wal.append_mutation(&k, "__deleted__");
-                            }
-                        } else if upper.starts_with("UPDATE") {
-                            if let Some((k, d)) = extract_update_row_from_sql(stmt) {
-                                let val = serde_json::to_string(&d).unwrap_or_default();
-                                wal.append_mutation(&k, &val);
-                            }
-                        }
-                    }
-                    let _ = wal.maybe_checkpoint();
-                }
-                // Release all intents for this xid — writes are now committed and visible.
-                rs.release_write_intents(xid);
-            }
-            // S4-WS3-04: publish each committed DML mutation to RowStoreSyncOrigin for HTAP consumers.
-            {
-                use voltnuerongrid_store::htap_sync::MutationOp;
-                let mut origin = state.sync_origin.lock().expect("sync_origin lock");
-                for stmt in &req.statements {
-                    let upper = stmt.trim_start().to_ascii_uppercase();
-                    if upper.starts_with("INSERT") {
-                        if let Some((k, _d)) = extract_insert_row_from_sql(stmt) {
-                            origin.append("row_store", &k, stmt, MutationOp::Insert);
-                        }
-                    } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
-                            origin.append("row_store", &k, stmt, MutationOp::Delete);
-                        }
-                    } else if upper.starts_with("UPDATE") {
-                        if let Some((k, _d)) = extract_update_row_from_sql(stmt) {
-                            origin.append("row_store", &k, stmt, MutationOp::Update);
-                        }
-                    }
-                }
-            }
-        } else if has_rollback {
-            acid.rollback(&tx_id, now_ms);
-        }
-    }
-    let (status, response) = execute_transaction_statements(req.statements);
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Sql,
-        &principal,
-        "sql_transaction",
-        if status == StatusCode::OK { "ok" } else { "error" },
-        json!({
-            "route_scope": "sql/transaction",
-            "statements_executed": response.statements_executed,
-            "requires_transaction": response.requires_transaction,
-            "touches_catalog": response.touches_catalog,
-            "rejected_statement_count": response.rejected_statement_count,
-        }),
-    );
-    release_sql_data_plane_connection(&state, &connection_id);
-    Ok((status, Json(response)))
-}
-
-async fn sql_pessimistic_lock_acquire(
-    State(state): State<AppState>,
-    Json(req): Json<PessimisticLockAcquireRequest>,
-) -> (StatusCode, Json<PessimisticLockResponse>) {
-    let now_ms = now_unix_ms();
-    let ttl_ms = req.ttl_ms.unwrap_or(30_000).clamp(1_000, 300_000);
-    let owner = req
-        .owner
-        .unwrap_or_else(|| "runtime-transaction-manager".to_string());
-    let mut lock_table = match state.pessimistic_locks.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PessimisticLockResponse {
-                    status: "error",
-                    lock_state: "failed",
-                    reason: "lock_state_poisoned".to_string(),
-                    lock: None,
-                }),
-            )
-        }
-    };
-    let mut wait_graph = match state.pessimistic_lock_waits.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PessimisticLockResponse {
-                    status: "error",
-                    lock_state: "failed",
-                    reason: "wait_graph_state_poisoned".to_string(),
-                    lock: None,
-                }),
-            )
-        }
-    };
-
-    let (status, response) =
-        acquire_pessimistic_lock(
-            &mut lock_table,
-            &mut wait_graph,
-            &req.transaction_id,
-            &req.resource,
-            &owner,
-            ttl_ms,
-            req.wait_timeout_ms.unwrap_or(0),
-            now_ms,
-        );
-    match response.lock_state {
-        "deadlock_risk" => { state.pessimistic_lock_metrics.deadlock_detections.fetch_add(1, Ordering::Relaxed); }
-        "wait_timeout" if response.reason.contains("scan_cap") => { state.pessimistic_lock_metrics.scan_cap_timeouts.fetch_add(1, Ordering::Relaxed); }
-        "wait_timeout" => { state.pessimistic_lock_metrics.wait_timeouts.fetch_add(1, Ordering::Relaxed); }
-        "acquired" | "renewed" => { state.pessimistic_lock_metrics.lock_grants.fetch_add(1, Ordering::Relaxed); }
-        "held_by_other_transaction" => { state.pessimistic_lock_metrics.lock_conflicts.fetch_add(1, Ordering::Relaxed); }
-        _ => {}
-    }
-    (status, Json(response))
-}
-
-async fn sql_pessimistic_lock_release(
-    State(state): State<AppState>,
-    Json(req): Json<PessimisticLockReleaseRequest>,
-) -> (StatusCode, Json<PessimisticLockResponse>) {
-    let mut lock_table = match state.pessimistic_locks.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PessimisticLockResponse {
-                    status: "error",
-                    lock_state: "failed",
-                    reason: "lock_state_poisoned".to_string(),
-                    lock: None,
-                }),
-            )
-        }
-    };
-    let mut wait_graph = match state.pessimistic_lock_waits.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PessimisticLockResponse {
-                    status: "error",
-                    lock_state: "failed",
-                    reason: "wait_graph_state_poisoned".to_string(),
-                    lock: None,
-                }),
-            )
-        }
-    };
-    let (status, response) =
-        release_pessimistic_lock(&mut lock_table, &mut wait_graph, &req.transaction_id, &req.resource);
-    if response.lock_state == "released" {
-        state.pessimistic_lock_metrics.lock_releases.fetch_add(1, Ordering::Relaxed);
-    }
-    (status, Json(response))
-}
-
-async fn sql_pessimistic_lock_metrics(
-    State(state): State<AppState>,
-) -> Json<PessimisticLockContentionMetricsResponse> {
-    let deadlock_detections = state.pessimistic_lock_metrics.deadlock_detections.load(Ordering::Relaxed);
-    let scan_cap_timeouts = state.pessimistic_lock_metrics.scan_cap_timeouts.load(Ordering::Relaxed);
-    let wait_timeouts = state.pessimistic_lock_metrics.wait_timeouts.load(Ordering::Relaxed);
-    let lock_grants = state.pessimistic_lock_metrics.lock_grants.load(Ordering::Relaxed);
-    let lock_conflicts = state.pessimistic_lock_metrics.lock_conflicts.load(Ordering::Relaxed);
-    let lock_releases = state.pessimistic_lock_metrics.lock_releases.load(Ordering::Relaxed);
-    let total_attempts = deadlock_detections + scan_cap_timeouts + wait_timeouts + lock_grants + lock_conflicts;
-    let contention_ratio = if total_attempts > 0 {
-        (deadlock_detections + scan_cap_timeouts + wait_timeouts + lock_conflicts) as f64 / total_attempts as f64
-    } else {
-        0.0
-    };
-    Json(PessimisticLockContentionMetricsResponse {
-        status: "ok",
-        deadlock_detections,
-        scan_cap_timeouts,
-        wait_timeouts,
-        lock_grants,
-        lock_conflicts,
-        lock_releases,
-        contention_ratio,
-    })
-}
-
-async fn sql_analyze(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<SqlAnalyzeRequest>,
-) -> Result<Json<SqlAnalyzeResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/analyze")?;
-    let dispatcher = CommandDispatcher::new();
-    let envelope = build_http_envelope(
-        &headers,
-        CanonicalCommandName::SqlAnalyze,
-        req.clone(),
-        "http-sql-analyze",
-    );
-    let response = dispatcher.dispatch_sql_analyze(&envelope);
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Sql,
-        &principal,
-        "sql_analyze",
-        "ok",
-        json!({
-            "route_scope": "sql/analyze",
-            "total_statements": response.payload.total_statements,
-            "rejected_statements": response.payload.rejected_statements,
-            "request_id": response.request_id,
-        }),
-    );
-    Ok(Json(response.payload))
-}
-
-async fn sql_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<SqlRouteRequest>,
-) -> Result<Json<SqlRouteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/route")?;
-    let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/route")?;
-    let dispatcher = CommandDispatcher::new();
-    let envelope = build_http_envelope(
-        &headers,
-        CanonicalCommandName::SqlRoute,
-        req.clone(),
-        "http-sql-route",
-    );
-    let response = dispatcher.dispatch_sql_route(&envelope);
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Sql,
-        &principal,
-        "sql_route",
-        "ok",
-        json!({
-            "route_scope": "sql/route",
-            "route_path": response.payload.route_path,
-            "statement_count": response.payload.statements.len(),
-            "reason": response.payload.reason,
-            "request_id": response.request_id,
-        }),
-    );
-    release_sql_data_plane_connection(&state, &connection_id);
-    Ok(Json(response.payload))
-}
-
-async fn sql_execute(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<SqlExecuteRequest>,
-) -> Result<(StatusCode, Json<SqlExecuteResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_sql_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Execute,
-        "sql/execute",
-    )?;
-    let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/execute")?;
-    let dispatcher = CommandDispatcher::new();
-    let envelope = build_http_envelope(
-        &headers,
-        CanonicalCommandName::SqlExecute,
-        req.clone(),
-        "http-sql-execute",
-    );
-    let decision = dispatcher.dispatch_sql_execute_route_decision(&envelope);
-    let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
-
-    // ── Demo CALL intercept (TODO: replace with real stored-procedure execution) ─
-    // Handle CALL insert_rows('<table>', <count>) for the studio demo button.
-    // This is NOT a real stored-procedure runtime — it is a fixed-name shortcut
-    // that synthesises rows with heuristic values. Once CREATE PROCEDURE / UDF
-    // execution lands, remove this and route through the real catalog.
-    // Tracked as gap §4.3 in gaps-may26-1.md.
-    if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req) {
-        return early;
-    }
-
-
-    let udf_function_catalog = udf_function_catalog_contract();
-    let udf_guard_policies = udf_guard_policy_contract();
-    let udf_execution_plan = build_udf_execution_plan(&req.sql_batch);
-    let udf_execution = execute_udf_runtime_scaffold(&req.sql_batch);
-
-    let udf_results = match udf_execution {
-        Ok(results) => results,
-        Err(reason) => {
-            let canonical_error = CanonicalError {
-                request_id: envelope.request_id.clone(),
-                transport: envelope.transport,
-                kind: "validation",
-                message: reason.clone(),
-            };
-            append_runtime_audit_event(
-                &state,
-                AuditEventKind::Sql,
-                &principal,
-                "sql_execute",
-                "blocked",
-                json!({
-                    "route_scope": "sql/execute",
-                    "route_path": route_path_name(decision.payload.path),
-                    "reason": canonical_error.message,
-                    "error_kind": canonical_error.kind,
-                    "request_id": canonical_error.request_id,
-                    "rejected_statement_count": parsed.len(),
-                    "udf_guardrail_status": "blocked",
-                }),
-            );
-            let response = Ok((
-                StatusCode::BAD_REQUEST,
-                Json(SqlExecuteResponse {
-                    status: "error",
-                    route_path: route_path_name(decision.payload.path).to_string(),
-                    reason: canonical_error.message,
-                    transaction: None,
-                    olap: None,
-                    rejected_statement_count: parsed.len(),
-                    udf_results: None,
-                    udf_guardrail_status: Some("blocked".to_string()),
-                    udf_function_catalog,
-                    udf_guard_policies,
-                    udf_execution_plan,
-                    legacy_agg_results: None,
-                    planner_path: None,
-                    oltp_rows: None,
-                    olap_agg_results: None,
-                    columns: None,
-                    rows: None,
-                }),
-            ));
-            release_sql_data_plane_connection(&state, &connection_id);
-            return response;
-        }
-    };
-
-    if matches!(decision.payload.path, QueryPath::Unknown) {
-        append_runtime_audit_event(
-            &state,
-            AuditEventKind::Sql,
-            &principal,
-            "sql_execute",
-            "error",
-            json!({
-                "route_scope": "sql/execute",
-                "route_path": "unknown",
-                "reason": decision.payload.reason,
-                "rejected_statement_count": parsed.len(),
-            }),
-        );
-        let response = Ok((
-            StatusCode::BAD_REQUEST,
-            Json(SqlExecuteResponse {
-                status: "error",
-                route_path: "unknown".to_string(),
-                reason: decision.payload.reason,
-                transaction: None,
-                olap: None,
-                rejected_statement_count: parsed.len(),
-                udf_results: None,
-                udf_guardrail_status: None,
-                udf_function_catalog,
-                udf_guard_policies,
-                udf_execution_plan,
-                legacy_agg_results: None,
-                planner_path: None,
-                oltp_rows: None,
-                olap_agg_results: None,
-                columns: None,
-                rows: None,
-            }),
-        ));
-        release_sql_data_plane_connection(&state, &connection_id);
-        return response;
-    }
-
-    // ── Statement dispatch ───────────────────────────────────────────────────
-    let mut transaction_statements = Vec::new();
-    let mut olap_statements = Vec::new();
-    for statement in parsed {
-        let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
-        if analysis.kind == SqlStatementKind::Select {
-            olap_statements.push(statement.raw);
-        } else {
-            transaction_statements.push(statement.raw);
-        }
-    }
-
-    let mut transaction = None;
-    let mut olap = None;
-    let mut rejected_statement_count = 0usize;
-    // Hoisted so the DML WAL/row_store commit block below can access it
-    // regardless of whether touches_catalog is true or false.
-    let mut ddl_snapshot: Vec<String> = Vec::new();
-
-    if !transaction_statements.is_empty() {
-        // REQ-02: snapshot statements for DDL catalog update after ownership transfer
-        ddl_snapshot = transaction_statements.clone();
-        let (status, response) = execute_transaction_statements(transaction_statements);
-        rejected_statement_count += response.rejected_statement_count;
-        if status != StatusCode::OK {
-            append_runtime_audit_event(
-                &state,
-                AuditEventKind::Sql,
-                &principal,
-                "sql_execute",
-                "error",
-                json!({
-                    "route_scope": "sql/execute",
-                    "route_path": route_path_name(decision.payload.path),
-                    "reason": decision.payload.reason,
-                    "rejected_statement_count": rejected_statement_count,
-                    "transaction_status": response.status,
-                }),
-            );
-            let response = Ok((
-                status,
-                Json(SqlExecuteResponse {
-                    status: "error",
-                    route_path: route_path_name(decision.payload.path).to_string(),
-                    reason: decision.payload.reason,
-                    transaction: Some(response),
-                    olap: None,
-                    rejected_statement_count,
-                    udf_results: None,
-                    udf_guardrail_status: None,
-                    udf_function_catalog,
-                    udf_guard_policies,
-                    udf_execution_plan,
-                    legacy_agg_results: None,
-                    planner_path: None,
-                    oltp_rows: None,
-                    olap_agg_results: None,
-                    columns: None,
-                    rows: None,
-                }),
-            ));
-            release_sql_data_plane_connection(&state, &connection_id);
-            return response;
-        }
-        transaction = Some(response);
-        // REQ-02: update DDL catalog when DDL statements touched the catalog
-        if transaction.as_ref().map(|r| r.touches_catalog).unwrap_or(false) {
-            let now_ms = now_unix_ms();
-            let mut catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
-            let mut ddl_warning: Option<String> = None;
-            for stmt in &ddl_snapshot {
-                if let Some(info) = parse_ddl_info(stmt) {
-                    match info.operation {
-                        "create" => {
-                            let result = catalog.record_create(
-                                &info.object_kind,
-                                &info.database_name,
-                                &info.schema_name,
-                                &info.object_name,
-                                stmt,
-                                now_ms,
-                                info.replace_ok,
-                            );
-                            if result == CatalogResult::AlreadyExists {
-                                // Record warning but continue — DML statements in the same
-                                // batch should still execute (e.g. INSERT after CREATE TABLE).
-                                ddl_warning = Some(format!(
-                                    "{} '{}' already exists",
-                                    info.object_kind, info.object_name
-                                ));
-                                append_runtime_audit_event(
-                                    &state,
-                                    AuditEventKind::Sql,
-                                    &principal,
-                                    "sql_execute",
-                                    "warning",
-                                    json!({
-                                        "route_scope": "sql/execute",
-                                        "warning": ddl_warning,
-                                    }),
-                                );
-                            } else {
-                                // Persist to WAL so this DDL survives a restart.
-                                persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
-                            }
-                        }
-                        "drop" => {
-                            catalog.record_drop(&info.database_name, &info.schema_name, &info.object_name);
-                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
-                        }
-                        "alter" => {
-                            catalog.record_alter(&info.database_name, &info.schema_name, &info.object_name, stmt, now_ms);
-                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            // If the entire batch is DDL-only and we got an AlreadyExists, return 409 now.
-            // If there are DML statements too, we fall through so they still execute.
-            let has_dml = ddl_snapshot.iter().any(|s| {
-                let u = s.trim_start().to_ascii_uppercase();
-                u.starts_with("INSERT")
-                    || u.starts_with("UPDATE")
-                    || u.starts_with("DELETE")
-                    || u.starts_with("SELECT")
-            });
-            if let Some(ref warn_msg) = ddl_warning {
-                if !has_dml {
-                    drop(catalog);
-                    let err_response = Ok((
-                        StatusCode::CONFLICT,
-                        Json(SqlExecuteResponse {
-                            status: "error",
-                            route_path: route_path_name(decision.payload.path).to_string(),
-                            reason: warn_msg.clone(),
-                            transaction: None,
-                            olap: None,
-                            rejected_statement_count: 0,
-                            udf_results: None,
-                            udf_guardrail_status: None,
-                            udf_function_catalog: vec![],
-                            udf_guard_policies: vec![],
-                            udf_execution_plan: vec![],
-                            legacy_agg_results: None,
-                            planner_path: None,
-                            oltp_rows: None,
-                            olap_agg_results: None,
-                            columns: None,
-                            rows: None,
-                        }),
-                    ));
-                    release_sql_data_plane_connection(&state, &connection_id);
-                    return err_response;
-                }
-                // Has DML: store the warning to attach to the final response below
-                drop(catalog);
-            }
-        }
-    }
-    // Execute DML (INSERT/UPDATE/DELETE) against the row store for ALL committed
-    // non-SELECT transactions — pure DML, mixed DDL+DML, etc. Each row is individually
-    // written and appended to the DML WAL so data survives a server restart.
-    if transaction.as_ref().map(|r| r.statements_executed > 0).unwrap_or(false) {
-        let has_dml = ddl_snapshot.iter().any(|s| {
-            let u = s.trim_start().to_ascii_uppercase();
-            u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
-        });
-        if has_dml {
-            let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
-            let xid = rs.begin_xid();
-            for stmt in &ddl_snapshot {
-                let upper = stmt.trim_start().to_ascii_uppercase();
-                if upper.starts_with("INSERT") {
-                    for (k, d, single_sql) in extract_all_insert_rows(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.insert(xid, &k, d);
-                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
-                    }
-                } else if upper.starts_with("UPDATE") {
-                    if let Some((k, d)) = extract_update_row_from_sql(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.insert(xid, &k, d);
-                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
-                    }
-                } else if upper.starts_with("DELETE") {
-                    if let Some(k) = extract_delete_key_from_sql(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.delete(xid, &k);
-                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
-                    }
-                }
-            }
-            rs.release_write_intents(xid);
-        }
-    }
-
-    if !olap_statements.is_empty() {
-        let query = olap_statements.join("; ");
-        olap = Some(execute_olap_query(query, req.max_rows));
-    }
-
-    // REQ-12: Detect legacy aggregate functions in OLAP SELECT statements and
-    // route them through eval_legacy_numeric_aggregation.
-    let legacy_agg_results: Option<Vec<LegacyAggResult>> = {
-        let mut agg_results: Vec<LegacyAggResult> = Vec::new();
-        // REQ-12: collect real numeric values from all ingest stores; fall back to synthetic sample.
-        let mut real_values: Vec<f64> = Vec::new();
-        for store in [
-            &state.ingest_csv_records,
-            &state.ingest_json_records,
-            &state.ingest_parquet_records,
-            &state.ingest_excel_records,
-        ] {
-            if let Ok(guard) = store.lock() {
-                for records in guard.values() {
-                    for rec in records {
-                        if let Ok(jv) = serde_json::from_str::<serde_json::Value>(&rec.payload) {
-                            if let Some(obj) = jv.as_object() {
-                                for v in obj.values() {
-                                    if let Some(n) = v.as_f64() { real_values.push(n); }
-                                }
-                            } else if let Some(n) = jv.as_f64() {
-                                real_values.push(n);
-                            }
-                        } else {
-                            for field in rec.payload.split(',') {
-                                if let Ok(f) = field.trim().parse::<f64>() { real_values.push(f); }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let sample_storage: Vec<f64>;
-        let sample: &[f64] = if real_values.is_empty() {
-            &[1.0, 2.0, 3.0, 4.0, 5.0]
-        } else {
-            sample_storage = real_values;
-            &sample_storage
-        };
-        for stmt in &olap_statements {
-            let upper = stmt.to_ascii_uppercase();
-            for &agg in SUPPORTED_LEGACY_AGGREGATIONS {
-                if upper.contains(&format!("{agg}(")) || upper.contains(&format!("{agg} (")) {
-                    let eval = eval_legacy_numeric_aggregation(agg, sample, None);
-                    agg_results.push(LegacyAggResult {
-                        aggregation: agg.to_string(),
-                        result: eval.as_ref().ok().copied(),
-                        error: eval.err(),
-                        source: "legacy_agg_olap_path",
-                    });
-                }
-            }
-        }
-        if agg_results.is_empty() { None } else { Some(agg_results) }
-    };
-
-    // S3-WS1-05: derive dominant planner path for the execute batch
-    let planner_path: Option<String> = {
-        use voltnuerongrid_exec::{QueryPlanner, QueryPath};
-        use voltnuerongrid_sql::parse_one;
-        let mut max_cost: f64 = f64::NEG_INFINITY;
-        let mut dominant: Option<String> = None;
-        for stmt in &olap_statements {
-            if let Ok(parsed) = parse_one(stmt) {
-                let plan = QueryPlanner::plan(&parsed);
-                let estimate = QueryPlanner::estimate_cost(&plan);
-                let path_str = match estimate.recommended_path {
-                    QueryPath::Olap => "olap",
-                    QueryPath::Hybrid => "hybrid",
-                    QueryPath::Oltp => "oltp",
-                    QueryPath::Unknown => continue,
-                };
-                if estimate.relative_cost > max_cost {
-                    max_cost = estimate.relative_cost;
-                    dominant = Some(path_str.to_string());
-                }
-            }
-        }
-        dominant
-    };
-
-    // S4-WS3-02: OLTP physical executor dispatch
-    let oltp_rows: Option<Vec<OltpRowResult>> =
-        if planner_path.as_deref() == Some("oltp") && !olap_statements.is_empty() {
-            let rs = state.row_store.lock().expect("row_store lock oltp select");
-            let limit = req.max_rows.unwrap_or(10_000).min(100_000);
-            let rows = execute_oltp_select(&olap_statements, &rs, limit);
-            if rows.is_empty() { None } else { Some(rows) }
-        } else {
-            None
-        };
-
-    // S3-WS1-05: vectorized OLAP executor dispatch — if planner says olap/hybrid,
-    // run filter_batch (predicate pushdown from WHERE clause) then aggregate_batch over a
-    // columnar scan of the committed PagedRowStore snapshot.
-    let olap_agg_results: Option<Vec<OlapVecAggResult>> =
-        if matches!(planner_path.as_deref(), Some("olap") | Some("hybrid")) {
-            use voltnuerongrid_store::columnar::{
-                vectorized_scan, aggregate_batch, filter_batch, VectorizedAggOp,
-            };
-            use voltnuerongrid_sql::{parse_one, Statement};
-            let rs = state.row_store.lock().expect("row_store lock olap dispatch");
-            let snapshot_xid = rs.current_xid();
-            // Collect into owned (String, HashMap) so the lock can be released before scan.
-            let rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
-                .scan_at_snapshot(snapshot_xid)
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
-            drop(rs);
-            let limit = req.max_rows.unwrap_or(10_000).min(100_000);
-            let (batch, _stats) = vectorized_scan(&rows, limit);
-            if batch.row_count() == 0 {
-                None
-            } else {
-                // S3-WS1-05: extract WHERE predicates from the first parseable SELECT
-                // and push them into filter_batch before aggregating.
-                let predicates = olap_statements.iter().find_map(|sql| {
-                    if let Ok(Statement::Select(sel)) = parse_one(sql) {
-                        sel.where_clause
-                            .as_deref()
-                            .and_then(parse_where_predicates)
-                    } else {
-                        None
-                    }
-                });
-                let filtered = match predicates {
-                    Some(preds) if !preds.is_empty() => filter_batch(&batch, &preds),
-                    _ => batch,
-                };
-                if filtered.row_count() == 0 {
-                    None
-                } else {
-                    // Apply Count on every column in the filtered batch.
-                    let mut ops = std::collections::HashMap::new();
-                    for col_name in filtered.columns.keys() {
-                        ops.insert(col_name.clone(), VectorizedAggOp::Count);
-                    }
-                    let count_results = aggregate_batch(&filtered, &ops);
-                    let mut agg_out: Vec<OlapVecAggResult> = count_results
-                        .into_iter()
-                        .map(|(col, res)| OlapVecAggResult {
-                            column: col,
-                            op: format!("{:?}", res.op).to_ascii_lowercase(),
-                            value: res.value,
-                            row_count: res.row_count,
-                        })
-                        .collect();
-                    agg_out.sort_by(|a, b| a.column.cmp(&b.column));
-                    Some(agg_out)
-                }
-            }
-        } else {
-            None
-        };
-
-    // Build client-visible columns + rows from the row store for any SELECT query.
-    // This is the primary path the UI uses to display query results.
-    let (result_columns, result_rows): (Option<Vec<serde_json::Value>>, Option<Vec<serde_json::Value>>) =
-        if !olap_statements.is_empty() {
-            use voltnuerongrid_sql::{parse_one, Statement};
-            let rs = state.row_store.lock().expect("row_store lock select_result_builder");
-            let snapshot_xid = rs.current_xid();
-            let all_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
-                .scan_at_snapshot(snapshot_xid)
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
-            drop(rs);
-            let limit = req.max_rows.unwrap_or(10_000).min(100_000);
-            // final ordered column list and rows for this response
-            let mut ordered_cols: Vec<String> = Vec::new();
-            let mut out_rows: Vec<serde_json::Value> = Vec::new();
-
-            for stmt_str in &olap_statements {
-                if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
-                    // Determine which table to filter on (FROM clause table name)
-                    let filter_table: Option<String> = sel.table.as_deref().map(|f| {
-                        f.split_ascii_whitespace()
-                            .next()
-                            .unwrap_or(f)
-                            .rsplit('.')
-                            .next()
-                            .unwrap_or(f)
-                            .to_ascii_lowercase()
-                    });
-
-                    // Fetch real DDL column names for this table (CREATE TABLE definition order).
-                    // These are used to (a) build the column header list in the right order,
-                    // and (b) remap positional `col_N` storage keys back to readable names.
-                    let ddl_cols: Vec<String> = filter_table.as_deref().map(|tbl| {
-                        let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock result_builder");
-                        catalog.get(tbl)
-                            .map(|e| extract_column_names_from_ddl(&e.original_statement))
-                            .unwrap_or_default()
-                    }).unwrap_or_default();
-
-                    // Build WHERE key filter (RHS of `col = 'val'`)
-                    let key_filter: Option<String> = sel.where_clause.as_deref().and_then(|w| {
-                        let eq = w.find('=')?;
-                        let rhs = w[eq + 1..].trim();
-                        let val = rhs.trim_matches('\'').trim_matches('"').trim().to_string();
-                        if val.is_empty() { None } else { Some(val) }
-                    });
-
-                    // Determine the projected column list from SELECT clause.
-                    // `sel.columns` should contain ["*"] or explicit names.
-                    let select_star = sel.columns.is_empty()
-                        || sel.columns.iter().any(|c| c == "*");
-
-                    for (key, data) in &all_rows {
-                        if out_rows.len() >= limit { break; }
-                        // Filter by table name
-                        let row_table = data.get("__table").map(|s| s.to_ascii_lowercase());
-                        if let Some(ft) = &filter_table {
-                            if row_table.as_deref() != Some(ft.as_str()) { continue; }
-                        }
-                        // Filter by WHERE key
-                        if let Some(kf) = &key_filter {
-                            if !key.contains(kf.as_str()) { continue; }
-                        }
-
-                        // Build row object using DDL column order when available.
-                        // Remap "col_N" storage keys to real DDL column names.
-                        let mut row_obj = serde_json::Map::new();
-
-                        if !ddl_cols.is_empty() && select_star {
-                            // Emit columns in CREATE TABLE order; remap col_N if needed.
-                            for (idx, col_name) in ddl_cols.iter().enumerate() {
-                                // Try real column name first, then positional fallback key.
-                                let val = data.get(col_name)
-                                    .or_else(|| data.get(&format!("col_{idx}")))
-                                    .cloned()
-                                    .unwrap_or_default();
-                                row_obj.insert(col_name.clone(), serde_json::Value::String(val));
-                                if !ordered_cols.contains(col_name) {
-                                    ordered_cols.push(col_name.clone());
-                                }
-                            }
-                        } else {
-                            // No DDL info: fall back to sorted storage keys, still readable.
-                            let mut sorted_keys: Vec<&str> = data.keys()
-                                .filter(|k| !k.starts_with("__"))
-                                .map(|k| k.as_str())
-                                .collect();
-                            sorted_keys.sort();
-                            for col in &sorted_keys {
-                                row_obj.insert((*col).to_string(), serde_json::Value::String(data[*col].clone()));
-                                if !ordered_cols.contains(&(*col).to_string()) {
-                                    ordered_cols.push((*col).to_string());
-                                }
-                            }
-                        }
-
-                        if !row_obj.is_empty() {
-                            out_rows.push(serde_json::Value::Object(row_obj));
-                        }
-                    }
-                }
-            }
-            if out_rows.is_empty() {
-                (None, None)
-            } else {
-                let cols: Vec<serde_json::Value> = ordered_cols
-                    .iter()
-                    .map(|c| serde_json::json!({"name": c, "data_type": "text"}))
-                    .collect();
-                (Some(cols), Some(out_rows))
-            }
-        } else {
-            (None, None)
-        };
-
-    let response = SqlExecuteResponse {
-        status: "ok",
-        route_path: route_path_name(decision.payload.path).to_string(),
-        reason: decision.payload.reason,
-        transaction,
-        olap,
-        rejected_statement_count,
-        udf_results: if udf_results.is_empty() {
-            None
-        } else {
-            Some(udf_results)
-        },
-        udf_guardrail_status: Some("passed".to_string()),
-        udf_function_catalog,
-        udf_guard_policies,
-        udf_execution_plan,
-        legacy_agg_results,
-        planner_path,
-        oltp_rows,
-        olap_agg_results,
-        columns: result_columns,
-        rows: result_rows,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Sql,
-        &principal,
-        "sql_execute",
-        "ok",
-        json!({
-            "route_scope": "sql/execute",
-            "route_path": response.route_path,
-            "reason": response.reason,
-            "rejected_statement_count": response.rejected_statement_count,
-            "udf_guardrail_status": response.udf_guardrail_status,
-        }),
-    );
-    release_sql_data_plane_connection(&state, &connection_id);
-    Ok((
-        StatusCode::OK,
-        Json(response),
-    ))
-}
-
 async fn olap_query(Json(req): Json<OlapQueryRequest>) -> Json<OlapQueryResponse> {
     Json(execute_olap_query(req.query, req.max_rows))
 }
@@ -8969,1029 +5530,6 @@ async fn failover_simulate(
             .unwrap_or_else(|| "manual_failover_simulation".to_string()),
         requested_by: req.requested_by.unwrap_or_else(|| "unknown".to_string()),
         handoff_report,
-    }))
-}
-
-async fn admin_cluster_topology(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<AdminClusterTopologyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    Ok((StatusCode::OK, Json(cluster_topology_snapshot(&state))))
-}
-
-async fn admin_sql_transaction_control(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<AdminTransactionControlRequest>,
-) -> Result<(StatusCode, Json<AdminTransactionControlResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    let action = req.action.to_ascii_lowercase();
-    let now_ms = now_unix_ms();
-    let mut affected_count = 0usize;
-
-    match action.as_str() {
-        "list" => {}
-        "commit" | "rollback" => {
-            let Some(transaction_id) = req.transaction_id.as_deref() else {
-                return Ok((StatusCode::BAD_REQUEST, Json(AdminTransactionControlResponse {
-                    status: "error",
-                    action,
-                    affected_count: 0,
-                    active_count: 0,
-                    transactions: Vec::new(),
-                })));
-            };
-
-            let mut acid = state.acid_transactions.lock().expect("acid_transactions admin control lock");
-            affected_count = if action == "commit" {
-                usize::from(acid.commit(transaction_id, now_ms))
-            } else {
-                usize::from(acid.rollback(transaction_id, now_ms))
-            };
-            drop(acid);
-
-            if action == "rollback" {
-                let mut lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin rollback lock");
-                let mut wait_graph = state.pessimistic_lock_waits.lock().expect("pessimistic_lock_waits admin rollback lock");
-                let released = release_locks_for_transaction(&mut lock_table, &mut wait_graph, transaction_id);
-                if released > 0 {
-                    state.pessimistic_lock_metrics.lock_releases.fetch_add(released as u64, Ordering::Relaxed);
-                }
-            }
-
-            append_audit_event(
-                &state,
-                AuditEventKind::Sql,
-                "admin",
-                "admin_sql_transaction_control",
-                if affected_count > 0 { "ok" } else { "not_found" },
-                &json!({
-                    "action": action,
-                    "transaction_id": transaction_id,
-                    "reason": req.reason,
-                    "affected_count": affected_count,
-                })
-                .to_string(),
-            );
-        }
-        _ => {
-            return Ok((StatusCode::BAD_REQUEST, Json(AdminTransactionControlResponse {
-                status: "error",
-                action,
-                affected_count: 0,
-                active_count: 0,
-                transactions: Vec::new(),
-            })));
-        }
-    }
-
-    let acid = state.acid_transactions.lock().expect("acid_transactions admin response lock");
-    let active_transactions: Vec<AcidTxEntry> = acid.active_transactions().into_iter().map(|entry| entry.clone()).collect();
-    let active_count = active_transactions.len();
-    Ok((StatusCode::OK, Json(AdminTransactionControlResponse {
-        status: "ok",
-        action,
-        affected_count,
-        active_count,
-        transactions: active_transactions,
-    })))
-}
-
-async fn admin_sql_lock_control(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<AdminLockControlRequest>,
-) -> Result<(StatusCode, Json<AdminLockControlResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    let action = req.action.to_ascii_lowercase();
-    let mut released_lock_count = 0usize;
-    let mut affected_transactions = Vec::new();
-
-    {
-        let mut lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin control lock");
-        let mut wait_graph = state.pessimistic_lock_waits.lock().expect("pessimistic_lock_waits admin control lock");
-
-        match action.as_str() {
-            "list" => {}
-            "kill_lock" => {
-                if let Some(lock_id) = req.lock_id.as_deref() {
-                    if let Some(record) = lock_table.remove(lock_id) {
-                        affected_transactions.push(record.transaction_id.clone());
-                        wait_graph.retain(|waiting_tx, holder_tx| waiting_tx != &record.transaction_id && holder_tx != &record.transaction_id);
-                        released_lock_count = 1;
-                    }
-                } else if let Some(transaction_id) = req.transaction_id.as_deref() {
-                    released_lock_count = release_locks_for_transaction(&mut lock_table, &mut wait_graph, transaction_id);
-                    if released_lock_count > 0 {
-                        affected_transactions.push(transaction_id.to_string());
-                    }
-                } else {
-                    return Ok((StatusCode::BAD_REQUEST, Json(AdminLockControlResponse {
-                        status: "error",
-                        action,
-                        released_lock_count: 0,
-                        active_lock_count: lock_table.len(),
-                        locks: lock_table.values().cloned().collect(),
-                        affected_transactions: Vec::new(),
-                    })));
-                }
-            }
-            "kill_deadlock" => {
-                let Some(transaction_id) = req.transaction_id.as_deref() else {
-                    return Ok((StatusCode::BAD_REQUEST, Json(AdminLockControlResponse {
-                        status: "error",
-                        action,
-                        released_lock_count: 0,
-                        active_lock_count: lock_table.len(),
-                        locks: lock_table.values().cloned().collect(),
-                        affected_transactions: Vec::new(),
-                    })));
-                };
-                released_lock_count = release_locks_for_transaction(&mut lock_table, &mut wait_graph, transaction_id);
-                if released_lock_count > 0 {
-                    affected_transactions.push(transaction_id.to_string());
-                }
-                let mut acid = state.acid_transactions.lock().expect("acid_transactions deadlock victim lock");
-                let _ = acid.rollback(transaction_id, now_unix_ms());
-            }
-            _ => {
-                return Ok((StatusCode::BAD_REQUEST, Json(AdminLockControlResponse {
-                    status: "error",
-                    action,
-                    released_lock_count: 0,
-                    active_lock_count: lock_table.len(),
-                    locks: lock_table.values().cloned().collect(),
-                    affected_transactions: Vec::new(),
-                })));
-            }
-        }
-
-        if released_lock_count > 0 {
-            state.pessimistic_lock_metrics.lock_releases.fetch_add(released_lock_count as u64, Ordering::Relaxed);
-        }
-    }
-
-    let lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin control response lock");
-    let locks: Vec<PessimisticLockRecord> = lock_table.values().cloned().collect();
-    drop(lock_table);
-    append_audit_event(
-        &state,
-        AuditEventKind::Sql,
-        "admin",
-        "admin_sql_lock_control",
-        "ok",
-        &json!({
-            "action": action,
-            "released_lock_count": released_lock_count,
-            "reason": req.reason,
-            "affected_transactions": affected_transactions,
-        })
-        .to_string(),
-    );
-    Ok((StatusCode::OK, Json(AdminLockControlResponse {
-        status: "ok",
-        action,
-        released_lock_count,
-        active_lock_count: locks.len(),
-        locks,
-        affected_transactions,
-    })))
-}
-
-async fn admin_cluster_node_manage(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<AdminClusterNodeManageRequest>,
-) -> Result<(StatusCode, Json<AdminClusterNodeManageResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    let action = req.action.to_ascii_lowercase();
-    let mut migrated_transactions = 0usize;
-    let mut migrated_sessions = 0usize;
-
-    match action.as_str() {
-        "add" => {
-            let mut nodes = state.cluster_nodes.lock().expect("cluster_nodes add lock");
-            let entry = nodes.entry(req.node_id.clone()).or_insert(ClusterNodeRuntime {
-                node_id: req.node_id.clone(),
-                role: req.role.clone().unwrap_or_else(|| "follower".to_string()),
-                status: req.desired_status.clone().unwrap_or_else(|| "active".to_string()),
-                total_cpu_cores: req.total_cpu_cores.unwrap_or_else(default_node_cpu_cores),
-                total_ram_mb: req.total_ram_mb.unwrap_or_else(default_node_ram_mb),
-                draining: false,
-                last_heartbeat_ms: now_unix_ms_u64(),
-            });
-            entry.last_heartbeat_ms = now_unix_ms_u64();
-            drop(nodes);
-            let mut replicas = state.replica_replay_states.lock().expect("replica_replay_states add lock");
-            replicas.entry(req.node_id.clone()).or_insert_with(|| ReplicaReplayState::new(&req.node_id));
-        }
-        "remove" => {
-            let target_node_id = {
-                let nodes = state.cluster_nodes.lock().expect("cluster_nodes remove select lock");
-                choose_migration_target(&nodes, &req.node_id, req.target_node_id.as_deref())
-            };
-
-            let Some(target_node_id) = target_node_id else {
-                return Ok((StatusCode::CONFLICT, Json(AdminClusterNodeManageResponse {
-                    status: "error",
-                    action,
-                    node_id: req.node_id,
-                    cluster_size: 0,
-                    migrated_transactions: 0,
-                    migrated_sessions: 0,
-                    message: "no viable target node available for drain/remove".to_string(),
-                })));
-            };
-
-            {
-                let mut acid = state.acid_transactions.lock().expect("acid_transactions node manage lock");
-                migrated_transactions = acid.reassign_active_node(&req.node_id, &target_node_id);
-            }
-            {
-                let mut sessions = state.driver_sessions.lock().expect("driver_sessions node manage lock");
-                migrated_sessions = migrate_driver_sessions(&mut sessions, &req.node_id, &target_node_id);
-            }
-            {
-                let mut nodes = state.cluster_nodes.lock().expect("cluster_nodes remove lock");
-                nodes.remove(&req.node_id);
-                if let Some(target) = nodes.get_mut(&target_node_id) {
-                    target.status = "active".to_string();
-                    target.draining = false;
-                    if *state.leader_node_id.lock().expect("leader_node_id remove lock") == req.node_id {
-                        target.role = "leader".to_string();
-                    }
-                }
-            }
-            {
-                let mut replicas = state.replica_replay_states.lock().expect("replica_replay_states remove lock");
-                replicas.remove(&req.node_id);
-            }
-            {
-                let mut leader = state.leader_node_id.lock().expect("leader_node_id node manage lock");
-                if *leader == req.node_id {
-                    *leader = target_node_id;
-                }
-            }
-        }
-        _ => {
-            return Ok((StatusCode::BAD_REQUEST, Json(AdminClusterNodeManageResponse {
-                status: "error",
-                action,
-                node_id: req.node_id,
-                cluster_size: 0,
-                migrated_transactions: 0,
-                migrated_sessions: 0,
-                message: "unsupported action; expected add or remove".to_string(),
-            })));
-        }
-    }
-
-    let cluster_size = state.cluster_nodes.lock().expect("cluster_nodes count lock").len();
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        "admin",
-        "admin_cluster_node_manage",
-        "ok",
-        &json!({
-            "action": action,
-            "node_id": req.node_id,
-            "reason": req.reason,
-            "migrated_transactions": migrated_transactions,
-            "migrated_sessions": migrated_sessions,
-            "cluster_size": cluster_size,
-        })
-        .to_string(),
-    );
-    Ok((StatusCode::OK, Json(AdminClusterNodeManageResponse {
-        status: "ok",
-        action,
-        node_id: req.node_id,
-        cluster_size,
-        migrated_transactions,
-        migrated_sessions,
-        message: "cluster membership updated".to_string(),
-    })))
-}
-
-async fn sre_reliability_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<SreReliabilityStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/reliability",
-        PrivilegeAction::Read,
-    )?;
-    Ok(Json(SreReliabilityStatusResponse {
-        status: "ok",
-        service_health: "healthy",
-        failure_budget: failure_budget_snapshot(12.5),
-        rate_limit_policy: rate_limit_policy_snapshot(540),
-    }))
-}
-
-async fn sre_rate_limit_check(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<RateLimitCheckRequest>,
-) -> Result<Json<RateLimitCheckResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/rate_limit",
-        PrivilegeAction::Execute,
-    )?;
-    let requested_units = req.requested_units.unwrap_or(1).max(1);
-    let (allowed, remaining_units, reason) = evaluate_rate_limit(
-        req.current_minute_count,
-        requested_units,
-        600,
-        50,
-    );
-    append_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &operator.operator_id,
-        "sre_rate_limit_check",
-        if allowed { "allow" } else { "deny" },
-        &json!({
-            "current_minute_count": req.current_minute_count,
-            "requested_units": requested_units,
-            "remaining_units": remaining_units,
-            "reason": reason,
-        })
-        .to_string(),
-    );
-    Ok(Json(RateLimitCheckResponse {
-        status: "ok",
-        allowed,
-        remaining_units,
-        reason: reason.to_string(),
-    }))
-}
-
-async fn sre_failure_budget_alerts(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<FailureBudgetAlertQuery>,
-) -> Result<Json<FailureBudgetAlertResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/failure_budget",
-        PrivilegeAction::Read,
-    )?;
-    let consumed_percent = query.consumed_percent.unwrap_or(12.5).clamp(0.0, 100.0);
-    let burn_rate = query.burn_rate.unwrap_or((consumed_percent / 10.0).max(0.1));
-    let alert = evaluate_failure_budget_alert(consumed_percent, burn_rate);
-    Ok(Json(alert))
-}
-
-async fn sre_dr_hook_policy(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<DrHookPolicyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.dr_hooks",
-        "dr_hooks/policy",
-        PrivilegeAction::Read,
-    )?;
-    let tracked_hooks = state
-        .dr_hook_policy_state
-        .lock()
-        .map(|value| value.hooks.len())
-        .unwrap_or(0);
-    let policy = state.dr_hook_policy_config.as_ref();
-    Ok(Json(DrHookPolicyResponse {
-        status: "ok",
-        policy: DrHookPolicyContract {
-            min_mode: policy.min_mode,
-            cooldown_seconds: policy.cooldown_seconds,
-            max_retries: policy.max_retries,
-            base_backoff_ms: policy.base_backoff_ms,
-            max_backoff_ms: policy.max_backoff_ms,
-            allowed_hooks: policy.allowed_hooks.clone(),
-            tracked_hooks,
-        },
-    }))
-}
-
-async fn sre_dr_hook_retry_plan(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<DrHookRetryPlanQuery>,
-) -> Result<Json<DrHookRetryPlanResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.dr_hooks",
-        "dr_hooks/retry_plan",
-        PrivilegeAction::Read,
-    )?;
-    let policy = state.dr_hook_policy_config.as_ref();
-    let attempts = query.attempts.unwrap_or(5).clamp(1, 10);
-    let hook = query.hook.trim().to_ascii_lowercase();
-    let accepted = policy
-        .allowed_hooks
-        .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(&hook));
-    if !accepted {
-        return Ok(Json(DrHookRetryPlanResponse {
-            status: "ok",
-            hook,
-            accepted: false,
-            reason: "unsupported_dr_hook".to_string(),
-            steps: Vec::new(),
-        }));
-    }
-    let steps = build_retry_plan(policy, attempts);
-    Ok(Json(DrHookRetryPlanResponse {
-        status: "ok",
-        hook,
-        accepted: true,
-        reason: "plan_generated".to_string(),
-        steps,
-    }))
-}
-
-async fn sre_dr_hook_schedule(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<DrHookScheduleRequest>,
-) -> Result<Json<DrHookScheduleResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.dr_hooks",
-        "dr_hooks/schedule",
-        PrivilegeAction::Execute,
-    )?;
-    let requested_by = operator.operator_id.as_str();
-    let task = enqueue_dr_hook_task(
-        &state,
-        &req.hook,
-        req.scope.as_deref(),
-        req.dry_run.unwrap_or(false),
-        requested_by,
-        req.reason.as_deref().unwrap_or("manual_sre_schedule"),
-    );
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        requested_by,
-        "sre_dr_hook_schedule",
-        "queued",
-        &json!({
-            "task_id": task.task_id,
-            "hook": task.hook,
-            "scope": task.scope,
-            "dry_run": task.dry_run,
-        })
-        .to_string(),
-    );
-    let queue_depth = state.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(0);
-    Ok(Json(DrHookScheduleResponse {
-        status: "ok",
-        task,
-        queue_depth,
-    }))
-}
-
-async fn sre_dr_hook_trigger(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<DrHookTriggerRequest>,
-) -> Result<Json<DrHookTriggerResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.dr_hooks",
-        "dr_hooks/trigger",
-        PrivilegeAction::Execute,
-    )?;
-    let requested_by = operator.operator_id.as_str();
-    let execution = execute_dr_hook(
-        &state,
-        &req.hook,
-        req.scope.as_deref(),
-        req.dry_run.unwrap_or(true),
-    );
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        requested_by,
-        "sre_dr_hook_trigger",
-        execution.status,
-        &json!({
-            "execution_id": execution.execution_id,
-            "hook": execution.hook,
-            "scope": execution.scope,
-            "dry_run": execution.dry_run,
-            "policy_decision": execution.policy_decision,
-            "cooldown_remaining_ms": execution.cooldown_remaining_ms,
-            "retry_backoff_ms": execution.retry_backoff_ms,
-            "retry_attempt": execution.retry_attempt,
-            "details": execution.details,
-        })
-        .to_string(),
-    );
-    Ok(Json(DrHookTriggerResponse {
-        status: "ok",
-        execution,
-    }))
-}
-
-async fn sre_dr_hook_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<DrHookStatusQuery>,
-) -> Result<Json<DrHookStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.dr_hooks",
-        "dr_hooks/status",
-        PrivilegeAction::Read,
-    )?;
-    let max_items = query.max_items.unwrap_or(50).min(500);
-    let records = latest_dr_hook_records(&state, max_items);
-    Ok(Json(DrHookStatusResponse {
-        status: "ok",
-        total_records: records.len(),
-        records,
-    }))
-}
-
-async fn sre_failure_signal(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<FailureSignalRequest>,
-) -> Result<Json<FailureSignalResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/failure_signal",
-        PrivilegeAction::Execute,
-    )?;
-    let signal = ClusterFailureSignal {
-        signal_id: format!("sig-{}", DR_HOOK_COUNTER.fetch_add(1, Ordering::Relaxed)),
-        node_id: req.node_id.trim().to_string(),
-        transport: req.transport.trim().to_string(),
-        failure_type: req.failure_type.trim().to_ascii_lowercase(),
-        severity: req.severity.trim().to_ascii_lowercase(),
-        message: req
-            .message
-            .unwrap_or_else(|| "no_message_provided".to_string())
-            .trim()
-            .to_string(),
-        observed_unix_ms: now_unix_ms(),
-        resolved: false,
-        resolved_by: None,
-        resolved_unix_ms: None,
-        resolution_note: None,
-    };
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
-        signals.push(signal.clone());
-    }
-    record_transport_mutation(
-        &state,
-        &state.node_id,
-        "*",
-        "failure_signal",
-        "cluster_failure_signal",
-        &signal.signal_id,
-        MutationOp::Insert,
-        json!({
-            "signal_id": signal.signal_id,
-            "node_id": signal.node_id,
-            "transport": signal.transport,
-            "failure_type": signal.failure_type,
-            "severity": signal.severity,
-            "observed_by": operator.operator_id.as_str(),
-        }),
-    );
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_failure_signal",
-        "observed",
-        &json!({
-            "signal_id": signal.signal_id,
-            "node_id": signal.node_id,
-            "transport": signal.transport,
-            "failure_type": signal.failure_type,
-            "severity": signal.severity,
-        })
-        .to_string(),
-    );
-
-    let queued_remediation_task = if signal.severity == "critical"
-        && signal.failure_type == "node_unreachable"
-    {
-        Some(enqueue_dr_hook_task(
-            &state,
-            "failover_drill",
-            Some("cluster"),
-            false,
-            "auto_sre",
-            "critical_node_unreachable_signal",
-        ))
-    } else {
-        None
-    };
-
-    Ok(Json(FailureSignalResponse {
-        status: "ok",
-        signal,
-        queued_remediation_task,
-    }))
-}
-
-async fn sre_failure_reconcile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<FailureReconcileRequest>,
-) -> Result<Json<FailureReconcileResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/failure_reconcile",
-        PrivilegeAction::Execute,
-    )?;
-    let mut resolved_count = 0usize;
-    let now = now_unix_ms();
-    let selected_ids = req.signal_ids.unwrap_or_default();
-    let resolve_all_critical = req.resolve_all_critical.unwrap_or(false);
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
-        for signal in signals.iter_mut() {
-            if signal.resolved {
-                continue;
-            }
-            let targeted = if resolve_all_critical {
-                signal.severity.eq_ignore_ascii_case("critical")
-            } else {
-                selected_ids.iter().any(|id| id == &signal.signal_id)
-            };
-            if targeted {
-                signal.resolved = true;
-                signal.resolved_by = Some(operator.operator_id.clone());
-                signal.resolved_unix_ms = Some(now);
-                signal.resolution_note = req.note.clone();
-                resolved_count += 1;
-            }
-        }
-    }
-    let unresolved_critical_count = state
-        .cluster_failure_signals
-        .lock()
-        .map(|signals| {
-            signals
-                .iter()
-                .filter(|s| s.severity.eq_ignore_ascii_case("critical") && !s.resolved)
-                .count()
-        })
-        .unwrap_or(usize::MAX);
-    if resolved_count > 0 {
-        record_transport_mutation(
-            &state,
-            &state.node_id,
-            "*",
-            "failure_reconcile",
-            "cluster_failure_signal",
-            &format!("reconcile-{now}"),
-            MutationOp::Update,
-            json!({
-                "resolved_count": resolved_count,
-                "resolved_by": operator.operator_id.as_str(),
-                "resolve_all_critical": resolve_all_critical,
-                "unresolved_critical_count": unresolved_critical_count,
-            }),
-        );
-    }
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_failure_reconcile",
-        "ok",
-        &json!({
-            "resolved_count": resolved_count,
-            "unresolved_critical_count": unresolved_critical_count,
-            "resolve_all_critical": resolve_all_critical,
-        })
-        .to_string(),
-    );
-    Ok(Json(FailureReconcileResponse {
-        status: "ok",
-        resolved_count,
-        unresolved_critical_count,
-    }))
-}
-
-async fn sre_gate_evaluate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<SreGateEvaluationResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/gate",
-        PrivilegeAction::Read,
-    )?;
-    Ok(Json(build_sre_gate_evaluation(&state)))
-}
-
-async fn sre_gate_export(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<SreGateExportRequest>,
-) -> Result<Json<SreGateExportResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/gate",
-        PrivilegeAction::Manage,
-    )?;
-    let evaluation = build_sre_gate_evaluation(&state);
-    let output_path = req
-        .output_path
-        .unwrap_or_else(|| "tests/kpi/results/ws12/gate-fail-report.json".to_string());
-    export_gate_report(&output_path, &evaluation);
-    Ok(Json(SreGateExportResponse {
-        status: "ok",
-        output_path,
-        gate_result: evaluation.gate_result,
-    }))
-}
-
-async fn sre_cache_set(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<CacheSetRequest>,
-) -> Result<Json<CacheWriteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/cache",
-        PrivilegeAction::Execute,
-    )?;
-
-    let now_ms = now_unix_ms_u64();
-    let result = state
-        .distributed_cache
-        .lock()
-        .expect("cache manager lock")
-        .set(
-            req.partition_id.as_str(),
-            req.key.clone(),
-            req.value,
-            req.ttl_ms,
-            now_ms,
-        );
-
-    let response = CacheWriteResponse {
-        status: if result.is_ok() { "ok" } else { "error" },
-        partition_id: req.partition_id.clone(),
-        key: req.key.clone(),
-        error: result.err().map(|error| error.to_string()),
-    };
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_cache_set",
-        response.status,
-        &json!({
-            "partition_id": response.partition_id,
-            "key": response.key,
-            "ttl_ms": req.ttl_ms,
-            "error": response.error,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(response))
-}
-
-async fn sre_cache_get(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<CacheGetQuery>,
-) -> Result<Json<CacheGetResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/cache",
-        PrivilegeAction::Read,
-    )?;
-
-    let now_ms = now_unix_ms_u64();
-    let result = state
-        .distributed_cache
-        .lock()
-        .expect("cache manager lock")
-        .get(query.partition_id.as_str(), query.key.as_str(), now_ms);
-
-    let response = match result {
-        Ok(value) => CacheGetResponse {
-            status: "ok",
-            partition_id: query.partition_id.clone(),
-            key: query.key.clone(),
-            hit: value.is_some(),
-            value,
-            error: None,
-        },
-        Err(error) => CacheGetResponse {
-            status: "error",
-            partition_id: query.partition_id.clone(),
-            key: query.key.clone(),
-            hit: false,
-            value: None,
-            error: Some(error.to_string()),
-        },
-    };
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_cache_get",
-        response.status,
-        &json!({
-            "partition_id": response.partition_id,
-            "key": response.key,
-            "hit": response.hit,
-            "error": response.error,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(response))
-}
-
-async fn sre_cache_invalidate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<CacheInvalidateRequest>,
-) -> Result<Json<CacheInvalidateResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/cache",
-        PrivilegeAction::Execute,
-    )?;
-
-    let result = state
-        .distributed_cache
-        .lock()
-        .expect("cache manager lock")
-        .invalidate(req.partition_id.as_str(), req.key.as_str());
-
-    let response = match result {
-        Ok(removed) => CacheInvalidateResponse {
-            status: "ok",
-            partition_id: req.partition_id.clone(),
-            key: req.key.clone(),
-            removed,
-            error: None,
-        },
-        Err(error) => CacheInvalidateResponse {
-            status: "error",
-            partition_id: req.partition_id.clone(),
-            key: req.key.clone(),
-            removed: false,
-            error: Some(error.to_string()),
-        },
-    };
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_cache_invalidate",
-        response.status,
-        &json!({
-            "partition_id": response.partition_id,
-            "key": response.key,
-            "removed": response.removed,
-            "error": response.error,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(response))
-}
-
-async fn sre_cache_rebalance(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<CacheRebalanceResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/cache",
-        PrivilegeAction::Execute,
-    )?;
-
-    let now_ms = now_unix_ms_u64();
-    let results = state
-        .distributed_cache
-        .lock()
-        .expect("cache manager lock")
-        .rebalance_all(now_ms);
-    let entries_evicted: usize = results.iter().map(|result| result.entries_evicted).sum();
-
-    let response = CacheRebalanceResponse {
-        status: "ok",
-        partition_count: results.len(),
-        rebalanced_partitions: results.len(),
-        entries_evicted,
-    };
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_cache_rebalance",
-        "ok",
-        &json!({
-            "partition_count": response.partition_count,
-            "entries_evicted": response.entries_evicted,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(response))
-}
-
-async fn sre_cache_metrics(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<CacheMetricsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/cache",
-        PrivilegeAction::Read,
-    )?;
-
-    let guard = state.distributed_cache.lock().expect("cache manager lock");
-    let partitions = guard
-        .all_stats()
-        .into_iter()
-        .map(|partition| CachePartitionMetricsResponse {
-            partition_id: partition.partition_id,
-            entry_count: partition.entry_count,
-            total_hits: partition.total_hits,
-            total_misses: partition.total_misses,
-            total_evictions: partition.total_evictions,
-            circuit_breaker_state: partition.circuit_breaker_state,
-            hit_ratio: partition.hit_ratio,
-            last_rebalance_ms: partition.last_rebalance_ms,
-        })
-        .collect::<Vec<_>>();
-
-    Ok(Json(CacheMetricsResponse {
-        status: "ok",
-        partition_count: guard.partition_count(),
-        total_entries: guard.total_entry_count(),
-        partitions,
     }))
 }
 
@@ -10505,401 +6043,6 @@ async fn cache_redis_command(
     Ok(Json(response))
 }
 
-async fn sre_driver_pool_acquire(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<PoolAcquireRequest>,
-) -> Result<Json<PoolAcquireResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/driver_pool",
-        PrivilegeAction::Execute,
-    )?;
-    let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
-
-    let (acquire_state, connection_id, error, stats) = {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
-        let acquire_result = pool.acquire(now_ms);
-        let (acquire_state, connection_id, error) = match acquire_result {
-            Ok(connection_id) => ("acquired", Some(connection_id), None),
-            Err(error) => (
-                pool_acquire_error_state(&error),
-                None,
-                Some(error.to_string()),
-            ),
-        };
-        let stats = pool_stats_response(&pool.pool_stats(now_ms));
-        (acquire_state, connection_id, error, stats)
-    };
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_driver_pool_acquire",
-        if error.is_none() { "ok" } else { "error" },
-        &json!({
-            "acquire_state": acquire_state,
-            "connection_id": connection_id,
-            "error": error,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(PoolAcquireResponse {
-        status: "ok",
-        acquire_state,
-        connection_id,
-        error,
-        stats,
-    }))
-}
-
-async fn sre_driver_pool_release(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<PoolReleaseRequest>,
-) -> Result<Json<PoolReleaseResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/driver_pool",
-        PrivilegeAction::Execute,
-    )?;
-    let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
-
-    let (released, stats) = {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
-        let released = pool.release(req.connection_id.as_str(), now_ms);
-        let stats = pool_stats_response(&pool.pool_stats(now_ms));
-        (released, stats)
-    };
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_driver_pool_release",
-        if released { "ok" } else { "error" },
-        &json!({
-            "connection_id": req.connection_id,
-            "released": released,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(PoolReleaseResponse {
-        status: "ok",
-        released,
-        stats,
-    }))
-}
-
-async fn sre_driver_pool_failure(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<PoolFailureRequest>,
-) -> Result<Json<PoolFailureResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/driver_pool",
-        PrivilegeAction::Execute,
-    )?;
-    let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
-
-    let stats = {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
-        pool.mark_failed(
-            req.connection_id.as_str(),
-            req.error
-                .clone()
-                .unwrap_or_else(|| "simulated_failure".to_string()),
-            now_ms,
-        );
-        pool_stats_response(&pool.pool_stats(now_ms))
-    };
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_driver_pool_failure",
-        "ok",
-        &json!({
-            "connection_id": req.connection_id,
-            "error": req.error,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(PoolFailureResponse {
-        status: "ok",
-        marked_failed: true,
-        stats,
-    }))
-}
-
-async fn sre_driver_pool_recover(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<PoolRecoverRequest>,
-) -> Result<Json<PoolRecoverResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/driver_pool",
-        PrivilegeAction::Execute,
-    )?;
-    let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
-
-    let (circuit_recovered, pruned_unhealthy, stats) = {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
-        let circuit_recovered = pool.check_circuit_recovery(now_ms);
-        let pruned_unhealthy = if req.prune_unhealthy.unwrap_or(true) {
-            pool.prune_unhealthy(now_ms)
-        } else {
-            0
-        };
-        let stats = pool_stats_response(&pool.pool_stats(now_ms));
-        (circuit_recovered, pruned_unhealthy, stats)
-    };
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Failover,
-        &operator.operator_id,
-        "sre_driver_pool_recover",
-        "ok",
-        &json!({
-            "circuit_recovered": circuit_recovered,
-            "pruned_unhealthy": pruned_unhealthy,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(PoolRecoverResponse {
-        status: "ok",
-        circuit_recovered,
-        pruned_unhealthy,
-        stats,
-    }))
-}
-
-async fn sre_driver_pool_stats(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<PoolStatsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "cluster.sre",
-        "sre/driver_pool",
-        PrivilegeAction::Read,
-    )?;
-    let now_ms = now_unix_ms_u64();
-    let stats = state
-        .driver_pool
-        .lock()
-        .expect("driver pool lock")
-        .pool_stats(now_ms);
-    Ok(Json(pool_stats_response(&stats)))
-}
-
-async fn security_plugins_provenance_register(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<SignedProvenanceRegistrationRequest>,
-) -> Result<Json<SignedProvenanceRegistrationResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "security.supply_chain",
-        "security/plugins/provenance/register",
-        PrivilegeAction::Manage,
-    )?;
-
-    let mut chain = ProvenanceChain::new(req.plugin_id.clone(), req.plugin_version.clone());
-    for attestation in &req.attestations {
-        let Some(attestation_type) = parse_attestation_type(attestation.attestation_type.as_str()) else {
-            return Ok(Json(SignedProvenanceRegistrationResponse {
-                status: "error",
-                registration_state: "rejected",
-                plugin_id: req.plugin_id,
-                plugin_version: req.plugin_version,
-                chain_complete: false,
-                chain_digest: String::new(),
-                attestation_count: req.attestations.len(),
-                passed_attestations: req.attestations.iter().filter(|entry| entry.passed).count(),
-                sbom_approved: false,
-                sbom_license_violations: 0,
-                sbom_missing_checksums: 0,
-                audit_records_total: state
-                    .plugin_lifecycle
-                    .lock()
-                    .map(|manager| manager.audit_trail().len())
-                    .unwrap_or(0),
-                error: Some("unsupported_attestation_type".to_string()),
-            }));
-        };
-
-        chain.add_attestation(ProvenanceAttestation {
-            attester_id: attestation.attester_id.clone(),
-            attested_at_ms: attestation.attested_at_ms.unwrap_or_else(now_unix_ms_u64),
-            attestation_type,
-            payload_digest_sha256: attestation.payload_digest_sha256.clone(),
-            signature_base64: attestation.signature_base64.clone(),
-            passed: attestation.passed,
-        });
-    }
-
-    let sbom_entries = req
-        .sbom_entries
-        .unwrap_or_default()
-        .into_iter()
-        .map(|entry| SbomEntry {
-            component_name: entry.component_name,
-            component_version: entry.component_version,
-            license: entry.license,
-            checksum_sha256: entry.checksum_sha256,
-            source_url: entry.source_url,
-        })
-        .collect::<Vec<_>>();
-    let sbom_result = SbomInspectionResult::inspect(
-        req.plugin_id.clone(),
-        sbom_entries,
-        &["GPL-3.0-only", "AGPL-3.0-only"],
-    );
-
-    if !chain.is_complete() || !sbom_result.approved {
-        append_audit_event(
-            &state,
-            AuditEventKind::Security,
-            &operator.operator_id,
-            "security_plugins_provenance_register",
-            "rejected",
-            &json!({
-                "plugin_id": req.plugin_id,
-                "plugin_version": req.plugin_version,
-                "chain_complete": chain.is_complete(),
-                "sbom_approved": sbom_result.approved,
-            })
-            .to_string(),
-        );
-        return Ok(Json(SignedProvenanceRegistrationResponse {
-            status: "error",
-            registration_state: "rejected",
-            plugin_id: req.plugin_id,
-            plugin_version: req.plugin_version,
-            chain_complete: chain.is_complete(),
-            chain_digest: chain.chain_digest,
-            attestation_count: chain.attestations.len(),
-            passed_attestations: chain.attestations.iter().filter(|entry| entry.passed).count(),
-            sbom_approved: sbom_result.approved,
-            sbom_license_violations: sbom_result.license_violations.len(),
-            sbom_missing_checksums: sbom_result.missing_checksums.len(),
-            audit_records_total: state
-                .plugin_lifecycle
-                .lock()
-                .map(|manager| manager.audit_trail().len())
-                .unwrap_or(0),
-            error: Some("provenance_or_sbom_policy_violation".to_string()),
-        }));
-    }
-
-    let manifest = SignedPluginManifest {
-        schema_version: req.schema_version.unwrap_or_else(|| "v1".to_string()),
-        declared_checksum_sha256: req.checksum_sha256.clone(),
-        generated_epoch_ms: now_unix_ms(),
-        signature: PluginManifestSignature {
-            algorithm: req.signature_algorithm,
-            key_id: req.signature_key_id,
-            signature_base64: req.signature_base64,
-        },
-        revoked_key_ids: req.revoked_key_ids.unwrap_or_default(),
-    };
-    let metadata = ConnectorPackageMetadata {
-        plugin_id: req.plugin_id.clone(),
-        version: req.plugin_version.clone(),
-        display_name: req
-            .display_name
-            .unwrap_or_else(|| req.plugin_id.clone()),
-        owner: req.owner.unwrap_or_else(|| "platform-security".to_string()),
-        license: req.license.unwrap_or_else(|| "Apache-2.0".to_string()),
-        checksum_sha256: req.checksum_sha256,
-        capabilities: req
-            .capabilities
-            .filter(|capabilities| !capabilities.is_empty())
-            .unwrap_or_else(|| vec!["ingest.read".to_string()]),
-    };
-
-    let register_result = state
-        .plugin_lifecycle
-        .lock()
-        .expect("plugin lifecycle lock")
-        .register(
-            manifest,
-            metadata,
-            Some(operator.operator_id.clone()),
-            Some(chain.clone()),
-            now_unix_ms_u64(),
-        );
-
-    let (status, registration_state, error) = match register_result {
-        Ok(_) => ("ok", "registered", None),
-        Err(error) => ("error", "rejected", Some(error.to_string())),
-    };
-
-    let audit_records_total = state
-        .plugin_lifecycle
-        .lock()
-        .map(|manager| manager.audit_trail().len())
-        .unwrap_or(0);
-
-    append_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &operator.operator_id,
-        "security_plugins_provenance_register",
-        status,
-        &json!({
-            "plugin_id": req.plugin_id,
-            "plugin_version": req.plugin_version,
-            "chain_complete": chain.is_complete(),
-            "chain_digest": chain.chain_digest,
-            "registration_state": registration_state,
-            "error": error,
-        })
-        .to_string(),
-    );
-
-    Ok(Json(SignedProvenanceRegistrationResponse {
-        status,
-        registration_state,
-        plugin_id: req.plugin_id,
-        plugin_version: req.plugin_version,
-        chain_complete: chain.is_complete(),
-        chain_digest: chain.chain_digest,
-        attestation_count: chain.attestations.len(),
-        passed_attestations: chain.attestations.iter().filter(|entry| entry.passed).count(),
-        sbom_approved: sbom_result.approved,
-        sbom_license_violations: sbom_result.license_violations.len(),
-        sbom_missing_checksums: sbom_result.missing_checksums.len(),
-        audit_records_total,
-        error,
-    }))
-}
 
 async fn audit_events(
     State(state): State<AppState>,
@@ -10975,33 +6118,6 @@ async fn audit_snapshot(
     })))
 }
 
-// ─── S4-WS3-04: HTAP detailed status handler ─────────────────────────────────
-
-/// S4-WS3-04: Return detailed HTAP sync status — pending queue depth, OLAP row count,
-/// and estimated lag.
-async fn htap_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<HtapStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let sync_origin_pending = {
-        let so = state.sync_origin.lock().expect("sync_origin lock");
-        so.pending_len()
-    };
-    let olap_row_count = state.olap_store.lock().expect("olap_store lock").len();
-    let last_sync_ms = now_unix_ms_u64();
-    let sync_lag_estimate = sync_origin_pending as i64 - olap_row_count as i64;
-    let is_synchronized = sync_origin_pending == 0;
-    Ok((StatusCode::OK, Json(HtapStatusResponse {
-        status: "ok",
-        sync_origin_pending,
-        olap_row_count,
-        last_sync_ms,
-        sync_lag_estimate,
-        is_synchronized,
-    })))
-}
-
 // ─── S9-WS8A-02: Audit purge — flush the in-memory audit sink ────────────────
 
 /// S9-WS8A-02: Purge all buffered audit events (requires operator auth).
@@ -11053,26 +6169,6 @@ async fn audit_cli_summary(
     })))
 }
 
-async fn autonomous_action_records(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<AutonomousActionRecordsQuery>,
-) -> Result<Json<AutonomousActionRecordsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_autonomous_records_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "autonomous/records",
-    )?;
-    let max_items = query.max_items.unwrap_or(100).min(1_000);
-    let records = filter_action_records_for_principal(latest_action_records(&state, max_items), &principal);
-    Ok(Json(AutonomousActionRecordsResponse {
-        status: "ok",
-        total_records: records.len(),
-        records,
-    }))
-}
-
 async fn i18n_messages(Query(query): Query<I18nMessagesQuery>) -> Json<I18nMessagesResponse> {
     let locale = SupportedLocale::parse(query.locale.as_deref().unwrap_or("en-US"));
     let keys = ["unauthorized", "missing_or_invalid_admin_key", "health_ok"];
@@ -11088,197 +6184,7 @@ async fn i18n_messages(Query(query): Query<I18nMessagesQuery>) -> Json<I18nMessa
     })
 }
 
-async fn autonomous_guardrails(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<AutonomousGuardrailsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let _operator = require_operator_privilege(
-        &headers,
-        &state,
-        "autonomous.guardrails",
-        "autonomous/guardrails",
-        PrivilegeAction::Read,
-    )?;
-    Ok(Json(AutonomousGuardrailsResponse {
-        status: "ok",
-        autonomous_mode: state.autonomous_mode,
-        emergency_stop_enabled: state.emergency_stop.get(),
-        policy_matrix: state.guardrails.as_ref().clone(),
-    }))
-}
-
-async fn autonomous_emergency_stop(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<EmergencyStopRequest>,
-) -> Result<Json<EmergencyStopResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "autonomous.guardrails",
-        "autonomous/emergency_stop",
-        PrivilegeAction::Manage,
-    )?;
-    state.emergency_stop.set(req.enabled);
-    let reason = req
-        .reason
-        .clone()
-        .unwrap_or_else(|| "manual_control_plane_request".to_string());
-    let requested_by = req.requested_by.clone().unwrap_or(operator.operator_id);
-    append_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &requested_by,
-        "autonomous_emergency_stop",
-        "ok",
-        &json!({
-            "enabled": req.enabled,
-            "reason": reason,
-        })
-        .to_string(),
-    );
-    Ok(Json(EmergencyStopResponse {
-        status: "ok",
-        emergency_stop_enabled: req.enabled,
-        reason,
-        requested_by,
-    }))
-}
-
-async fn authorize_autonomous_action(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<AuthorizeActionRequest>,
-) -> Result<(StatusCode, Json<AuthorizeActionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "autonomous.actions",
-        "autonomous/actions",
-        PrivilegeAction::Execute,
-    )?;
-    let requested_scope = req.scope.unwrap_or_else(|| "cluster".to_string());
-    let requested_by = operator.operator_id;
-    let action = req.action;
-    let trace_id = next_action_trace_id();
-    if state.emergency_stop.get() {
-        return Ok(build_authorize_action_response(
-            &state,
-            StatusCode::SERVICE_UNAVAILABLE,
-            &action,
-            &requested_scope,
-            "blocked",
-            "emergency_stop_enabled".to_string(),
-            &trace_id,
-            &requested_by,
-            AutonomousActionDecision::Blocked,
-        ));
-    }
-
-    if state.autonomous_mode == AutonomousMode::Disabled {
-        return Ok(build_authorize_action_response(
-            &state,
-            StatusCode::FORBIDDEN,
-            &action,
-            &requested_scope,
-            "blocked",
-            "autonomous_mode_disabled".to_string(),
-            &trace_id,
-            &requested_by,
-            AutonomousActionDecision::Blocked,
-        ));
-    }
-
-    let matching_rule = state
-        .guardrails
-        .iter()
-        .find(|r| r.action.eq_ignore_ascii_case(&action));
-
-    Ok(match matching_rule {
-        Some(rule) if state.autonomous_mode.rank() >= rule.required_mode.rank() => {
-            build_authorize_action_response(
-                &state,
-                StatusCode::OK,
-                &action,
-                &requested_scope,
-                "allow",
-                format!(
-                    "mode {:?} satisfies required mode {:?}",
-                    state.autonomous_mode, rule.required_mode
-                ),
-                &trace_id,
-                &requested_by,
-                AutonomousActionDecision::Allow,
-            )
-        }
-        Some(rule) => build_authorize_action_response(
-            &state,
-            StatusCode::FORBIDDEN,
-            &action,
-            &requested_scope,
-            "deny",
-            format!(
-                "required mode {:?} exceeds current mode {:?}",
-                rule.required_mode, state.autonomous_mode
-            ),
-            &trace_id,
-            &requested_by,
-            AutonomousActionDecision::Deny,
-        ),
-        None => build_authorize_action_response(
-            &state,
-            StatusCode::NOT_FOUND,
-            &action,
-            &requested_scope,
-            "deny",
-            "no_guardrail_rule_found".to_string(),
-            &trace_id,
-            &requested_by,
-            AutonomousActionDecision::Unknown,
-        ),
-    })
-}
-
-fn default_guardrail_rules() -> Vec<GuardrailRule> {
-    vec![
-        GuardrailRule {
-            action: "schema_change".to_string(),
-            required_mode: AutonomousMode::Supervised,
-            scope: "database".to_string(),
-            rationale: "DDL and schema drift changes require human oversight".to_string(),
-        },
-        GuardrailRule {
-            action: "plugin_install".to_string(),
-            required_mode: AutonomousMode::Supervised,
-            scope: "cluster".to_string(),
-            rationale: "Plugin supply-chain changes require supervised execution".to_string(),
-        },
-        GuardrailRule {
-            action: "security_patch".to_string(),
-            required_mode: AutonomousMode::Supervised,
-            scope: "cluster".to_string(),
-            rationale: "Security posture changes require explicit review and audit".to_string(),
-        },
-        GuardrailRule {
-            action: "self_heal_failover".to_string(),
-            required_mode: AutonomousMode::Autonomous,
-            scope: "cluster".to_string(),
-            rationale: "Fast autonomous failover is allowed only in full autonomous mode"
-                .to_string(),
-        },
-        GuardrailRule {
-            action: "performance_tune".to_string(),
-            required_mode: AutonomousMode::Advisory,
-            scope: "session".to_string(),
-            rationale: "Low-risk tuning actions can run in advisory mode".to_string(),
-        },
-    ]
-}
-
-fn route_path_name(path: QueryPath) -> &'static str {
+pub(crate) fn route_path_name(path: QueryPath) -> &'static str {
     match path {
         QueryPath::Oltp => "oltp",
         QueryPath::Olap => "olap",
@@ -11287,7 +6193,7 @@ fn route_path_name(path: QueryPath) -> &'static str {
     }
 }
 
-fn execute_transaction_statements(statements: Vec<String>) -> (StatusCode, SqlTransactionResponse) {
+pub(crate) fn execute_transaction_statements(statements: Vec<String>) -> (StatusCode, SqlTransactionResponse) {
     if statements.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -11347,7 +6253,7 @@ fn execute_transaction_statements(statements: Vec<String>) -> (StatusCode, SqlTr
     )
 }
 
-fn acquire_pessimistic_lock(
+pub(crate) fn acquire_pessimistic_lock(
     lock_table: &mut HashMap<String, PessimisticLockRecord>,
     wait_graph: &mut HashMap<String, String>,
     transaction_id: &str,
@@ -11455,7 +6361,7 @@ fn acquire_pessimistic_lock(
     )
 }
 
-fn release_pessimistic_lock(
+pub(crate) fn release_pessimistic_lock(
     lock_table: &mut HashMap<String, PessimisticLockRecord>,
     wait_graph: &mut HashMap<String, String>,
     transaction_id: &str,
@@ -11517,7 +6423,7 @@ fn release_pessimistic_lock(
 }
 /// S3-WS1-05: parse a WHERE clause string into `VectorizedFilter` predicates.
 /// Handles simple `col op val` expressions joined by ` AND `.
-fn parse_where_predicates(
+pub(crate) fn parse_where_predicates(
     where_clause: &str,
 ) -> Option<Vec<voltnuerongrid_store::columnar::VectorizedFilter>> {
     use voltnuerongrid_store::columnar::{FilterOp, VectorizedFilter};
@@ -11887,7 +6793,7 @@ async fn wal_recover(
 
 // ─── S7-WS6-04: Chaos/game-day injection handlers ────────────────────────────
 
-fn now_epoch_ms_chaos() -> u64 {
+pub(crate) fn now_epoch_ms_chaos() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -12017,136 +6923,6 @@ async fn chaos_fire_drill(
         faults_injected: 1,
         target_node,
     })))
-}
-
-/// S6-WS5-03: Initiate a TLS cert rotation (scaffold — records attempt, does not hot-swap certs).
-async fn security_tls_rotate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<TlsCertRotateRequest>,
-) -> Result<(StatusCode, Json<TlsCertRotateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    require_operator_privilege(
-        &headers,
-        &state,
-        "security.kms",
-        "security/tls/rotate",
-        PrivilegeAction::Manage,
-    )?;
-    let cert_source = std::env::var("VNG_TLS_CERT_PATH")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "not_configured".to_string());
-    let key_source = std::env::var("VNG_TLS_KEY_PATH")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "not_configured".to_string());
-    let cert_present = cert_source != "not_configured" && std::path::Path::new(&cert_source).exists();
-    let key_present = key_source != "not_configured" && std::path::Path::new(&key_source).exists();
-    let preflight_ok = cert_present && key_present;
-    let rotation_initiated = preflight_ok;
-    let reason = req.reason.unwrap_or_else(|| "manual_rotation".to_string());
-    Ok((StatusCode::OK, Json(TlsCertRotateResponse {
-        status: "ok",
-        rotation_initiated,
-        cert_source,
-        key_source,
-        cert_present,
-        key_present,
-        preflight_ok,
-        reason,
-    })))
-}
-
-// ─── S6-WS5-03: TLS certificate info ─────────────────────────────────────────
-
-/// S6-WS5-03: Return TLS certificate configuration details.
-async fn security_tls_cert_info(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<TlsCertInfoResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let cert_source = std::env::var("VNG_TLS_CERT_PATH")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "not_configured".to_string());
-    let key_source = std::env::var("VNG_TLS_KEY_PATH")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "not_configured".to_string());
-    let cert_present = cert_source != "not_configured" && std::path::Path::new(&cert_source).exists();
-    let key_present = key_source != "not_configured" && std::path::Path::new(&key_source).exists();
-    let preflight_ok = cert_present && key_present;
-    let sc = &*state.security_config;
-    Ok((StatusCode::OK, Json(TlsCertInfoResponse {
-        status: "ok",
-        cert_source,
-        key_source,
-        cert_present,
-        key_present,
-        preflight_ok,
-        tls_required: sc.tls_required,
-        mtls_required: sc.mtls_required,
-        cert_rotation_supported: false,
-    })))
-}
-
-// ─── S8-WS10-02: Driver wire protocol handlers ────────────────────────────────
-
-/// S8-WS10-02: Return the current wire protocol capabilities.
-async fn driver_protocol_info() -> (StatusCode, Json<DriverProtocolInfo>) {
-    (StatusCode::OK, Json(DriverProtocolInfo {
-        protocol_version: "1.0",
-        encoding: "json",
-        auth_modes: vec![
-            "admin_key".to_string(),
-            "operator_id".to_string(),
-            "tenant".to_string(),
-        ],
-        supported_statements: vec![
-            "SELECT".to_string(), "INSERT".to_string(),
-            "UPDATE".to_string(), "DELETE".to_string(),
-            "BEGIN".to_string(), "COMMIT".to_string(), "ROLLBACK".to_string(),
-        ],
-        max_batch_size: 500,
-    }))
-}
-
-/// S8-WS10-02: Negotiate a driver connection session and return a session token.
-async fn driver_connect(
-    State(state): State<AppState>,
-    Json(req): Json<DriverConnectRequest>,
-) -> (StatusCode, Json<DriverConnectResponse>) {
-    let sid = DRIVER_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let session_token = format!("drv-sess-{sid}");
-    let pooled_connection_id = {
-        let now_ms = now_unix_ms_u64();
-        state
-            .driver_pool
-            .lock()
-            .expect("driver pool lock")
-            .acquire(now_ms)
-            .ok()
-    };
-    let mut sessions = state.driver_sessions.lock().expect("driver_sessions lock");
-    sessions.insert(session_token.clone(), DriverSession {
-        driver_name: req.driver_name,
-        driver_version: req.driver_version,
-        connected_at_ms: now_epoch_ms_chaos(),
-        assigned_node_id: state.node_id.clone(),
-        pooled_connection_id,
-    });
-    let negotiated: Vec<String> = req.requested_capabilities
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|c| matches!(c.as_str(), "batch_execute" | "streaming" | "prepared_statements"))
-        .collect();
-    (StatusCode::OK, Json(DriverConnectResponse {
-        status: "connected",
-        session_token,
-        negotiated_capabilities: negotiated,
-        max_batch_size: 500,
-    }))
 }
 
 
@@ -12304,169 +7080,6 @@ async fn raft_leader(
     Ok((StatusCode::OK, Json(response)))
 }
 
-// ─── S8-WS10-02: Driver session disconnect ────────────────────────────────────
-
-async fn driver_disconnect(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<DriverDisconnectRequest>,
-) -> Result<(StatusCode, Json<DriverDisconnectResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let mut sessions = state.driver_sessions.lock().expect("driver_sessions lock");
-    let removed = sessions.remove(&req.session_token);
-    drop(sessions);
-
-    if let Some(session) = removed.as_ref() {
-        if let Some(connection_id) = session.pooled_connection_id.as_ref() {
-            release_sql_data_plane_connection(&state, connection_id);
-        }
-    }
-
-    let disconnected = removed.is_some();
-    Ok((StatusCode::OK, Json(DriverDisconnectResponse {
-        status: "ok",
-        session_token: req.session_token,
-        disconnected,
-    })))
-}
-
-// ─── S5-E4A-01: Connector SDK runtime load ───────────────────────────────────
-
-/// Register a connector plugin manifest at runtime.
-async fn connector_register(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ConnectorRegisterRequest>,
-) -> Result<(StatusCode, Json<ConnectorRegisterResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let registered_at_ms = now_epoch_ms_chaos();
-    let plugin = ConnectorPlugin {
-        connector_id: req.connector_id.clone(),
-        connector_type: req.connector_type.clone(),
-        version: req.version.clone(),
-        signed: req.signed.unwrap_or(false),
-        registered_at_ms,
-    };
-    state.connector_registry.lock().expect("connector_registry lock").push(plugin);
-    Ok((
-        StatusCode::OK,
-        Json(ConnectorRegisterResponse {
-            status: "ok",
-            connector_id: req.connector_id,
-            registered_at_ms,
-        }),
-    ))
-}
-
-/// List all registered connector plugins.
-async fn connector_list(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<ConnectorListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let connectors = state.connector_registry.lock().expect("connector_registry lock").clone();
-    let connector_count = connectors.len();
-    Ok((StatusCode::OK, Json(ConnectorListResponse { status: "ok", connector_count, connectors })))
-}
-
-/// S5-E4A-01: Deregister a connector plugin by ID.
-async fn connector_deregister(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ConnectorDeregisterRequest>,
-) -> Result<(StatusCode, Json<ConnectorDeregisterResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let mut registry = state.connector_registry.lock().expect("connector_registry lock");
-    let before_len = registry.len();
-    registry.retain(|c| c.connector_id != req.connector_id);
-    let removed = registry.len() < before_len;
-    drop(registry);
-    Ok((
-        StatusCode::OK,
-        Json(ConnectorDeregisterResponse {
-            status: "ok",
-            connector_id: req.connector_id,
-            removed,
-        }),
-    ))
-}
-
-// ─── S5-E4A-01: Connector get by ID ──────────────────────────────────────────
-
-/// S5-E4A-01: Return a single connector from the registry by connector_id.
-async fn connector_get(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(params): Query<ConnectorGetQuery>,
-) -> Result<(StatusCode, Json<ConnectorGetResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let registry = state.connector_registry.lock().expect("connector_registry lock");
-    let connector = registry.iter().find(|c| c.connector_id == params.id).cloned();
-    let found = connector.is_some();
-    Ok((StatusCode::OK, Json(ConnectorGetResponse {
-        status: "ok",
-        found,
-        connector,
-    })))
-}
-
-// ─── S5-E4A-01: Connector update handler ─────────────────────────────────────
-
-/// S5-E4A-01: Update the version or signed flag of an existing registered connector.
-async fn connector_update(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ConnectorUpdateRequest>,
-) -> Result<(StatusCode, Json<ConnectorUpdateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let mut registry = state.connector_registry.lock().expect("connector_registry lock update");
-    let entry = registry.iter_mut().find(|c| c.connector_id == req.connector_id);
-    let updated = if let Some(plugin) = entry {
-        if let Some(v) = req.version {
-            plugin.version = v;
-        }
-        if let Some(s) = req.signed {
-            plugin.signed = s;
-        }
-        true
-    } else {
-        false
-    };
-    drop(registry);
-    Ok((StatusCode::OK, Json(ConnectorUpdateResponse {
-        status: "ok",
-        connector_id: req.connector_id,
-        updated,
-    })))
-}
-
-// ─── S11-WS1-10: Row store key list endpoint ─────────────────────────────────
-
-/// S11-WS1-10: Return primary keys from the row store, optionally filtered by prefix.
-async fn store_rows_keys(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(params): Query<StoreRowsKeysQuery>,
-) -> Result<(StatusCode, Json<StoreRowsKeysResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock store_rows_keys");
-    let all_rows = rs.export_rows_snapshot();
-    drop(rs);
-    let keys: Vec<String> = all_rows
-        .into_iter()
-        .map(|(k, _)| k)
-        .filter(|k| {
-            params.prefix.as_ref().map(|p| k.starts_with(p.as_str())).unwrap_or(true)
-        })
-        .collect();
-    let total_keys = keys.len();
-    Ok((StatusCode::OK, Json(StoreRowsKeysResponse {
-        status: "ok",
-        total_keys,
-        keys,
-    })))
-}
-
 // ─── S11-WS1-10: WAL truncate endpoint ───────────────────────────────────────
 
 /// S11-WS1-10: Truncate WAL records up to a given sequence by forcing a checkpoint.
@@ -12501,46 +7114,6 @@ async fn wal_truncate(
         records_removed,
         new_record_count,
         truncated,
-    })))
-}
-
-// ─── S11-WS1-11: Row store version endpoint ─────────────────────────────────
-
-/// S11-WS1-11: Return the current transaction ID and basic stats for the MVCC row store.
-async fn row_store_version(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<RowStoreVersionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock row_store_version");
-    let current_xid = rs.current_xid();
-    let page_count = rs.page_count();
-    let total_rows = rs.total_row_count();
-    drop(rs);
-    Ok((StatusCode::OK, Json(RowStoreVersionResponse {
-        status: "ok",
-        current_xid,
-        page_count,
-        total_rows,
-    })))
-}
-
-// ─── S11-WS1-11: HTAP stats endpoint ─────────────────────────────────────────
-
-/// S11-WS1-11: Return entry counts from the in-memory OLAP replica store.
-async fn htap_stats(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<HtapStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let olap = state.olap_store.lock().expect("olap_store lock htap_stats");
-    let table_count = olap.len();
-    let total_entries: usize = olap.values().map(|rows| rows.len()).sum();
-    drop(olap);
-    Ok((StatusCode::OK, Json(HtapStatsResponse {
-        status: "ok",
-        table_count,
-        total_entries,
     })))
 }
 
@@ -12598,37 +7171,6 @@ async fn rows_page_stats(
 // ─── S11-WS1-13: Ingest schema fields endpoint ──────────────────────────────
 
 /// S11-WS1-13: Return field definitions for a specific ingest schema entry.
-async fn ingest_schema_fields(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(params): Query<IngestSchemaFieldsQuery>,
-) -> Result<(StatusCode, Json<IngestSchemaFieldsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    // Build schema on the fly from ingest records — match by connector_id (schema_id param).
-    let csv_map = state.ingest_csv_records.lock().expect("csv_records lock ingest_schema_fields");
-    let json_map = state.ingest_json_records.lock().expect("json_records lock ingest_schema_fields");
-    let columns = if let Some(records) = csv_map.get(params.schema_id.as_str()) {
-        ingest_infer_columns(records)
-    } else if let Some(records) = json_map.get(params.schema_id.as_str()) {
-        ingest_infer_columns(records)
-    } else {
-        vec![]
-    };
-    drop(csv_map);
-    drop(json_map);
-    let fields: Vec<SchemaFieldEntry> = columns.iter().map(|c| SchemaFieldEntry {
-        field_name: c.name.clone(),
-        field_type: c.inferred_type.to_string(),
-    }).collect();
-    let field_count = fields.len();
-    Ok((StatusCode::OK, Json(IngestSchemaFieldsResponse {
-        status: "ok",
-        schema_id: params.schema_id,
-        field_count,
-        fields,
-    })))
-}
-
 // ─── S11-WS1-13: WAL sequence info endpoint ──────────────────────────────────
 
 /// S11-WS1-13: Return the latest WAL sequence number and record count.
@@ -15839,655 +10381,9 @@ async fn raft_fence(
     ))
 }
 
-// ─── S6-WS5-04: TDE toggle override ───────────────────────────────────────────────────
-
-/// Override the TDE (Transparent Data Encryption) active state at runtime.
-async fn security_tde_toggle(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<TdeToggleRequest>,
-) -> Result<(StatusCode, Json<TdeToggleResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    require_operator_privilege(
-        &headers,
-        &state,
-        "security.kms",
-        "security/tde/toggle",
-        PrivilegeAction::Manage,
-    )?;
-    *state.tde_override.lock().expect("tde_override lock") = Some(req.enable);
-    Ok((
-        StatusCode::OK,
-        Json(TdeToggleResponse {
-            status: "ok",
-            tde_active: req.enable,
-            override_applied: true,
-        }),
-    ))
-}
 
 // ─── S10-WS15-02: CDC stream from WAL ─────────────────────────────────────────
 
-/// S10-WS15-02: Stream committed mutations as CDC events derived from the WAL.
-async fn cdc_stream(
-    State(state): State<AppState>,
-) -> (StatusCode, Json<CdcStreamResponse>) {
-    let wal = state.wal_engine.lock().expect("wal_engine lock cdc");
-    let events: Vec<CdcEvent> = wal.wal_records()
-        .iter()
-        .map(|r| CdcEvent {
-            sequence: r.sequence,
-            op: if r.value == "__deleted__" {
-                "delete".to_string()
-            } else {
-                "insert".to_string()
-            },
-            table_name: "row_store".to_string(),
-            key: r.key.clone(),
-            payload: r.value.clone(),
-            captured_at_ms: 0,
-        })
-        .collect();
-    let event_count = events.len();
-    drop(wal);
-    (StatusCode::OK, Json(CdcStreamResponse {
-        status: "ok",
-        event_count,
-        events,
-    }))
-}
-
-// ─── S10-WS15-02: CDC cursor tracking ────────────────────────────────────────
-
-/// S10-WS15-02: Filter CDC stream by table name.
-async fn cdc_stream_filter(
-    State(state): State<AppState>,
-    Query(query): Query<CdcStreamFilterQuery>,
-) -> (StatusCode, Json<CdcStreamFilterResponse>) {
-    let wal = state.wal_engine.lock().expect("wal_engine lock cdc_filter");
-    let all_events: Vec<CdcEvent> = wal.wal_records()
-        .iter()
-        .map(|r| CdcEvent {
-            sequence: r.sequence,
-            op: if r.value == "__deleted__" { "delete".to_string() } else { "insert".to_string() },
-            table_name: "row_store".to_string(),
-            key: r.key.clone(),
-            payload: r.value.clone(),
-            captured_at_ms: 0,
-        })
-        .collect();
-    drop(wal);
-    let events: Vec<CdcEvent> = match &query.table {
-        Some(t) => all_events.into_iter().filter(|e| e.table_name == *t).collect(),
-        None => all_events,
-    };
-    let event_count = events.len();
-    (StatusCode::OK, Json(CdcStreamFilterResponse {
-        status: "ok",
-        table_filter: query.table,
-        event_count,
-        events,
-    }))
-}
-
-/// S10-WS15-02: Return the latest N CDC events from the WAL stream.
-async fn cdc_stream_latest(
-    State(state): State<AppState>,
-    Query(query): Query<CdcLatestQuery>,
-) -> (StatusCode, Json<CdcLatestResponse>) {
-    let limit = query.limit.unwrap_or(10).min(1000);
-    let wal = state.wal_engine.lock().expect("wal_engine lock cdc_latest");
-    let all_events: Vec<CdcEvent> = wal.wal_records()
-        .iter()
-        .map(|r| CdcEvent {
-            sequence: r.sequence,
-            op: if r.value == "__deleted__" { "delete".to_string() } else { "insert".to_string() },
-            table_name: "row_store".to_string(),
-            key: r.key.clone(),
-            payload: r.value.clone(),
-            captured_at_ms: 0,
-        })
-        .collect();
-    drop(wal);
-    let total = all_events.len();
-    let skip = if total > limit { total - limit } else { 0 };
-    let events: Vec<CdcEvent> = all_events.into_iter().skip(skip).collect();
-    let event_count = events.len();
-    (StatusCode::OK, Json(CdcLatestResponse {
-        status: "ok",
-        event_count,
-        limit_applied: limit,
-        events,
-    }))
-}
-
-/// S10-WS15-02: Read the current CDC cursor position for a given table.
-async fn cdc_cursor_status(
-    State(state): State<AppState>,
-    Query(q): Query<CdcCursorQuery>,
-) -> (StatusCode, Json<CdcCursorResponse>) {
-    let cursors = state.cdc_cursors.lock().expect("cdc_cursors lock");
-    let pos = *cursors.get(&q.table).unwrap_or(&0);
-    (StatusCode::OK, Json(CdcCursorResponse {
-        status: "ok",
-        table_name: q.table,
-        cursor_position: pos,
-    }))
-}
-
-/// S10-WS15-02: Advance (or initialise) the CDC cursor for a table to a given position.
-async fn cdc_cursor_advance(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<CdcCursorAdvanceRequest>,
-) -> Result<(StatusCode, Json<CdcCursorResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let mut cursors = state.cdc_cursors.lock().expect("cdc_cursors lock");
-    cursors.insert(req.table_name.clone(), req.position);
-    Ok((StatusCode::OK, Json(CdcCursorResponse {
-        status: "ok",
-        table_name: req.table_name,
-        cursor_position: req.position,
-    })))
-}
-
-// ─── S10-WS15-02: CDC cursor rewind — reset a table cursor to 0 ───────────────
-
-/// S10-WS15-02: Rewind (reset to 0) the CDC cursor for the specified table.
-async fn cdc_cursor_rewind(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<CdcCursorRewindRequest>,
-) -> Result<(StatusCode, Json<CdcCursorResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let mut cursors = state.cdc_cursors.lock().expect("cdc_cursors lock");
-    cursors.insert(req.table_name.clone(), 0);
-    Ok((StatusCode::OK, Json(CdcCursorResponse {
-        status: "ok",
-        table_name: req.table_name,
-        cursor_position: 0,
-    })))
-}
-
-// ─── S10-WS15-02: CDC cursor list ─────────────────────────────────────────────
-
-/// S10-WS15-02: List all tracked CDC cursor positions across tables.
-async fn cdc_cursor_list(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<CdcCursorListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let cursors = state.cdc_cursors.lock().expect("cdc_cursors lock");
-    let mut entries: Vec<CdcCursorEntry> = cursors
-        .iter()
-        .map(|(table, pos)| CdcCursorEntry {
-            table_name: table.clone(),
-            cursor_position: *pos,
-        })
-        .collect();
-    entries.sort_by(|a, b| a.table_name.cmp(&b.table_name));
-    let cursor_count = entries.len();
-    Ok((StatusCode::OK, Json(CdcCursorListResponse {
-        status: "ok",
-        cursor_count,
-        cursors: entries,
-    })))
-}
-
-// ─── S10-WS15-02: CDC aggregate metrics ──────────────────────────────────────
-
-/// S10-WS15-02: Return aggregate CDC event metrics (total/insert/delete counts, tables seen).
-async fn cdc_metrics(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<CdcMetricsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine cdc_metrics lock");
-    let records = wal.wal_records().to_vec();
-    drop(wal);
-    let total_events = records.len();
-    let insert_count = records.iter().filter(|r| r.value != "__deleted__").count();
-    let delete_count = records.iter().filter(|r| r.value == "__deleted__").count();
-    let tables_seen = records.iter()
-        .filter_map(|r| r.key.split(':').next().map(|t| t.to_string()))
-        .collect::<std::collections::HashSet<_>>()
-        .len();
-    Ok((StatusCode::OK, Json(CdcMetricsResponse {
-        status: "ok",
-        total_events,
-        insert_count,
-        delete_count,
-        tables_seen,
-    })))
-}
-
-// ─── S2-WS2-04: Row store point-in-time snapshot export ──────────────────────
-
-/// S2-WS2-04: Export a snapshot of all currently-visible rows in the
-/// `PagedRowStore` at the current head XID.
-async fn row_store_snapshot(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<RowSnapshotResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let store = state.row_store.lock().expect("row_store lock snapshot");
-    let snapshot_xid = store.current_xid();
-    let rows: Vec<RowSnapshotEntry> = store
-        .export_rows_snapshot()
-        .into_iter()
-        .map(|(key, payload)| RowSnapshotEntry { key, payload })
-        .collect();
-    let row_count = rows.len();
-    Ok((StatusCode::OK, Json(RowSnapshotResponse {
-        status: "ok",
-        snapshot_xid,
-        row_count,
-        rows,
-    })))
-}
-
-// ─── S2-WS2-04: Row store operational stats ─────────────────────────────────────
-
-/// S2-WS2-04: Return operational statistics for the MVCC page-based row store.
-async fn row_store_stats(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<RowStoreStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock stats");
-    let current_xid = rs.current_xid();
-    let total_pages = rs.page_count();
-    let total_rows = rs.total_row_count();
-    let total_visible_rows = rs.visible_row_count(current_xid);
-    drop(rs);
-    Ok((StatusCode::OK, Json(RowStoreStatsResponse {
-        status: "ok",
-        current_xid,
-        total_pages,
-        total_rows,
-        total_visible_rows,
-    })))
-}
-
-// ─── S2-WS2-04: Row store prefix count handler ──────────────────────────────
-
-/// S2-WS2-04: Count visible rows at current snapshot, optionally filtered by key prefix.
-async fn row_store_count(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(params): Query<RowCountQuery>,
-) -> Result<(StatusCode, Json<RowCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock count");
-    let snapshot_xid = rs.current_xid();
-    let count = {
-        let all_rows = rs.scan_at_snapshot(snapshot_xid);
-        match &params.key_prefix {
-            Some(prefix) => all_rows.iter().filter(|(k, _)| k.starts_with(prefix.as_str())).count(),
-            None => all_rows.len(),
-        }
-    };
-    drop(rs);
-    Ok((StatusCode::OK, Json(RowCountResponse {
-        status: "ok",
-        snapshot_xid,
-        key_prefix: params.key_prefix.clone(),
-        count,
-    })))
-}
-
-// ─── S2-WS2-04: Row store delete-by-key handler ──────────────────────────────
-
-/// S2-WS2-04: Delete a specific row by key from the row store and WAL.
-async fn row_store_delete(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<RowDeleteRequest>,
-) -> Result<(StatusCode, Json<RowDeleteResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let mut rs = state.row_store.lock().expect("row_store lock delete");
-    let snapshot_xid = rs.current_xid();
-    let rows = rs.scan_at_snapshot(snapshot_xid);
-    let exists = rows.iter().any(|(k, _)| *k == req.key.as_str());
-    if exists {
-        let xid = rs.begin_xid();
-        rs.delete(xid, &req.key);
-        drop(rs);
-        let mut wal = state.wal_engine.lock().expect("wal_engine lock delete");
-        wal.append_mutation(&req.key, "__deleted__");
-    } else {
-        drop(rs);
-    }
-    Ok((StatusCode::OK, Json(RowDeleteResponse {
-        status: "ok",
-        key: req.key,
-        deleted: exists,
-    })))
-}
-
-// ─── S5-WS4A-02: Broker adapter status + flush ────────────────────────────────
-
-/// S5-WS4A-02: Report the status of all registered broker adapters.
-async fn outbox_broker_status(
-    State(state): State<AppState>,
-) -> (StatusCode, Json<BrokerAdapterStatus>) {
-    let counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock");
-    let adapters: Vec<BrokerAdapterInfo> = ["kafka", "nats", "event_hubs"]
-        .iter()
-        .map(|b| BrokerAdapterInfo {
-            broker_type: b.to_string(),
-            enabled: false, // scaffold: no live broker connection
-            flush_count: *counts.get(*b).unwrap_or(&0),
-        })
-        .collect();
-    drop(counts);
-    (StatusCode::OK, Json(BrokerAdapterStatus {
-        status: "ok",
-        adapters,
-    }))
-}
-
-/// S5-WS4A-02: Flush pending outbox events to the specified broker adapter (scaffold).
-async fn outbox_broker_flush(
-    State(state): State<AppState>,
-    Json(req): Json<BrokerFlushRequest>,
-) -> (StatusCode, Json<BrokerFlushResponse>) {
-    if !["kafka", "nats", "event_hubs"].contains(&req.broker_type.as_str()) {
-        return (StatusCode::BAD_REQUEST, Json(BrokerFlushResponse {
-            status: "error",
-            broker_type: req.broker_type,
-            events_flushed: 0,
-            total_flush_count: 0,
-        }));
-    }
-    let max_events = req.max_events.unwrap_or(100).min(10_000);
-    // Derive flush count from WAL length (scaffold: no live broker write).
-    let wal = state.wal_engine.lock().expect("wal_engine lock broker_flush");
-    let events_available = wal.wal_records().len();
-    drop(wal);
-    let events_flushed = events_available.min(max_events);
-    let mut counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock flush");
-    let cnt = counts.entry(req.broker_type.clone()).or_insert(0);
-    *cnt += 1;
-    let total_flush_count = *cnt;
-    drop(counts);
-    (StatusCode::OK, Json(BrokerFlushResponse {
-        status: "ok",
-        broker_type: req.broker_type,
-        events_flushed,
-        total_flush_count,
-    }))
-}
-
-/// S5-WS4A-02: Return per-broker health: flush count vs WAL length.
-async fn outbox_broker_health(
-    State(state): State<AppState>,
-) -> (StatusCode, Json<BrokerHealthResponse>) {
-    let wal_len = state.wal_engine.lock().expect("wal_engine lock health").wal_records().len();
-    let counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock health");
-    let brokers: Vec<BrokerHealthEntry> = ["kafka", "nats", "event_hubs"].iter().map(|bt| {
-        let flush_count = counts.get(*bt).copied().unwrap_or(0);
-        BrokerHealthEntry {
-            broker_type: bt,
-            flush_count,
-            wal_len,
-            healthy: flush_count > 0 || wal_len == 0,
-        }
-    }).collect();
-    let broker_count = brokers.len();
-    (StatusCode::OK, Json(BrokerHealthResponse {
-        status: "ok",
-        broker_count,
-        brokers,
-    }))
-}
-
-/// S8-WS10-02: List all active driver sessions.
-async fn driver_session_list(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<DriverSessionListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let sessions = state.driver_sessions.lock().expect("driver_sessions lock list");
-    let list: Vec<DriverSessionInfo> = sessions
-        .iter()
-        .map(|(token, sess)| DriverSessionInfo {
-            session_token: token.clone(),
-            driver_name: sess.driver_name.clone(),
-            driver_version: sess.driver_version.clone(),
-            connected_at_ms: sess.connected_at_ms,
-            assigned_node_id: sess.assigned_node_id.clone(),
-        })
-        .collect();
-    let session_count = list.len();
-    drop(sessions);
-    Ok((StatusCode::OK, Json(DriverSessionListResponse {
-        status: "ok",
-        session_count,
-        sessions: list,
-    })))
-}
-
-// ─── S5-WS4-03: Ingest schema registry handler ──────────────────────────────
-
-async fn ingest_schema_registry(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<IngestSchemaRegistryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_ingest_runtime_privilege(&headers, &state, PrivilegeAction::Read, "ingest/schema")?;
-    Ok((StatusCode::OK, Json(collect_ingest_schema_registry_response(&state))))
-}
-
-fn ingest_infer_columns(
-    records: &[voltnuerongrid_ingest::IngestRecord],
-) -> Vec<IngestSchemaColumn> {
-    if records.is_empty() {
-        return vec![IngestSchemaColumn { name: "payload".to_string(), inferred_type: "utf8" }];
-    }
-    vec![
-        IngestSchemaColumn { name: "key".to_string(), inferred_type: "utf8" },
-        IngestSchemaColumn { name: "payload".to_string(), inferred_type: "utf8" },
-    ]
-}
-
-// ─── S5-WS4-03: Ingest schema list (format-filtered) handler ─────────────────
-
-/// S5-WS4-03: List ingest schema entries, optionally filtered by format (csv/json/parquet/excel).
-async fn ingest_schema_list(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(params): Query<IngestSchemaListQuery>,
-) -> Result<(StatusCode, Json<IngestSchemaListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_ingest_runtime_privilege(&headers, &state, PrivilegeAction::Read, "ingest/schema")?;
-    let csv_map = state.ingest_csv_records.lock().expect("csv schema list lock");
-    let json_map = state.ingest_json_records.lock().expect("json schema list lock");
-    let mut entries: Vec<IngestSchemaEntry> = Vec::new();
-    let fmt = params.format.as_deref();
-    if fmt.is_none() || fmt == Some("csv") {
-        for (connector_id, records) in csv_map.iter() {
-            entries.push(IngestSchemaEntry {
-                connector_id: connector_id.clone(),
-                format: "csv".to_string(),
-                row_count: records.len(),
-                columns: ingest_infer_columns(records),
-            });
-        }
-    }
-    if fmt.is_none() || fmt == Some("json") {
-        for (connector_id, records) in json_map.iter() {
-            entries.push(IngestSchemaEntry {
-                connector_id: connector_id.clone(),
-                format: "json".to_string(),
-                row_count: records.len(),
-                columns: ingest_infer_columns(records),
-            });
-        }
-    }
-    let connector_count = entries.len();
-    drop(csv_map);
-    drop(json_map);
-    Ok((StatusCode::OK, Json(IngestSchemaListResponse {
-        status: "ok",
-        format_filter: params.format,
-        connector_count,
-        entries,
-    })))
-}
-
-// ─── S5-WS4-03: Ingest format auto-detection handler ─────────────────────────
-
-/// S5-WS4-03: Analyse a raw data sample and return the detected format + field count.
-async fn ingest_format_detect(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IngestFormatDetectRequest>,
-) -> Result<(StatusCode, Json<IngestFormatDetectResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let sample = req.sample_data.trim();
-    let (detected_format, confidence, field_count) =
-        if sample.starts_with('[') || sample.starts_with('{') {
-            let fc = if let Ok(v) = serde_json::from_str::<serde_json::Value>(sample) {
-                if let Some(obj) = v.as_object() {
-                    obj.len()
-                } else if let Some(arr) = v.as_array() {
-                    arr.first().and_then(|x| x.as_object()).map(|o| o.len()).unwrap_or(0)
-                } else { 0 }
-            } else { 0 };
-            ("json".to_string(), 0.95f64, fc)
-        } else if sample.lines().next().map(|l| l.contains(',')).unwrap_or(false) {
-            let fc = sample.lines().next().map(|l| l.split(',').count()).unwrap_or(0);
-            ("csv".to_string(), 0.85f64, fc)
-        } else {
-            ("unknown".to_string(), 0.0f64, 0usize)
-        };
-    Ok((StatusCode::OK, Json(IngestFormatDetectResponse {
-        status: "ok",
-        detected_format,
-        confidence,
-        field_count,
-    })))
-}
-
-// ─── S5-WS4-04: Connector configuration validation handler ──────────────────
-
-/// S5-WS4-04: Validate that a connector config is well-formed before registration.
-async fn ingest_connector_validate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IngestConnectorValidateRequest>,
-) -> Result<(StatusCode, Json<IngestConnectorValidateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let mut issues: Vec<String> = Vec::new();
-    if req.connector_id.trim().is_empty() {
-        issues.push("connector_id cannot be empty".to_string());
-    }
-    match req.format.as_str() {
-        "json" | "csv" | "parquet" | "excel" => {}
-        _ => issues.push(format!("unsupported format '{}'; expected: json, csv, parquet, excel", req.format)),
-    }
-    if let Err(e) = serde_json::from_str::<serde_json::Value>(&req.config_json) {
-        issues.push(format!("config_json is not valid JSON: {e}"));
-    }
-    let valid = issues.is_empty();
-    Ok((StatusCode::OK, Json(IngestConnectorValidateResponse {
-        status: "ok",
-        valid,
-        issues,
-    })))
-}
-
-// ─── S8-WS10-02: driver query pass-through ──────────────────────────────────
-
-/// S8-WS10-02: Execute a simple query through a driver session (scaffold).
-async fn driver_query(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<DriverQueryRequest>,
-) -> Result<(StatusCode, Json<DriverQueryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let sessions = state.driver_sessions.lock().expect("driver_sessions lock");
-    let session_exists = sessions.contains_key(&req.session_token);
-    drop(sessions);
-    if !session_exists {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(AuthErrorResponse { status: "error", reason: "invalid_session_token".to_string(), locale: "en".to_string(), localized_message: "Invalid or expired session token".to_string() }),
-        ));
-    }
-    let executed_at_ms = now_unix_ms_u64();
-    Ok((StatusCode::OK, Json(DriverQueryResponse {
-        status: "ok",
-        session_token: req.session_token,
-        sql: req.sql,
-        rows_returned: 0,
-        executed_at_ms,
-    })))
-}
-
-// ─── S8-WS10-02: Driver session ping/keepalive ──────────────────────────────
-
-/// S8-WS10-02: Ping/keepalive for an existing driver session.
-async fn driver_ping(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<DriverPingRequest>,
-) -> Result<(StatusCode, Json<DriverPingResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let sessions = state.driver_sessions.lock().expect("driver_sessions lock");
-    let session_exists = sessions.contains_key(&req.session_token);
-    drop(sessions);
-    if !session_exists {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(AuthErrorResponse {
-                status: "error",
-                reason: "invalid_session_token".to_string(),
-                locale: "en".to_string(),
-                localized_message: "Invalid or expired session token".to_string(),
-            }),
-        ));
-    }
-    let pinged_at_ms = now_unix_ms_u64();
-    Ok((StatusCode::OK, Json(DriverPingResponse {
-        status: "pong",
-        session_token: req.session_token,
-        pinged_at_ms,
-    })))
-}
-
-// ─── S8-WS10-02: Driver pool stats (operator-facing) ────────────────────────
-
-/// S8-WS10-02: Return driver connection pool statistics.
-async fn driver_pool_stats(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<PoolStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let now_ms = now_unix_ms_u64();
-    let stats = state.driver_pool.lock().expect("driver_pool stats lock").pool_stats(now_ms);
-    Ok((StatusCode::OK, Json(pool_stats_response(&stats))))
-}
-
-// ─── S8-WS10-02: Driver health handler ──────────────────────────────────────
-
-async fn driver_health(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<DriverHealthResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let active_sessions = state.driver_sessions.lock().expect("driver_sessions health lock").len();
-    let now_ms = now_unix_ms_u64();
-    let pool_stats = state.driver_pool.lock().expect("driver_pool health lock").pool_stats(now_ms);
-    let healthy = pool_stats.circuit_breaker_state == "closed" && active_sessions < 1_000;
-    Ok((StatusCode::OK, Json(DriverHealthResponse {
-        status: "ok",
-        active_sessions,
-        pool_circuit_breaker: pool_stats.circuit_breaker_state.clone(),
-        pool_active_connections: pool_stats.active_connections,
-        pool_total_acquired: pool_stats.total_acquired,
-        healthy,
-    })))
-}
 
 fn evaluate_deadlock_scan_outcome(
     wait_graph: &HashMap<String, String>,
@@ -16525,7 +10421,7 @@ fn cleanup_wait_edges_for_resource(
     wait_graph.retain(|_, waiting_resource| waiting_resource != resource_key);
 }
 
-fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryResponse {
+pub(crate) fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryResponse {
     let started = Instant::now();
     let elapsed = started.elapsed().as_millis();
     let resolved_max_rows = max_rows.unwrap_or(1000);
@@ -16539,12 +10435,14 @@ fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryRespon
 
 /// S4-WS3-02: physical OLTP executor — runs point SELECT queries against `PagedRowStore`.
 /// Extracts an optional key/prefix constraint from the WHERE clause and filters visible rows.
-fn execute_oltp_select(
+pub(crate) fn execute_oltp_select(
     statements: &[String],
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     limit: usize,
 ) -> Vec<OltpRowResult> {
     use voltnuerongrid_exec_datafusion::{execute_select, SelectOutput, ExecError};
+    use voltnuerongrid_exec_datafusion::datafusion::execute_select_from_rows;
+    use voltnuerongrid_sql::{parse_one, Statement};
 
     let mut results: Vec<OltpRowResult> = Vec::new();
     for stmt_str in statements {
@@ -16552,6 +10450,86 @@ fn execute_oltp_select(
         if remaining == 0 {
             break;
         }
+
+        // Phase 3 — DataFusion fast path for JOIN / GROUP BY / HAVING / window / subquery.
+        // Parse once to check for complex features before deciding which executor to use.
+        let complex = if let Ok(Statement::Select(ref sel)) = parse_one(stmt_str) {
+            sel.has_group_by
+                || sel.has_having
+                || sel.join.is_some()
+                || sel.has_subquery
+                || sel.has_window_fn
+        } else {
+            false
+        };
+
+        if complex {
+            // Collect ALL table names: FROM + every JOIN (including A JOIN B JOIN C).
+            let table_names = voltnuerongrid_exec_datafusion::collect_query_table_names(stmt_str);
+
+            // Take a snapshot once and filter per table by key prefix.
+            let all_rows = rs.export_rows_snapshot();
+            let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
+                std::collections::HashMap::new();
+            for name in &table_names {
+                let prefix = format!("{name}:");
+                let filtered: Vec<_> = all_rows
+                    .iter()
+                    .filter(|(k, _)| k == name || k.starts_with(&prefix))
+                    .cloned()
+                    .collect();
+                table_rows.insert(name.clone(), filtered);
+            }
+
+            let df_result = run_async_in_executor(
+                execute_select_from_rows(stmt_str, table_rows, remaining)
+            );
+
+            match df_result {
+                Ok(SelectOutput::Rows(rows)) => {
+                    metrics::counter!(
+                        "vng_sql_select_executor_total",
+                        "engine" => "datafusion",
+                        "outcome" => "ok",
+                    ).increment(1);
+                    for r in rows {
+                        results.push(OltpRowResult { key: r.key, data: r.data });
+                        if results.len() >= limit { break; }
+                    }
+                    continue;
+                }
+                Ok(SelectOutput::Aggregate(agg)) => {
+                    // DataFusion now always returns Rows; this arm is defensive.
+                    // Convert the single-row aggregate summary to an OltpRowResult.
+                    metrics::counter!(
+                        "vng_sql_select_executor_total",
+                        "engine" => "datafusion",
+                        "outcome" => "aggregate_as_row",
+                    ).increment(1);
+                    let mut data = voltnuerongrid_store::mvcc::RowData::new();
+                    for (col, val) in agg.columns.iter().zip(agg.values.iter()) {
+                        let s = match val {
+                            voltnuerongrid_exec_datafusion::AggregateCell::Int(i) => i.to_string(),
+                            voltnuerongrid_exec_datafusion::AggregateCell::Float(f) => f.to_string(),
+                            voltnuerongrid_exec_datafusion::AggregateCell::Text(t) => t.clone(),
+                            voltnuerongrid_exec_datafusion::AggregateCell::Null => continue,
+                        };
+                        data.insert(col.clone(), s);
+                    }
+                    results.push(OltpRowResult { key: "agg_0".to_string(), data });
+                    continue;
+                }
+                Err(_) => {
+                    metrics::counter!(
+                        "vng_sql_select_executor_total",
+                        "engine" => "datafusion",
+                        "outcome" => "error_fallback",
+                    ).increment(1);
+                    // Fall through to Phase 1.7 / legacy.
+                }
+            }
+        }
+
         // Phase 1.7 — try the correct AST-driven executor first.
         // It returns Unsupported for features it can't handle yet
         // (JOIN, GROUP BY, subquery), in which case we fall back to the
@@ -16601,6 +10579,22 @@ fn execute_oltp_select(
     results
 }
 
+/// Drive an async future to completion from synchronous code within a tokio runtime.
+///
+/// Uses `block_in_place` when a multi-thread handle is available (service path)
+/// and falls back to a fresh single-threaded runtime for test contexts.
+fn run_async_in_executor<F, T>(fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
+        Err(_) => tokio::runtime::Runtime::new()
+            .expect("tokio runtime for DataFusion")
+            .block_on(fut),
+    }
+}
+
 /// Legacy substring-based executor. Kept as a fallback for queries the new
 /// executor doesn't support yet (JOIN / GROUP BY / subquery). To be deleted
 /// once the new executor covers those features.
@@ -16608,7 +10602,7 @@ fn execute_oltp_select(
 /// **Known incorrect:** uses `row_key.contains(prefix_str)` which makes
 /// `WHERE id = 5` match rows 15, 25, 50, 51 etc. The new path is preferred
 /// whenever it can handle the query.
-fn execute_oltp_select_legacy(
+pub(crate) fn execute_oltp_select_legacy(
     stmt_str: &str,
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     limit: usize,
@@ -16645,7 +10639,7 @@ fn execute_oltp_select_legacy(
     }
 }
 
-fn execute_udf_runtime_scaffold(sql_batch: &str) -> Result<Vec<UdfExecutionResult>, String> {
+pub(crate) fn execute_udf_runtime_scaffold(sql_batch: &str) -> Result<Vec<UdfExecutionResult>, String> {
     enforce_udf_guardrails(sql_batch)?;
     let mut results = Vec::new();
     for statement in SqlAnalyzer::parse_batch(sql_batch) {
@@ -16682,7 +10676,7 @@ fn execute_udf_runtime_scaffold(sql_batch: &str) -> Result<Vec<UdfExecutionResul
     Ok(results)
 }
 
-fn udf_function_catalog_contract() -> Vec<UdfFunctionCatalogEntry> {
+pub(crate) fn udf_function_catalog_contract() -> Vec<UdfFunctionCatalogEntry> {
     vec![
         UdfFunctionCatalogEntry {
             name: "udf_rust",
@@ -16705,7 +10699,7 @@ fn udf_function_catalog_contract() -> Vec<UdfFunctionCatalogEntry> {
     ]
 }
 
-fn udf_guard_policy_contract() -> Vec<UdfLanguageGuardPolicy> {
+pub(crate) fn udf_guard_policy_contract() -> Vec<UdfLanguageGuardPolicy> {
     vec![
         UdfLanguageGuardPolicy {
             language: "rust",
@@ -16725,7 +10719,7 @@ fn udf_guard_policy_contract() -> Vec<UdfLanguageGuardPolicy> {
     ]
 }
 
-fn build_udf_execution_plan(sql_batch: &str) -> Vec<UdfExecutionPlanStep> {
+pub(crate) fn build_udf_execution_plan(sql_batch: &str) -> Vec<UdfExecutionPlanStep> {
     let mut plan = Vec::new();
     for statement in SqlAnalyzer::parse_batch(sql_batch) {
         let mut invocations = Vec::new();
@@ -16791,7 +10785,7 @@ fn extract_udf_input(statement: &str) -> Option<String> {
     Some(remaining[..end].to_string())
 }
 
-fn failure_budget_snapshot(consumed_percent: f64) -> FailureBudgetSnapshot {
+pub(crate) fn failure_budget_snapshot(consumed_percent: f64) -> FailureBudgetSnapshot {
     let bounded_consumed = consumed_percent.clamp(0.0, 100.0);
     let remaining = (100.0 - bounded_consumed).max(0.0);
     FailureBudgetSnapshot {
@@ -16803,7 +10797,7 @@ fn failure_budget_snapshot(consumed_percent: f64) -> FailureBudgetSnapshot {
     }
 }
 
-fn rate_limit_policy_snapshot(current_minute_count: u32) -> RateLimitPolicySnapshot {
+pub(crate) fn rate_limit_policy_snapshot(current_minute_count: u32) -> RateLimitPolicySnapshot {
     let (allowed, _, _) = evaluate_rate_limit(current_minute_count, 1, 600, 50);
     RateLimitPolicySnapshot {
         requests_per_minute: 600,
@@ -16813,7 +10807,7 @@ fn rate_limit_policy_snapshot(current_minute_count: u32) -> RateLimitPolicySnaps
     }
 }
 
-fn evaluate_failure_budget_alert(
+pub(crate) fn evaluate_failure_budget_alert(
     consumed_percent: f64,
     burn_rate: f64,
 ) -> FailureBudgetAlertResponse {
@@ -16864,18 +10858,18 @@ fn default_dr_hook_policy_config() -> DrHookPolicyConfig {
     }
 }
 
-fn now_unix_ms() -> u128 {
+pub(crate) fn now_unix_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
 }
 
-fn now_unix_ms_u64() -> u64 {
+pub(crate) fn now_unix_ms_u64() -> u64 {
     now_unix_ms().min(u128::from(u64::MAX)) as u64
 }
 
-fn pool_stats_response(stats: &voltnuerongrid_driver_rust::PoolStats) -> PoolStatsResponse {
+pub(crate) fn pool_stats_response(stats: &voltnuerongrid_driver_rust::PoolStats) -> PoolStatsResponse {
     PoolStatsResponse {
         total_connections: stats.total_connections,
         idle_connections: stats.idle_connections,
@@ -16891,7 +10885,7 @@ fn pool_stats_response(stats: &voltnuerongrid_driver_rust::PoolStats) -> PoolSta
     }
 }
 
-fn pool_acquire_error_state(error: &PoolAcquireError) -> &'static str {
+pub(crate) fn pool_acquire_error_state(error: &PoolAcquireError) -> &'static str {
     match error {
         PoolAcquireError::PoolExhausted { .. } => "pool_exhausted",
         PoolAcquireError::CircuitOpen { .. } => "circuit_open",
@@ -16900,18 +10894,8 @@ fn pool_acquire_error_state(error: &PoolAcquireError) -> &'static str {
     }
 }
 
-fn parse_attestation_type(value: &str) -> Option<AttestationType> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "build_verification" => Some(AttestationType::BuildVerification),
-        "security_scan" => Some(AttestationType::SecurityScan),
-        "checksum_verification" => Some(AttestationType::ChecksumVerification),
-        "signature_verification" => Some(AttestationType::SignatureVerification),
-        "review_approval" => Some(AttestationType::ReviewApproval),
-        _ => None,
-    }
-}
 
-fn acquire_sql_data_plane_connection(
+pub(crate) fn acquire_sql_data_plane_connection(
     state: &AppState,
     headers: &HeaderMap,
     principal: &RuntimeAccessPrincipal,
@@ -16951,7 +10935,7 @@ fn acquire_sql_data_plane_connection(
     }
 }
 
-fn release_sql_data_plane_connection(state: &AppState, connection_id: &str) {
+pub(crate) fn release_sql_data_plane_connection(state: &AppState, connection_id: &str) {
     let now_ms = now_unix_ms_u64();
     let _ = state
         .driver_pool
@@ -16966,7 +10950,7 @@ fn compute_retry_backoff_ms(attempt: u32, base_backoff_ms: u64, max_backoff_ms: 
     base_backoff_ms.saturating_mul(factor).min(max_backoff_ms)
 }
 
-fn build_retry_plan(policy: &DrHookPolicyConfig, attempts: u32) -> Vec<DrHookRetryPlanStep> {
+pub(crate) fn build_retry_plan(policy: &DrHookPolicyConfig, attempts: u32) -> Vec<DrHookRetryPlanStep> {
     (1..=attempts)
         .map(|attempt| {
             let backoff = compute_retry_backoff_ms(
@@ -17087,7 +11071,7 @@ fn persist_dr_hook_policy_state(state: &AppState) {
     }
 }
 
-fn enqueue_dr_hook_task(
+pub(crate) fn enqueue_dr_hook_task(
     state: &AppState,
     hook: &str,
     scope: Option<&str>,
@@ -17233,7 +11217,7 @@ fn export_gate_report(path: &str, evaluation: &SreGateEvaluationResponse) {
     }
 }
 
-fn execute_dr_hook(
+pub(crate) fn execute_dr_hook(
     state: &AppState,
     hook: &str,
     scope: Option<&str>,
@@ -17424,7 +11408,7 @@ fn execute_dr_hook(
     record
 }
 
-fn latest_dr_hook_records(state: &AppState, max_items: usize) -> Vec<DrHookExecutionRecord> {
+pub(crate) fn latest_dr_hook_records(state: &AppState, max_items: usize) -> Vec<DrHookExecutionRecord> {
     match state.dr_hook_records.lock() {
         Ok(records) => {
             let len = records.len();
@@ -17441,7 +11425,7 @@ fn append_dr_hook_record(state: &AppState, record: DrHookExecutionRecord) {
     }
 }
 
-fn evaluate_rate_limit(
+pub(crate) fn evaluate_rate_limit(
     current_minute_count: u32,
     requested_units: u32,
     requests_per_minute: u32,
@@ -17483,7 +11467,7 @@ fn rotate_leader(
     }
 }
 
-fn record_transport_mutation(
+pub(crate) fn record_transport_mutation(
     state: &AppState,
     source_node_id: &str,
     target_node_id: &str,
@@ -17603,13 +11587,13 @@ fn build_failover_handoff_report(
     }
 }
 
-fn default_node_cpu_cores() -> u32 {
+pub(crate) fn default_node_cpu_cores() -> u32 {
     std::thread::available_parallelism()
         .map(|value| value.get() as u32)
         .unwrap_or(4)
 }
 
-fn default_node_ram_mb() -> u64 {
+pub(crate) fn default_node_ram_mb() -> u64 {
     env::var("VNG_NODE_TOTAL_RAM_MB")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -17636,2084 +11620,6 @@ fn initial_cluster_nodes(node_id: &str) -> HashMap<String, ClusterNodeRuntime> {
     nodes
 }
 
-fn require_admin_api_key(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
-    let Some(required_key) = state.admin_api_key.as_ref() else {
-        return Err(auth_error(headers, "missing_or_invalid_admin_key"));
-    };
-
-    let provided = headers
-        .get("x-vng-admin-key")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-
-    if provided != required_key {
-        return Err(auth_error(headers, "missing_or_invalid_admin_key"));
-    }
-
-    Ok(())
-}
-
-fn release_locks_for_transaction(
-    lock_table: &mut HashMap<String, PessimisticLockRecord>,
-    wait_graph: &mut HashMap<String, String>,
-    transaction_id: &str,
-) -> usize {
-    let before = lock_table.len();
-    lock_table.retain(|_, record| record.transaction_id != transaction_id);
-    wait_graph.retain(|waiting_tx, holder_tx| waiting_tx != transaction_id && holder_tx != transaction_id);
-    before.saturating_sub(lock_table.len())
-}
-
-fn choose_migration_target(
-    nodes: &HashMap<String, ClusterNodeRuntime>,
-    source_node_id: &str,
-    requested_target_node_id: Option<&str>,
-) -> Option<String> {
-    if let Some(target_node_id) = requested_target_node_id {
-        if target_node_id != source_node_id {
-            if let Some(node) = nodes.get(target_node_id) {
-                if node.status != "dead" {
-                    return Some(target_node_id.to_string());
-                }
-            }
-        }
-    }
-
-    nodes.iter()
-        .filter(|(node_id, node)| node_id.as_str() != source_node_id && node.status != "dead")
-        .max_by_key(|(_, node)| if node.status == "active" { 2 } else { 1 })
-        .map(|(node_id, _)| node_id.clone())
-}
-
-fn migrate_driver_sessions(
-    sessions: &mut HashMap<String, DriverSession>,
-    source_node_id: &str,
-    target_node_id: &str,
-) -> usize {
-    let mut migrated = 0usize;
-    for session in sessions.values_mut() {
-        if session.assigned_node_id == source_node_id {
-            session.assigned_node_id = target_node_id.to_string();
-            migrated += 1;
-        }
-    }
-    migrated
-}
-
-fn cluster_topology_snapshot(state: &AppState) -> AdminClusterTopologyResponse {
-    let leader_node_id = state
-        .leader_node_id
-        .lock()
-        .map(|value| value.clone())
-        .unwrap_or_else(|_| state.node_id.clone());
-    let cluster_nodes = state.cluster_nodes.lock().expect("cluster_nodes lock topology");
-    let sessions = state.driver_sessions.lock().expect("driver_sessions lock topology");
-    let transactions = state.acid_transactions.lock().expect("acid_transactions lock topology");
-    let locks = state.pessimistic_locks.lock().expect("pessimistic_locks lock topology");
-    let failure_signals = state.cluster_failure_signals.lock().expect("cluster_failure_signals lock topology");
-
-    let mut active_nodes = 0usize;
-    let mut passive_nodes = 0usize;
-    let mut dead_nodes = 0usize;
-    let mut active_sessions = 0usize;
-    let mut passive_sessions = 0usize;
-    let mut live_transactions = 0usize;
-    let total_transactions = transactions.all_transactions().len();
-    let live_locks = locks.len();
-    let mut nodes = Vec::new();
-
-    for node in cluster_nodes.values() {
-        let node_dead = failure_signals.iter().any(|signal| {
-            signal.node_id == node.node_id && !signal.resolved && signal.severity.eq_ignore_ascii_case("critical")
-        }) || node.status == "dead";
-        let effective_status = if node_dead {
-            "dead".to_string()
-        } else {
-            node.status.clone()
-        };
-        let node_active_sessions = sessions.values().filter(|session| session.assigned_node_id == node.node_id).count();
-        let node_live_transactions = transactions
-            .active_transactions()
-            .into_iter()
-            .filter(|entry| entry.assigned_node_id == node.node_id)
-            .count();
-        let node_total_transactions = transactions
-            .all_transactions()
-            .into_iter()
-            .filter(|entry| entry.assigned_node_id == node.node_id)
-            .count();
-        let node_live_locks = locks.values().filter(|record| {
-            transactions
-                .transactions
-                .get(&record.transaction_id)
-                .map(|entry| entry.assigned_node_id == node.node_id)
-                .unwrap_or(false)
-        }).count();
-        let node_passive_sessions = if effective_status == "passive" { node_active_sessions } else { 0 };
-        let node_effective_active_sessions = if effective_status == "active" { node_active_sessions } else { 0 };
-
-        match effective_status.as_str() {
-            "active" => active_nodes += 1,
-            "passive" => passive_nodes += 1,
-            _ => dead_nodes += 1,
-        }
-        active_sessions += node_effective_active_sessions;
-        passive_sessions += node_passive_sessions;
-        live_transactions += node_live_transactions;
-
-        let estimated_cpu = ((node_effective_active_sessions as f64 * 4.0)
-            + (node_live_transactions as f64 * 6.0)
-            + (node_live_locks as f64 * 1.5)
-            + if node.role == "leader" { 8.0 } else { 3.0 })
-            .min(100.0);
-        let estimated_ram = (512u64
-            + (node_active_sessions as u64 * 128)
-            + (node_live_transactions as u64 * 96)
-            + (node_live_locks as u64 * 16))
-            .min(node.total_ram_mb.max(512));
-
-        nodes.push(ClusterTopologyNodeEntry {
-            node_id: node.node_id.clone(),
-            role: node.role.clone(),
-            status: effective_status,
-            total_cpu_cores: node.total_cpu_cores,
-            total_ram_mb: node.total_ram_mb,
-            used_cpu_pct: estimated_cpu,
-            used_ram_mb: estimated_ram,
-            active_sessions: node_effective_active_sessions,
-            passive_sessions: node_passive_sessions,
-            live_transactions: node_live_transactions,
-            total_transactions: node_total_transactions,
-            live_locks: node_live_locks,
-            draining: node.draining,
-            last_heartbeat_ms: node.last_heartbeat_ms,
-        });
-    }
-
-    nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
-
-    AdminClusterTopologyResponse {
-        status: "ok",
-        leader_node_id,
-        total_nodes: nodes.len(),
-        active_nodes,
-        passive_nodes,
-        dead_nodes,
-        active_sessions,
-        passive_sessions,
-        live_transactions,
-        total_transactions,
-        live_locks,
-        nodes,
-    }
-}
-
-fn require_operator_auth(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
-    let Some(required_key) = state.admin_api_key.as_ref() else {
-        return Err(auth_error(headers, "missing_or_invalid_admin_key"));
-    };
-
-    let provided = headers
-        .get("x-vng-admin-key")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-
-    if provided != required_key {
-        return Err(auth_error(headers, "missing_or_invalid_admin_key"));
-    }
-
-    let operator = operator_identity_from_headers(headers, state)
-        .ok_or_else(|| auth_error(headers, "missing_or_invalid_operator_identity"))?;
-    if !state.allowed_operator_roles.contains(&operator.role) {
-        return Err(auth_error(headers, "operator_role_not_allowed"));
-    }
-    if !CONTROL_PLANE_OPERATOR_ROLES.contains(&operator.role) {
-        return Err(auth_error(headers, "operator_role_not_authorized"));
-    }
-
-    Ok(())
-}
-
-fn require_cluster_failover_privilege(
-    headers: &HeaderMap,
-    state: &AppState,
-    action: PrivilegeAction,
-) -> Result<OperatorIdentity, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(headers, state)?;
-    require_operator_privilege(headers, state, "cluster.failover", "cluster", action)
-}
-
-fn require_operator_privilege(
-    headers: &HeaderMap,
-    state: &AppState,
-    resource: &str,
-    scope: &str,
-    action: PrivilegeAction,
-) -> Result<OperatorIdentity, (StatusCode, Json<AuthErrorResponse>)> {
-    let operator = operator_identity_from_headers(headers, state)
-        .ok_or_else(|| auth_error(headers, "missing_or_invalid_operator_identity"))?;
-    if state
-        .rbac_privilege_matrix
-        .allows(operator.role.as_str(), resource, scope, action)
-    {
-        Ok(operator)
-    } else {
-        Err(forbidden_error(headers, "insufficient_privilege"))
-    }
-}
-
-fn require_sql_runtime_principal(
-    headers: &HeaderMap,
-    state: &AppState,
-    action: PrivilegeAction,
-    sql_scope: &str,
-) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
-    require_runtime_principal(headers, state, "sql.runtime", sql_scope, action)
-}
-
-fn require_ingest_runtime_privilege(
-    headers: &HeaderMap,
-    state: &AppState,
-    action: PrivilegeAction,
-    ingest_scope: &str,
-) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
-    require_runtime_principal(headers, state, "ingest.connectors", ingest_scope, action)
-}
-
-fn require_store_runtime_principal(
-    headers: &HeaderMap,
-    state: &AppState,
-    action: PrivilegeAction,
-    store_scope: &str,
-) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
-    require_runtime_principal(headers, state, "storage.catalog", store_scope, action)
-}
-
-fn require_audit_runtime_principal(
-    headers: &HeaderMap,
-    state: &AppState,
-    action: PrivilegeAction,
-    audit_scope: &str,
-) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
-    require_runtime_principal(headers, state, "observability.audit", audit_scope, action)
-}
-
-fn require_autonomous_records_runtime_principal(
-    headers: &HeaderMap,
-    state: &AppState,
-    action: PrivilegeAction,
-    records_scope: &str,
-) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
-    require_runtime_principal(
-        headers,
-        state,
-        "observability.autonomous_records",
-        records_scope,
-        action,
-    )
-}
-
-fn require_runtime_principal(
-    headers: &HeaderMap,
-    state: &AppState,
-    resource: &str,
-    scope: &str,
-    action: PrivilegeAction,
-) -> Result<RuntimeAccessPrincipal, (StatusCode, Json<AuthErrorResponse>)> {
-    let has_operator_headers = headers.contains_key("x-vng-admin-key")
-        || headers.contains_key("x-vng-operator-id");
-
-    if has_operator_headers {
-        require_operator_auth(headers, state)?;
-        let operator = require_operator_privilege(headers, state, resource, scope, action)?;
-        return Ok(RuntimeAccessPrincipal::Operator(operator));
-    }
-
-    let user = require_tenant_user_privilege(headers, state, resource, scope, action)?;
-    Ok(RuntimeAccessPrincipal::TenantUser(user))
-}
-
-fn tenant_scoped_scope(tenant_id: &str, scope: &str) -> String {
-    format!("tenants/{tenant_id}/{}", scope.trim_start_matches('/'))
-}
-
-fn store_table_matches_tenant_namespace(table: &str, tenant_id: &str) -> bool {
-    let normalized_table = table.trim().to_ascii_lowercase();
-    let normalized_tenant = tenant_id.trim().to_ascii_lowercase();
-    normalized_table.starts_with(&format!("tenant/{normalized_tenant}/"))
-        || normalized_table.starts_with(&format!("tenant_{normalized_tenant}_"))
-        || normalized_table.starts_with(&format!("{normalized_tenant}."))
-}
-
-fn ensure_store_table_access(
-    principal: &RuntimeAccessPrincipal,
-    headers: &HeaderMap,
-    table: &str,
-) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
-    match principal {
-        RuntimeAccessPrincipal::Operator(_) => Ok(()),
-        RuntimeAccessPrincipal::TenantUser(user) => {
-            if store_table_matches_tenant_namespace(table, &user.tenant_id) {
-                Ok(())
-            } else {
-                Err(forbidden_error(headers, "insufficient_privilege"))
-            }
-        }
-    }
-}
-
-fn ingest_scope_for_connector(connector_id: &str, format: &str) -> String {
-    format!("ingest/connectors/{connector_id}/{format}")
-}
-
-fn ingest_status_scope() -> &'static str {
-    "ingest/status"
-}
-
-fn ingest_outbox_scope(connector_id: Option<&str>) -> String {
-    match connector_id {
-        Some(connector_id) => format!("ingest/outbox/{connector_id}"),
-        None => "ingest/outbox".to_string(),
-    }
-}
-
-fn ingest_outbox_stream_name(storage_key: &str) -> String {
-    format!(
-        "ingest.outbox.{}",
-        storage_key
-            .replace('/', ".")
-            .replace(':', ".")
-            .replace(' ', "_")
-    )
-}
-
-fn ingest_storage_key(principal: &RuntimeAccessPrincipal, connector_id: &str) -> String {
-    match principal {
-        RuntimeAccessPrincipal::Operator(_) => connector_id.to_string(),
-        RuntimeAccessPrincipal::TenantUser(user) => {
-            format!("tenant/{}/{}", user.tenant_id, connector_id)
-        }
-    }
-}
-
-fn count_tenant_ingest_records<T>(records: &HashMap<String, Vec<T>>, tenant_id: &str) -> (usize, usize) {
-    let prefix = format!("tenant/{tenant_id}/");
-    let connectors = records.keys().filter(|key| key.starts_with(&prefix)).count();
-    let total_records = records
-        .iter()
-        .filter(|(key, _)| key.starts_with(&prefix))
-        .map(|(_, value)| value.len())
-        .sum();
-    (connectors, total_records)
-}
-
-fn append_ingest_outbox_events(
-    state: &AppState,
-    principal: &RuntimeAccessPrincipal,
-    connector_id: &str,
-    format: &str,
-    records: &[voltnuerongrid_ingest::IngestRecord],
-) -> usize {
-    let storage_key = ingest_storage_key(principal, connector_id);
-    let stream_name = ingest_outbox_stream_name(&storage_key);
-
-    if let Ok(mut stream_map) = state.ingest_outbox_streams.lock() {
-        stream_map.insert(storage_key.clone(), stream_name.clone());
-    }
-
-    let mut event_bus = match state.ingest_event_bus.lock() {
-        Ok(guard) => guard,
-        Err(_) => return 0,
-    };
-
-    let mut appended = 0usize;
-    for record in records {
-        let mut attributes = HashMap::new();
-        attributes.insert("connector_id".to_string(), connector_id.to_string());
-        attributes.insert("format".to_string(), format.to_string());
-        attributes.insert("storage_key".to_string(), storage_key.clone());
-        attributes.insert("record_key".to_string(), record.key.clone());
-        if let RuntimeAccessPrincipal::TenantUser(user) = principal {
-            attributes.insert("tenant_id".to_string(), user.tenant_id.clone());
-        }
-
-        if event_bus
-            .publish(
-            &stream_name,
-            StreamDirection::Internal,
-            &state.node_id,
-            &json!({
-                "connector_id": connector_id,
-                "format": format,
-                "storage_key": storage_key,
-                "record_key": record.key,
-                "payload": record.payload,
-            })
-            .to_string(),
-            attributes,
-        )
-            .is_ok()
-        {
-            appended += 1;
-        }
-    }
-
-    appended
-}
-
-fn evaluate_kms_runtime(state: &AppState) -> KmsEvaluationSnapshot {
-    let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
-    let unavailable_envs = runtime.unavailable_envs.clone();
-    for provider in &mut runtime.providers {
-        provider.clear_unavailable();
-        for env_name in &unavailable_envs {
-            provider.mark_unavailable(env_name);
-        }
-    }
-
-    let mut unavailable_envs = runtime.unavailable_envs.iter().cloned().collect::<Vec<_>>();
-    unavailable_envs.sort();
-
-    let providers = runtime
-        .providers
-        .iter()
-        .map(|provider| provider as &dyn KmsKeyProvider)
-        .collect::<Vec<_>>();
-    let chain = KmsProviderChain::new(providers);
-
-    match state.security_config.resolve_kms_key_ref_with_provider(&chain) {
-        Ok(resolution) => {
-            runtime.last_error = None;
-            runtime.last_resolution = Some(resolution.clone());
-            KmsEvaluationSnapshot {
-                status: if resolution.failover_used { "degraded" } else { "ok" },
-                resolution_state: if resolution.failover_used {
-                    "failover_active"
-                } else {
-                    "primary_active"
-                },
-                resolution: Some(resolution),
-                unavailable_envs,
-                last_simulation_note: runtime.last_simulation_note.clone(),
-                last_error: None,
-            }
-        }
-        Err(error) => {
-            runtime.last_resolution = None;
-            runtime.last_error = Some(error.clone());
-            KmsEvaluationSnapshot {
-                status: "degraded",
-                resolution_state: "unresolved",
-                resolution: None,
-                unavailable_envs,
-                last_simulation_note: runtime.last_simulation_note.clone(),
-                last_error: Some(error),
-            }
-        }
-    }
-}
-
-fn build_security_kms_status_response(
-    state: &AppState,
-    snapshot: &KmsEvaluationSnapshot,
-) -> SecurityKmsStatusResponse {
-    SecurityKmsStatusResponse {
-        status: snapshot.status,
-        resolution_state: snapshot.resolution_state,
-        encryption_at_rest_required: state.security_config.encryption_at_rest_required,
-        configured_envs: state.security_config.kms_key_candidates(),
-        unavailable_envs: snapshot.unavailable_envs.clone(),
-        selected_env: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.selected_env.clone()),
-        key_ref: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.key_ref.clone()),
-        failover_used: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.failover_used)
-            .unwrap_or(false),
-        last_simulation_note: snapshot.last_simulation_note.clone(),
-        last_error: snapshot.last_error.clone(),
-    }
-}
-
-fn require_tenant_user_privilege(
-    headers: &HeaderMap,
-    state: &AppState,
-    resource: &str,
-    scope: &str,
-    action: PrivilegeAction,
-) -> Result<TenantUserIdentity, (StatusCode, Json<AuthErrorResponse>)> {
-    let user = tenant_user_identity_from_headers(headers, state)
-        .ok_or_else(|| auth_error(headers, "missing_or_invalid_user_identity"))?;
-    let expected_scope = tenant_scoped_scope(&user.tenant_id, scope);
-    if state
-        .rbac_privilege_matrix
-        .allows(user.role.as_str(), resource, &expected_scope, action)
-    {
-        Ok(user)
-    } else {
-        Err(forbidden_error(headers, "insufficient_privilege"))
-    }
-}
-
-fn operator_identity_from_headers(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Option<OperatorIdentity> {
-    let operator_id = headers
-        .get("x-vng-operator-id")
-        .and_then(|value| value.to_str().ok())?
-        .trim();
-    if operator_id.is_empty() {
-        return None;
-    }
-    let role = state.operator_role_bindings.get(operator_id).copied()?;
-    Some(OperatorIdentity {
-        operator_id: operator_id.to_string(),
-        role,
-    })
-}
-
-fn tenant_user_identity_from_headers(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Option<TenantUserIdentity> {
-    let user_id = headers
-        .get("x-vng-user-id")
-        .and_then(|value| value.to_str().ok())?
-        .trim();
-    let tenant_id = headers
-        .get("x-vng-tenant-id")
-        .and_then(|value| value.to_str().ok())?
-        .trim();
-    if user_id.is_empty() || tenant_id.is_empty() {
-        return None;
-    }
-    let binding = state.tenant_user_bindings.get(user_id)?;
-    if !binding.tenant_id.eq_ignore_ascii_case(tenant_id) {
-        return None;
-    }
-    Some(TenantUserIdentity {
-        user_id: user_id.to_string(),
-        tenant_id: tenant_id.to_string(),
-        role: binding.role.clone(),
-    })
-}
-
-fn auth_error(
-    headers: &HeaderMap,
-    reason: &str,
-) -> (StatusCode, Json<AuthErrorResponse>) {
-    let locale = locale_from_headers(headers);
-    let message_key = if reason == "missing_or_invalid_admin_key" {
-        "missing_or_invalid_admin_key"
-    } else {
-        "unauthorized"
-    };
-    let localized = I18nCatalog::message(locale, message_key);
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(AuthErrorResponse {
-            status: "unauthorized",
-            reason: reason.to_string(),
-            locale: locale.as_str().to_string(),
-            localized_message: localized.message.to_string(),
-        }),
-    )
-}
-
-fn forbidden_error(
-    headers: &HeaderMap,
-    reason: &str,
-) -> (StatusCode, Json<AuthErrorResponse>) {
-    let locale = locale_from_headers(headers);
-    let localized = I18nCatalog::message(locale, "unauthorized");
-    (
-        StatusCode::FORBIDDEN,
-        Json(AuthErrorResponse {
-            status: "forbidden",
-            reason: reason.to_string(),
-            locale: locale.as_str().to_string(),
-            localized_message: localized.message.to_string(),
-        }),
-    )
-}
-
-fn bad_request_error(
-    headers: &HeaderMap,
-    reason: &str,
-) -> (StatusCode, Json<AuthErrorResponse>) {
-    let locale = locale_from_headers(headers);
-    let localized = I18nCatalog::message(locale, "unauthorized");
-    (
-        StatusCode::BAD_REQUEST,
-        Json(AuthErrorResponse {
-            status: "bad_request",
-            reason: reason.to_string(),
-            locale: locale.as_str().to_string(),
-            localized_message: localized.message.to_string(),
-        }),
-    )
-}
-
-fn locale_from_headers(headers: &HeaderMap) -> SupportedLocale {
-    headers
-        .get("accept-language")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.split(',').next().unwrap_or("en-US"))
-        .map(SupportedLocale::parse)
-        .unwrap_or(SupportedLocale::EnUs)
-}
-
-fn append_audit_event(
-    state: &AppState,
-    kind: AuditEventKind,
-    actor: &str,
-    action: &str,
-    outcome: &str,
-    details_json: &str,
-) {
-    if let Ok(mut sink) = state.audit_sink.lock() {
-        let event = sink.append(kind, actor, action, outcome, details_json);
-        // S9-WS8A-02: write to file-backed audit log if configured.
-        if let Some(ref path) = state.audit_log_path {
-            if let Ok(line) = serde_json::to_string(&event) {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                {
-                    let _ = writeln!(f, "{}", line);
-                }
-            }
-        }
-    }
-}
-
-fn append_runtime_audit_event(
-    state: &AppState,
-    kind: AuditEventKind,
-    principal: &RuntimeAccessPrincipal,
-    action: &str,
-    outcome: &str,
-    details: serde_json::Value,
-) {
-    let actor = match principal {
-        RuntimeAccessPrincipal::Operator(operator) => operator.operator_id.as_str(),
-        RuntimeAccessPrincipal::TenantUser(user) => user.user_id.as_str(),
-    };
-    let mut payload = match details {
-        serde_json::Value::Object(map) => map,
-        other => {
-            let mut map = serde_json::Map::new();
-            map.insert("details".to_string(), other);
-            map
-        }
-    };
-    match principal {
-        RuntimeAccessPrincipal::Operator(operator) => {
-            payload.insert("actor_type".to_string(), json!("operator"));
-            payload.insert("operator_id".to_string(), json!(operator.operator_id));
-            payload.insert("operator_role".to_string(), json!(operator.role.as_str()));
-        }
-        RuntimeAccessPrincipal::TenantUser(user) => {
-            payload.insert("actor_type".to_string(), json!("tenant_user"));
-            payload.insert("tenant_id".to_string(), json!(user.tenant_id));
-            payload.insert("user_id".to_string(), json!(user.user_id));
-            payload.insert("user_role".to_string(), json!(user.role));
-        }
-    }
-    append_audit_event(
-        state,
-        kind,
-        actor,
-        action,
-        outcome,
-        &serde_json::Value::Object(payload).to_string(),
-    );
-}
-
-fn audit_event_matches_tenant(event: &AuditEvent, tenant_id: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(&event.details_json)
-        .ok()
-        .and_then(|value| value.get("tenant_id").and_then(|v| v.as_str()).map(str::to_string))
-        .map(|value| value.eq_ignore_ascii_case(tenant_id))
-        .unwrap_or(false)
-}
-
-fn filter_audit_events_for_principal(
-    events: Vec<AuditEvent>,
-    principal: &RuntimeAccessPrincipal,
-) -> Vec<AuditEvent> {
-    match principal {
-        RuntimeAccessPrincipal::Operator(_) => events,
-        RuntimeAccessPrincipal::TenantUser(user) => events
-            .into_iter()
-            .filter(|event| audit_event_matches_tenant(event, &user.tenant_id))
-            .collect(),
-    }
-}
-
-fn next_action_trace_id() -> String {
-    let id = ACTION_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("atrace-{id}")
-}
-
-fn tenant_id_from_scoped_path(scope: &str) -> Option<String> {
-    let mut segments = scope.trim().trim_start_matches('/').split('/');
-    let prefix = segments.next()?;
-    if !prefix.eq_ignore_ascii_case("tenants") {
-        return None;
-    }
-    let tenant_id = segments.next()?.trim();
-    if tenant_id.is_empty() {
-        None
-    } else {
-        Some(tenant_id.to_string())
-    }
-}
-
-fn latest_action_records(state: &AppState, max_items: usize) -> Vec<AutonomousActionExecutionRecord> {
-    match state.action_records.lock() {
-        Ok(records) => {
-            let len = records.len();
-            let start = len.saturating_sub(max_items);
-            records[start..].to_vec()
-        }
-        Err(_) => Vec::new(),
-    }
-}
-
-fn append_action_record(state: &AppState, record: AutonomousActionExecutionRecord) {
-    if let Ok(mut records) = state.action_records.lock() {
-        records.push(record);
-    }
-}
-
-fn autonomous_action_record_matches_tenant(
-    record: &AutonomousActionExecutionRecord,
-    tenant_id: &str,
-) -> bool {
-    record
-        .tenant_id
-        .as_deref()
-        .map(|value| value.eq_ignore_ascii_case(tenant_id))
-        .or_else(|| {
-            tenant_id_from_scoped_path(&record.scope)
-                .map(|value| value.eq_ignore_ascii_case(tenant_id))
-        })
-        .unwrap_or(false)
-}
-
-fn filter_action_records_for_principal(
-    records: Vec<AutonomousActionExecutionRecord>,
-    principal: &RuntimeAccessPrincipal,
-) -> Vec<AutonomousActionExecutionRecord> {
-    match principal {
-        RuntimeAccessPrincipal::Operator(_) => records,
-        RuntimeAccessPrincipal::TenantUser(user) => records
-            .into_iter()
-            .filter(|record| autonomous_action_record_matches_tenant(record, &user.tenant_id))
-            .collect(),
-    }
-}
-
-fn build_authorize_action_response(
-    state: &AppState,
-    status_code: StatusCode,
-    action: &str,
-    requested_scope: &str,
-    decision: &'static str,
-    reason: String,
-    trace_id: &str,
-    requested_by: &str,
-    typed_decision: AutonomousActionDecision,
-) -> (StatusCode, Json<AuthorizeActionResponse>) {
-    let tenant_id = tenant_id_from_scoped_path(requested_scope);
-    let record = AutonomousActionExecutionRecord::new(
-        trace_id.to_string(),
-        action,
-        requested_scope,
-        requested_by,
-        typed_decision,
-        &reason,
-    )
-    .with_tenant_id(tenant_id.as_deref());
-    append_action_record(state, record);
-    let mut details = serde_json::Map::new();
-    details.insert("trace_id".to_string(), json!(trace_id));
-    details.insert("action".to_string(), json!(action));
-    details.insert("requested_scope".to_string(), json!(requested_scope));
-    details.insert("decision".to_string(), json!(decision));
-    details.insert("reason".to_string(), json!(reason.clone()));
-    if let Some(tenant_id) = tenant_id.as_ref() {
-        details.insert("tenant_id".to_string(), json!(tenant_id));
-    }
-    append_audit_event(
-        state,
-        AuditEventKind::Autonomous,
-        requested_by,
-        "autonomous_action_authorize",
-        decision,
-        &serde_json::Value::Object(details).to_string(),
-    );
-    (
-        status_code,
-        Json(AuthorizeActionResponse {
-            status: if status_code == StatusCode::OK {
-                "ok"
-            } else if status_code == StatusCode::NOT_FOUND {
-                "unknown_action"
-            } else {
-                "blocked"
-            },
-            action: action.to_string(),
-            requested_scope: requested_scope.to_string(),
-            decision,
-            reason,
-            trace_id: trace_id.to_string(),
-        }),
-    )
-}
-
-// â”€â”€ WS2 Index + Constraint handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-async fn store_list_indexes(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<ListIndexesResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "store/indexes",
-    )?;
-    let mgr = state.index_manager.lock().expect("index lock");
-    let indexes = mgr
-        .list_indexes()
-        .iter()
-        .filter(|descriptor| match &principal {
-            RuntimeAccessPrincipal::Operator(_) => true,
-            RuntimeAccessPrincipal::TenantUser(user) => {
-                store_table_matches_tenant_namespace(&descriptor.table, &user.tenant_id)
-            }
-        })
-        .map(|d| IndexListEntry {
-            name: d.name.clone(),
-            table: d.table.clone(),
-            column: d.column.clone(),
-            kind: format!("{:?}", d.kind),
-            unique: d.unique,
-        })
-        .collect();
-    let response = ListIndexesResponse {
-        status: "ok",
-        indexes,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Storage,
-        &principal,
-        "store_list_indexes",
-        "ok",
-        json!({
-            "route_scope": "store/indexes",
-            "visible_index_count": response.indexes.len(),
-        }),
-    );
-    Ok(Json(response))
-}
-
-async fn store_create_index(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<CreateIndexRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Manage,
-        "store/indexes",
-    )?;
-    ensure_store_table_access(&principal, &headers, &req.table)?;
-    use voltnuerongrid_store::index::{IndexDescriptor, IndexKind};
-    let unique = req.unique.unwrap_or(false);
-    let descriptor = IndexDescriptor {
-        name: req.name.clone(),
-        table: req.table.clone(),
-        column: req.column.clone(),
-        kind: IndexKind::BTree,
-        unique,
-    };
-    let mut mgr = state.index_manager.lock().expect("index lock");
-    Ok(match mgr.create_index(descriptor) {
-        Ok(()) => {
-            let response = CreateIndexResponse {
-                status: "created",
-                index_name: req.name,
-                table: req.table,
-                column: req.column,
-                unique,
-            };
-            append_runtime_audit_event(
-                &state,
-                AuditEventKind::Storage,
-                &principal,
-                "store_create_index",
-                "ok",
-                json!({
-                    "route_scope": "store/indexes/create",
-                    "index_name": response.index_name,
-                    "table": response.table,
-                    "column": response.column,
-                    "unique": response.unique,
-                }),
-            );
-            (
-                StatusCode::CREATED,
-                Json(serde_json::to_value(response).expect("json")),
-            )
-        }
-        Err(e) => (
-            StatusCode::CONFLICT,
-            Json(json!({ "status": "error", "reason": e.to_string() })),
-        ),
-    })
-}
-
-async fn store_drop_index(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<DropIndexRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Manage,
-        "store/indexes",
-    )?;
-    let mut mgr = state.index_manager.lock().expect("index lock");
-    Ok(match mgr.get(&req.name) {
-        Some(idx) => {
-            ensure_store_table_access(&principal, &headers, &idx.descriptor().table)?;
-            match mgr.drop_index(&req.name) {
-                Ok(desc) => {
-                    let response = DropIndexResponse {
-                        status: "dropped",
-                        dropped: req.name,
-                    };
-                    append_runtime_audit_event(
-                        &state,
-                        AuditEventKind::Storage,
-                        &principal,
-                        "store_drop_index",
-                        "ok",
-                        json!({
-                            "route_scope": "store/indexes/drop",
-                            "index_name": response.dropped,
-                            "table": desc.table,
-                            "column": desc.column,
-                        }),
-                    );
-                    (
-                        StatusCode::OK,
-                        Json(serde_json::to_value(response).expect("json")),
-                    )
-                }
-                Err(e) => (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({ "status": "error", "reason": e.to_string() })),
-                ),
-            }
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "status": "error", "reason": format!("index '{}' not found", req.name) })),
-        ),
-    })
-}
-
-async fn store_index_lookup(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IndexLookupRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "store/indexes/lookup",
-    )?;
-    let mgr = state.index_manager.lock().expect("index lock");
-    Ok(match mgr.get(&req.index_name) {
-        Some(idx) => {
-            ensure_store_table_access(&principal, &headers, &idx.descriptor().table)?;
-            let row_keys: Vec<String> = idx.lookup(&req.value).iter().map(|s| s.to_string()).collect();
-            let response = IndexLookupResponse {
-                status: "ok",
-                index_name: req.index_name,
-                value: req.value,
-                row_keys,
-            };
-            append_runtime_audit_event(
-                &state,
-                AuditEventKind::Storage,
-                &principal,
-                "store_index_lookup",
-                "ok",
-                json!({
-                    "route_scope": "store/indexes/lookup",
-                    "index_name": response.index_name,
-                    "value": response.value,
-                    "row_key_count": response.row_keys.len(),
-                    "table": idx.descriptor().table,
-                }),
-            );
-            (
-                StatusCode::OK,
-                Json(serde_json::to_value(response).expect("json")),
-            )
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "status": "error", "reason": format!("index '{}' not found", req.index_name) })),
-        ),
-    })
-}
-
-async fn store_add_constraint(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<AddConstraintRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Manage,
-        "store/constraints",
-    )?;
-    ensure_store_table_access(&principal, &headers, &req.table)?;
-    use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
-    let kind = match req.kind.to_ascii_lowercase().as_str() {
-        "primary_key" | "pk" => ConstraintKind::PrimaryKey,
-        "unique" => ConstraintKind::Unique,
-        "not_null" => ConstraintKind::NotNull,
-        "foreign_key" | "fk" => ConstraintKind::ForeignKey,
-        other => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "status": "error", "reason": format!("unknown constraint kind: {other}") })),
-            ));
-        }
-    };
-    let descriptor = ConstraintDescriptor {
-        name: req.name.clone(),
-        table: req.table.clone(),
-        column: req.column.clone(),
-        kind,
-    };
-    let mut mgr = state.constraint_manager.lock().expect("constraint lock");
-    Ok(match mgr.add_constraint(descriptor) {
-        Ok(()) => {
-            let response = AddConstraintResponse {
-                status: "created",
-                constraint_name: req.name,
-                table: req.table,
-                column: req.column,
-                kind: req.kind,
-            };
-            append_runtime_audit_event(
-                &state,
-                AuditEventKind::Storage,
-                &principal,
-                "store_add_constraint",
-                "ok",
-                json!({
-                    "route_scope": "store/constraints/add",
-                    "constraint_name": response.constraint_name,
-                    "table": response.table,
-                    "column": response.column,
-                    "kind": response.kind,
-                }),
-            );
-            (
-                StatusCode::CREATED,
-                Json(serde_json::to_value(response).expect("json")),
-            )
-        }
-        Err(e) => (
-            StatusCode::CONFLICT,
-            Json(json!({ "status": "error", "reason": e.to_string() })),
-        ),
-    })
-}
-
-async fn store_validate_constraint(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ValidateConstraintRequest>,
-) -> Result<Json<ValidateConstraintResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "store/constraints/validate",
-    )?;
-    ensure_store_table_access(&principal, &headers, &req.table)?;
-    let mgr = state.constraint_manager.lock().expect("constraint lock");
-    Ok(match mgr.validate(&req.table, &req.column, req.value.as_deref()) {
-        Ok(()) => {
-            let response = ValidateConstraintResponse {
-                status: "ok",
-                valid: true,
-                violation: None,
-            };
-            append_runtime_audit_event(
-                &state,
-                AuditEventKind::Storage,
-                &principal,
-                "store_validate_constraint",
-                "ok",
-                json!({
-                    "route_scope": "store/constraints/validate",
-                    "table": req.table,
-                    "column": req.column,
-                    "valid": response.valid,
-                }),
-            );
-            Json(response)
-        }
-        Err(v) => {
-            let violation = v.to_string();
-            append_runtime_audit_event(
-                &state,
-                AuditEventKind::Storage,
-                &principal,
-                "store_validate_constraint",
-                "ok",
-                json!({
-                    "route_scope": "store/constraints/validate",
-                    "table": req.table,
-                    "column": req.column,
-                    "valid": false,
-                    "violation": violation,
-                }),
-            );
-            Json(ValidateConstraintResponse {
-                status: "ok",
-                valid: false,
-                violation: Some(violation),
-            })
-        }
-    })
-}
-
-// S5-WS4-03 / S2-WS2-04: scan MVCC PagedRowStore at a snapshot
-async fn store_rows_scan(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<StoreRowsScanRequest>,
-) -> Result<(StatusCode, Json<StoreRowsScanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "store/rows/scan",
-    )?;
-    let rs = state.row_store.lock().expect("row_store lock");
-    let snapshot_xid = req.snapshot_xid.unwrap_or_else(|| rs.current_xid());
-    let key_prefix = req.key_prefix.unwrap_or_default();
-    let limit = req.limit.unwrap_or(1_000).min(10_000);
-    let rows: Vec<StoreRowEntry> = rs
-        .scan_at_snapshot(snapshot_xid)
-        .into_iter()
-        .filter(|(k, _)| key_prefix.is_empty() || k.starts_with(key_prefix.as_str()))
-        .take(limit)
-        .map(|(k, d)| StoreRowEntry {
-            key: k.to_string(),
-            data: d.clone(),
-        })
-        .collect();
-    let row_count = rows.len();
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Storage,
-        &principal,
-        "store_rows_scan",
-        "ok",
-        json!({
-            "route_scope": "store/rows/scan",
-            "snapshot_xid": snapshot_xid,
-            "row_count": row_count,
-            "key_prefix": key_prefix,
-        }),
-    );
-    Ok((
-        StatusCode::OK,
-        Json(StoreRowsScanResponse {
-            status: "ok",
-            snapshot_xid,
-            row_count,
-            rows,
-        }),
-    ))
-}
-
-/// S4-WS3-04: HTAP sync export — returns pending mutations from `RowStoreSyncOrigin`.
-async fn store_htap_export(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<StoreHtapExportRequest>,
-) -> Result<(StatusCode, Json<StoreHtapExportResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "store/htap/export",
-    )?;
-    let since = req.since_sequence.unwrap_or(0);
-    let max_items = req.max_items.unwrap_or(500).min(5_000);
-    let mutations = {
-        use voltnuerongrid_store::htap_sync::MutationOp;
-        let origin = state.sync_origin.lock().expect("sync_origin lock");
-        let checkpoint = origin.checkpoint();
-        let raw = origin.export_since(since, max_items);
-        let entries: Vec<HtapMutationEntry> = raw
-            .into_iter()
-            .map(|m| HtapMutationEntry {
-                sequence: m.sequence,
-                table: m.table,
-                primary_key: m.primary_key,
-                payload_json: m.payload_json,
-                op: match m.op {
-                    MutationOp::Insert => "insert",
-                    MutationOp::Update => "update",
-                    MutationOp::Delete => "delete",
-                }
-                .to_string(),
-            })
-            .collect();
-        (entries, checkpoint.last_sequence)
-    };
-    let (entries, last_sequence) = mutations;
-    let mutation_count = entries.len();
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Storage,
-        &principal,
-        "store_htap_export",
-        "ok",
-        json!({
-            "route_scope": "store/htap/export",
-            "since_sequence": since,
-            "mutation_count": mutation_count,
-        }),
-    );
-    Ok((
-        StatusCode::OK,
-        Json(StoreHtapExportResponse {
-            status: "ok",
-            since_sequence: since,
-            mutation_count,
-            checkpoint_last_sequence: last_sequence,
-            mutations: entries,
-        }),
-    ))
-}
-
-/// S4-WS3-03: vectorized columnar scan — reads committed rows from PagedRowStore
-/// and materialises them as typed column batches for OLAP consumers.
-async fn store_columnar_scan(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<ColumnarScanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "store/columnar/scan",
-    )?;
-    let (batch, stats) = {
-        use voltnuerongrid_store::columnar::vectorized_scan;
-        let rs = state.row_store.lock().expect("row_store lock columnar_scan");
-        let snapshot_xid = rs.current_xid();
-        let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
-            .scan_at_snapshot(snapshot_xid)
-            .into_iter()
-            .map(|(k, d)| (k.to_string(), d.clone()))
-            .collect();
-        vectorized_scan(&raw_rows, 10_000)
-    };
-    let columns: Vec<ColumnarScanColumn> = batch
-        .column_names
-        .iter()
-        .filter_map(|name| {
-            batch.columns.get(name).map(|cv| {
-                use voltnuerongrid_store::columnar::ColumnVector;
-                let type_hint = match cv {
-                    ColumnVector::Int64(_) => "int64",
-                    ColumnVector::Float64(_) => "float64",
-                    ColumnVector::Bool(_) => "bool",
-                    ColumnVector::Utf8(_) => "utf8",
-                    ColumnVector::Null(_) => "null",
-                };
-                let sample_values: Vec<String> = (0..cv.len().min(3))
-                    .filter_map(|i| cv.value_as_str(i))
-                    .collect();
-                ColumnarScanColumn {
-                    name: name.clone(),
-                    type_hint: type_hint.to_string(),
-                    row_count: cv.len(),
-                    sample_values,
-                }
-            })
-        })
-        .collect();
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Storage,
-        &principal,
-        "store_columnar_scan",
-        "ok",
-        json!({
-            "route_scope": "store/columnar/scan",
-            "rows_scanned": stats.rows_scanned,
-            "columns_materialized": stats.columns_materialized,
-        }),
-    );
-    Ok((
-        StatusCode::OK,
-        Json(ColumnarScanResponse {
-            status: "ok",
-            rows_scanned: stats.rows_scanned,
-            columns_materialized: stats.columns_materialized,
-            elapsed_us: stats.elapsed_us,
-            columns,
-        }),
-    ))
-}
-
-// ─── S4-WS3-02: Columnar column projection ───────────────────────────────────
-
-/// S4-WS3-02: Project specific columns from the columnar store.
-/// Accepts `?columns=a,b,c`; returns all when parameter is absent.
-async fn store_columnar_project(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(params): Query<ColumnarProjectQuery>,
-) -> Result<(StatusCode, Json<ColumnarProjectResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_store_runtime_principal(&headers, &state, PrivilegeAction::Read, "store/columnar/project")?;
-    let (batch, stats) = {
-        use voltnuerongrid_store::columnar::vectorized_scan;
-        let rs = state.row_store.lock().expect("row_store lock columnar_project");
-        let snapshot_xid = rs.current_xid();
-        let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
-            .scan_at_snapshot(snapshot_xid)
-            .into_iter()
-            .map(|(k, d)| (k.to_string(), d.clone()))
-            .collect();
-        vectorized_scan(&raw_rows, 10_000)
-    };
-    // Build projection set — empty means "all columns"
-    let requested: Vec<String> = params
-        .columns
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(|c| c.trim().to_string())
-        .filter(|c| !c.is_empty())
-        .collect();
-    let columns: Vec<ColumnarScanColumn> = batch
-        .column_names
-        .iter()
-        .filter(|name| requested.is_empty() || requested.contains(name))
-        .filter_map(|name| {
-            batch.columns.get(name).map(|cv| {
-                use voltnuerongrid_store::columnar::ColumnVector;
-                let type_hint = match cv {
-                    ColumnVector::Int64(_) => "int64",
-                    ColumnVector::Float64(_) => "float64",
-                    ColumnVector::Bool(_) => "bool",
-                    ColumnVector::Utf8(_) => "utf8",
-                    ColumnVector::Null(_) => "null",
-                };
-                let sample_values: Vec<String> = (0..cv.len().min(3))
-                    .filter_map(|i| cv.value_as_str(i))
-                    .collect();
-                ColumnarScanColumn {
-                    name: name.clone(),
-                    type_hint: type_hint.to_string(),
-                    row_count: cv.len(),
-                    sample_values,
-                }
-            })
-        })
-        .collect();
-    let columns_projected = columns.len();
-    Ok((
-        StatusCode::OK,
-        Json(ColumnarProjectResponse {
-            status: "ok",
-            rows_scanned: stats.rows_scanned,
-            columns_projected,
-            elapsed_us: stats.elapsed_us,
-            columns,
-        }),
-    ))
-}
-
-// ─── S4-WS3-03: Columnar vectorized aggregate ───────────────────────────────
-
-/// S4-WS3-03: Run a vectorized aggregate over the OLAP columnar snapshot.
-async fn store_columnar_aggregate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(params): Query<ColumnarAggregateQuery>,
-) -> Result<(StatusCode, Json<ColumnarAggregateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_store_runtime_principal(&headers, &state, PrivilegeAction::Read, "store/columnar/aggregate")?;
-    use voltnuerongrid_store::columnar::{vectorized_scan, VectorizedAggOp, aggregate_batch};
-    let (batch, stats) = {
-        let rs = state.row_store.lock().expect("row_store lock columnar_aggregate");
-        let snapshot_xid = rs.current_xid();
-        let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
-            .scan_at_snapshot(snapshot_xid)
-            .into_iter()
-            .map(|(k, d)| (k.to_string(), d.clone()))
-            .collect();
-        vectorized_scan(&raw_rows, 10_000)
-    };
-    // Resolve the target column (default: first available column).
-    let col_name = params.column
-        .filter(|c| !c.trim().is_empty())
-        .or_else(|| batch.column_names.first().cloned())
-        .unwrap_or_else(|| "payload".to_string());
-    // Resolve the operation (default: count).
-    let agg_op = match params.op.as_deref().unwrap_or("count") {
-        "sum" => VectorizedAggOp::Sum,
-        "avg" => VectorizedAggOp::Avg,
-        "min" => VectorizedAggOp::Min,
-        "max" => VectorizedAggOp::Max,
-        _ => VectorizedAggOp::Count,
-    };
-    let op_str = format!("{:?}", agg_op).to_lowercase();
-    let mut ops = std::collections::HashMap::new();
-    ops.insert(col_name.clone(), agg_op);
-    let results = aggregate_batch(&batch, &ops);
-    let result_val = results
-        .get(&col_name)
-        .map_or("null".to_string(), |r| r.value.clone());
-    Ok((StatusCode::OK, Json(ColumnarAggregateResponse {
-        status: "ok",
-        op: op_str,
-        column: col_name,
-        result: result_val,
-        rows_scanned: stats.rows_scanned,
-    })))
-}
-
-/// S6-WS5-03: TLS runtime status — reports TLS/mTLS contract state from SecurityConfigContract.
-async fn security_tls_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<SecurityTlsStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "security.kms",
-        "security/tls/status",
-        PrivilegeAction::Read,
-    )?;
-    let principal = RuntimeAccessPrincipal::Operator(operator);
-    let cert_source = std::env::var("VNG_TLS_CERT_PATH")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "not_configured".to_string());
-    let key_source = std::env::var("VNG_TLS_KEY_PATH")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "not_configured".to_string());
-    let cert_present = cert_source != "not_configured" && std::path::Path::new(&cert_source).exists();
-    let key_present = key_source != "not_configured" && std::path::Path::new(&key_source).exists();
-    let cert_pair_configured = cert_present && key_present;
-    let note = if state.security_config.tls_required {
-        "TLS required — server must be started with rustls/native-tls adapter"
-    } else {
-        "TLS not required — plaintext mode (development only)"
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &principal,
-        "security_tls_status",
-        "ok",
-        json!({
-            "route_scope": "security/tls/status",
-            "tls_required": state.security_config.tls_required,
-            "mtls_required": state.security_config.mtls_required,
-        }),
-    );
-    Ok(Json(SecurityTlsStatusResponse {
-        status: "ok",
-        tls_required: state.security_config.tls_required,
-        mtls_required: state.security_config.mtls_required,
-        cert_source,
-        key_source,
-        cert_present,
-        key_present,
-        cert_pair_configured,
-        cert_rotation_supported: false,
-        note,
-    }))
-}
-
-/// S6-WS5-04: TDE runtime status — reports encryption-at-rest state from SecurityConfigContract.
-async fn security_tde_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<SecurityTdeStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "security.kms",
-        "security/tde/status",
-        PrivilegeAction::Read,
-    )?;
-    let principal = RuntimeAccessPrincipal::Operator(operator);
-    let key_env_var = state.security_config.kms_key_ref_env.clone();
-    let key_resolved = std::env::var(&key_env_var)
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .is_some();
-    // TDE is "active" when encryption-at-rest is required AND a KMS key is resolved.
-    let tde_active = state.security_config.encryption_at_rest_required && key_resolved;
-    let note = if tde_active {
-        "TDE active: encryption-at-rest required and KMS key resolved"
-    } else if state.security_config.encryption_at_rest_required {
-        "TDE contract requires encryption but KMS key env var is not set — data NOT encrypted at rest"
-    } else {
-        "TDE not required in current security contract"
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &principal,
-        "security_tde_status",
-        "ok",
-        json!({
-            "route_scope": "security/tde/status",
-            "encryption_at_rest_required": state.security_config.encryption_at_rest_required,
-            "tde_active": tde_active,
-            "key_env_var": key_env_var,
-        }),
-    );
-    Ok(Json(SecurityTdeStatusResponse {
-        status: "ok",
-        encryption_at_rest_required: state.security_config.encryption_at_rest_required,
-        tde_active,
-        key_env_var,
-        key_resolved,
-        note,
-    }))
-}
-
-// ─── S6-WS5-04: TDE runtime override status ─────────────────────────────────
-
-/// S6-WS5-04: Return the current TDE runtime override state.
-async fn security_tde_override_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<TdeOverrideStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    require_operator_privilege(
-        &headers,
-        &state,
-        "security.kms",
-        "security/tde/status",
-        PrivilegeAction::Read,
-    )?;
-    let override_value = *state.tde_override.lock().expect("tde_override lock override");
-    let override_set = override_value.is_some();
-    // Effective TDE = override (if set) else config default
-    let effective_tde_active = override_value
-        .unwrap_or(state.security_config.encryption_at_rest_required);
-    Ok((StatusCode::OK, Json(TdeOverrideStatusResponse {
-        status: "ok",
-        override_set,
-        override_value,
-        effective_tde_active,
-    })))
-}
-
-/// S9-WS8-02: AI model gateway policy — read current policy.
-async fn ai_policy(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<AiPolicyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "ai.governance",
-        "ai/policy",
-        PrivilegeAction::Read,
-    )?;
-    let principal = RuntimeAccessPrincipal::Operator(operator);
-    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock").clone();
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &principal,
-        "ai_policy_read",
-        "ok",
-        json!({ "route_scope": "ai/policy", "isolation_enabled": policy.isolation_enabled }),
-    );
-    Ok(Json(AiPolicyResponse { status: "ok", policy }))
-}
-
-/// S9-WS8-02: AI model gateway policy update (admin only).
-async fn ai_policy_update(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<AiPolicyUpdateRequest>,
-) -> Result<Json<AiPolicyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "ai.governance",
-        "ai/policy",
-        PrivilegeAction::Manage,
-    )?;
-    let principal = RuntimeAccessPrincipal::Operator(operator);
-    let policy = {
-        let mut p = state.model_gateway_policy.lock().expect("model_gateway_policy lock");
-        if let Some(v) = req.isolation_enabled { p.isolation_enabled = v; }
-        if let Some(v) = req.allowed_models { p.allowed_models = v; }
-        if let Some(v) = req.max_tokens_per_request { p.max_tokens_per_request = v; }
-        if let Some(v) = req.rate_limit_rpm { p.rate_limit_rpm = v; }
-        p.clone()
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &principal,
-        "ai_policy_update",
-        "ok",
-        json!({
-            "route_scope": "ai/policy/update",
-            "isolation_enabled": policy.isolation_enabled,
-            "allowed_models_count": policy.allowed_models.len(),
-            "max_tokens_per_request": policy.max_tokens_per_request,
-            "rate_limit_rpm": policy.rate_limit_rpm,
-        }),
-    );
-    Ok(Json(AiPolicyResponse { status: "ok", policy }))
-}
-
-/// S9-WS8-02: Rate-limit check for AI model requests.
-///
-// ─── S4-WS3-04: HTAP OLAP consumer apply ─────────────────────────────────────
-
-/// Increments the per-model-identity counter and rejects with 429 when
-/// the counter exceeds `rate_limit_rpm`.  The counter is a simple lifetime
-/// accumulator (scaffold); a production implementation would use a sliding
-/// window or token-bucket backed by a shared clock.
-#[derive(Deserialize)]
-struct AiRequestBody {
-    /// Identifier of the model being invoked (e.g. "gpt-4o", "llama3").
-    model_id: String,
-    /// Number of tokens requested.
-    tokens: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-struct AiRequestResponse {
-    status: &'static str,
-    model_id: String,
-    request_count: u64,
-    rate_limit_rpm: u32,
-    tokens_checked: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ModelRequestStat {
-    model_id: String,
-    request_count: u64,
-}
-
-/// Response for `GET /api/v1/ai/policy/stats`.
-#[derive(Debug, Serialize)]
-struct AiPolicyStatsResponse {
-    status: &'static str,
-    model_count: usize,
-    total_requests: u64,
-    allowed_models_enforced: bool,
-    per_model: Vec<ModelRequestStat>,
-}
-
-/// Response for `POST /api/v1/ai/policy/reset`.
-#[derive(Debug, Serialize)]
-struct AiPolicyResetResponse {
-    status: &'static str,
-    models_cleared: usize,
-}
-
-// ─── S9-WS8-02: AI governance audit response ──────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct AiGovernanceAuditEntry {
-    model_id: String,
-    request_count: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct AiGovernanceAuditResponse {
-    status: &'static str,
-    total_models: usize,
-    total_requests: u64,
-    entries: Vec<AiGovernanceAuditEntry>,
-}
-
-async fn ai_rate_check(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<AiRequestBody>,
-) -> Result<(StatusCode, Json<AiRequestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock").clone();
-    // Validate allowed_models list when non-empty (model-identity enforcement).
-    if !policy.allowed_models.is_empty() && !policy.allowed_models.contains(&req.model_id) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(AuthErrorResponse {
-                status: "error",
-                reason: format!("model_not_allowed:{}", req.model_id),
-                locale: "en".to_string(),
-                localized_message: "Model not in allowed list".to_string(),
-            }),
-        ));
-    }
-    // Token budget check.
-    let tokens_checked = if let Some(t) = req.tokens {
-        if policy.max_tokens_per_request > 0 && t > policy.max_tokens_per_request {
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: format!("token_limit_exceeded:{t}"),
-                    locale: "en".to_string(),
-                    localized_message: "Token request exceeds policy limit".to_string(),
-                }),
-            ));
-        }
-        true
-    } else {
-        false
-    };
-    // Rate limit check — sliding window (60s).
-    let request_count = {
-        let now_ms = now_epoch_ms_chaos();
-        let window_ms: u64 = 60_000;
-        let mut w_starts = state.ai_rate_window_starts.lock().expect("ai_rate_window_starts lock");
-        let start = w_starts.entry(req.model_id.clone()).or_insert(now_ms);
-        if now_ms.saturating_sub(*start) >= window_ms {
-            // Window elapsed: reset counter and window start.
-            *start = now_ms;
-            drop(w_starts);
-            let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock");
-            let cnt = counters.entry(req.model_id.clone()).or_insert(0);
-            *cnt = 1;
-            1u64
-        } else {
-            drop(w_starts);
-            let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock");
-            let cnt = counters.entry(req.model_id.clone()).or_insert(0);
-            *cnt += 1;
-            *cnt
-        }
-    };
-    if policy.rate_limit_rpm > 0 && request_count > policy.rate_limit_rpm as u64 {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(AuthErrorResponse {
-                status: "error",
-                reason: format!("rate_limit_exceeded:{request_count}"),
-                locale: "en".to_string(),
-                localized_message: "AI request rate limit exceeded".to_string(),
-            }),
-        ));
-    }
-    Ok((StatusCode::OK, Json(AiRequestResponse {
-        status: "ok",
-        model_id: req.model_id,
-        request_count,
-        rate_limit_rpm: policy.rate_limit_rpm,
-        tokens_checked,
-    })))
-}
-
-/// S9-WS8-02: Return per-model request counts and policy enforcement state.
-async fn ai_policy_stats(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<AiPolicyStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock stats").clone();
-    let counters = state.ai_request_counters.lock().expect("ai_request_counters lock stats");
-    let per_model: Vec<ModelRequestStat> = counters
-        .iter()
-        .map(|(k, v)| ModelRequestStat { model_id: k.clone(), request_count: *v })
-        .collect();
-    let model_count = per_model.len();
-    let total_requests: u64 = per_model.iter().map(|m| m.request_count).sum();
-    let allowed_models_enforced = !policy.allowed_models.is_empty();
-    drop(counters);
-    Ok((StatusCode::OK, Json(AiPolicyStatsResponse {
-        status: "ok",
-        model_count,
-        total_requests,
-        allowed_models_enforced,
-        per_model,
-    })))
-}
-
-/// S9-WS8-02: Reset all per-model AI request counters.
-async fn ai_policy_reset(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<AiPolicyResetResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock reset");
-    let models_cleared = counters.len();
-    counters.clear();
-    drop(counters);
-    Ok((StatusCode::OK, Json(AiPolicyResetResponse {
-        status: "ok",
-        models_cleared,
-    })))
-}
-
-// ─── S9-WS8-02: AI governance audit handler ──────────────────────────────────
-
-/// S9-WS8-02: Return a read-only audit view of all model request counts.
-async fn ai_governance_audit(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<AiGovernanceAuditResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let counters = state.ai_request_counters.lock().expect("ai_request_counters audit lock");
-    let mut entries: Vec<AiGovernanceAuditEntry> = counters
-        .iter()
-        .map(|(model_id, &count)| AiGovernanceAuditEntry {
-            model_id: model_id.clone(),
-            request_count: count,
-        })
-        .collect();
-    entries.sort_by(|a, b| b.request_count.cmp(&a.request_count));
-    let total_models = entries.len();
-    let total_requests: u64 = entries.iter().map(|e| e.request_count).sum();
-    drop(counters);
-    Ok((StatusCode::OK, Json(AiGovernanceAuditResponse {
-        status: "ok",
-        total_models,
-        total_requests,
-        entries,
-    })))
-}
-
-// ─── S2-WS2-05: Transaction isolation stats handler ─────────────────────────
-
-async fn sql_transactions_isolation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<TxIsolationStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "sql/transactions/isolation",
-    )?;
-    let acid = state.acid_transactions.lock().expect("acid_tx isolation lock");
-    let active = acid.active_transactions();
-    let transactions: Vec<TxIsolationEntry> = active
-        .iter()
-        .map(|t| TxIsolationEntry {
-            transaction_id: t.transaction_id.clone(),
-            isolation_level: t.isolation_level.clone(),
-            snapshot_xid: t.row_store_snapshot_xid,
-            statement_count: t.statement_count,
-        })
-        .collect();
-    let active_count = transactions.len();
-    drop(acid);
-    Ok((StatusCode::OK, Json(TxIsolationStatsResponse { status: "ok", active_count, transactions })))
-}
-
-/// Apply a batch of HTAP mutations to the in-memory OLAP replica.
-async fn store_htap_apply(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<StoreHtapApplyRequest>,
-) -> Result<(StatusCode, Json<StoreHtapApplyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Write,
-        "store/htap/apply",
-    )?;
-    let mut olap = state.olap_store.lock().expect("olap_store lock");
-    let mut last_seq = 0u64;
-    let mut applied = 0usize;
-    for m in &req.mutations {
-        last_seq = last_seq.max(m.sequence);
-        match m.op.as_str() {
-            "insert" | "update" => {
-                // Parse the payload JSON into a HashMap<String, String>
-                let data: HashMap<String, String> = serde_json::from_str(&m.payload_json)
-                    .unwrap_or_else(|_| {
-                        let mut d = HashMap::new();
-                        d.insert("payload".to_string(), m.payload_json.clone());
-                        d
-                    });
-                olap.insert(m.primary_key.clone(), data);
-                applied += 1;
-            }
-            "delete" => {
-                olap.remove(&m.primary_key);
-                applied += 1;
-            }
-            _ => {}
-        }
-    }
-    drop(olap);
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Storage,
-        &principal,
-        "store_htap_apply",
-        "ok",
-        json!({
-            "route_scope": "store/htap/apply",
-            "applied_count": applied,
-            "last_applied_sequence": last_seq,
-        }),
-    );
-    Ok((
-        StatusCode::OK,
-        Json(StoreHtapApplyResponse {
-            status: "ok",
-            applied_count: applied,
-            last_applied_sequence: last_seq,
-        }),
-    ))
-}
-
-/// Scan all rows in the in-memory OLAP replica.
-async fn store_htap_olap_scan(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<StoreHtapOlapScanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let _principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "store/htap/olap/scan",
-    )?;
-    let olap = state.olap_store.lock().expect("olap_store lock");
-    let rows: Vec<OlapScanRow> = olap
-        .iter()
-        .map(|(k, v)| OlapScanRow { key: k.clone(), data: v.clone() })
-        .collect();
-    let row_count = rows.len();
-    Ok((
-        StatusCode::OK,
-        Json(StoreHtapOlapScanResponse { status: "ok", row_count, rows }),
-    ))
-}
-
-/// S4-WS3-04: Return HTAP sync lag — pending mutations in sync_origin vs OLAP row count.
-async fn htap_lag(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<HtapLagResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let _principal = require_store_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "store/htap/lag",
-    )?;
-    let sync_origin_pending = state.sync_origin.lock().expect("sync_origin lock htap_lag").pending_len();
-    let olap_row_count = state.olap_store.lock().expect("olap_store lock htap_lag").len();
-    let estimated_lag_mutations = sync_origin_pending.saturating_sub(olap_row_count);
-    Ok((StatusCode::OK, Json(HtapLagResponse {
-        status: "ok",
-        sync_origin_pending,
-        olap_row_count,
-        estimated_lag_mutations,
-    })))
-}
-
-// ─── S4-WS3-04: HTAP force-sync handler ─────────────────────────────────────
-
-/// S4-WS3-04: Drain all pending sync_origin mutations into the in-memory OLAP replica
-/// in one atomic sweep, then acknowledge them.
-async fn htap_force_sync(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<HtapForceSyncResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_store_runtime_principal(&headers, &state, PrivilegeAction::Write, "store/htap/sync")?;
-    // Collect all pending mutations without dropping/acking yet.
-    let batch = state.sync_origin.lock().expect("sync_origin lock htap_force_sync")
-        .export_batch(usize::MAX);
-    let mut applied = 0usize;
-    let mut last_seq = 0u64;
-    {
-        let mut olap = state.olap_store.lock().expect("olap_store lock htap_force_sync");
-        for m in &batch {
-            last_seq = last_seq.max(m.sequence);
-            match m.op {
-                MutationOp::Insert | MutationOp::Update => {
-                    let data: HashMap<String, String> = serde_json::from_str(&m.payload_json)
-                        .unwrap_or_else(|_| {
-                            let mut d = HashMap::new();
-                            d.insert("payload".to_string(), m.payload_json.clone());
-                            d
-                        });
-                    olap.insert(m.primary_key.clone(), data);
-                    applied += 1;
-                }
-                MutationOp::Delete => {
-                    olap.remove(&m.primary_key);
-                    applied += 1;
-                }
-            }
-        }
-    }
-    // Acknowledge all exported mutations so they are removed from the sync_origin queue.
-    if last_seq > 0 {
-        state.sync_origin.lock().expect("sync_origin ack lock").ack_through(last_seq);
-    }
-    let olap_row_count_after = state.olap_store.lock().expect("olap_store count lock").len();
-    Ok((StatusCode::OK, Json(HtapForceSyncResponse {
-        status: "ok",
-        mutations_applied: applied,
-        olap_row_count_after,
-    })))
-}
 
 // ─── S9-WS8A-02: Audit export endpoint ───────────────────────────────────────
 
@@ -19827,1930 +11733,19 @@ async fn raft_tick(
     }))
 }
 
-async fn security_kms_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<SecurityKmsStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "security.kms",
-        "security/kms",
-        PrivilegeAction::Read,
-    )?;
-    let principal = RuntimeAccessPrincipal::Operator(operator.clone());
-    let snapshot = evaluate_kms_runtime(&state);
-    let response = build_security_kms_status_response(&state, &snapshot);
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &principal,
-        "security_kms_status",
-        response.status,
-        json!({
-            "route_scope": "security/kms",
-            "resolution_state": response.resolution_state,
-            "selected_env": response.selected_env,
-            "failover_used": response.failover_used,
-            "unavailable_envs": response.unavailable_envs,
-        }),
-    );
-    Ok(Json(response))
-}
-
-async fn security_kms_outage_simulate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<SecurityKmsOutageSimulateRequest>,
-) -> Result<Json<SecurityKmsOutageResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "security.kms",
-        "security/kms/outage",
-        PrivilegeAction::Manage,
-    )?;
-
-    let configured = state
-        .security_config
-        .kms_key_candidates()
-        .into_iter()
-        .map(|value| value.to_ascii_lowercase())
-        .collect::<HashSet<_>>();
-    let normalized = req
-        .unavailable_envs
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .filter(|value| configured.contains(&value.to_ascii_lowercase()))
-        .map(ToString::to_string)
-        .collect::<HashSet<_>>();
-    let note = req
-        .note
-        .clone()
-        .unwrap_or_else(|| "manual_kms_region_outage_simulation".to_string());
-
-    {
-        let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
-        runtime.unavailable_envs = normalized;
-        runtime.last_simulation_note = Some(note.clone());
-    }
-
-    let principal = RuntimeAccessPrincipal::Operator(operator);
-    let snapshot = evaluate_kms_runtime(&state);
-    let response = SecurityKmsOutageResponse {
-        status: snapshot.status,
-        resolution_state: snapshot.resolution_state,
-        unavailable_envs: snapshot.unavailable_envs.clone(),
-        selected_env: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.selected_env.clone()),
-        key_ref: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.key_ref.clone()),
-        failover_used: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.failover_used)
-            .unwrap_or(false),
-        note: note.clone(),
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &principal,
-        "security_kms_outage_simulate",
-        response.status,
-        json!({
-            "route_scope": "security/kms/outage",
-            "resolution_state": response.resolution_state,
-            "selected_env": response.selected_env,
-            "failover_used": response.failover_used,
-            "unavailable_envs": response.unavailable_envs,
-            "note": response.note,
-        }),
-    );
-    Ok(Json(response))
-}
-
-async fn security_kms_outage_reconcile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<SecurityKmsOutageReconcileRequest>,
-) -> Result<Json<SecurityKmsOutageResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    let operator = require_operator_privilege(
-        &headers,
-        &state,
-        "security.kms",
-        "security/kms/outage",
-        PrivilegeAction::Manage,
-    )?;
-    let note = req
-        .note
-        .clone()
-        .unwrap_or_else(|| "manual_kms_region_outage_reconcile".to_string());
-
-    {
-        let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
-        runtime.unavailable_envs.clear();
-        runtime.last_simulation_note = Some(note.clone());
-    }
-
-    let principal = RuntimeAccessPrincipal::Operator(operator);
-    let snapshot = evaluate_kms_runtime(&state);
-    let response = SecurityKmsOutageResponse {
-        status: snapshot.status,
-        resolution_state: snapshot.resolution_state,
-        unavailable_envs: snapshot.unavailable_envs.clone(),
-        selected_env: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.selected_env.clone()),
-        key_ref: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.key_ref.clone()),
-        failover_used: snapshot
-            .resolution
-            .as_ref()
-            .map(|resolution| resolution.failover_used)
-            .unwrap_or(false),
-        note: note.clone(),
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Security,
-        &principal,
-        "security_kms_outage_reconcile",
-        response.status,
-        json!({
-            "route_scope": "security/kms/outage",
-            "resolution_state": response.resolution_state,
-            "selected_env": response.selected_env,
-            "failover_used": response.failover_used,
-            "note": response.note,
-        }),
-    );
-    Ok(Json(response))
-}
 
 // â”€â”€ WS4 Ingest handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async fn ingest_csv(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IngestCsvRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_ingest_runtime_privilege(
-        &headers,
-        &state,
-        PrivilegeAction::Write,
-        &ingest_scope_for_connector(&req.connector_id, "csv"),
-    )?;
-    use voltnuerongrid_ingest::csv::CsvConnector;
-    let mut conn = CsvConnector::new(&req.connector_id, &req.connector_id);
-    let count = conn.load_csv(&req.csv_data);
-    let records = conn.read_batch(usize::MAX);
-    // S5-WS4-03: write each ingested record into PagedRowStore for durable typed-table backing
-    {
-        let mut rs = state.row_store.lock().expect("row_store lock");
-        let xid = rs.begin_xid();
-        for record in &records {
-            let mut data = std::collections::HashMap::new();
-            data.insert("payload".to_string(), record.payload.clone());
-            data.insert("source".to_string(), format!("csv:{}", req.connector_id));
-            rs.insert(xid, &record.key, data);
-        }
-    }
-    let storage_key = ingest_storage_key(&principal, &req.connector_id);
-    state
-        .ingest_csv_records
-        .lock()
-        .expect("csv lock")
-        .insert(storage_key, records);
-    let outbox_events_written = append_ingest_outbox_events(
-        &state,
-        &principal,
-        &req.connector_id,
-        "csv",
-        state
-            .ingest_csv_records
-            .lock()
-            .expect("csv lock")
-            .get(&ingest_storage_key(&principal, &req.connector_id))
-            .cloned()
-            .unwrap_or_default()
-            .as_slice(),
-    );
-    let response = IngestCsvResponse {
-        status: "ok",
-        connector_id: req.connector_id,
-        records_parsed: count,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Ingest,
-        &principal,
-        "ingest_csv",
-        "ok",
-        json!({
-            "route_scope": "ingest/connectors/csv",
-            "connector_id": response.connector_id,
-            "records_parsed": response.records_parsed,
-            "outbox_events_written": outbox_events_written,
-        }),
-    );
-    Ok((
-        StatusCode::OK,
-        Json(serde_json::to_value(response).expect("json")),
-    ))
-}
-
-async fn ingest_json(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IngestJsonRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_ingest_runtime_privilege(
-        &headers,
-        &state,
-        PrivilegeAction::Write,
-        &ingest_scope_for_connector(&req.connector_id, "json"),
-    )?;
-    use voltnuerongrid_ingest::json::JsonConnector;
-    let mut conn = JsonConnector::new(&req.connector_id, &req.connector_id, &req.key_field);
-    let count = conn.load_ndjson(&req.ndjson_data);
-    let records = conn.read_batch(usize::MAX);
-    // S5-WS4-03: write each ingested record into PagedRowStore for durable typed-table backing
-    {
-        let mut rs = state.row_store.lock().expect("row_store lock");
-        let xid = rs.begin_xid();
-        for record in &records {
-            let mut data = std::collections::HashMap::new();
-            data.insert("payload".to_string(), record.payload.clone());
-            data.insert("source".to_string(), format!("json:{}", req.connector_id));
-            rs.insert(xid, &record.key, data);
-        }
-    }
-    let storage_key = ingest_storage_key(&principal, &req.connector_id);
-    state
-        .ingest_json_records
-        .lock()
-        .expect("json lock")
-        .insert(storage_key, records);
-    let outbox_events_written = append_ingest_outbox_events(
-        &state,
-        &principal,
-        &req.connector_id,
-        "json",
-        state
-            .ingest_json_records
-            .lock()
-            .expect("json lock")
-            .get(&ingest_storage_key(&principal, &req.connector_id))
-            .cloned()
-            .unwrap_or_default()
-            .as_slice(),
-    );
-    let response = IngestJsonResponse {
-        status: "ok",
-        connector_id: req.connector_id,
-        records_parsed: count,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Ingest,
-        &principal,
-        "ingest_json",
-        "ok",
-        json!({
-            "route_scope": "ingest/connectors/json",
-            "connector_id": response.connector_id,
-            "records_parsed": response.records_parsed,
-            "key_field": req.key_field,
-            "outbox_events_written": outbox_events_written,
-        }),
-    );
-    Ok((
-        StatusCode::OK,
-        Json(serde_json::to_value(response).expect("json")),
-    ))
-}
-
-async fn ingest_parquet(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IngestParquetRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_ingest_runtime_privilege(
-        &headers,
-        &state,
-        PrivilegeAction::Write,
-        &ingest_scope_for_connector(&req.connector_id, "parquet"),
-    )?;
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(req.parquet_data_base64.trim())
-        .map_err(|_| bad_request_error(&headers, "invalid_base64_payload"))?;
-    use voltnuerongrid_ingest::parquet::ParquetConnector;
-    let mut conn = ParquetConnector::new(&req.connector_id, &req.connector_id);
-    let count = conn
-        .load_parquet_bytes(&raw)
-        .map_err(|_| bad_request_error(&headers, "parquet_parse_failed"))?;
-    let records = conn.read_batch(usize::MAX);
-    // S5-WS4-03: write each ingested parquet record into PagedRowStore
-    {
-        let mut rs = state.row_store.lock().expect("row_store lock");
-        let xid = rs.begin_xid();
-        for record in &records {
-            let mut data = std::collections::HashMap::new();
-            data.insert("payload".to_string(), record.payload.clone());
-            data.insert("source".to_string(), format!("parquet:{}", req.connector_id));
-            rs.insert(xid, &record.key, data);
-        }
-    }
-    let storage_key = ingest_storage_key(&principal, &req.connector_id);
-    state
-        .ingest_parquet_records
-        .lock()
-        .expect("parquet lock")
-        .insert(storage_key, records);
-    let outbox_events_written = append_ingest_outbox_events(
-        &state,
-        &principal,
-        &req.connector_id,
-        "parquet",
-        state
-            .ingest_parquet_records
-            .lock()
-            .expect("parquet lock")
-            .get(&ingest_storage_key(&principal, &req.connector_id))
-            .cloned()
-            .unwrap_or_default()
-            .as_slice(),
-    );
-    let response = IngestParquetResponse {
-        status: "ok",
-        connector_id: req.connector_id,
-        records_parsed: count,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Ingest,
-        &principal,
-        "ingest_parquet",
-        "ok",
-        json!({
-            "route_scope": "ingest/connectors/parquet",
-            "connector_id": response.connector_id,
-            "records_parsed": response.records_parsed,
-            "outbox_events_written": outbox_events_written,
-        }),
-    );
-    Ok((
-        StatusCode::OK,
-        Json(serde_json::to_value(response).expect("json")),
-    ))
-}
-
-async fn ingest_excel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IngestExcelRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_ingest_runtime_privilege(
-        &headers,
-        &state,
-        PrivilegeAction::Write,
-        &ingest_scope_for_connector(&req.connector_id, "excel"),
-    )?;
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(req.xlsx_data_base64.trim())
-        .map_err(|_| bad_request_error(&headers, "invalid_base64_payload"))?;
-    use voltnuerongrid_ingest::excel::ExcelConnector;
-    let mut conn = ExcelConnector::new(&req.connector_id, &req.connector_id);
-    let count = conn
-        .load_xlsx_bytes(&raw)
-        .map_err(|_| bad_request_error(&headers, "excel_parse_failed"))?;
-    let records = conn.read_batch(usize::MAX);
-    // S5-WS4-03: write each ingested excel record into PagedRowStore
-    {
-        let mut rs = state.row_store.lock().expect("row_store lock");
-        let xid = rs.begin_xid();
-        for record in &records {
-            let mut data = std::collections::HashMap::new();
-            data.insert("payload".to_string(), record.payload.clone());
-            data.insert("source".to_string(), format!("excel:{}", req.connector_id));
-            rs.insert(xid, &record.key, data);
-        }
-    }
-    let storage_key = ingest_storage_key(&principal, &req.connector_id);
-    state
-        .ingest_excel_records
-        .lock()
-        .expect("excel lock")
-        .insert(storage_key, records);
-    let outbox_events_written = append_ingest_outbox_events(
-        &state,
-        &principal,
-        &req.connector_id,
-        "excel",
-        state
-            .ingest_excel_records
-            .lock()
-            .expect("excel lock")
-            .get(&ingest_storage_key(&principal, &req.connector_id))
-            .cloned()
-            .unwrap_or_default()
-            .as_slice(),
-    );
-    let response = IngestExcelResponse {
-        status: "ok",
-        connector_id: req.connector_id,
-        records_parsed: count,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Ingest,
-        &principal,
-        "ingest_excel",
-        "ok",
-        json!({
-            "route_scope": "ingest/connectors/excel",
-            "connector_id": response.connector_id,
-            "records_parsed": response.records_parsed,
-            "outbox_events_written": outbox_events_written,
-        }),
-    );
-    Ok((
-        StatusCode::OK,
-        Json(serde_json::to_value(response).expect("json")),
-    ))
-}
-
-// REQ-07: POST /api/v1/ingest/chunked
-async fn ingest_chunked(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IngestChunkedRequest>,
-) -> Result<(StatusCode, Json<IngestChunkedResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_ingest_runtime_privilege(
-        &headers,
-        &state,
-        PrivilegeAction::Write,
-        &ingest_scope_for_connector(&req.connector_id, "chunked"),
-    )?;
-    use voltnuerongrid_ingest::batch_config::IngestParallelConfig;
-    use voltnuerongrid_ingest::IngestRecord;
-
-    let cfg = IngestParallelConfig {
-        chunk_target_rows: req.chunk_target_rows.unwrap_or(256),
-        max_in_flight_tasks: req.max_in_flight_tasks.unwrap_or(4),
-    };
-    let records: Vec<IngestRecord> = req
-        .records
-        .iter()
-        .enumerate()
-        .map(|(i, payload)| IngestRecord {
-            key: format!("{}-{i}", req.connector_id),
-            payload: payload.clone(),
-        })
-        .collect();
-
-    // REQ-07: async Tokio fan-out â€” each chunk is dispatched as a spawn_blocking task
-    // so CPU-bound processing doesn't block the async runtime.
-    let chunk_target = cfg.chunk_target_rows.max(1);
-    let in_flight_cap = cfg.max_in_flight_tasks.max(1);
-    let raw_chunks: Vec<Vec<IngestRecord>> = records
-        .chunks(chunk_target)
-        .map(|c| c.to_vec())
-        .collect();
-    let chunk_count = raw_chunks.len();
-    let mut all_outcomes: Vec<voltnuerongrid_ingest::chunked_loader::ChunkOutcome> = Vec::new();
-    for (wave_start, wave) in raw_chunks.chunks(in_flight_cap).enumerate() {
-        let base_idx = wave_start * in_flight_cap;
-        let handles: Vec<_> = wave
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(i, chunk)| {
-                let chunk_index = base_idx + i;
-                tokio::task::spawn_blocking(move || {
-                    voltnuerongrid_ingest::chunked_loader::ChunkOutcome {
-                        chunk_index,
-                        records_in_chunk: chunk.len(),
-                    }
-                })
-            })
-            .collect();
-        for handle in handles {
-            if let Ok(outcome) = handle.await {
-                all_outcomes.push(outcome);
-            }
-        }
-    }
-    let stats = voltnuerongrid_ingest::chunked_loader::ChunkedIngestStats {
-        total_records: records.len(),
-        chunk_count,
-        chunk_target_rows: chunk_target,
-        max_in_flight_tasks: in_flight_cap,
-        tasks_dispatched: chunk_count.min(in_flight_cap),
-        outcomes: all_outcomes,
-    };
-
-    let storage_key = ingest_storage_key(&principal, &req.connector_id);
-    state
-        .ingest_json_records
-        .lock()
-        .expect("json lock")
-        .insert(storage_key, records);
-
-    let chunks_succeeded = stats.outcomes.len();
-    let chunks_failed = stats.chunk_count.saturating_sub(chunks_succeeded);
-
-    let response = IngestChunkedResponse {
-        status: "ok",
-        connector_id: req.connector_id.clone(),
-        total_records: stats.total_records,
-        chunk_count: stats.chunk_count,
-        tasks_dispatched: stats.tasks_dispatched,
-        chunks_succeeded,
-        chunks_failed,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Ingest,
-        &principal,
-        "ingest_chunked",
-        "ok",
-        json!({
-            "connector_id": response.connector_id,
-            "total_records": response.total_records,
-            "chunk_count": response.chunk_count,
-        }),
-    );
-    Ok((StatusCode::OK, Json(response)))
-}
-
-async fn ingest_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<IngestStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_ingest_runtime_privilege(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        ingest_status_scope(),
-    )?;
-    let csv_map = state.ingest_csv_records.lock().expect("csv lock");
-    let json_map = state.ingest_json_records.lock().expect("json lock");
-    let parquet_map = state.ingest_parquet_records.lock().expect("parquet lock");
-    let excel_map = state.ingest_excel_records.lock().expect("excel lock");
-    let (csv_connectors, csv_total) = match &principal {
-        RuntimeAccessPrincipal::Operator(_) => (
-            csv_map.len(),
-            csv_map.values().map(|v| v.len()).sum(),
-        ),
-        RuntimeAccessPrincipal::TenantUser(user) => {
-            count_tenant_ingest_records(&csv_map, &user.tenant_id)
-        }
-    };
-    let (json_connectors, json_total) = match &principal {
-        RuntimeAccessPrincipal::Operator(_) => (
-            json_map.len(),
-            json_map.values().map(|v| v.len()).sum(),
-        ),
-        RuntimeAccessPrincipal::TenantUser(user) => {
-            count_tenant_ingest_records(&json_map, &user.tenant_id)
-        }
-    };
-    let (parquet_connectors, parquet_total) = match &principal {
-        RuntimeAccessPrincipal::Operator(_) => (
-            parquet_map.len(),
-            parquet_map.values().map(|v| v.len()).sum(),
-        ),
-        RuntimeAccessPrincipal::TenantUser(user) => {
-            count_tenant_ingest_records(&parquet_map, &user.tenant_id)
-        }
-    };
-    let (excel_connectors, excel_total) = match &principal {
-        RuntimeAccessPrincipal::Operator(_) => (
-            excel_map.len(),
-            excel_map.values().map(|v| v.len()).sum(),
-        ),
-        RuntimeAccessPrincipal::TenantUser(user) => {
-            count_tenant_ingest_records(&excel_map, &user.tenant_id)
-        }
-    };
-    let response = IngestStatusResponse {
-        status: "ok",
-        csv_connectors,
-        json_connectors,
-        parquet_connectors,
-        excel_connectors,
-        total_records_loaded: csv_total + json_total + parquet_total + excel_total,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Ingest,
-        &principal,
-        "ingest_status",
-        "ok",
-        json!({
-            "route_scope": "ingest/status",
-            "csv_connectors": response.csv_connectors,
-            "json_connectors": response.json_connectors,
-            "parquet_connectors": response.parquet_connectors,
-            "excel_connectors": response.excel_connectors,
-            "total_records_loaded": response.total_records_loaded,
-        }),
-    );
-    Ok(Json(response))
-}
-
-async fn ingest_outbox_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<IngestOutboxStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_ingest_runtime_privilege(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        &ingest_outbox_scope(None),
-    )?;
-    let stream_map = state.ingest_outbox_streams.lock().expect("outbox stream map lock");
-    let accessible_streams = match &principal {
-        RuntimeAccessPrincipal::Operator(_) => stream_map.values().cloned().collect::<Vec<_>>(),
-        RuntimeAccessPrincipal::TenantUser(user) => {
-            let prefix = format!("tenant/{}/", user.tenant_id);
-            stream_map
-                .iter()
-                .filter(|(storage_key, _)| storage_key.starts_with(&prefix))
-                .map(|(_, stream_name)| stream_name.clone())
-                .collect::<Vec<_>>()
-        }
-    };
-    drop(stream_map);
-
-    let accessible_set = accessible_streams.iter().cloned().collect::<HashSet<_>>();
-    let event_bus = state.ingest_event_bus.lock().expect("event bus lock");
-    let broker_mode = event_bus.broker_kind().to_string();
-    let broker_target = event_bus.broker_target();
-    let visible_events = event_bus
-        .events()
-        .into_iter()
-        .filter(|event| accessible_set.contains(&event.event.stream_name))
-        .collect::<Vec<_>>();
-    let response = IngestOutboxStatusResponse {
-        status: "ok",
-        broker_mode,
-        broker_target,
-        stream_count: accessible_streams.len(),
-        total_events: visible_events.len(),
-        last_event_id: visible_events.iter().map(|event| event.event.event_id).max(),
-        streams: accessible_streams,
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Ingest,
-        &principal,
-        "ingest_outbox_status",
-        "ok",
-        json!({
-            "route_scope": "ingest/outbox",
-            "stream_count": response.stream_count,
-            "total_events": response.total_events,
-            "last_event_id": response.last_event_id,
-        }),
-    );
-    Ok(Json(response))
-}
-
-async fn ingest_outbox_replay(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IngestOutboxReplayRequest>,
-) -> Result<Json<IngestOutboxReplayResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let principal = require_ingest_runtime_privilege(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        &ingest_outbox_scope(Some(&req.connector_id)),
-    )?;
-    let storage_key = ingest_storage_key(&principal, &req.connector_id);
-    let stream_name = ingest_outbox_stream_name(&storage_key);
-    let consumer_id = req
-        .consumer_id
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "default-consumer".to_string());
-    let cursor_key = format!("consumer/{consumer_id}/{stream_name}");
-    let max_items = req.max_items.unwrap_or(100).min(1_000);
-    let acknowledge = req.acknowledge.unwrap_or(true);
-
-    let cursor_before_ack = state
-        .ingest_outbox_cursors
-        .lock()
-        .expect("outbox cursor lock")
-        .load(&cursor_key);
-    let last_acknowledged_event_id = cursor_before_ack.unwrap_or(0);
-    let delivered = state
-        .ingest_event_bus
-        .lock()
-        .expect("event bus lock")
-        .export_for_stream_since(&stream_name, last_acknowledged_event_id, max_items)
-        .into_iter()
-        .collect::<Vec<_>>();
-
-    let mut cursor_after_ack = cursor_before_ack;
-    if acknowledge && !delivered.is_empty() {
-        let last_event_id = delivered
-            .last()
-            .map(|event| event.event_id)
-            .expect("delivered last event");
-        let mut cursor_store = state
-            .ingest_outbox_cursors
-            .lock()
-            .expect("outbox cursor lock");
-        let _ = cursor_store.save(&cursor_key, last_event_id);
-        cursor_after_ack = cursor_store.load(&cursor_key);
-    }
-
-    let delivery_state = if delivered.is_empty() {
-        "already_acknowledged"
-    } else if acknowledge {
-        "delivered_and_acked"
-    } else {
-        "delivered_pending_ack"
-    };
-    let response = IngestOutboxReplayResponse {
-        status: "ok",
-        delivery_state,
-        stream_name,
-        consumer_id: consumer_id.clone(),
-        delivered_count: delivered.len(),
-        cursor_before_ack,
-        cursor_after_ack,
-        acknowledged: acknowledge,
-        events: delivered
-            .into_iter()
-            .map(|event| IngestOutboxReplayEventResponse {
-                replay_key: event.replay_key(),
-                event_id: event.event_id,
-                stream_name: event.stream_name,
-                origin: event.origin,
-                payload_json: event.payload_json,
-            })
-            .collect(),
-    };
-    append_runtime_audit_event(
-        &state,
-        AuditEventKind::Ingest,
-        &principal,
-        "ingest_outbox_replay",
-        "ok",
-        json!({
-            "route_scope": format!("ingest/outbox/{}", req.connector_id),
-            "consumer_id": response.consumer_id,
-            "delivery_state": response.delivery_state,
-            "delivered_count": response.delivered_count,
-            "cursor_before_ack": response.cursor_before_ack,
-            "cursor_after_ack": response.cursor_after_ack,
-            "acknowledged": response.acknowledged,
-        }),
-    );
-    Ok(Json(response))
-}
 
 // â”€â”€ REQ-02: DDL catalog schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-#[derive(Serialize)]
-struct CatalogEntryView {
-    object_name: String,
-    object_kind: String,
-    created_at_unix_ms: u128,
-    last_altered_at_unix_ms: Option<u128>,
-    alteration_count: u32,
-}
-
-#[derive(Serialize)]
-struct CatalogSchemasResponse {
-    status: &'static str,
-    active_count: usize,
-    total_count: usize,
-    entries: Vec<CatalogEntryView>,
-}
-
-#[derive(Serialize)]
-struct CatalogTableColumnView {
-    name: String,
-    data_type: String,
-    nullable: bool,
-    primary_key: bool,
-}
-
-#[derive(Serialize)]
-struct CatalogTableIndexView {
-    name: String,
-    columns: Vec<String>,
-    unique: bool,
-}
-
-#[derive(Serialize)]
-struct CatalogTableColumnsResponse {
-    status: &'static str,
-    table_name: String,
-    columns: Vec<CatalogTableColumnView>,
-    indexes: Vec<CatalogTableIndexView>,
-}
-
-async fn catalog_schemas(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<CatalogSchemasResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/catalog/schemas")?;
-    let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
-    let active = catalog.active_entries();
-    let entries: Vec<CatalogEntryView> = active
-        .iter()
-        .map(|e| CatalogEntryView {
-            object_name: e.object_name.clone(),
-            object_kind: e.object_kind.clone(),
-            created_at_unix_ms: e.created_at_unix_ms,
-            last_altered_at_unix_ms: e.last_altered_at_unix_ms,
-            alteration_count: e.alteration_count,
-        })
-        .collect();
-    let resp = CatalogSchemasResponse {
-        status: "ok",
-        active_count: catalog.active_count(),
-        total_count: catalog.total_count(),
-        entries,
-    };
-    Ok((StatusCode::OK, Json(resp)))
-}
-
-async fn catalog_table_columns(
-    State(state): State<AppState>,
-    Path(table_name): Path<String>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<CatalogTableColumnsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/catalog/schemas")?;
-
-    let normalized_name = table_name.trim().to_ascii_lowercase();
-    let entry = {
-        let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
-        catalog.get(&normalized_name).cloned()
-    };
-
-    let Some(entry) = entry else {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            Json(CatalogTableColumnsResponse {
-                status: "not_found",
-                table_name,
-                columns: Vec::new(),
-                indexes: Vec::new(),
-            }),
-        ));
-    };
-
-    if entry.dropped {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            Json(CatalogTableColumnsResponse {
-                status: "not_found",
-                table_name: entry.object_name,
-                columns: Vec::new(),
-                indexes: Vec::new(),
-            }),
-        ));
-    }
-
-    let columns = match voltnuerongrid_sql::parse_one(&entry.original_statement) {
-        Ok(Statement::CreateTable(stmt)) => stmt
-            .columns
-            .iter()
-            .map(|column| CatalogTableColumnView {
-                name: column.name.clone(),
-                data_type: column.data_type.clone(),
-                nullable: true,
-                primary_key: false,
-            })
-            .collect::<Vec<_>>(),
-        _ => Vec::new(),
-    };
-
-    let indexes = {
-        let mgr = state.index_manager.lock().expect("index lock");
-        mgr.list_indexes()
-            .iter()
-            .filter(|idx| idx.table.eq_ignore_ascii_case(&entry.object_name))
-            .map(|idx| CatalogTableIndexView {
-                name: idx.name.clone(),
-                columns: vec![idx.column.clone()],
-                unique: idx.unique,
-            })
-            .collect::<Vec<_>>()
-    };
-
-    Ok((
-        StatusCode::OK,
-        Json(CatalogTableColumnsResponse {
-            status: "ok",
-            table_name: entry.object_name,
-            columns,
-            indexes,
-        }),
-    ))
-}
-
 // â”€â”€ REQ-23: ACID active transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-// ─── IDE admin schema tree (admin-key only, no RBAC) ──────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct AdminSchemaColumn {
-    name: String,
-    data_type: String,
-    nullable: bool,
-    primary_key: bool,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaIndex {
-    name: String,
-    columns: Vec<String>,
-    unique: bool,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaTable {
-    name: String,
-    schema: String,
-    columns: Vec<AdminSchemaColumn>,
-    indexes: Vec<AdminSchemaIndex>,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaFunction {
-    name: String,
-    schema: String,
-    /// Raw DDL body stored at CREATE FUNCTION time.
-    definition: String,
-    /// Argument list extracted from the first `(…)` in the DDL, or empty string.
-    arguments: String,
-    /// Return type extracted from RETURNS clause, or "void".
-    return_type: String,
-    /// Language tag, e.g. "sql", "plpgsql", "rust".
-    language: String,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaView {
-    name: String,
-    schema: String,
-    definition: String,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaTrigger {
-    name: String,
-    schema: String,
-    table: String,
-    definition: String,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaEvent {
-    name: String,
-    schema: String,
-    schedule: String,
-    definition: String,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaSchemaEntry {
-    name: String,
-    database: String,
-    tables: Vec<AdminSchemaTable>,
-    views: Vec<AdminSchemaView>,
-    functions: Vec<AdminSchemaFunction>,
-    triggers: Vec<AdminSchemaTrigger>,
-    events: Vec<AdminSchemaEvent>,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaDatabase {
-    name: String,
-    schemas: Vec<AdminSchemaSchemaEntry>,
-}
-
-#[derive(Serialize)]
-struct AdminSchemaTreeResponse {
-    databases: Vec<AdminSchemaDatabase>,
-    timestamp: u128,
-}
 
 // ─── Phase 1.3 — Database CRUD ─────────────────────────────────────────────
 //
 // HTTP API for first-class database lifecycle management. Sits alongside
 // (and will eventually replace) the implicit `database_name` string used as
 // a key prefix in `DdlCatalog`. See `gaps-may26-1.md` §3.2 for context.
-
-#[derive(Serialize, Clone)]
-struct AdminDatabaseRecord {
-    name: String,
-    owner: Option<String>,
-    description: Option<String>,
-    created_at_ms: u128,
-}
-
-impl From<&voltnuerongrid_meta::Database> for AdminDatabaseRecord {
-    fn from(db: &voltnuerongrid_meta::Database) -> Self {
-        Self {
-            name: db.name.as_str().to_string(),
-            owner: db.owner.clone(),
-            description: db.description.clone(),
-            created_at_ms: db.created_at_ms,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct AdminDatabasesListResponse {
-    databases: Vec<AdminDatabaseRecord>,
-    count: usize,
-}
-
-#[derive(Deserialize)]
-struct AdminCreateDatabaseRequest {
-    name: String,
-    #[serde(default)]
-    owner: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    /// If true, succeed silently when the database already exists.
-    #[serde(default)]
-    if_not_exists: bool,
-}
-
-#[derive(Serialize)]
-struct AdminCreateDatabaseResponse {
-    status: &'static str,
-    database: Option<AdminDatabaseRecord>,
-    /// Set when the request was a no-op (database already existed and `if_not_exists` was true).
-    already_existed: bool,
-}
-
-#[derive(Deserialize, Default)]
-struct AdminDropDatabaseQuery {
-    /// If true, return success when the database does not exist.
-    #[serde(default)]
-    if_exists: bool,
-}
-
-#[derive(Serialize)]
-struct AdminDropDatabaseResponse {
-    status: &'static str,
-    dropped: Option<AdminDatabaseRecord>,
-    /// Set when the request was a no-op (database did not exist and `if_exists` was true).
-    not_found_acceptable: bool,
-}
-
-/// `GET /api/v1/admin/databases` — list all databases.
-async fn admin_databases_list(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<AdminDatabasesListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    let catalog = match state.database_catalog.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            tracing::error!(target: "vng.handler", resource = "database_catalog", "mutex poisoned");
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: "database_catalog mutex poisoned".to_string(),
-                    locale: "en".to_string(),
-                    localized_message: "Database catalog temporarily unavailable".to_string(),
-                }),
-            ));
-        }
-    };
-    let databases: Vec<AdminDatabaseRecord> =
-        catalog.list().into_iter().map(AdminDatabaseRecord::from).collect();
-    let count = databases.len();
-    Ok((
-        StatusCode::OK,
-        Json(AdminDatabasesListResponse { databases, count }),
-    ))
-}
-
-/// `POST /api/v1/admin/databases` — create a new database.
-///
-/// Returns 201 on success, 409 on conflict (unless `if_not_exists` is true,
-/// in which case 200 with `already_existed=true`), 400 on invalid name.
-async fn admin_databases_create(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<AdminCreateDatabaseRequest>,
-) -> Result<(StatusCode, Json<AdminCreateDatabaseResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    let mut catalog = match state.database_catalog.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            tracing::error!(target: "vng.handler", resource = "database_catalog", "mutex poisoned");
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: "database_catalog mutex poisoned".to_string(),
-                    locale: "en".to_string(),
-                    localized_message: "Database catalog temporarily unavailable".to_string(),
-                }),
-            ));
-        }
-    };
-    let now_ms = now_unix_ms() as u128;
-    match catalog.create(
-        &req.name,
-        now_ms,
-        req.owner.as_deref(),
-        req.description.as_deref(),
-    ) {
-        Ok(db) => {
-            let record = AdminDatabaseRecord::from(db);
-            tracing::info!(
-                target: "vng.database",
-                name = %record.name,
-                owner = ?record.owner,
-                "database created"
-            );
-            metrics::counter!(
-                "vng_database_lifecycle_total",
-                "operation" => "create",
-                "status" => "ok",
-            )
-            .increment(1);
-            Ok((
-                StatusCode::CREATED,
-                Json(AdminCreateDatabaseResponse {
-                    status: "ok",
-                    database: Some(record),
-                    already_existed: false,
-                }),
-            ))
-        }
-        Err(voltnuerongrid_meta::DatabaseCatalogError::AlreadyExists { name }) if req.if_not_exists => {
-            // Idempotent path — return current record.
-            let record = catalog.get(&name).map(AdminDatabaseRecord::from);
-            metrics::counter!(
-                "vng_database_lifecycle_total",
-                "operation" => "create",
-                "status" => "noop_exists",
-            )
-            .increment(1);
-            Ok((
-                StatusCode::OK,
-                Json(AdminCreateDatabaseResponse {
-                    status: "ok",
-                    database: record,
-                    already_existed: true,
-                }),
-            ))
-        }
-        Err(voltnuerongrid_meta::DatabaseCatalogError::AlreadyExists { name }) => {
-            metrics::counter!(
-                "vng_database_lifecycle_total",
-                "operation" => "create",
-                "status" => "conflict",
-            )
-            .increment(1);
-            Err((
-                StatusCode::CONFLICT,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: format!("database {name:?} already exists"),
-                    locale: "en".to_string(),
-                    localized_message: format!("Database {name:?} already exists"),
-                }),
-            ))
-        }
-        Err(e) => {
-            metrics::counter!(
-                "vng_database_lifecycle_total",
-                "operation" => "create",
-                "status" => "invalid",
-            )
-            .increment(1);
-            let msg = e.to_string();
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: msg.clone(),
-                    locale: "en".to_string(),
-                    localized_message: msg,
-                }),
-            ))
-        }
-    }
-}
-
-/// `DELETE /api/v1/admin/databases/{name}` — drop a database.
-async fn admin_databases_drop(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(name): Path<String>,
-    Query(q): Query<AdminDropDatabaseQuery>,
-) -> Result<(StatusCode, Json<AdminDropDatabaseResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    let mut catalog = match state.database_catalog.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: "database_catalog mutex poisoned".to_string(),
-                    locale: "en".to_string(),
-                    localized_message: "Database catalog temporarily unavailable".to_string(),
-                }),
-            ));
-        }
-    };
-    match catalog.drop_database(&name, q.if_exists) {
-        Ok(Some(db)) => {
-            let record = AdminDatabaseRecord::from(&db);
-            tracing::info!(target: "vng.database", name = %record.name, "database dropped");
-            metrics::counter!(
-                "vng_database_lifecycle_total",
-                "operation" => "drop",
-                "status" => "ok",
-            )
-            .increment(1);
-            Ok((
-                StatusCode::OK,
-                Json(AdminDropDatabaseResponse {
-                    status: "ok",
-                    dropped: Some(record),
-                    not_found_acceptable: false,
-                }),
-            ))
-        }
-        Ok(None) => {
-            metrics::counter!(
-                "vng_database_lifecycle_total",
-                "operation" => "drop",
-                "status" => "noop_missing",
-            )
-            .increment(1);
-            Ok((
-                StatusCode::OK,
-                Json(AdminDropDatabaseResponse {
-                    status: "ok",
-                    dropped: None,
-                    not_found_acceptable: true,
-                }),
-            ))
-        }
-        Err(voltnuerongrid_meta::DatabaseCatalogError::NotFound { name }) => {
-            metrics::counter!(
-                "vng_database_lifecycle_total",
-                "operation" => "drop",
-                "status" => "not_found",
-            )
-            .increment(1);
-            Err((
-                StatusCode::NOT_FOUND,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: format!("database {name:?} not found"),
-                    locale: "en".to_string(),
-                    localized_message: format!("Database {name:?} not found"),
-                }),
-            ))
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: msg.clone(),
-                    locale: "en".to_string(),
-                    localized_message: msg,
-                }),
-            ))
-        }
-    }
-}
-
-/// `GET /api/v1/admin/databases/{name}/metadata` — return the static
-/// metadata-schema layout for a database. Phase 1.4 will replace this with
-/// live data-bearing rows; for now this returns the column-list schema so
-/// the Studio can render the metadata browser.
-#[derive(Serialize)]
-struct AdminMetadataLayoutResponse {
-    database: String,
-    schema: &'static str,
-    tables: Vec<voltnuerongrid_meta::MetadataTableSpec>,
-}
-
-async fn admin_databases_metadata(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(name): Path<String>,
-) -> Result<(StatusCode, Json<AdminMetadataLayoutResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    let catalog = match state.database_catalog.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: "database_catalog mutex poisoned".to_string(),
-                    locale: "en".to_string(),
-                    localized_message: "Database catalog temporarily unavailable".to_string(),
-                }),
-            ));
-        }
-    };
-    if !catalog.exists(&name) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(AuthErrorResponse {
-                status: "error",
-                reason: format!("database {name:?} not found"),
-                locale: "en".to_string(),
-                localized_message: format!("Database {name:?} not found"),
-            }),
-        ));
-    }
-    drop(catalog);
-    Ok((
-        StatusCode::OK,
-        Json(AdminMetadataLayoutResponse {
-            database: name.trim().to_ascii_lowercase(),
-            schema: "metadata",
-            tables: voltnuerongrid_meta::metadata_schema_layout(),
-        }),
-    ))
-}
-
-// ─── Phase 1.4 — live metadata.* rows ──────────────────────────────────────
-//
-// Implements `MetadataDataProvider` for the service's `AppState`, then
-// surfaces the rows over HTTP. Once the DataFusion executor lands
-// (Phase 1.7), `SELECT * FROM metadata.tables` will read through this same
-// provider.
-//
-// Design choice: we don't take any locks while building rows — instead we
-// snapshot the catalog under its mutex, drop the lock, then walk the
-// snapshot. This keeps the catalog mutex hold time short.
-
-/// Adapter that lets us pass `&AppState` where a
-/// `voltnuerongrid_meta::MetadataDataProvider` is required.
-struct AppStateMetadataProvider<'a> {
-    state: &'a AppState,
-}
-
-impl<'a> voltnuerongrid_meta::MetadataDataProvider for AppStateMetadataProvider<'a> {
-    fn rows_for(
-        &self,
-        table: voltnuerongrid_meta::MetadataTable,
-        database_name: &voltnuerongrid_meta::DatabaseName,
-    ) -> Vec<voltnuerongrid_meta::MetadataRow> {
-        use voltnuerongrid_meta::{MetadataRow, MetadataTable};
-
-        let db_str = database_name.as_str();
-        let mut out: Vec<MetadataRow> = Vec::new();
-
-        match table {
-            MetadataTable::Databases => {
-                // List ALL databases (this table ignores the per-DB filter —
-                // every database can introspect the global database list).
-                if let Ok(catalog) = self.state.database_catalog.lock() {
-                    for db in catalog.list() {
-                        let mut row = MetadataRow::new();
-                        row.insert("name".to_string(), db.name.as_str().to_string());
-                        row.insert(
-                            "owner".to_string(),
-                            db.owner.clone().unwrap_or_default(),
-                        );
-                        row.insert("created_at_ms".to_string(), db.created_at_ms.to_string());
-                        row.insert(
-                            "description".to_string(),
-                            db.description.clone().unwrap_or_default(),
-                        );
-                        out.push(row);
-                    }
-                }
-            }
-
-            MetadataTable::Tables => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
-                    for entry in catalog.active_entries() {
-                        if entry.database_name != db_str {
-                            continue;
-                        }
-                        if entry.object_kind != "table" {
-                            continue;
-                        }
-                        let mut row = MetadataRow::new();
-                        row.insert("database_name".to_string(), entry.database_name.clone());
-                        row.insert("schema_name".to_string(), entry.schema_name.clone());
-                        row.insert("table_name".to_string(), entry.object_name.clone());
-                        row.insert("kind".to_string(), entry.object_kind.clone());
-                        row.insert(
-                            "created_at_ms".to_string(),
-                            entry.created_at_unix_ms.to_string(),
-                        );
-                        out.push(row);
-                    }
-                }
-            }
-
-            MetadataTable::Schemas => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
-                    let mut schemas: std::collections::BTreeSet<String> = Default::default();
-                    for entry in catalog.active_entries() {
-                        if entry.database_name == db_str {
-                            schemas.insert(entry.schema_name.clone());
-                        }
-                    }
-                    // Always expose the virtual `metadata` schema so the
-                    // Studio's tree always shows it.
-                    schemas.insert("metadata".to_string());
-                    for schema_name in schemas {
-                        let mut row = MetadataRow::new();
-                        row.insert("database_name".to_string(), db_str.to_string());
-                        row.insert("schema_name".to_string(), schema_name);
-                        out.push(row);
-                    }
-                }
-            }
-
-            MetadataTable::Views => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
-                    for entry in catalog.active_entries() {
-                        if entry.database_name != db_str {
-                            continue;
-                        }
-                        if entry.object_kind != "view" && entry.object_kind != "materialized_view" {
-                            continue;
-                        }
-                        let mut row = MetadataRow::new();
-                        row.insert("database_name".to_string(), entry.database_name.clone());
-                        row.insert("schema_name".to_string(), entry.schema_name.clone());
-                        row.insert("view_name".to_string(), entry.object_name.clone());
-                        row.insert("definition".to_string(), entry.original_statement.clone());
-                        out.push(row);
-                    }
-                }
-            }
-
-            MetadataTable::Routines => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
-                    for entry in catalog.active_entries() {
-                        if entry.database_name != db_str {
-                            continue;
-                        }
-                        if entry.object_kind != "function" && entry.object_kind != "procedure" {
-                            continue;
-                        }
-                        let mut row = MetadataRow::new();
-                        row.insert("database_name".to_string(), entry.database_name.clone());
-                        row.insert("schema_name".to_string(), entry.schema_name.clone());
-                        row.insert("routine_name".to_string(), entry.object_name.clone());
-                        row.insert("language".to_string(), "sql".to_string());
-                        row.insert("kind".to_string(), entry.object_kind.clone());
-                        out.push(row);
-                    }
-                }
-            }
-
-            MetadataTable::Triggers => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
-                    for entry in catalog.active_entries() {
-                        if entry.database_name != db_str {
-                            continue;
-                        }
-                        if entry.object_kind != "trigger" {
-                            continue;
-                        }
-                        let mut row = MetadataRow::new();
-                        row.insert("database_name".to_string(), entry.database_name.clone());
-                        row.insert("schema_name".to_string(), entry.schema_name.clone());
-                        row.insert("trigger_name".to_string(), entry.object_name.clone());
-                        row.insert("table_name".to_string(), String::new());
-                        row.insert("event".to_string(), String::new());
-                        out.push(row);
-                    }
-                }
-            }
-
-            MetadataTable::Settings => {
-                // Surface the boot-time runtime config as setting rows. The
-                // `scope` column distinguishes server-wide settings (`server`)
-                // from per-database overrides (none yet — Phase 2+ work).
-                let cfg = &self.state.runtime_config;
-                let pairs: Vec<(&str, String)> = vec![
-                    ("storage.engine", format!("{:?}", cfg.storage.engine).to_ascii_lowercase()),
-                    ("storage.data_dir", cfg.storage.data_dir.clone()),
-                    (
-                        "storage.max_background_jobs",
-                        cfg.storage.max_background_jobs.to_string(),
-                    ),
-                    (
-                        "storage.wal_fsync_on_commit",
-                        cfg.storage.wal_fsync_on_commit.to_string(),
-                    ),
-                    ("sql.engine", format!("{:?}", cfg.sql.engine).to_ascii_lowercase()),
-                    (
-                        "sql.htap_olap_threshold_rows",
-                        cfg.sql.htap_olap_threshold_rows.to_string(),
-                    ),
-                    ("sql.max_result_rows", cfg.sql.max_result_rows.to_string()),
-                ];
-                for (key, value) in pairs {
-                    let mut row = MetadataRow::new();
-                    row.insert("database_name".to_string(), db_str.to_string());
-                    row.insert("key".to_string(), key.to_string());
-                    row.insert("value".to_string(), value);
-                    row.insert("scope".to_string(), "server".to_string());
-                    out.push(row);
-                }
-            }
-
-            // The remaining tables don't have a backing source yet; return
-            // empty rather than synthesising fake data. Phase 1.6+ work
-            // (real users / roles / indexes) will populate them.
-            MetadataTable::Columns
-            | MetadataTable::Indexes
-            | MetadataTable::Users
-            | MetadataTable::Roles
-            | MetadataTable::Grants => {
-                // Empty — see comment above.
-            }
-        }
-
-        out
-    }
-}
-
-#[derive(Serialize)]
-struct AdminMetadataRowsResponse {
-    database: String,
-    table: String,
-    columns: Vec<&'static str>,
-    rows: Vec<voltnuerongrid_meta::MetadataRow>,
-    row_count: usize,
-}
-
-/// `GET /api/v1/admin/databases/:name/metadata/:table` — return live rows
-/// for a single metadata table. Phase 1.4.
-async fn admin_databases_metadata_rows(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((name, table_str)): Path<(String, String)>,
-) -> Result<(StatusCode, Json<AdminMetadataRowsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-
-    // Validate the database name + existence under one short lock-hold.
-    let db_name = {
-        let parsed = match voltnuerongrid_meta::DatabaseName::parse(&name) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(AuthErrorResponse {
-                        status: "error",
-                        reason: format!("invalid database name: {e}"),
-                        locale: "en".to_string(),
-                        localized_message: format!("Invalid database name: {e}"),
-                    }),
-                ));
-            }
-        };
-        let catalog = match state.database_catalog.lock() {
-            Ok(g) => g,
-            Err(_) => {
-                return Err((
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(AuthErrorResponse {
-                        status: "error",
-                        reason: "database_catalog mutex poisoned".to_string(),
-                        locale: "en".to_string(),
-                        localized_message: "Database catalog temporarily unavailable".to_string(),
-                    }),
-                ));
-            }
-        };
-        if !catalog.exists(parsed.as_str()) {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: format!("database {:?} not found", parsed.as_str()),
-                    locale: "en".to_string(),
-                    localized_message: format!("Database {:?} not found", parsed.as_str()),
-                }),
-            ));
-        }
-        parsed
-    };
-
-    let table = match voltnuerongrid_meta::MetadataTable::parse_name(&table_str) {
-        Some(t) => t,
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(AuthErrorResponse {
-                    status: "error",
-                    reason: format!(
-                        "metadata table {table_str:?} does not exist; \
-                         see GET /api/v1/admin/databases/{}/metadata for the list",
-                        db_name.as_str()
-                    ),
-                    locale: "en".to_string(),
-                    localized_message: format!(
-                        "Metadata table {table_str:?} does not exist for database {}",
-                        db_name.as_str()
-                    ),
-                }),
-            ));
-        }
-    };
-
-    let provider = AppStateMetadataProvider { state: &state };
-    let rows = <AppStateMetadataProvider as voltnuerongrid_meta::MetadataDataProvider>::rows_for(
-        &provider, table, &db_name,
-    );
-    let row_count = rows.len();
-    Ok((
-        StatusCode::OK,
-        Json(AdminMetadataRowsResponse {
-            database: db_name.as_str().to_string(),
-            table: table.name().to_string(),
-            columns: table.columns().to_vec(),
-            rows,
-            row_count,
-        }),
-    ))
-}
-
-/// `GET /api/v1/admin/runtime-config` — read-only view of the boot-time
-/// runtime configuration (storage engine, SQL engine, tunables). Used by
-/// the Studio settings panel to show what backends are active.
-async fn admin_runtime_config(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<voltnuerongrid_config::RuntimeConfig>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-    Ok((StatusCode::OK, Json((*state.runtime_config).clone())))
-}
-
-async fn admin_schema_tree(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<AdminSchemaTreeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_admin_api_key(&headers, &state)?;
-
-    let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
-    let index_mgr = state.index_manager.lock().expect("index lock");
-
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-
-    // Group active entries by (database_name, schema_name) using sorted maps for stable output.
-    use std::collections::BTreeMap;
-    let mut db_map: BTreeMap<String, BTreeMap<String, Vec<&DdlCatalogEntry>>> = BTreeMap::new();
-    for entry in catalog.active_entries() {
-        db_map
-            .entry(entry.database_name.clone())
-            .or_default()
-            .entry(entry.schema_name.clone())
-            .or_default()
-            .push(entry);
-    }
-    // Do not inject synthetic databases/schemas here. Only return what the
-    // catalog actually contains so the UI accurately reflects persisted state.
-
-    let databases: Vec<AdminSchemaDatabase> = db_map
-        .into_iter()
-        .map(|(db_name, schema_map)| {
-            let schemas: Vec<AdminSchemaSchemaEntry> = schema_map
-                .into_iter()
-                .map(|(schema_name, entries)| {
-                    let mut tables: Vec<AdminSchemaTable> = entries
-                        .iter()
-                        .filter(|e| e.object_kind == "table")
-                        .map(|e| {
-                            let columns = match voltnuerongrid_sql::parse_one(&e.original_statement) {
-                                Ok(Statement::CreateTable(stmt)) => stmt
-                                    .columns
-                                    .iter()
-                                    .map(|c| AdminSchemaColumn {
-                                        name: c.name.clone(),
-                                        data_type: c.data_type.clone(),
-                                        nullable: true,
-                                        primary_key: false,
-                                    })
-                                    .collect(),
-                                _ => Vec::new(),
-                            };
-                            let indexes = index_mgr
-                                .list_indexes()
-                                .iter()
-                                .filter(|idx| idx.table.eq_ignore_ascii_case(&e.object_name))
-                                .map(|idx| AdminSchemaIndex {
-                                    name: idx.name.clone(),
-                                    columns: vec![idx.column.clone()],
-                                    unique: idx.unique,
-                                })
-                                .collect();
-                            AdminSchemaTable {
-                                name: e.object_name.clone(),
-                                schema: schema_name.clone(),
-                                columns,
-                                indexes,
-                            }
-                        })
-                        .collect();
-                    tables.sort_by(|a, b| a.name.cmp(&b.name));
-
-                    let mut views: Vec<AdminSchemaView> = entries
-                        .iter()
-                        .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
-                        .map(|e| AdminSchemaView {
-                            name: e.object_name.clone(),
-                            schema: schema_name.clone(),
-                            definition: e.original_statement.clone(),
-                        })
-                        .collect();
-                    views.sort_by(|a, b| a.name.cmp(&b.name));
-
-                    let mut functions: Vec<AdminSchemaFunction> = entries
-                        .iter()
-                        .filter(|e| e.object_kind == "function")
-                        .map(|e| {
-                            let def = &e.original_statement;
-                            let arguments = def
-                                .find('(')
-                                .and_then(|start| {
-                                    def[start + 1..].find(')').map(|end| {
-                                        def[start + 1..start + 1 + end].trim().to_string()
-                                    })
-                                })
-                                .unwrap_or_default();
-                            let return_type = {
-                                let upper = def.to_ascii_uppercase();
-                                upper
-                                    .find("RETURNS")
-                                    .and_then(|pos| {
-                                        def[pos + 7..].split_whitespace().next().map(|s| {
-                                            s.trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
-                                                .to_string()
-                                        })
-                                    })
-                                    .unwrap_or_else(|| "void".to_string())
-                            };
-                            let language = {
-                                let upper = def.to_ascii_uppercase();
-                                upper
-                                    .find("LANGUAGE")
-                                    .and_then(|pos| {
-                                        def[pos + 8..]
-                                            .split_whitespace()
-                                            .next()
-                                            .map(|s| s.trim().to_ascii_lowercase())
-                                    })
-                                    .unwrap_or_else(|| "sql".to_string())
-                            };
-                            AdminSchemaFunction {
-                                name: e.object_name.clone(),
-                                schema: schema_name.clone(),
-                                definition: def.clone(),
-                                arguments,
-                                return_type,
-                                language,
-                            }
-                        })
-                        .collect();
-                    functions.sort_by(|a, b| a.name.cmp(&b.name));
-
-                    let mut triggers: Vec<AdminSchemaTrigger> = entries
-                        .iter()
-                        .filter(|e| e.object_kind == "trigger")
-                        .map(|e| AdminSchemaTrigger {
-                            name: e.object_name.clone(),
-                            schema: schema_name.clone(),
-                            table: extract_trigger_table_name(&e.original_statement),
-                            definition: e.original_statement.clone(),
-                        })
-                        .collect();
-                    triggers.sort_by(|a, b| a.name.cmp(&b.name));
-
-                    let mut events: Vec<AdminSchemaEvent> = entries
-                        .iter()
-                        .filter(|e| e.object_kind == "event")
-                        .map(|e| AdminSchemaEvent {
-                            name: e.object_name.clone(),
-                            schema: schema_name.clone(),
-                            schedule: extract_event_schedule(&e.original_statement),
-                            definition: e.original_statement.clone(),
-                        })
-                        .collect();
-                    events.sort_by(|a, b| a.name.cmp(&b.name));
-
-                    AdminSchemaSchemaEntry {
-                        name: schema_name.clone(),
-                        database: db_name.clone(),
-                        tables,
-                        views,
-                        functions,
-                        triggers,
-                        events,
-                    }
-                })
-                .collect();
-            AdminSchemaDatabase {
-                name: db_name,
-                schemas,
-            }
-        })
-        .collect();
-
-    Ok((StatusCode::OK, Json(AdminSchemaTreeResponse { databases, timestamp: now_ms })))
-}
-
-fn extract_trigger_table_name(ddl: &str) -> String {
-    let tokens: Vec<&str> = ddl.split_whitespace().collect();
-    for pair in tokens.windows(2) {
-        if pair[0].eq_ignore_ascii_case("ON") {
-            return pair[1]
-                .trim_matches(|c: char| c == ';' || c == '(' || c == ')')
-                .rsplit('.')
-                .next()
-                .unwrap_or(pair[1])
-                .to_string();
-        }
-    }
-    String::new()
-}
-
-fn extract_event_schedule(ddl: &str) -> String {
-    let upper = ddl.to_ascii_uppercase();
-    if let Some(start) = upper.find("ON SCHEDULE") {
-        let rest = ddl[start + "ON SCHEDULE".len()..].trim();
-        if let Some(end) = rest.to_ascii_uppercase().find(" DO ") {
-            return rest[..end].trim().trim_end_matches(';').to_string();
-        }
-        return rest.trim().trim_end_matches(';').to_string();
-    }
-    String::new()
-}
-
-
-#[derive(Serialize)]
-struct AcidTransactionsResponse {
-    status: &'static str,
-    active_count: usize,
-    total_count: usize,
-    transactions: Vec<AcidTxEntry>,
-}
-
-async fn sql_transactions_active(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<AcidTransactionsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_sql_runtime_principal(
-        &headers,
-        &state,
-        PrivilegeAction::Read,
-        "sql/transactions/active",
-    )?;
-    let acid = state.acid_transactions.lock().expect("acid_tx lock");
-    let all = acid.all_transactions();
-    let active = acid.active_transactions();
-    let resp = AcidTransactionsResponse {
-        status: "ok",
-        active_count: active.len(),
-        total_count: all.len(),
-        transactions: active.iter().map(|t| (*t).clone()).collect(),
-    };
-    Ok((StatusCode::OK, Json(resp)))
-}
 
 // REQ-10/19: benchmark endpoint types and handlers
 #[derive(Deserialize)]
@@ -21994,56 +11989,6 @@ async fn import_sql(
     ))
 }
 
-// ─── S6-004: Server status endpoint for IDE panel ────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct ServerStatusTransport {
-    http: bool,
-    native: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ServerStatusConnections {
-    active: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct ServerStatusStorage {
-    engine: String,
-    status: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ServerStatusResponse {
-    version: String,
-    uptime_s: u64,
-    transport: ServerStatusTransport,
-    connections: ServerStatusConnections,
-    storage: ServerStatusStorage,
-}
-
-async fn admin_server_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<ServerStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
-    require_operator_auth(&headers, &state)?;
-    Ok((
-        StatusCode::OK,
-        Json(ServerStatusResponse {
-            version: "0.3.2".to_string(),
-            uptime_s: 0,
-            transport: ServerStatusTransport {
-                http: true,
-                native: false,
-            },
-            connections: ServerStatusConnections { active: 0 },
-            storage: ServerStatusStorage {
-                engine: "voltnuerongrid".to_string(),
-                status: "ok".to_string(),
-            },
-        }),
-    ))
-}
 
 // ─── S6-005: Full-text search endpoint (feature-gated) ───────────────────────
 

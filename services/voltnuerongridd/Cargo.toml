@@ -17,7 +17,7 @@ rustls-pemfile = "2"
 voltnuerongrid-core = { path = "../../crates/voltnuerongrid-core" }
 voltnuerongrid-config = { path = "../../crates/voltnuerongrid-config" }
 voltnuerongrid-meta = { path = "../../crates/voltnuerongrid-meta" }
-voltnuerongrid-exec-datafusion = { path = "../../crates/voltnuerongrid-exec-datafusion" }
+voltnuerongrid-exec-datafusion = { path = "../../crates/voltnuerongrid-exec-datafusion", features = ["datafusion"] }
 voltnuerongrid-auth = { path = "../../crates/voltnuerongrid-auth" }
 voltnuerongrid-audit = { path = "../../crates/voltnuerongrid-audit" }
 voltnuerongrid-ai = { path = "../../crates/voltnuerongrid-ai" }

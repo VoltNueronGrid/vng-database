@@ -1,247 +1,86 @@
-# `remaining.md` — handoff for next session (v7)
+# `remaining.md` — handoff for next session (v14)
 
-**Last updated:** 2026-05-05 (eighth session — Phase 2.2 text WAL deprecation)
-**Branch:** `phase-2-2-text-wal-deprecation`
-**Total unit tests passing locally:** 562 (399 SQL + 97 store + 25 exec + 21 meta + 12 config + 8 soak)
-**Phase:** 2.2 — text WAL deprecation + auto-migrate-on-boot
-
----
-
-## TL;DR
-
-This session deprecated the legacy text WAL files. Going forward:
-
-- **Engine is canonical.** `storage.legacy_text_wal` defaults to `false`. The dual-write helper now skips the text WAL by default.
-- **Auto-migrate-on-boot.** If RocksDB has no SQL but `state/ddl.wal` / `state/dml.wal` exist, the service migrates them automatically before serving requests. Operators upgrading from Phase 2.0/2.1 don't need to run `vng-migrate` manually — but it's still there if they want explicit control.
-- **All legacy text WAL helpers marked `#[deprecated]`** (since 0.2.0, removal in 0.3.0). Compiler warns at every call site that isn't `#[allow(deprecated)]`.
+**Last updated:** 2026-05-07 (thirteenth session — Slice 4 complete: sql.rs, sre.rs, store.rs)
+**Branch:** `main`
+**Total unit tests:** ~603 passing (resilience.rs has 2 pre-existing E0597 failures unrelated to modular work; 28 planner tests in voltnuerongrid-exec also pre-existing failures)
+**Phase:** main.rs modular refactor underway — Slices 1–4 complete
 
 ---
 
-## ⚠️ Sandbox network status
+## TL;DR — what landed this session
 
-The two domains needed to install latest Rust (`sh.rustup.rs`,
-`static.rust-lang.org`) are **still blocked** as of this session — `403 Host
-not in allowlist` from the egress proxy. Even some previously-allowed
-domains (`crates.io`, `raw.githubusercontent.com`, `static.crates.io`) now
-also return 403. Worth confirming the allowlist actually got updated.
+### ✅ main.rs modular refactor — Slice 4
 
-This means I'm still on rustc 1.75 in the sandbox and still cannot
-compile-test the full service. All 562 unit tests pass on what I CAN
-compile (the small isolated crates).
+**New files:**
 
----
+- **`services/voltnuerongridd/src/handlers/sql.rs`** (1,423 lines) — 26 DTOs + 9 handlers:
+  - Handlers: `sql_transaction`, `sql_pessimistic_lock_acquire`, `sql_pessimistic_lock_release`, `sql_pessimistic_lock_metrics`, `sql_analyze`, `sql_route`, `sql_execute`, `sql_transactions_isolation`, `sql_transactions_active`
+  - DTOs: `SqlTransactionRequest`, `SqlAnalyzeRequest`, `AnalyzedStatement`, `SqlAnalyzeResponse`, `SqlRouteRequest`, `RoutedStatementResponse`, `SqlRouteResponse`, `SqlExecuteRequest`, `LegacyAggResult`, `SqlExecuteResponse`, `OltpRowResult`, `OlapVecAggResult`, `UdfExecutionResult`, `UdfFunctionCatalogEntry`, `UdfLanguageGuardPolicy`, `UdfExecutionPlanStep`, `UdfInvocationPlan`, `PessimisticLockAcquireRequest`, `PessimisticLockReleaseRequest`, `PessimisticLockResponse`, `PessimisticLockContentionMetricsResponse`, `TxIsolationEntry`, `TxIsolationStatsResponse`, `OlapQueryRequest`, `OlapQueryResponse`, `AcidTransactionsResponse`
 
-## What landed this session
+- **`services/voltnuerongridd/src/handlers/sre.rs`** (1,431 lines) — ~35 DTOs + 22 handlers:
+  - Handlers: `sre_reliability_status`, `sre_rate_limit_check`, `sre_failure_budget_alerts`, `sre_dr_hook_policy`, `sre_dr_hook_retry_plan`, `sre_dr_hook_schedule`, `sre_dr_hook_trigger`, `sre_dr_hook_status`, `sre_failure_signal`, `sre_failure_reconcile`, `sre_gate_evaluate`, `sre_gate_export`, `sre_cache_set`, `sre_cache_get`, `sre_cache_invalidate`, `sre_cache_rebalance`, `sre_cache_metrics`, `sre_driver_pool_acquire`, `sre_driver_pool_release`, `sre_driver_pool_failure`, `sre_driver_pool_recover`, `sre_driver_pool_stats`
+  - Note: `cache_redis_command` and its DTOs (`RedisCacheCommandRequest`, `RedisCacheCommandResponse`) STAY in main.rs (heavily tested there)
 
-### ✅ Config: `legacy_text_wal` flag
+- **`services/voltnuerongridd/src/handlers/store.rs`** (1,330 lines) — 43 DTOs + 23 handlers:
+  - Handlers: `htap_status`, `store_rows_keys`, `row_store_version`, `htap_stats`, `row_store_snapshot`, `row_store_stats`, `row_store_count`, `row_store_delete`, `store_list_indexes`, `store_create_index`, `store_drop_index`, `store_index_lookup`, `store_add_constraint`, `store_validate_constraint`, `store_rows_scan`, `store_htap_export`, `store_columnar_scan`, `store_columnar_project`, `store_columnar_aggregate`, `store_htap_apply`, `store_htap_olap_scan`, `htap_lag`, `htap_force_sync`
 
-**File:** `crates/voltnuerongrid-config/src/lib.rs`
+**`pub(crate)` changes in main.rs for Slice 4:**
+- `DR_HOOK_COUNTER` static → `pub(crate)`
+- Functions: `failure_budget_snapshot`, `rate_limit_policy_snapshot`, `evaluate_rate_limit`, `evaluate_failure_budget_alert`, `build_retry_plan`, `enqueue_dr_hook_task`, `execute_dr_hook`, `latest_dr_hook_records`, `pool_acquire_error_state`, `record_transport_mutation` → all `pub(crate)`
 
-```rust
-pub struct StorageConfig {
-    // ... existing fields ...
-    /// Phase 2.2 — opt-in to ALSO write to the legacy text WAL files.
-    /// Defaults to `false`. The next release will remove this entirely.
-    #[serde(default)]
-    pub legacy_text_wal: bool,
-}
-```
+**Shared-type rule in action (stays in main.rs):**
+- `PoolStatsResponse` — shared between driver.rs and sre.rs, stays in main.rs as `pub(crate)`
+- `RedisCacheCommandRequest/Response` — private to main.rs (function + tests co-located)
+- `PessimisticLockContentionMetrics` — AppState field type, stays in main.rs
 
-- Default `false`.
-- Env var: `VNG_LEGACY_TEXT_WAL=1` to enable.
-- JSON: `storage.legacy_text_wal: true`.
-- 5 new unit tests covering default, env enable/disable, JSON load,
-  back-compat with old config files (omitted key → false).
+**main.rs line count:** 30,287 (Slice 3) → 24,962 (after Slice 4, -5,325 lines)
 
-### ✅ Service: dual-write becomes engine-only by default
-
-**File:** `services/voltnuerongridd/src/main.rs::persist_sql_statement`
-
-The previous unconditional `append_sql_wal(&path, sql)` is now gated:
-```rust
-if state.runtime_config.storage.legacy_text_wal {
-    append_sql_wal(&path, sql);
-}
-```
-
-The metric `vng_wal_append_total` gained a `text_wal=yes|no` label so
-operators can confirm at a glance whether the legacy path is actually
-being used in production.
-
-### ✅ Auto-migrate-on-boot
-
-**File:** `services/voltnuerongridd/src/main.rs::auto_migrate_text_to_engine`
-
-Called from `replay_ddl_into` and `replay_dml_into` before the engine-vs-text
-fallback decision. Behaviour:
-
-1. If a `<wal_path>.migrated` marker exists → skip (already migrated).
-2. If the text WAL file doesn't exist → skip (nothing to migrate).
-3. If the engine doesn't persist SQL (in-memory) → skip.
-4. If the engine already has SQL of this kind → mark and skip.
-5. Otherwise: read text WAL, append every statement to the engine, write
-   `<wal_path>.migrated` marker.
-
-After migration, the next replay step finds the data in the engine and
-emits `vng_wal_replay_total{source=engine}` as before. The original
-`state/*.wal` files are left untouched (operators may want them as a
-sanity-check backup).
-
-New metric `vng_wal_auto_migrate_total{kind}` counts how many statements
-were lifted on first boot.
-
-### ✅ Deprecation markers
-
-**File:** `services/voltnuerongridd/src/main.rs`
-
-Eight functions now carry:
-```rust
-#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
-```
-
-- `ddl_wal_path`, `dml_wal_path`
-- `sql_wal_escape`, `sql_wal_unescape`
-- `append_sql_wal`, `read_sql_wal`
-- `replay_ddl_wal_into`, `replay_dml_wal_into`
-
-Their authorised callers (`persist_sql_statement`,
-`auto_migrate_text_to_engine`, `replay_*_into`) are tagged
-`#[allow(deprecated)]` so the warnings only appear if a future PR adds a
-new caller.
-
-### ✅ Studio + sample config
-
-- `ui/voltnuerongrid-studio/src/api/studio-client.ts` — added optional
-  `legacy_text_wal?: boolean` to the `StorageConfig` interface.
-- `vng.config.sample.json` — documented the new flag with a comment
-  explaining when (rarely) to enable it.
-
----
-
-## ⚠️ Things to verify on rustc 1.86+ (when it's available)
-
-```bash
-git checkout phase-2-2-text-wal-deprecation
-cargo check --workspace            # should compile clean
-cargo test --workspace              # 562 unit tests + 8 soak
-cargo build --release -p voltnuerongridd
-
-# Smoke test: upgrade path from a Phase-2.1 deployment
-mkdir -p state data
-echo "CREATE TABLE t (id INT, name TEXT)" > state/ddl.wal
-echo "INSERT INTO t (id, name) VALUES (5, 'alice')" > state/dml.wal
-
-VNG_LOG=info VNG_ADMIN_API_KEY=test ./target/release/voltnuerongridd &
-sleep 1
-
-# 1. Auto-migrate metric should report the lift.
-curl -s http://127.0.0.1:8080/metrics | grep vng_wal_auto_migrate_total
-# Expected: vng_wal_auto_migrate_total{kind="ddl"} 1
-#           vng_wal_auto_migrate_total{kind="dml"} 1
-
-# 2. Marker files should exist now.
-ls -la state/*.migrated
-# Expected: state/ddl.wal.migrated, state/dml.wal.migrated
-
-# 3. Replay should report engine source.
-# (Restart the service first to trigger replay)
-pkill voltnuerongridd; sleep 1
-./target/release/voltnuerongridd &
-sleep 1
-curl -s http://127.0.0.1:8080/metrics | grep vng_wal_replay_total
-# Expected: vng_wal_replay_total{kind="ddl",source="engine"} 1
-#           vng_wal_replay_total{kind="dml",source="engine"} 1
-
-# 4. Confirm new writes go ONLY to the engine.
-curl -X POST -H "x-vng-admin-key: test" -H "x-vng-operator-id: admin" \
-  -H "content-type: application/json" \
-  -d '{"sql_batch":"INSERT INTO t (id, name) VALUES (6, '\''bob'\'')"}' \
-  http://127.0.0.1:8080/api/v1/sql/execute
-
-curl -s http://127.0.0.1:8080/metrics | grep vng_wal_append_total
-# Expected: vng_wal_append_total{kind="dml",text_wal="no"} 1
-
-# 5. With legacy_text_wal=true, dual-write resumes.
-pkill voltnuerongridd; sleep 1
-VNG_LEGACY_TEXT_WAL=1 ./target/release/voltnuerongridd &
-sleep 1
-curl -X POST -H "x-vng-admin-key: test" -H "x-vng-operator-id: admin" \
-  -H "content-type: application/json" \
-  -d '{"sql_batch":"INSERT INTO t (id, name) VALUES (7, '\''carol'\'')"}' \
-  http://127.0.0.1:8080/api/v1/sql/execute
-
-curl -s http://127.0.0.1:8080/metrics | grep vng_wal_append_total
-# Expected: vng_wal_append_total{kind="dml",text_wal="yes"} 1
-# AND state/dml.wal grew by one line.
-```
-
-### Likely compile issues
-
-1. **`#[allow(deprecated)]` placement.** I put it as an outer attribute
-   above each authorised caller fn. If rustc complains it should be
-   inside the fn body, move it to `#![allow(deprecated)]` at the top of
-   the relevant `mod` instead.
-
-2. **`now_unix_ms()` return type.** Phase 2.1 had this same caveat —
-   confirm the helper returns whatever `apply_ddl_to_catalog` expects
-   (currently `u128`).
+**`cargo check --workspace`**: clean ✓
+**`cargo test`**: ~603 passing; 2 pre-existing E0597 in resilience.rs; 28 pre-existing planner failures in voltnuerongrid-exec
 
 ---
 
 ## What's still TODO
 
-### Phase 2.3 — actual deletion (next session, after one production cycle)
+### Phase main.rs refactor (continuing)
 
-Once production has run on Phase 2.2 successfully and nobody is on
-`legacy_text_wal=true`, mechanically delete:
+5. **Slice 5** — `handlers/wal.rs` (87 WAL handlers — largest, most risk)
 
-1. The 8 deprecated functions.
-2. The `legacy_text_wal` config field (or keep it as a deprecated no-op
-   for compatibility).
-3. The `text_wal` label from `vng_wal_append_total` (always `no` after
-   removal).
-4. The `vng-migrate` CLI under `tools/voltnuerongrid-migrate/` — keep one
-   release cycle for operators with stale text WAL backups, then remove.
+6. **Slice 6** — `handlers/audit.rs` (10 audit handlers)
 
-### Phase 3 — items still in the gaps doc
+### Phase 3 extended
 
-These are the next big rocks:
+1. **Real RBAC** — current privilege matrix is hardcoded in `default_rbac_privilege_matrix` (now in `config_init.rs`).
 
-1. **DataFusion adoption** — the executor crate is named for it but
-   currently uses a hand-rolled std-only evaluator. Once MSRV bumps for
-   RocksDB anyway, swap in real DataFusion behind a feature flag for
-   JOIN / GROUP BY / window / subquery support.
-2. **Real RBAC** — the current matrix is hardcoded.
-3. **Replication** — leader/follower with the existing Raft skeleton.
-
-### Phase 0 follow-ups
-
-1. `handler_lock!` macro rollout — still ~346 sites of `.lock().expect()`.
-2. main.rs modular refactor — now ~34,900+ lines.
+2. **Replication** — leader/follower with the existing Raft skeleton.
 
 ---
 
 ## How to continue
 
 ```
-@.cursorrules
-@gaps-may26-1.md
 @remaining.md
-@crates/voltnuerongrid-config/src/lib.rs
-@crates/voltnuerongrid-store/src/lib.rs
-@crates/voltnuerongrid-store/src/rocksdb_engine.rs
-@services/voltnuerongridd/src/main.rs        # replay + persist_sql_statement
-@tools/voltnuerongrid-migrate/src/main.rs
+@services/voltnuerongridd/src/main.rs
+@services/voltnuerongridd/src/handlers/store.rs
+@services/voltnuerongridd/src/handlers/sre.rs
 ```
 
-Recommended next step (your choice):
+Recommended next steps (in priority order):
+1. **Continue main.rs refactor** — Slice 5: wal.rs (87 handlers, highest risk — do carefully)
+2. **Slice 6** — audit.rs (10 handlers)
+3. **Real RBAC** — replace `default_rbac_privilege_matrix` in `config_init.rs`
 
-- **Phase 2.3 cleanup.** Lowest-risk; lets you remove ~300 lines from main.rs.
-- **Phase 3 DataFusion.** Biggest functional unlock — JOIN / GROUP BY actually work.
-- **main.rs modular refactor.** Maintainability win, no behaviour change.
+**Extraction pattern for handler modules:**
+1. Find all `Prefix*` DTOs with `grep -n "^struct Prefix" main.rs`
+2. Read the handler function bodies
+3. Create `handlers/name.rs` with DTOs + handlers (all `pub(crate)`)
+4. Create/update `handlers/mod.rs` with `pub(crate) mod name;`
+5. Add `use handlers::name::*;` to main.rs after the existing glob imports
+6. Delete DTOs + handlers from main.rs
+7. `cargo check --workspace` must be clean before next module
 
-Or unblock the network so I can install rustc 1.87 and compile the full
-service end-to-end. The two domains needed:
+**Shared-type rule:** Types in `AppState` fields (e.g. `ConnectorPlugin`, `PoolStatsResponse`, `AcidTxEntry`, `PessimisticLockContentionMetrics`) must stay in main.rs as `pub(crate)` — never move them to handler modules.
 
-- `static.rust-lang.org`
-- `sh.rustup.rs`
+**Key gotcha from Slice 4:** When a type is defined in both main.rs (private) and the new module (pub(crate)), the private main.rs version SHADOWS the glob import. The fix is to delete the private main.rs version — after deletion, the glob import version is used by all code in main.rs scope.
+
+**WAL handlers note:** 87 handlers is a large batch. Consider splitting into multiple sub-batches (wal_write*, wal_read*, wal_replay*, wal_checkpoint*, etc.) to reduce risk.

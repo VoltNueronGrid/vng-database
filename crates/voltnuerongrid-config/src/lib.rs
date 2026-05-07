@@ -123,13 +123,6 @@ pub struct StorageConfig {
     pub max_background_jobs: u32,
     /// Whether to fsync the WAL on every commit. Defaults to true (durable).
     pub wal_fsync_on_commit: bool,
-    /// Phase 2.2 — opt-in to ALSO write to the legacy text WAL files
-    /// (`state/ddl.wal`, `state/dml.wal`) alongside the durability engine.
-    /// Defaults to `false`. Set to `true` only if you need to roll back to
-    /// a pre-Phase-2.1 binary; otherwise the engine is the single source of
-    /// truth. The next release will remove the text WAL code path entirely.
-    #[serde(default)]
-    pub legacy_text_wal: bool,
 }
 
 impl Default for StorageConfig {
@@ -139,7 +132,6 @@ impl Default for StorageConfig {
             data_dir: "./data".to_string(),
             max_background_jobs: 4,
             wal_fsync_on_commit: true,
-            legacy_text_wal: false,
         }
     }
 }
@@ -198,12 +190,6 @@ impl RuntimeConfig {
         }
         if let Some(v) = env.get("VNG_WAL_FSYNC_ON_COMMIT") {
             cfg.storage.wal_fsync_on_commit = matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            );
-        }
-        if let Some(v) = env.get("VNG_LEGACY_TEXT_WAL") {
-            cfg.storage.legacy_text_wal = matches!(
                 v.trim().to_ascii_lowercase().as_str(),
                 "1" | "true" | "yes" | "on"
             );
@@ -331,58 +317,5 @@ mod tests {
         let err = RuntimeConfig::from_env_and_file(&e, Some("{not json}"))
             .expect_err("malformed JSON must error");
         assert!(err.contains("malformed VNG config file"));
-    }
-
-    // ── Phase 2.2: legacy_text_wal flag ──────────────────────────────────────
-
-    #[test]
-    fn legacy_text_wal_defaults_to_false() {
-        let cfg = StorageConfig::default();
-        assert!(!cfg.legacy_text_wal);
-    }
-
-    #[test]
-    fn legacy_text_wal_enabled_via_env() {
-        for v in ["1", "true", "TRUE", "yes", "ON"] {
-            let e = env(&[("VNG_LEGACY_TEXT_WAL", v)]);
-            let cfg = RuntimeConfig::from_env_and_file(&e, None).expect("ok");
-            assert!(cfg.storage.legacy_text_wal, "env value {v:?} should enable");
-        }
-    }
-
-    #[test]
-    fn legacy_text_wal_disabled_via_env() {
-        for v in ["0", "false", "no", "off", ""] {
-            let e = env(&[("VNG_LEGACY_TEXT_WAL", v)]);
-            let cfg = RuntimeConfig::from_env_and_file(&e, None).expect("ok");
-            assert!(!cfg.storage.legacy_text_wal, "env value {v:?} should disable");
-        }
-    }
-
-    #[test]
-    fn legacy_text_wal_loaded_from_json() {
-        let json = r#"{
-            "storage": { "engine": "rocksdb", "data_dir": "./data",
-                         "max_background_jobs": 4, "wal_fsync_on_commit": true,
-                         "legacy_text_wal": true },
-            "sql": { "engine": "datafusion", "htap_olap_threshold_rows": 1000, "max_result_rows": 50000 }
-        }"#;
-        let cfg = RuntimeConfig::from_env_and_file(&MemEnv(HashMap::new()), Some(json))
-            .expect("ok");
-        assert!(cfg.storage.legacy_text_wal);
-    }
-
-    #[test]
-    fn legacy_text_wal_omitted_from_json_defaults_false() {
-        // Existing config files (pre-Phase-2.2) have no `legacy_text_wal` key.
-        // Must default to false (engine-only) so a config file rewrite isn't required.
-        let json = r#"{
-            "storage": { "engine": "rocksdb", "data_dir": "./data",
-                         "max_background_jobs": 4, "wal_fsync_on_commit": true },
-            "sql": { "engine": "datafusion", "htap_olap_threshold_rows": 1000, "max_result_rows": 50000 }
-        }"#;
-        let cfg = RuntimeConfig::from_env_and_file(&MemEnv(HashMap::new()), Some(json))
-            .expect("ok");
-        assert!(!cfg.storage.legacy_text_wal);
     }
 }

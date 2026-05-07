@@ -67,6 +67,39 @@ pub async fn execute_select_single(
     execute_select_multi(sql, &tables, max_rows).await
 }
 
+/// Run `sql` against pre-filtered rows for each table.
+///
+/// Use this when you have a single unified store (as in the service) and need
+/// to pass rows already filtered by table prefix for each table in the query.
+/// Each entry in `table_rows` is registered as a separate MemTable.
+pub async fn execute_select_from_rows(
+    sql: &str,
+    table_rows: HashMap<String, Vec<(String, RowData)>>,
+    max_rows: usize,
+) -> Result<SelectOutput, ExecError> {
+    let ctx = SessionContext::new();
+
+    for (name, rows) in table_rows {
+        let (schema, batch) = rows_to_batch(&name, rows)?;
+        let provider = MemTable::try_new(schema, vec![vec![batch]])
+            .map_err(|e| ExecError::Unsupported(format!("MemTable({name}): {e}")))?;
+        ctx.register_table(name.as_str(), Arc::new(provider))
+            .map_err(|e| ExecError::Unsupported(format!("register_table({name}): {e}")))?;
+    }
+
+    let df = ctx
+        .sql(sql)
+        .await
+        .map_err(|e| ExecError::BadPredicate(format!("DataFusion parse/plan: {e}")))?;
+
+    let batches = df
+        .collect()
+        .await
+        .map_err(|e| ExecError::BadPredicate(format!("DataFusion execute: {e}")))?;
+
+    batches_to_output(batches, max_rows)
+}
+
 /// Run `sql` against multiple `PagedRowStore`s, each registered under its map
 /// key as a separate MemTable. This enables cross-table JOINs.
 pub async fn execute_select_multi(
@@ -168,11 +201,9 @@ fn batches_to_output(
         .map(|f| f.name().clone())
         .collect();
 
-    let is_aggregate = is_aggregate_schema(&col_names);
-    if is_aggregate {
-        return aggregate_output(batches, col_names);
-    }
-
+    // Strip the internal key column; use it to populate ResultRow::key.
+    // For aggregate/GROUP BY results, __vng_key is absent — fall back to
+    // a synthetic "row_N" key so every result row is still addressable.
     let key_col_idx = col_names.iter().position(|n| n == KEY_COL);
     let output_cols: Vec<usize> = (0..col_names.len())
         .filter(|&i| Some(i) != key_col_idx)
@@ -198,34 +229,6 @@ fn batches_to_output(
         }
     }
     Ok(SelectOutput::Rows(out))
-}
-
-fn aggregate_output(
-    batches: Vec<RecordBatch>,
-    col_names: Vec<String>,
-) -> Result<SelectOutput, ExecError> {
-    let mut values: Vec<AggregateCell> = vec![AggregateCell::Null; col_names.len()];
-    if let Some(batch) = batches.first() {
-        if batch.num_rows() > 0 {
-            for (col_idx, _) in col_names.iter().enumerate() {
-                values[col_idx] = match string_value(batch, col_idx, 0) {
-                    Some(s) => AggregateCell::Text(s),
-                    None => AggregateCell::Null,
-                };
-            }
-        }
-    }
-    Ok(SelectOutput::Aggregate(AggregateResult { columns: col_names, values }))
-}
-
-/// Heuristic: any output column that looks like an aggregate expression
-/// → treat result as `SelectOutput::Aggregate`.
-fn is_aggregate_schema(col_names: &[String]) -> bool {
-    let prefixes = [
-        "COUNT(", "SUM(", "AVG(", "MIN(", "MAX(",
-        "count(", "sum(", "avg(", "min(", "max(",
-    ];
-    col_names.iter().any(|n| prefixes.iter().any(|p| n.starts_with(p)))
 }
 
 fn string_value(batch: &RecordBatch, col_idx: usize, row_idx: usize) -> Option<String> {
@@ -342,6 +345,32 @@ mod tests {
         assert_eq!(rows[1].data.get("dept").map(String::as_str), Some("hr"));
         assert_eq!(rows[0].data.get("cnt").map(String::as_str), Some("3"));
         assert_eq!(rows[1].data.get("cnt").map(String::as_str), Some("2"));
+    }
+
+    #[tokio::test]
+    async fn group_by_unaliased_count_returns_all_groups() {
+        // Regression: previously is_aggregate_schema fired on "count(*)" column name
+        // and aggregate_output only took the first row, silently dropping all other groups.
+        let store = store_with_rows(&[
+            ("e1", &[("dept", "eng")]),
+            ("e2", &[("dept", "eng")]),
+            ("e3", &[("dept", "hr")]),
+            ("e4", &[("dept", "hr")]),
+            ("e5", &[("dept", "pm")]),
+        ]);
+        let out = execute_select_single(
+            "SELECT dept, COUNT(*) FROM t GROUP BY dept ORDER BY dept",
+            "t", &store, 100,
+        )
+        .await
+        .unwrap();
+        let rows = match out { SelectOutput::Rows(r) => r, o => panic!("{o:?}") };
+        // Must get all 3 groups, not just the first.
+        assert_eq!(rows.len(), 3, "all groups must survive — was truncated to 1 before fix");
+        // dept column is present
+        assert!(rows.iter().any(|r| r.data.get("dept").map(String::as_str) == Some("eng")));
+        assert!(rows.iter().any(|r| r.data.get("dept").map(String::as_str) == Some("hr")));
+        assert!(rows.iter().any(|r| r.data.get("dept").map(String::as_str) == Some("pm")));
     }
 
     #[tokio::test]
