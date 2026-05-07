@@ -128,14 +128,16 @@ pub struct RocksDbDurabilityEngine {
     path: PathBuf,
     /// Hot in-memory state — read on every access. Lock when mutating.
     state: Mutex<HotState>,
+    /// Bounded ring buffer of recent WAL records. Lives outside the mutex
+    /// so `wal_records(&self)` can return `&[WalRecord]` without unsafe.
+    /// Safe because the only writer is `append_mutation(&mut self)`.
+    wal_tail: Vec<WalRecord>,
+    wal_tail_cap: usize,
 }
 
 struct HotState {
     sequence: u64,
     checkpoint_count: usize,
-    /// Bounded ring buffer of recent WAL records (most recent at the end).
-    wal_tail: Vec<WalRecord>,
-    wal_tail_cap: usize,
     /// Records since the last checkpoint (for `maybe_checkpoint` threshold).
     wal_since_checkpoint: usize,
     /// Phase 2.1 — last assigned sequence per SqlWalKind.
@@ -209,20 +211,14 @@ impl RocksDbDurabilityEngine {
             config,
             sync_writes,
             path: path.as_ref().to_path_buf(),
+            wal_tail,
+            wal_tail_cap: DEFAULT_WAL_TAIL_CAP,
             state: Mutex::new(HotState {
                 sequence: latest_sequence,
                 checkpoint_count,
-                wal_tail,
-                wal_tail_cap: DEFAULT_WAL_TAIL_CAP,
                 wal_since_checkpoint,
                 sql_ddl_sequence,
                 sql_dml_sequence,
-            }),
-        })
-    }
-                wal_tail,
-                wal_tail_cap: DEFAULT_WAL_TAIL_CAP,
-                wal_since_checkpoint,
             }),
         })
     }
@@ -296,11 +292,11 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
         }
 
         // Update hot state.
-        if state.wal_tail.len() >= state.wal_tail_cap {
-            state.wal_tail.remove(0);
+        if self.wal_tail.len() >= self.wal_tail_cap {
+            self.wal_tail.remove(0);
         }
         if self.config.wal_enabled {
-            state.wal_tail.push(record.clone());
+            self.wal_tail.push(record.clone());
         }
         state.wal_since_checkpoint += 1;
 
@@ -308,27 +304,7 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
     }
 
     fn wal_records(&self) -> &[WalRecord] {
-        // SAFETY: We need to hand out a `&[WalRecord]` while the mutex is
-        // held only momentarily. To keep the trait signature compatible with
-        // the InMemory impl (which returns a borrow into &self), we leak a
-        // pointer to the internal Vec. The Vec lives as long as &self does
-        // because RocksDbDurabilityEngine holds it; the only mutator
-        // (append_mutation) takes &mut self so a concurrent call is
-        // statically forbidden by the type system.
-        //
-        // We use `Mutex::lock().leak_slice()` semantics manually: lock,
-        // capture the address of the Vec's slice, release the guard. The
-        // slice is valid until the next mutating call — which can't happen
-        // while a `&[WalRecord]` borrow is live (the borrow holds &self,
-        // and append_mutation needs &mut self).
-        //
-        // This pattern matches what InMemoryDurabilityEngine does
-        // implicitly (its &[WalRecord] borrow is also invalidated by any
-        // subsequent &mut self call).
-        let guard = self.state.lock().expect("rocksdb engine state mutex");
-        let slice: &[WalRecord] = &guard.wal_tail;
-        // Convert lifetime: tied to &self (which outlives the guard).
-        unsafe { std::slice::from_raw_parts(slice.as_ptr(), slice.len()) }
+        &self.wal_tail
     }
 
     fn latest_sequence(&self) -> u64 {
@@ -384,7 +360,7 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
         wo.set_sync(self.sync_writes);
         self.db.write_opt(batch, &wo).expect("rocksdb checkpoint write failed");
 
-        state.wal_tail.clear();
+        self.wal_tail.clear();
         state.wal_since_checkpoint = 0;
 
         CheckpointManifest {
