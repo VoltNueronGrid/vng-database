@@ -8,3 +8,8 @@ pub(crate) mod ingest;
 pub(crate) mod sql;
 pub(crate) mod sre;
 pub(crate) mod store;
+pub(crate) mod wal;
+pub(crate) mod audit;
+pub(crate) mod rows;
+pub(crate) mod raft;
+pub(crate) mod misc;
