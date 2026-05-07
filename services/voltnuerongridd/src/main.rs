@@ -836,22 +836,26 @@ fn load_ingest_outbox_cursor_store() -> ManagedReplayCursorStore {
 // All CREATE/DROP/ALTER and committed INSERT/UPDATE/DELETE statements are
 // appended here so they can be replayed when the server restarts.
 
+#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
 fn ddl_wal_path() -> String {
     std::env::var("VNG_DDL_WAL_PATH")
         .unwrap_or_else(|_| "state/ddl.wal".to_string())
 }
 
+#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
 fn dml_wal_path() -> String {
     std::env::var("VNG_DML_WAL_PATH")
         .unwrap_or_else(|_| "state/dml.wal".to_string())
 }
 
 /// Escape a SQL string to a single line: replace `\` → `\\`, newline → `\n`.
+#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
 fn sql_wal_escape(sql: &str) -> String {
     sql.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")
 }
 
 /// Reverse of `sql_wal_escape`.
+#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
 fn sql_wal_unescape(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -872,6 +876,7 @@ fn sql_wal_unescape(s: &str) -> String {
 }
 
 /// Append one SQL statement to the given WAL file.
+#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
 fn append_sql_wal(wal_path: &str, sql: &str) {
     use std::io::Write;
     if let Some(parent) = std::path::Path::new(wal_path).parent() {
@@ -892,32 +897,40 @@ fn append_sql_wal(wal_path: &str, sql: &str) {
 /// Call this from every handler that previously called `append_sql_wal` —
 /// the engine path becomes the source of truth, the text WAL stays as a
 /// migration safety net.
+#[allow(deprecated)]
 fn persist_sql_statement(
     state: &AppState,
     kind: voltnuerongrid_store::SqlWalKind,
     sql: &str,
 ) {
     // 1. Engine — durable on RocksDB, in-memory for the test harness.
+    //    This is the source of truth from Phase 2.2 onward.
     if let Ok(mut wal) = state.wal_engine.lock() {
         let _ = wal.append_sql(kind, sql);
     } else {
         tracing::error!(target: "vng.wal", "wal_engine mutex poisoned in persist_sql_statement");
     }
-    // 2. Legacy text WAL — kept during the migration. Once all production
-    // deployments have switched to engine-backed replay, this branch can
-    // be removed (and the text-WAL path helpers + replay_*_wal_into).
-    let path = match kind {
-        voltnuerongrid_store::SqlWalKind::Ddl => ddl_wal_path(),
-        voltnuerongrid_store::SqlWalKind::Dml => dml_wal_path(),
-    };
-    append_sql_wal(&path, sql);
+    // 2. Legacy text WAL — only when explicitly opted in via
+    //    `storage.legacy_text_wal = true` (or VNG_LEGACY_TEXT_WAL=1).
+    //    Default is OFF as of Phase 2.2 — the engine is canonical.
+    //    Operators who need to roll back to a pre-Phase-2.1 binary can
+    //    enable this; everyone else can ignore it.
+    if state.runtime_config.storage.legacy_text_wal {
+        let path = match kind {
+            voltnuerongrid_store::SqlWalKind::Ddl => ddl_wal_path(),
+            voltnuerongrid_store::SqlWalKind::Dml => dml_wal_path(),
+        };
+        append_sql_wal(&path, sql);
+    }
     metrics::counter!(
         "vng_wal_append_total",
         "kind" => kind.as_str(),
+        "text_wal" => if state.runtime_config.storage.legacy_text_wal { "yes" } else { "no" },
     ).increment(1);
 }
 
 /// Read all SQL statements from a WAL file (one per line, escaped).
+#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
 fn read_sql_wal(wal_path: &str) -> Vec<String> {
     use std::io::BufRead;
     let file = match std::fs::File::open(wal_path) {
@@ -1023,13 +1036,20 @@ fn build_durability_engine(
 
 /// Replay DDL into a freshly-created catalog. Prefers the durability engine,
 /// falls back to the legacy text WAL.
+#[allow(deprecated)]
 fn replay_ddl_into(
     catalog: &mut DdlCatalog,
     engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
 ) {
     use voltnuerongrid_store::SqlWalKind;
     let now_ms = now_unix_ms();
-    // Engine-first.
+
+    // Phase 2.2 — auto-migrate-on-boot. If the engine has no DDL but the
+    // text WAL file exists, migrate it into the engine before replaying.
+    // This makes the upgrade path zero-touch for operators: they don't have
+    // to run vng-migrate manually before restarting.
+    auto_migrate_text_to_engine(engine, SqlWalKind::Ddl, &ddl_wal_path());
+
     let stmts_from_engine: Vec<String> = {
         let guard = engine.lock().expect("wal_engine lock for replay_ddl");
         if guard.persists_sql() && guard.sql_count(SqlWalKind::Ddl) > 0 {
@@ -1053,17 +1073,24 @@ fn replay_ddl_into(
         ).increment(stmts_from_engine.len() as u64);
         return;
     }
-    // Fallback to legacy text WAL.
+    // Final fallback to legacy text WAL replay (engines that don't persist
+    // SQL — e.g. in-memory tests with the auto-migrate skipped because the
+    // file doesn't exist).
     replay_ddl_wal_into(catalog);
 }
 
 /// Replay DML into a freshly-created row store. Prefers the durability
 /// engine, falls back to the legacy text WAL.
+#[allow(deprecated)]
 fn replay_dml_into(
     rs: &mut PagedRowStore,
     engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
 ) {
     use voltnuerongrid_store::SqlWalKind;
+
+    // Phase 2.2 — auto-migrate-on-boot for DML.
+    auto_migrate_text_to_engine(engine, SqlWalKind::Dml, &dml_wal_path());
+
     let stmts_from_engine: Vec<String> = {
         let guard = engine.lock().expect("wal_engine lock for replay_dml");
         if guard.persists_sql() && guard.sql_count(SqlWalKind::Dml) > 0 {
@@ -1089,6 +1116,83 @@ fn replay_dml_into(
         return;
     }
     replay_dml_wal_into(rs);
+}
+
+/// Phase 2.2 — auto-migrate the legacy text WAL into the durability engine
+/// if (and only if) the engine has no statements of the given kind AND the
+/// text file exists. Returns silently if either condition fails (idempotent).
+///
+/// The migration writes a `.migrated` marker file so subsequent boots skip
+/// the migrate step even if the text file is left in place by the operator.
+#[allow(deprecated)]
+fn auto_migrate_text_to_engine(
+    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+    kind: voltnuerongrid_store::SqlWalKind,
+    text_wal_path: &str,
+) {
+    use std::path::Path;
+    use voltnuerongrid_store::SqlWalKind as Kind;
+
+    let marker_path = format!("{text_wal_path}.migrated");
+    if Path::new(&marker_path).exists() {
+        return; // already migrated this file
+    }
+    if !Path::new(text_wal_path).exists() {
+        return; // nothing to migrate
+    }
+
+    // Check the engine — if it already has SQL of this kind, the operator
+    // probably ran vng-migrate or already booted with this engine. Don't
+    // double-import, but still drop the marker so we don't re-check.
+    {
+        let guard = match engine.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                eprintln!("[vng-wal] auto-migrate: engine mutex poisoned, skipping");
+                return;
+            }
+        };
+        if !guard.persists_sql() {
+            return; // in-memory engine, no point migrating
+        }
+        if guard.sql_count(kind) > 0 {
+            // Engine already populated; mark and return.
+            let _ = std::fs::write(&marker_path, b"already had SQL on first boot\n");
+            return;
+        }
+    }
+
+    let stmts = read_sql_wal(text_wal_path);
+    if stmts.is_empty() {
+        let _ = std::fs::write(&marker_path, b"empty text WAL\n");
+        return;
+    }
+
+    let mut migrated = 0u64;
+    {
+        let mut guard = engine.lock().expect("wal_engine lock for auto_migrate");
+        for sql in &stmts {
+            let _ = guard.append_sql(kind, sql);
+            migrated += 1;
+        }
+    }
+    eprintln!(
+        "[vng-wal] auto-migrated {} {} statement(s) from {} into durability engine",
+        migrated,
+        match kind { Kind::Ddl => "DDL", Kind::Dml => "DML" },
+        text_wal_path
+    );
+    metrics::counter!(
+        "vng_wal_auto_migrate_total",
+        "kind" => kind.as_str(),
+    ).increment(migrated);
+
+    // Drop a marker so we don't try again on next boot. Keep the original
+    // text WAL untouched — operators may want it as a sanity-check backup.
+    let _ = std::fs::write(
+        &marker_path,
+        format!("auto-migrated {migrated} statement(s) at boot\n").as_bytes(),
+    );
 }
 
 /// Apply a single DDL statement to the catalog. Extracted from
@@ -1124,6 +1228,8 @@ fn apply_dml_to_rowstore(rs: &mut PagedRowStore, xid: voltnuerongrid_store::mvcc
 }
 
 /// Replay the DDL WAL into a freshly-created `DdlCatalog`.
+#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
+#[allow(deprecated)]
 fn replay_ddl_wal_into(catalog: &mut DdlCatalog) {
     let path = ddl_wal_path();
     let sqls = read_sql_wal(&path);
@@ -1142,6 +1248,8 @@ fn replay_ddl_wal_into(catalog: &mut DdlCatalog) {
 }
 
 /// Replay the DML WAL into a freshly-created `PagedRowStore`.
+#[deprecated(since = "0.2.0", note = "Phase 2.2: replaced by durability engine SQL streams. Will be removed in 0.3.0.")]
+#[allow(deprecated)]
 fn replay_dml_wal_into(rs: &mut PagedRowStore) {
     let path = dml_wal_path();
     let sqls = read_sql_wal(&path);
