@@ -4,3 +4,10 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+voltnuerongrid-store = { path = "../../crates/voltnuerongrid-store", features = ["rocksdb"], optional = true }
+
+[features]
+default = []
+# Enable the engine-level crash-recovery integration test suite.
+# Requires the rocksdb feature on voltnuerongrid-store.
+rocksdb-recovery = ["dep:voltnuerongrid-store"]

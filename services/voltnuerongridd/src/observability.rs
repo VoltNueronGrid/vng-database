@@ -106,6 +106,22 @@ fn init_metrics() {
         "vng_database_lifecycle_total",
         "Total CREATE/DROP DATABASE operations by status."
     );
+    metrics::describe_counter!(
+        "vng_durability_engine_boot",
+        "Increments once at process boot, labeled by chosen durability engine kind."
+    );
+    metrics::describe_counter!(
+        "vng_wal_replay_total",
+        "SQL statements replayed at boot, by kind (ddl|dml) and source (engine|text_wal)."
+    );
+    metrics::describe_counter!(
+        "vng_wal_append_total",
+        "SQL statements appended to durable WAL, by kind (ddl|dml)."
+    );
+    metrics::describe_counter!(
+        "vng_wal_auto_migrate_total",
+        "SQL statements auto-migrated from legacy text WAL into durability engine on boot, by kind."
+    );
 }
 
 static METRICS_HANDLE: std::sync::OnceLock<metrics_exporter_prometheus::PrometheusHandle> =

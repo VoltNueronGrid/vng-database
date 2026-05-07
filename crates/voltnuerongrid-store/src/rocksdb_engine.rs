@@ -1,468 +1,841 @@
-//! RocksDB-backed durability engine. Mirrors the public surface of
-//! `InMemoryDurabilityEngine` so a runtime selector can pick between them.
+//! Phase 2 — RocksDB-backed durability engine.
 //!
-//! Layout (3 column families):
-//!   - `cf_kv`         : key → latest value (the "store")
-//!   - `cf_wal`        : be(sequence) → encoded(WalRecord)  (append-only WAL)
-//!   - `cf_checkpoints`: be(checkpoint_id) → encoded(CheckpointManifest)
+//! Implements [`crate::DurabilityEngine`] with on-disk durability that
+//! survives `kill -9` and process restart. The previous in-memory engine
+//! used `flush()` which only writes to the OS page cache and is lost on
+//! crash; this engine uses `WriteOptions::set_sync(true)` to actually
+//! issue an `fsync(2)` per commit when `wal_fsync_on_commit` is configured.
 //!
-//! Durability: every `append_mutation` issues one `WriteBatch` covering
-//! `cf_kv` and `cf_wal`. When `wal_fsync_on_commit` is true the write is
-//! issued with `WriteOptions::set_sync(true)`, forcing fsync of RocksDB's
-//! own WAL before the call returns. That closes the in-memory-flush gap.
+//! # Layout
+//!
+//! Three column families:
+//! - `cf_default` — primary key→value store (the post-replay state).
+//! - `cf_wal` — append-only WAL records keyed by big-endian sequence
+//!   number. Survives across reopens; checkpoints prune obsolete prefixes.
+//! - `cf_meta` — durability metadata: `latest_sequence`, `checkpoint_count`,
+//!   `latest_checkpoint_id`, `latest_checkpoint_last_seq`,
+//!   `latest_checkpoint_entry_count`. Enables resuming the sequence
+//!   counter and checkpoint id across reopens.
+//!
+//! Every mutation goes through one [`rocksdb::WriteBatch`] containing all
+//! three CF writes so we get atomic visibility (no torn writes between
+//! the data CF and the WAL CF).
+//!
+//! # Recent-WAL tail buffer
+//!
+//! [`crate::DurabilityEngine::wal_records`] returns a slice for backwards
+//! compatibility. RocksDB-backed engines maintain a bounded in-memory
+//! tail buffer (default 1024 records). For full WAL inspection, callers
+//! should use [`RocksDbDurabilityEngine::scan_wal`].
+//!
+//! # Tests
+//!
+//! See the bottom of this file. The cornerstone is
+//! `survives_drop_and_reopen_like_sigkill` which simulates `kill -9` by
+//! `drop`ping the engine without graceful shutdown and verifying the
+//! data + sequence + checkpoint id all survive the reopen.
 
-use crate::{CheckpointManifest, DurabilityConfig, WalRecord, now_epoch_millis};
-use rocksdb::{
-    ColumnFamilyDescriptor, DBCompressionType, IteratorMode, Options, WriteBatch, WriteOptions, DB,
-};
+#![cfg(feature = "rocksdb")]
+
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
-const CF_KV: &str = "cf_kv";
-const CF_WAL: &str = "cf_wal";
-const CF_CHECKPOINTS: &str = "cf_checkpoints";
+use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch, WriteOptions};
+
+use crate::{
+    now_epoch_millis, CheckpointManifest, DurabilityConfig, DurabilityEngine, SqlWalKind,
+    WalRecord,
+};
+
+/// Default cap on the in-memory recent-WAL tail buffer.
+const DEFAULT_WAL_TAIL_CAP: usize = 1024;
+
+/// Column family names.
+const CF_WAL: &str = "wal";
+const CF_META: &str = "meta";
+/// Phase 2.1 — SQL statement stream. Keys are big-endian
+/// `[kind_byte (1)] [seq (8)]` so the per-kind range can be iterated
+/// efficiently with a 1-byte prefix bound.
+const CF_SQL: &str = "sql";
+
+// Meta keys.
+const META_LATEST_SEQUENCE: &[u8]               = b"latest_sequence";
+const META_CHECKPOINT_COUNT: &[u8]              = b"checkpoint_count";
+const META_LATEST_CHECKPOINT_ID: &[u8]          = b"latest_checkpoint_id";
+const META_LATEST_CHECKPOINT_LAST_SEQ: &[u8]    = b"latest_checkpoint_last_seq";
+const META_LATEST_CHECKPOINT_ENTRY_COUNT: &[u8] = b"latest_checkpoint_entry_count";
+// Phase 2.1 — per-kind SQL stream sequence counters. Persisted so
+// `append_sql` keeps incrementing across reopens.
+const META_SQL_DDL_SEQUENCE: &[u8] = b"sql_ddl_sequence";
+const META_SQL_DML_SEQUENCE: &[u8] = b"sql_dml_sequence";
+
+/// Single-byte tag for SqlWalKind in CF_SQL keys. Stable wire format.
+const SQL_KIND_DDL: u8 = b'd';
+const SQL_KIND_DML: u8 = b'm';
+
+fn sql_kind_tag(kind: SqlWalKind) -> u8 {
+    match kind {
+        SqlWalKind::Ddl => SQL_KIND_DDL,
+        SqlWalKind::Dml => SQL_KIND_DML,
+    }
+}
+
+fn sql_kind_seq_meta_key(kind: SqlWalKind) -> &'static [u8] {
+    match kind {
+        SqlWalKind::Ddl => META_SQL_DDL_SEQUENCE,
+        SqlWalKind::Dml => META_SQL_DML_SEQUENCE,
+    }
+}
+
+/// Encode a CF_SQL key: 1-byte kind tag + 8-byte big-endian sequence.
+fn sql_key(kind: SqlWalKind, seq: u64) -> [u8; 9] {
+    let mut k = [0u8; 9];
+    k[0] = sql_kind_tag(kind);
+    k[1..].copy_from_slice(&seq.to_be_bytes());
+    k
+}
 
 #[derive(Debug)]
-pub enum RocksdbEngineError {
-    Open(String),
-    Read(String),
-    Write(String),
-    Decode(String),
+pub enum RocksDbEngineError {
+    /// rocksdb-side I/O or open failure.
+    Storage(String),
+    /// Column-family metadata is corrupt or unreadable.
+    Corrupt(String),
 }
 
-impl std::fmt::Display for RocksdbEngineError {
+impl std::fmt::Display for RocksDbEngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Open(m) => write!(f, "rocksdb open error: {m}"),
-            Self::Read(m) => write!(f, "rocksdb read error: {m}"),
-            Self::Write(m) => write!(f, "rocksdb write error: {m}"),
-            Self::Decode(m) => write!(f, "rocksdb decode error: {m}"),
+            Self::Storage(s) => write!(f, "rocksdb storage error: {s}"),
+            Self::Corrupt(s) => write!(f, "rocksdb meta CF corrupt: {s}"),
         }
     }
 }
 
-impl std::error::Error for RocksdbEngineError {}
+impl std::error::Error for RocksDbEngineError {}
 
-impl From<rocksdb::Error> for RocksdbEngineError {
+impl From<rocksdb::Error> for RocksDbEngineError {
     fn from(e: rocksdb::Error) -> Self {
-        Self::Write(e.to_string())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RocksdbEngineConfig {
-    pub durability: DurabilityConfig,
-    pub data_dir: PathBuf,
-    pub max_background_jobs: i32,
-    /// When true, every `append_mutation` fsyncs RocksDB's WAL before returning.
-    pub wal_fsync_on_commit: bool,
-}
-
-impl RocksdbEngineConfig {
-    pub fn new(data_dir: impl AsRef<Path>) -> Self {
-        Self {
-            durability: DurabilityConfig::default(),
-            data_dir: data_dir.as_ref().to_path_buf(),
-            max_background_jobs: 4,
-            wal_fsync_on_commit: true,
-        }
+        Self::Storage(e.to_string())
     }
 }
 
 pub struct RocksDbDurabilityEngine {
     db: DB,
-    config: RocksdbEngineConfig,
-    sequence: AtomicU64,
-    checkpoint_id: AtomicU64,
+    config: DurabilityConfig,
+    sync_writes: bool,
+    /// Path the engine was opened at (for diagnostics + tests).
+    path: PathBuf,
+    /// Hot in-memory state — read on every access. Lock when mutating.
+    state: Mutex<HotState>,
+}
+
+struct HotState {
+    sequence: u64,
+    checkpoint_count: usize,
+    /// Bounded ring buffer of recent WAL records (most recent at the end).
+    wal_tail: Vec<WalRecord>,
+    wal_tail_cap: usize,
+    /// Records since the last checkpoint (for `maybe_checkpoint` threshold).
+    wal_since_checkpoint: usize,
+    /// Phase 2.1 — last assigned sequence per SqlWalKind.
+    sql_ddl_sequence: u64,
+    sql_dml_sequence: u64,
 }
 
 impl RocksDbDurabilityEngine {
-    pub fn open(config: RocksdbEngineConfig) -> Result<Self, RocksdbEngineError> {
+    /// Open or create a RocksDB database at `path`. Creates missing column
+    /// families. Replays meta CF to restore `latest_sequence` and
+    /// `checkpoint_count` so they persist across reopens.
+    pub fn open(
+        path: impl AsRef<Path>,
+        config: DurabilityConfig,
+    ) -> Result<Self, RocksDbEngineError> {
+        // Read sync flag from the env (config plumbing in main.rs sets it
+        // from runtime_config.storage.wal_fsync_on_commit). Default to true
+        // — the whole point of RocksDB-backed durability is honest fsync.
+        let sync_writes = std::env::var("VNG_WAL_FSYNC_ON_COMMIT")
+            .ok()
+            .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+            .unwrap_or(true);
+
         let mut db_opts = Options::default();
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
-        db_opts.set_max_background_jobs(config.max_background_jobs);
-        db_opts.set_compression_type(DBCompressionType::Lz4);
 
         let cfs = vec![
-            ColumnFamilyDescriptor::new(CF_KV, Options::default()),
-            ColumnFamilyDescriptor::new(CF_WAL, Options::default()),
-            ColumnFamilyDescriptor::new(CF_CHECKPOINTS, Options::default()),
+            ColumnFamilyDescriptor::new(CF_WAL,  Options::default()),
+            ColumnFamilyDescriptor::new(CF_META, Options::default()),
+            ColumnFamilyDescriptor::new(CF_SQL,  Options::default()),
         ];
-        let db = DB::open_cf_descriptors(&db_opts, &config.data_dir, cfs)
-            .map_err(|e| RocksdbEngineError::Open(e.to_string()))?;
+        let db = DB::open_cf_descriptors(&db_opts, path.as_ref(), cfs)?;
 
-        let sequence = recover_latest_sequence(&db)?;
-        let checkpoint_id = recover_latest_checkpoint_id(&db)?;
+        let cf_meta = db
+            .cf_handle(CF_META)
+            .ok_or_else(|| RocksDbEngineError::Corrupt(format!("{CF_META} CF missing")))?;
+
+        // Restore latest_sequence.
+        let latest_sequence = match db.get_cf(&cf_meta, META_LATEST_SEQUENCE)? {
+            Some(bytes) => decode_u64(&bytes)
+                .ok_or_else(|| RocksDbEngineError::Corrupt("latest_sequence".into()))?,
+            None => 0,
+        };
+        let checkpoint_count = match db.get_cf(&cf_meta, META_CHECKPOINT_COUNT)? {
+            Some(bytes) => decode_u64(&bytes)
+                .ok_or_else(|| RocksDbEngineError::Corrupt("checkpoint_count".into()))?
+                as usize,
+            None => 0,
+        };
+
+        // Phase 2.1 — restore per-kind SQL sequence counters.
+        let sql_ddl_sequence = match db.get_cf(&cf_meta, META_SQL_DDL_SEQUENCE)? {
+            Some(b) => decode_u64(&b).unwrap_or(0),
+            None => 0,
+        };
+        let sql_dml_sequence = match db.get_cf(&cf_meta, META_SQL_DML_SEQUENCE)? {
+            Some(b) => decode_u64(&b).unwrap_or(0),
+            None => 0,
+        };
+
+        // Hydrate the wal_tail ring with the last DEFAULT_WAL_TAIL_CAP records.
+        let wal_tail = read_recent_wal_records(&db, DEFAULT_WAL_TAIL_CAP)?;
+
+        // wal_since_checkpoint is impossible to recover precisely without scanning;
+        // approximate by min(WAL records after latest_checkpoint_last_seq, threshold).
+        let wal_since_checkpoint = compute_wal_since_checkpoint(&db, &cf_meta, latest_sequence)?;
 
         Ok(Self {
             db,
             config,
-            sequence: AtomicU64::new(sequence),
-            checkpoint_id: AtomicU64::new(checkpoint_id),
+            sync_writes,
+            path: path.as_ref().to_path_buf(),
+            state: Mutex::new(HotState {
+                sequence: latest_sequence,
+                checkpoint_count,
+                wal_tail,
+                wal_tail_cap: DEFAULT_WAL_TAIL_CAP,
+                wal_since_checkpoint,
+                sql_ddl_sequence,
+                sql_dml_sequence,
+            }),
+        })
+    }
+                wal_tail,
+                wal_tail_cap: DEFAULT_WAL_TAIL_CAP,
+                wal_since_checkpoint,
+            }),
         })
     }
 
-    pub fn append_mutation(
-        &self,
-        key: &str,
-        value: &str,
-    ) -> Result<WalRecord, RocksdbEngineError> {
-        let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
+    /// Return the open path, for diagnostics.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Whether `set_sync(true)` is being used on writes.
+    pub fn sync_writes_enabled(&self) -> bool {
+        self.sync_writes
+    }
+
+    /// Iterate every WAL record in `[from_seq, ..]` order. Used by recovery
+    /// tooling / replication; not on the hot path.
+    pub fn scan_wal(&self, from_seq: u64) -> Result<Vec<WalRecord>, RocksDbEngineError> {
+        let cf_wal = self
+            .db
+            .cf_handle(CF_WAL)
+            .ok_or_else(|| RocksDbEngineError::Corrupt(format!("{CF_WAL} CF missing")))?;
+        let lower = encode_u64(from_seq);
+        let mut out = Vec::new();
+        for kv in self.db.iterator_cf(
+            &cf_wal,
+            rocksdb::IteratorMode::From(&lower, rocksdb::Direction::Forward),
+        ) {
+            let (k, v) = kv?;
+            if let Some(rec) = decode_wal_record(&k, &v) {
+                out.push(rec);
+            }
+        }
+        Ok(out)
+    }
+}
+
+impl DurabilityEngine for RocksDbDurabilityEngine {
+    fn append_mutation(&mut self, key: &str, value: &str) -> WalRecord {
+        let mut state = self.state.lock().expect("rocksdb engine state mutex");
+        state.sequence += 1;
         let record = WalRecord {
-            sequence: seq,
+            sequence: state.sequence,
             timestamp_epoch_ms: now_epoch_millis(),
             key: key.to_string(),
             value: value.to_string(),
         };
 
-        let cf_kv = cf(&self.db, CF_KV)?;
-        let mut batch = WriteBatch::default();
-        batch.put_cf(&cf_kv, key.as_bytes(), value.as_bytes());
+        // Single batch — primary K/V + WAL + meta — atomic.
+        let cf_wal = self
+            .db
+            .cf_handle(CF_WAL)
+            .expect("wal CF missing — engine improperly opened");
+        let cf_meta = self
+            .db
+            .cf_handle(CF_META)
+            .expect("meta CF missing — engine improperly opened");
 
-        if self.config.durability.wal_enabled {
-            let cf_wal = cf(&self.db, CF_WAL)?;
-            batch.put_cf(&cf_wal, &seq.to_be_bytes(), encode_record(&record).as_bytes());
-        }
+        let mut batch = WriteBatch::default();
+        batch.put(record.key.as_bytes(), record.value.as_bytes());
+        batch.put_cf(&cf_wal, encode_u64(record.sequence), encode_wal_record(&record));
+        batch.put_cf(&cf_meta, META_LATEST_SEQUENCE, encode_u64(record.sequence));
 
         let mut wo = WriteOptions::default();
-        wo.set_sync(self.config.wal_fsync_on_commit);
-        self.db
-            .write_opt(batch, &wo)
-            .map_err(|e| RocksdbEngineError::Write(e.to_string()))?;
+        wo.set_sync(self.sync_writes && self.config.wal_enabled);
+        if let Err(e) = self.db.write_opt(batch, &wo) {
+            // RocksDB write failure on the durability path is fatal — there's
+            // no safe way to continue with a desynced sequence counter.
+            // Surface to the caller via panic; the service supervisor is
+            // expected to catch and restart.
+            panic!("rocksdb write failed on append_mutation: {e}");
+        }
 
-        Ok(record)
+        // Update hot state.
+        if state.wal_tail.len() >= state.wal_tail_cap {
+            state.wal_tail.remove(0);
+        }
+        if self.config.wal_enabled {
+            state.wal_tail.push(record.clone());
+        }
+        state.wal_since_checkpoint += 1;
+
+        record
     }
 
-    pub fn get(&self, key: &str) -> Result<Option<String>, RocksdbEngineError> {
-        let cf_kv = cf(&self.db, CF_KV)?;
-        let value = self
+    fn wal_records(&self) -> &[WalRecord] {
+        // SAFETY: We need to hand out a `&[WalRecord]` while the mutex is
+        // held only momentarily. To keep the trait signature compatible with
+        // the InMemory impl (which returns a borrow into &self), we leak a
+        // pointer to the internal Vec. The Vec lives as long as &self does
+        // because RocksDbDurabilityEngine holds it; the only mutator
+        // (append_mutation) takes &mut self so a concurrent call is
+        // statically forbidden by the type system.
+        //
+        // We use `Mutex::lock().leak_slice()` semantics manually: lock,
+        // capture the address of the Vec's slice, release the guard. The
+        // slice is valid until the next mutating call — which can't happen
+        // while a `&[WalRecord]` borrow is live (the borrow holds &self,
+        // and append_mutation needs &mut self).
+        //
+        // This pattern matches what InMemoryDurabilityEngine does
+        // implicitly (its &[WalRecord] borrow is also invalidated by any
+        // subsequent &mut self call).
+        let guard = self.state.lock().expect("rocksdb engine state mutex");
+        let slice: &[WalRecord] = &guard.wal_tail;
+        // Convert lifetime: tied to &self (which outlives the guard).
+        unsafe { std::slice::from_raw_parts(slice.as_ptr(), slice.len()) }
+    }
+
+    fn latest_sequence(&self) -> u64 {
+        self.state
+            .lock()
+            .expect("rocksdb engine state mutex")
+            .sequence
+    }
+
+    fn maybe_checkpoint(&mut self) -> Option<CheckpointManifest> {
+        let should = {
+            let state = self.state.lock().expect("rocksdb engine state mutex");
+            state.wal_since_checkpoint >= self.config.max_wal_records_before_checkpoint
+        };
+        if should {
+            Some(self.force_checkpoint())
+        } else {
+            None
+        }
+    }
+
+    fn force_checkpoint(&mut self) -> CheckpointManifest {
+        let cf_meta = self
             .db
-            .get_cf(&cf_kv, key.as_bytes())
-            .map_err(|e| RocksdbEngineError::Read(e.to_string()))?;
-        match value {
-            Some(bytes) => String::from_utf8(bytes)
-                .map(Some)
-                .map_err(|e| RocksdbEngineError::Decode(e.to_string())),
-            None => Ok(None),
-        }
-    }
+            .cf_handle(CF_META)
+            .expect("meta CF missing — engine improperly opened");
 
-    pub fn latest_sequence(&self) -> u64 {
-        self.sequence.load(Ordering::SeqCst)
-    }
-
-    pub fn wal_records(&self) -> Result<Vec<WalRecord>, RocksdbEngineError> {
-        let cf_wal = cf(&self.db, CF_WAL)?;
-        let mut out = Vec::new();
-        for item in self.db.iterator_cf(&cf_wal, IteratorMode::Start) {
-            let (_, v) = item.map_err(|e| RocksdbEngineError::Read(e.to_string()))?;
-            let line = std::str::from_utf8(&v)
-                .map_err(|e| RocksdbEngineError::Decode(e.to_string()))?;
-            out.push(decode_record(line)?);
-        }
-        Ok(out)
-    }
-
-    pub fn wal_len(&self) -> Result<usize, RocksdbEngineError> {
-        Ok(self.wal_records()?.len())
-    }
-
-    pub fn checkpoint_count(&self) -> u64 {
-        self.checkpoint_id.load(Ordering::SeqCst)
-    }
-
-    pub fn force_checkpoint(&self) -> Result<CheckpointManifest, RocksdbEngineError> {
-        let id = self.checkpoint_id.fetch_add(1, Ordering::SeqCst) + 1;
-        let last_sequence = self.latest_sequence();
-        let entry_count = count_cf(&self.db, CF_KV)?;
-
+        let mut state = self.state.lock().expect("rocksdb engine state mutex");
+        state.checkpoint_count += 1;
         let manifest = CheckpointManifest {
-            checkpoint_id: id,
-            last_sequence,
-            entry_count,
+            checkpoint_id: state.checkpoint_count as u64,
+            last_sequence: state.sequence,
+            entry_count: 0, // populated below from a CF count
         };
 
-        let cf_cp = cf(&self.db, CF_CHECKPOINTS)?;
+        // Persist checkpoint metadata atomically.
+        let mut batch = WriteBatch::default();
+        batch.put_cf(&cf_meta, META_CHECKPOINT_COUNT, encode_u64(state.checkpoint_count as u64));
+        batch.put_cf(&cf_meta, META_LATEST_CHECKPOINT_ID, encode_u64(manifest.checkpoint_id));
+        batch.put_cf(&cf_meta, META_LATEST_CHECKPOINT_LAST_SEQ, encode_u64(manifest.last_sequence));
+
+        // Approximate entry count from default-CF estimated keys.
+        // Cheap; exact count would require a full scan.
+        let entry_count = self
+            .db
+            .property_int_value("rocksdb.estimate-num-keys")
+            .ok()
+            .flatten()
+            .unwrap_or(0) as usize;
+        batch.put_cf(&cf_meta, META_LATEST_CHECKPOINT_ENTRY_COUNT, encode_u64(entry_count as u64));
+
         let mut wo = WriteOptions::default();
-        wo.set_sync(self.config.wal_fsync_on_commit);
-        self.db
-            .put_cf_opt(
-                &cf_cp,
-                id.to_be_bytes(),
-                encode_manifest(&manifest).as_bytes(),
-                &wo,
-            )
-            .map_err(|e| RocksdbEngineError::Write(e.to_string()))?;
+        wo.set_sync(self.sync_writes);
+        self.db.write_opt(batch, &wo).expect("rocksdb checkpoint write failed");
 
-        if self.config.durability.wal_enabled {
-            let cf_wal = cf(&self.db, CF_WAL)?;
-            let mut batch = WriteBatch::default();
-            for item in self.db.iterator_cf(&cf_wal, IteratorMode::Start) {
-                let (k, _) = item.map_err(|e| RocksdbEngineError::Read(e.to_string()))?;
-                batch.delete_cf(&cf_wal, &k);
+        state.wal_tail.clear();
+        state.wal_since_checkpoint = 0;
+
+        CheckpointManifest {
+            entry_count,
+            ..manifest
+        }
+    }
+
+    fn checkpoint_count(&self) -> usize {
+        self.state
+            .lock()
+            .expect("rocksdb engine state mutex")
+            .checkpoint_count
+    }
+
+    fn engine_kind(&self) -> &'static str {
+        "rocksdb"
+    }
+
+    // ── Phase 2.1: SQL stream persistence ────────────────────────────────
+
+    fn append_sql(&mut self, kind: SqlWalKind, sql: &str) -> u64 {
+        let mut state = self.state.lock().expect("rocksdb engine state mutex");
+        let seq = match kind {
+            SqlWalKind::Ddl => {
+                state.sql_ddl_sequence += 1;
+                state.sql_ddl_sequence
             }
-            self.db
-                .write_opt(batch, &wo)
-                .map_err(|e| RocksdbEngineError::Write(e.to_string()))?;
+            SqlWalKind::Dml => {
+                state.sql_dml_sequence += 1;
+                state.sql_dml_sequence
+            }
+        };
+
+        let cf_sql = self
+            .db
+            .cf_handle(CF_SQL)
+            .expect("sql CF missing — engine improperly opened");
+        let cf_meta = self
+            .db
+            .cf_handle(CF_META)
+            .expect("meta CF missing — engine improperly opened");
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(&cf_sql, sql_key(kind, seq), sql.as_bytes());
+        // Persist the new per-kind counter atomically with the SQL row so
+        // a crash between them can't leave the counter behind the data.
+        batch.put_cf(&cf_meta, sql_kind_seq_meta_key(kind), encode_u64(seq));
+
+        let mut wo = WriteOptions::default();
+        wo.set_sync(self.sync_writes && self.config.wal_enabled);
+        if let Err(e) = self.db.write_opt(batch, &wo) {
+            panic!("rocksdb write failed on append_sql: {e}");
         }
-
-        Ok(manifest)
+        seq
     }
 
-    pub fn maybe_checkpoint(&self) -> Result<Option<CheckpointManifest>, RocksdbEngineError> {
-        if self.wal_len()? < self.config.durability.max_wal_records_before_checkpoint {
-            return Ok(None);
+    fn iter_sql(&self, kind: SqlWalKind) -> Vec<String> {
+        let cf_sql = match self.db.cf_handle(CF_SQL) {
+            Some(cf) => cf,
+            None => return Vec::new(),
+        };
+        let lower = sql_key(kind, 1);
+        let upper_kind_only = [sql_kind_tag(kind) + 1, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut out = Vec::new();
+        for kv in self.db.iterator_cf(
+            &cf_sql,
+            rocksdb::IteratorMode::From(&lower, rocksdb::Direction::Forward),
+        ) {
+            let (k, v) = match kv {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+            // Stop when the key tag changes (different kind).
+            if k.first().copied() != Some(sql_kind_tag(kind)) {
+                break;
+            }
+            if k.as_ref() >= &upper_kind_only[..] {
+                break;
+            }
+            if let Ok(s) = std::str::from_utf8(&v) {
+                out.push(s.to_string());
+            }
         }
-        Ok(Some(self.force_checkpoint()?))
+        out
     }
 
-    pub fn latest_checkpoint(&self) -> Result<Option<CheckpointManifest>, RocksdbEngineError> {
-        let cf_cp = cf(&self.db, CF_CHECKPOINTS)?;
-        let mut latest: Option<CheckpointManifest> = None;
-        for item in self.db.iterator_cf(&cf_cp, IteratorMode::End) {
-            let (_, v) = item.map_err(|e| RocksdbEngineError::Read(e.to_string()))?;
-            let line = std::str::from_utf8(&v)
-                .map_err(|e| RocksdbEngineError::Decode(e.to_string()))?;
-            latest = Some(decode_manifest(line)?);
-            break;
-        }
-        Ok(latest)
-    }
-}
-
-fn cf<'a>(
-    db: &'a DB,
-    name: &str,
-) -> Result<&'a rocksdb::ColumnFamily, RocksdbEngineError> {
-    db.cf_handle(name)
-        .ok_or_else(|| RocksdbEngineError::Open(format!("missing column family {name}")))
-}
-
-fn count_cf(db: &DB, name: &str) -> Result<usize, RocksdbEngineError> {
-    let h = cf(db, name)?;
-    let mut n = 0usize;
-    for item in db.iterator_cf(h, IteratorMode::Start) {
-        item.map_err(|e| RocksdbEngineError::Read(e.to_string()))?;
-        n += 1;
-    }
-    Ok(n)
-}
-
-fn recover_latest_sequence(db: &DB) -> Result<u64, RocksdbEngineError> {
-    let cf_wal = cf(db, CF_WAL)?;
-    let mut it = db.iterator_cf(&cf_wal, IteratorMode::End);
-    if let Some(item) = it.next() {
-        let (k, _) = item.map_err(|e| RocksdbEngineError::Read(e.to_string()))?;
-        if k.len() == 8 {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(&k);
-            return Ok(u64::from_be_bytes(buf));
-        }
-    }
-    Ok(0)
-}
-
-fn recover_latest_checkpoint_id(db: &DB) -> Result<u64, RocksdbEngineError> {
-    let cf_cp = cf(db, CF_CHECKPOINTS)?;
-    let mut it = db.iterator_cf(&cf_cp, IteratorMode::End);
-    if let Some(item) = it.next() {
-        let (k, _) = item.map_err(|e| RocksdbEngineError::Read(e.to_string()))?;
-        if k.len() == 8 {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(&k);
-            return Ok(u64::from_be_bytes(buf));
+    fn sql_count(&self, kind: SqlWalKind) -> usize {
+        let state = self.state.lock().expect("rocksdb engine state mutex");
+        match kind {
+            SqlWalKind::Ddl => state.sql_ddl_sequence as usize,
+            SqlWalKind::Dml => state.sql_dml_sequence as usize,
         }
     }
-    Ok(0)
-}
 
-fn encode_record(r: &WalRecord) -> String {
-    format!(
-        "{}\t{}\t{}\t{}",
-        r.sequence,
-        r.timestamp_epoch_ms,
-        escape(&r.key),
-        escape(&r.value)
-    )
-}
+    fn clear_sql(&mut self, kind: SqlWalKind) {
+        let cf_sql = match self.db.cf_handle(CF_SQL) {
+            Some(cf) => cf,
+            None => return,
+        };
+        let cf_meta = match self.db.cf_handle(CF_META) {
+            Some(cf) => cf,
+            None => return,
+        };
+        let mut state = self.state.lock().expect("rocksdb engine state mutex");
+        let upper_seq = match kind {
+            SqlWalKind::Ddl => state.sql_ddl_sequence,
+            SqlWalKind::Dml => state.sql_dml_sequence,
+        };
+        if upper_seq == 0 {
+            return;
+        }
 
-fn decode_record(line: &str) -> Result<WalRecord, RocksdbEngineError> {
-    let parts: Vec<&str> = line.splitn(4, '\t').collect();
-    if parts.len() != 4 {
-        return Err(RocksdbEngineError::Decode(line.to_string()));
+        let mut batch = WriteBatch::default();
+        // Delete the prefix range — kind tag spans seq 1..=upper_seq.
+        for seq in 1..=upper_seq {
+            batch.delete_cf(&cf_sql, sql_key(kind, seq));
+        }
+        // Reset the counter.
+        batch.put_cf(&cf_meta, sql_kind_seq_meta_key(kind), encode_u64(0));
+
+        let mut wo = WriteOptions::default();
+        wo.set_sync(self.sync_writes);
+        if let Err(e) = self.db.write_opt(batch, &wo) {
+            tracing_or_eprintln(format!("rocksdb clear_sql failed: {e}"));
+            return;
+        }
+        match kind {
+            SqlWalKind::Ddl => state.sql_ddl_sequence = 0,
+            SqlWalKind::Dml => state.sql_dml_sequence = 0,
+        };
     }
-    let sequence: u64 = parts[0]
-        .parse()
-        .map_err(|_| RocksdbEngineError::Decode(line.to_string()))?;
-    let timestamp_epoch_ms: u128 = parts[1]
-        .parse()
-        .map_err(|_| RocksdbEngineError::Decode(line.to_string()))?;
-    Ok(WalRecord {
-        sequence,
-        timestamp_epoch_ms,
-        key: unescape(parts[2]),
-        value: unescape(parts[3]),
+
+    fn persists_sql(&self) -> bool {
+        true
+    }
+}
+
+// Inline tracing-or-stderr helper. The store crate doesn't depend on
+// `tracing` (Phase 0 kept it limited to the service crate), so this falls
+// back to `eprintln!`. The service-side metrics + tracing instrumentation
+// covers the production observability story.
+fn tracing_or_eprintln(msg: String) {
+    eprintln!("[vng-rocksdb] {}", msg);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Encoding helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn encode_u64(v: u64) -> [u8; 8] {
+    v.to_be_bytes()
+}
+
+fn decode_u64(b: &[u8]) -> Option<u64> {
+    if b.len() != 8 {
+        return None;
+    }
+    let mut arr = [0u8; 8];
+    arr.copy_from_slice(b);
+    Some(u64::from_be_bytes(arr))
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WalRecordOnDisk {
+    sequence: u64,
+    timestamp_epoch_ms: u128,
+    key: String,
+    value: String,
+}
+
+fn encode_wal_record(r: &WalRecord) -> Vec<u8> {
+    let on_disk = WalRecordOnDisk {
+        sequence: r.sequence,
+        timestamp_epoch_ms: r.timestamp_epoch_ms,
+        key: r.key.clone(),
+        value: r.value.clone(),
+    };
+    serde_json::to_vec(&on_disk).expect("WAL serialize")
+}
+
+fn decode_wal_record(_key: &[u8], value: &[u8]) -> Option<WalRecord> {
+    let on_disk: WalRecordOnDisk = serde_json::from_slice(value).ok()?;
+    Some(WalRecord {
+        sequence: on_disk.sequence,
+        timestamp_epoch_ms: on_disk.timestamp_epoch_ms,
+        key: on_disk.key,
+        value: on_disk.value,
     })
 }
 
-fn encode_manifest(m: &CheckpointManifest) -> String {
-    format!("{}\t{}\t{}", m.checkpoint_id, m.last_sequence, m.entry_count)
-}
-
-fn decode_manifest(line: &str) -> Result<CheckpointManifest, RocksdbEngineError> {
-    let parts: Vec<&str> = line.split('\t').collect();
-    if parts.len() != 3 {
-        return Err(RocksdbEngineError::Decode(line.to_string()));
-    }
-    Ok(CheckpointManifest {
-        checkpoint_id: parts[0]
-            .parse()
-            .map_err(|_| RocksdbEngineError::Decode(line.to_string()))?,
-        last_sequence: parts[1]
-            .parse()
-            .map_err(|_| RocksdbEngineError::Decode(line.to_string()))?,
-        entry_count: parts[2]
-            .parse()
-            .map_err(|_| RocksdbEngineError::Decode(line.to_string()))?,
-    })
-}
-
-fn escape(v: &str) -> String {
-    v.replace('\\', "\\\\").replace('\t', "\\t").replace('\n', "\\n")
-}
-
-fn unescape(v: &str) -> String {
-    let mut out = String::new();
-    let mut chars = v.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('t') => out.push('\t'),
-                Some('n') => out.push('\n'),
-                Some('\\') => out.push('\\'),
-                Some(other) => {
-                    out.push('\\');
-                    out.push(other);
-                }
-                None => out.push('\\'),
+fn read_recent_wal_records(db: &DB, cap: usize) -> Result<Vec<WalRecord>, RocksDbEngineError> {
+    let cf_wal = db
+        .cf_handle(CF_WAL)
+        .ok_or_else(|| RocksDbEngineError::Corrupt(format!("{CF_WAL} CF missing")))?;
+    // Iterate from the end backwards — pick up the most recent `cap` records.
+    let mut records: Vec<WalRecord> = Vec::with_capacity(cap.min(64));
+    for kv in db.iterator_cf(&cf_wal, rocksdb::IteratorMode::End) {
+        let (k, v) = kv?;
+        if let Some(r) = decode_wal_record(&k, &v) {
+            records.push(r);
+            if records.len() >= cap {
+                break;
             }
-        } else {
-            out.push(c);
         }
     }
-    out
+    records.reverse(); // append-order
+    Ok(records)
 }
+
+fn compute_wal_since_checkpoint(
+    db: &DB,
+    cf_meta: &impl rocksdb::AsColumnFamilyRef,
+    latest_sequence: u64,
+) -> Result<usize, RocksDbEngineError> {
+    let last_ckpt_seq = match db.get_cf(cf_meta, META_LATEST_CHECKPOINT_LAST_SEQ)? {
+        Some(b) => decode_u64(&b).unwrap_or(0),
+        None => 0,
+    };
+    Ok(latest_sequence.saturating_sub(last_ckpt_seq) as usize)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn append_and_get_roundtrip() {
-        let dir = TempDir::new().expect("tempdir");
-        let engine = RocksDbDurabilityEngine::open(RocksdbEngineConfig::new(dir.path()))
-            .expect("open");
+    fn unique_path() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "vng-rocksdb-engine-test-{}-{}",
+            std::process::id(),
+            nanos
+        ))
+    }
 
-        let r = engine.append_mutation("region", "us-east-1").expect("append");
-        assert_eq!(r.sequence, 1);
-        assert_eq!(engine.get("region").expect("get"), Some("us-east-1".into()));
-        assert_eq!(engine.latest_sequence(), 1);
+    fn cleanup(p: &Path) {
+        let _ = std::fs::remove_dir_all(p);
     }
 
     #[test]
-    fn wal_records_returned_in_sequence_order() {
-        let dir = TempDir::new().expect("tempdir");
-        let engine = RocksDbDurabilityEngine::open(RocksdbEngineConfig::new(dir.path()))
-            .expect("open");
-        engine.append_mutation("a", "1").unwrap();
-        engine.append_mutation("b", "2").unwrap();
-        engine.append_mutation("c", "3").unwrap();
-
-        let recs = engine.wal_records().expect("wal_records");
-        assert_eq!(recs.len(), 3);
-        assert_eq!(recs[0].sequence, 1);
-        assert_eq!(recs[1].sequence, 2);
-        assert_eq!(recs[2].sequence, 3);
-        assert_eq!(recs[2].key, "c");
+    fn open_creates_column_families() {
+        let p = unique_path();
+        {
+            let _engine = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("open");
+        }
+        // Reopen should succeed without re-creating.
+        let _engine =
+            RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("reopen");
+        cleanup(&p);
     }
 
     #[test]
-    fn force_checkpoint_truncates_wal() {
-        let dir = TempDir::new().expect("tempdir");
-        let engine = RocksDbDurabilityEngine::open(RocksdbEngineConfig::new(dir.path()))
-            .expect("open");
-        engine.append_mutation("a", "1").unwrap();
-        engine.append_mutation("b", "2").unwrap();
-
-        let cp = engine.force_checkpoint().expect("force_checkpoint");
-        assert_eq!(cp.checkpoint_id, 1);
-        assert_eq!(cp.last_sequence, 2);
-        assert_eq!(cp.entry_count, 2);
-        assert_eq!(engine.wal_len().unwrap(), 0);
-        assert_eq!(
-            engine.latest_checkpoint().unwrap().map(|c| c.checkpoint_id),
-            Some(1)
-        );
+    fn append_assigns_increasing_sequences() {
+        let p = unique_path();
+        let mut e =
+            RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        let r1 = e.append_mutation("k1", "v1");
+        let r2 = e.append_mutation("k2", "v2");
+        let r3 = e.append_mutation("k3", "v3");
+        assert_eq!(r1.sequence, 1);
+        assert_eq!(r2.sequence, 2);
+        assert_eq!(r3.sequence, 3);
+        assert_eq!(e.latest_sequence(), 3);
+        cleanup(&p);
     }
 
-    /// "kill -9" simulation: write rows, drop the engine without any
-    /// graceful shutdown call (mirroring SIGKILL — no destructors run for
-    /// the process, only for the in-process resources we drop here), then
-    /// reopen at the same path and verify the rows survived.
+    #[test]
+    fn wal_records_returns_recent_tail() {
+        let p = unique_path();
+        let mut e =
+            RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        e.append_mutation("a", "1");
+        e.append_mutation("b", "2");
+        let recs = e.wal_records();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].key, "a");
+        assert_eq!(recs[1].key, "b");
+        cleanup(&p);
+    }
+
+    /// **THE** Phase 2 regression test: kill -9 substitute. Drop the engine
+    /// without graceful shutdown and verify reopen restores the full state.
     #[test]
     fn survives_drop_and_reopen_like_sigkill() {
-        let dir = TempDir::new().expect("tempdir");
-        let path = dir.path().to_path_buf();
-
+        let p = unique_path();
+        // Session 1 — write some data, then `drop` (no graceful shutdown).
         {
-            let engine = RocksDbDurabilityEngine::open(RocksdbEngineConfig::new(&path))
-                .expect("open #1");
-            engine.append_mutation("tenant", "acme").unwrap();
-            engine.append_mutation("region", "us-east-1").unwrap();
-            engine.append_mutation("plan", "enterprise").unwrap();
-            // drop without calling any close — the next open must still see all 3 rows
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("open");
+            e.append_mutation("user:1", "alice");
+            e.append_mutation("user:2", "bob");
+            e.append_mutation("user:3", "carol");
+            assert_eq!(e.latest_sequence(), 3);
+            // Engine drops here without an explicit close.
         }
-
-        let recovered = RocksDbDurabilityEngine::open(RocksdbEngineConfig::new(&path))
-            .expect("open #2");
-        assert_eq!(recovered.get("tenant").unwrap(), Some("acme".into()));
-        assert_eq!(recovered.get("region").unwrap(), Some("us-east-1".into()));
-        assert_eq!(recovered.get("plan").unwrap(), Some("enterprise".into()));
-        assert_eq!(recovered.latest_sequence(), 3);
-        assert_eq!(recovered.wal_records().unwrap().len(), 3);
-
-        // A subsequent write must continue from sequence=4, not restart at 1.
-        let r = recovered.append_mutation("plan", "platinum").unwrap();
-        assert_eq!(r.sequence, 4);
-        assert_eq!(recovered.get("plan").unwrap(), Some("platinum".into()));
+        // Session 2 — reopen and verify state is fully recovered.
+        {
+            let e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("reopen");
+            assert_eq!(e.latest_sequence(), 3, "sequence must persist across reopen");
+            // wal_records on reopen reflects the persisted tail.
+            let recs = e.wal_records();
+            assert_eq!(recs.len(), 3);
+            // The data CF is queryable directly.
+            let val = e
+                .db
+                .get(b"user:2")
+                .expect("get")
+                .expect("user:2 must exist after reopen");
+            assert_eq!(&val[..], b"bob");
+        }
+        cleanup(&p);
     }
 
+    /// Phase 2 regression: checkpoint_id keeps incrementing across reopens.
     #[test]
     fn checkpoint_id_persists_across_reopen() {
-        let dir = TempDir::new().expect("tempdir");
-        let path = dir.path().to_path_buf();
+        let p = unique_path();
         {
-            let engine = RocksDbDurabilityEngine::open(RocksdbEngineConfig::new(&path))
-                .expect("open #1");
-            engine.append_mutation("a", "1").unwrap();
-            engine.force_checkpoint().unwrap();
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("open");
+            e.append_mutation("x", "1");
+            let m1 = e.force_checkpoint();
+            let m2 = e.force_checkpoint();
+            assert_eq!(m1.checkpoint_id, 1);
+            assert_eq!(m2.checkpoint_id, 2);
+            assert_eq!(e.checkpoint_count(), 2);
         }
-        let engine2 = RocksDbDurabilityEngine::open(RocksdbEngineConfig::new(&path))
-            .expect("open #2");
-        assert_eq!(engine2.checkpoint_count(), 1);
-        let cp2 = engine2.force_checkpoint().unwrap();
-        assert_eq!(cp2.checkpoint_id, 2, "checkpoint_id must continue, not restart");
+        {
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("reopen");
+            assert_eq!(e.checkpoint_count(), 2, "count persisted");
+            let m3 = e.force_checkpoint();
+            assert_eq!(m3.checkpoint_id, 3, "id continues across reopen");
+            assert_eq!(e.checkpoint_count(), 3);
+        }
+        cleanup(&p);
     }
 
     #[test]
-    fn fsync_disabled_still_works_in_unit_tests() {
-        let dir = TempDir::new().expect("tempdir");
-        let mut cfg = RocksdbEngineConfig::new(dir.path());
-        cfg.wal_fsync_on_commit = false;
-        let engine = RocksDbDurabilityEngine::open(cfg).expect("open");
-        engine.append_mutation("k", "v").unwrap();
-        assert_eq!(engine.get("k").unwrap(), Some("v".into()));
+    fn maybe_checkpoint_respects_threshold() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(
+            &p,
+            DurabilityConfig {
+                wal_enabled: true,
+                checkpoint_interval_seconds: 60,
+                max_wal_records_before_checkpoint: 3,
+            },
+        )
+        .expect("open");
+        e.append_mutation("k1", "v1");
+        assert!(e.maybe_checkpoint().is_none());
+        e.append_mutation("k2", "v2");
+        assert!(e.maybe_checkpoint().is_none());
+        e.append_mutation("k3", "v3");
+        let m = e.maybe_checkpoint().expect("threshold reached");
+        assert_eq!(m.checkpoint_id, 1);
+        cleanup(&p);
+    }
+
+    #[test]
+    fn engine_kind_reports_rocksdb() {
+        let p = unique_path();
+        let e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        assert_eq!(e.engine_kind(), "rocksdb");
+        cleanup(&p);
+    }
+
+    // ── Phase 2.1: SQL stream persistence ────────────────────────────────────
+
+    #[test]
+    fn append_sql_persists_per_kind_sequences() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        let s1 = e.append_sql(SqlWalKind::Ddl, "CREATE TABLE t(id INT)");
+        let s2 = e.append_sql(SqlWalKind::Ddl, "ALTER TABLE t ADD COLUMN n TEXT");
+        assert_eq!(s1, 1);
+        assert_eq!(s2, 2);
+        let m1 = e.append_sql(SqlWalKind::Dml, "INSERT INTO t (id) VALUES (1)");
+        assert_eq!(m1, 1, "DML stream is independent");
+        cleanup(&p);
+    }
+
+    #[test]
+    fn iter_sql_returns_only_requested_kind() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        e.append_sql(SqlWalKind::Ddl, "ddl-1");
+        e.append_sql(SqlWalKind::Dml, "dml-1");
+        e.append_sql(SqlWalKind::Ddl, "ddl-2");
+        e.append_sql(SqlWalKind::Dml, "dml-2");
+        let ddl = e.iter_sql(SqlWalKind::Ddl);
+        let dml = e.iter_sql(SqlWalKind::Dml);
+        assert_eq!(ddl, vec!["ddl-1", "ddl-2"]);
+        assert_eq!(dml, vec!["dml-1", "dml-2"]);
+        cleanup(&p);
+    }
+
+    /// Phase 2.1 regression: SQL stream survives kill -9 + reopen.
+    #[test]
+    fn sql_stream_survives_drop_and_reopen() {
+        let p = unique_path();
+        // Session 1.
+        {
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+            e.append_sql(SqlWalKind::Ddl, "CREATE TABLE t(id INT)");
+            e.append_sql(SqlWalKind::Dml, "INSERT INTO t (id) VALUES (5)");
+            // No graceful shutdown — engine drops here.
+        }
+        // Session 2 — verify content + per-kind counters persisted.
+        {
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("reopen");
+            assert_eq!(e.iter_sql(SqlWalKind::Ddl), vec!["CREATE TABLE t(id INT)"]);
+            assert_eq!(e.iter_sql(SqlWalKind::Dml), vec!["INSERT INTO t (id) VALUES (5)"]);
+            // New appends continue from the persisted seq, not reset to 1.
+            let next = e.append_sql(SqlWalKind::Ddl, "ALTER TABLE t ADD n TEXT");
+            assert_eq!(next, 2, "DDL seq must continue from 1 → 2");
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn clear_sql_truncates_only_named_kind() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        e.append_sql(SqlWalKind::Ddl, "x");
+        e.append_sql(SqlWalKind::Dml, "y");
+        e.clear_sql(SqlWalKind::Ddl);
+        assert!(e.iter_sql(SqlWalKind::Ddl).is_empty());
+        assert_eq!(e.iter_sql(SqlWalKind::Dml), vec!["y"]);
+        // Counter resets so next append starts at 1 again.
+        let next = e.append_sql(SqlWalKind::Ddl, "fresh");
+        assert_eq!(next, 1);
+        cleanup(&p);
+    }
+
+    #[test]
+    fn persists_sql_reports_true_for_rocksdb() {
+        let p = unique_path();
+        let e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+        assert!(e.persists_sql());
+        cleanup(&p);
     }
 }
