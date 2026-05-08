@@ -87,6 +87,7 @@ use helpers::udf::*;
 use helpers::cluster::*;
 use helpers::boot::*;
 use helpers::native_protocol::*;
+use helpers::raft_loop::run_raft_tick_loop;
 // ─── Re-export helpers so handler modules can use `crate::X` ─────────────────
 // time
 pub(crate) use helpers::time::{now_unix_ms, now_unix_ms_u64, now_epoch_ms_chaos};
@@ -496,6 +497,8 @@ pub(crate) struct AppState {
     pub(crate) audit_log_path: Option<String>,
     /// S7-WS6-02: Raft consensus node state (single-node scaffold).
     pub(crate) raft_state: Arc<Mutex<RaftNode>>,
+    /// Raft peer base URLs loaded from `VNG_RAFT_PEERS`. Empty on single-node deployments.
+    pub(crate) raft_peers: Arc<Vec<String>>,
     /// S9-WS8-02: Per-model-identity request counters for rate limiting.
     /// Maps model_id → request count in current window.
     pub(crate) ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
@@ -1369,7 +1372,7 @@ async fn main() {
     let allowed_operator_roles = Arc::new(load_allowed_operator_roles());
     let operator_role_bindings = Arc::new(load_operator_role_bindings(&allowed_operator_roles));
     let tenant_user_bindings = Arc::new(default_tenant_user_bindings());
-    let rbac_privilege_matrix = Arc::new(default_rbac_privilege_matrix());
+    let rbac_privilege_matrix = Arc::new(load_rbac_privilege_matrix());
     let security_config = Arc::new(load_runtime_security_config(&allowed_operator_roles));
     let kms_runtime = Arc::new(Mutex::new(load_kms_runtime_state(&security_config)));
     let addr: SocketAddr = http_bind
@@ -1446,7 +1449,8 @@ async fn main() {
         chaos_state: Arc::new(Mutex::new(ChaosState::default())),
         olap_store: Arc::new(Mutex::new(HashMap::new())),
         audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
-        raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
+        raft_state: Arc::new(Mutex::new(RaftNode::new(&node_id))),
+        raft_peers: Arc::new(load_raft_peers()),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
@@ -1463,6 +1467,7 @@ async fn main() {
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
+    tokio::spawn(run_raft_tick_loop(state.clone()));
 
     let app = build_router(state.clone());
     if native_listener_config.enabled {

@@ -30,6 +30,7 @@ voltnuerongrid-plugins = { path = "../../crates/voltnuerongrid-plugins" }
 voltnuerongrid-mcp = { path = "../../crates/voltnuerongrid-mcp" }
 voltnuerongrid-driver-rust = { path = "../../drivers/voltnuerongrid-driver-rust" }
 tower-http = { version = "0.3", features = ["cors"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Observability — Phase 0.4
 tracing = "0.1"

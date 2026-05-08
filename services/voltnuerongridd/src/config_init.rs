@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
-use voltnuerongrid_auth::{ConfiguredKmsProviderAdapter, SecurityConfigContract};
+use voltnuerongrid_auth::{ConfiguredKmsProviderAdapter, RbacPrivilegeMatrix, SecurityConfigContract};
 use voltnuerongrid_ingest::{ManagedEventBusTransport, ManagedReplayCursorStore};
 use crate::{KmsRuntimeState, OperatorRole, TenantUserBinding, CONTROL_PLANE_OPERATOR_ROLES};
+use crate::helpers::boot::default_rbac_privilege_matrix;
 
 pub(crate) fn default_allowed_operator_roles() -> HashSet<OperatorRole> {
     CONTROL_PLANE_OPERATOR_ROLES.into_iter().collect()
@@ -167,6 +168,45 @@ pub(crate) fn load_kms_runtime_state(config: &SecurityConfigContract) -> KmsRunt
         last_simulation_note: None,
     }
 }
+
+/// Load the RBAC privilege matrix from a JSON file at `VNG_RBAC_POLICY_PATH`, or fall
+/// back to the compiled-in default matrix if the env var is unset or the file fails to parse.
+pub(crate) fn load_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
+    if let Ok(path) = env::var("VNG_RBAC_POLICY_PATH") {
+        let path = path.trim().to_string();
+        if !path.is_empty() {
+            match std::fs::read_to_string(&path) {
+                Ok(content) => match serde_json::from_str::<RbacPrivilegeMatrix>(&content) {
+                    Ok(matrix) => return matrix,
+                    Err(e) => eprintln!("[vng] WARN: failed to parse RBAC policy at {path}: {e}"),
+                },
+                Err(e) => eprintln!("[vng] WARN: failed to read RBAC policy at {path}: {e}"),
+            }
+        }
+    }
+    default_rbac_privilege_matrix()
+}
+
+
+/// Load the list of Raft peer base URLs from `VNG_RAFT_PEERS` (comma-separated).
+///
+/// Example: `VNG_RAFT_PEERS=http://node-2:8080,http://node-3:8080`
+///
+/// Returns an empty vec for single-node deployments (the default).
+pub(crate) fn load_raft_peers() -> Vec<String> {
+    env::var("VNG_RAFT_PEERS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 
 pub(crate) fn load_ingest_event_bus() -> ManagedEventBusTransport {
     let broker_mode = env::var("VNG_INGEST_OUTBOX_BROKER_MODE")

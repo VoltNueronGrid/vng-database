@@ -3893,6 +3893,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "parquet 53.4.1",
+ "reqwest",
  "rust_xlsxwriter",
  "rustls",
  "rustls-pemfile",

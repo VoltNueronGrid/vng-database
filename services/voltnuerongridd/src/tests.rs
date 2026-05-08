@@ -80,6 +80,7 @@ fn state_with_key(key: Option<&str>) -> AppState {
         olap_store: Arc::new(Mutex::new(HashMap::new())),
         audit_log_path: None,
         raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
+        raft_peers: Arc::new(Vec::new()),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
