@@ -83,6 +83,26 @@ pub struct RaftAppendResponse {
     pub match_index: u64,
 }
 
+/// InstallSnapshot RPC arguments (§7 — sent when a follower is too far behind).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftInstallSnapshotRequest {
+    pub term: u64,
+    pub leader_id: String,
+    /// Last log index included in this snapshot.
+    pub snapshot_index: u64,
+    /// Term of `snapshot_index`.
+    pub snapshot_term: u64,
+    /// Full row-store snapshot: key → column-value map serialised as JSON strings.
+    pub rows: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+}
+
+/// InstallSnapshot RPC reply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftInstallSnapshotResponse {
+    pub term: u64,
+    pub success: bool,
+}
+
 /// Snapshot of the node's current Raft state (for the status endpoint).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaftStatusSnapshot {
@@ -385,6 +405,71 @@ impl RaftNode {
     }
 
     // -----------------------------------------------------------------------
+    // Leader log append (§5.3)
+    // -----------------------------------------------------------------------
+
+    /// Append a new command to the leader's log and mark it as already applied
+    /// locally (the caller has written it directly to the state machine).
+    ///
+    /// Returns the log index assigned to the new entry.
+    ///
+    /// `total_peers` is the number of Raft peers (excluding self).  When
+    /// `total_peers == 0` (single-node cluster) the entry is immediately
+    /// committed, since the leader alone forms a quorum.
+    ///
+    /// Should only be called when `role == Leader`.
+    pub fn append_command(&mut self, command: String, total_peers: usize) -> u64 {
+        let new_index = self.last_log_position().0 + 1;
+        self.log.push(RaftLogEntry {
+            index: new_index,
+            term: self.current_term,
+            command,
+        });
+        // The caller applied the command to the state machine directly; skip re-apply.
+        if new_index > self.last_applied {
+            self.last_applied = new_index;
+        }
+        // Single-node cluster: leader is the quorum, commit immediately.
+        if total_peers == 0 && new_index > self.commit_index {
+            self.commit_index = new_index;
+        }
+        new_index
+    }
+
+    // -----------------------------------------------------------------------
+    // InstallSnapshot RPC handler (§7)
+    // -----------------------------------------------------------------------
+
+    /// Handle an incoming InstallSnapshot RPC from the leader.
+    ///
+    /// Replaces the local log and snapshot metadata with the leader's snapshot.
+    /// The caller is responsible for replacing the row-store contents with the
+    /// snapshot data in `req.rows`.
+    pub fn handle_install_snapshot(&mut self, req: &RaftInstallSnapshotRequest) -> RaftInstallSnapshotResponse {
+        if req.term < self.current_term {
+            return RaftInstallSnapshotResponse { term: self.current_term, success: false };
+        }
+        self.become_follower(req.term);
+        self.ticks_since_heartbeat = 0;
+        // Accept the snapshot only if it advances our state.
+        if req.snapshot_index <= self.snapshot_index {
+            return RaftInstallSnapshotResponse { term: self.current_term, success: true };
+        }
+        // Discard any log entries covered by the snapshot.
+        self.log.retain(|e| e.index > req.snapshot_index);
+        self.snapshot_index = req.snapshot_index;
+        self.snapshot_term = req.snapshot_term;
+        // Advance commit and apply pointers so the apply loop skips the snapshot.
+        if req.snapshot_index > self.commit_index {
+            self.commit_index = req.snapshot_index;
+        }
+        if req.snapshot_index > self.last_applied {
+            self.last_applied = req.snapshot_index;
+        }
+        RaftInstallSnapshotResponse { term: self.current_term, success: true }
+    }
+
+    // -----------------------------------------------------------------------
     // Log compaction (§7)
     // -----------------------------------------------------------------------
 
@@ -606,6 +691,66 @@ mod tests {
         }
         // Not all three should be equal (they could collide but it is astronomically unlikely).
         assert!(!(t1 == t2 && t2 == t3), "all three nodes got the same timeout");
+    }
+
+    #[test]
+    fn append_command_single_node_commits_immediately() {
+        let mut node = RaftNode::new("leader-1");
+        node.become_candidate();
+        node.become_leader();
+        let idx = node.append_command("INSERT INTO t VALUES (1)".to_string(), 0);
+        assert_eq!(idx, 1);
+        assert_eq!(node.log.len(), 1);
+        assert_eq!(node.commit_index, 1, "single-node: commit_index must advance");
+        assert_eq!(node.last_applied, 1, "single-node: last_applied must advance");
+    }
+
+    #[test]
+    fn append_command_multi_node_does_not_commit_without_quorum() {
+        let mut node = RaftNode::new("leader-1");
+        node.become_candidate();
+        node.become_leader();
+        let idx = node.append_command("INSERT INTO t VALUES (2)".to_string(), 2);
+        assert_eq!(idx, 1);
+        assert_eq!(node.log.len(), 1);
+        assert_eq!(node.commit_index, 0, "multi-node: commit_index must NOT advance without quorum");
+        assert_eq!(node.last_applied, 1, "caller already applied — last_applied advances");
+    }
+
+    #[test]
+    fn install_snapshot_advances_state_and_clears_covered_log() {
+        let mut node = RaftNode::new("follower-1");
+        node.log.push(RaftLogEntry { index: 1, term: 1, command: "INSERT INTO t VALUES (1)".into() });
+        let req = RaftInstallSnapshotRequest {
+            term: 2,
+            leader_id: "leader-1".into(),
+            snapshot_index: 5,
+            snapshot_term: 2,
+            rows: std::collections::HashMap::new(),
+        };
+        let resp = node.handle_install_snapshot(&req);
+        assert!(resp.success);
+        assert_eq!(node.snapshot_index, 5);
+        assert_eq!(node.snapshot_term, 2);
+        assert_eq!(node.commit_index, 5);
+        assert_eq!(node.last_applied, 5);
+        assert!(node.log.is_empty(), "entries covered by snapshot must be discarded");
+    }
+
+    #[test]
+    fn install_snapshot_rejected_on_stale_term() {
+        let mut node = RaftNode::new("follower-1");
+        node.current_term = 3;
+        let req = RaftInstallSnapshotRequest {
+            term: 2,
+            leader_id: "leader-1".into(),
+            snapshot_index: 5,
+            snapshot_term: 2,
+            rows: std::collections::HashMap::new(),
+        };
+        let resp = node.handle_install_snapshot(&req);
+        assert!(!resp.success);
+        assert_eq!(node.snapshot_index, 0, "stale snapshot must not advance state");
     }
 
     #[test]

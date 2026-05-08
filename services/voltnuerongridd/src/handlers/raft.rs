@@ -6,7 +6,7 @@ use tokio::sync::Semaphore;
 use voltnuerongrid_auth::PrivilegeAction;
 use crate::{AppState, AuthErrorResponse, now_unix_ms};
 use crate::NativeFrameType;
-use crate::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+use crate::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 use crate::auth::{require_operator_auth, require_operator_privilege, require_cluster_failover_privilege};
 
 /// Return `Ok(())` if the request carries a valid cluster token
@@ -437,5 +437,41 @@ pub(crate) async fn raft_tick(
         current_term: node.current_term,
         election_triggered,
     }))
+}
+
+
+/// Accept an InstallSnapshot RPC from the cluster leader.
+///
+/// Called when the leader has already compacted the log entries a follower
+/// needs to catch up.  Replaces the follower's row-store state with the
+/// full snapshot and advances `snapshot_index` / `last_applied`.
+pub(crate) async fn raft_install_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RaftInstallSnapshotRequest>,
+) -> Result<Json<RaftInstallSnapshotResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    // Accept intra-cluster token OR operator credentials.
+    if check_cluster_token(&headers, &state).is_err() {
+        require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
+    }
+
+    // Apply the snapshot to the Raft state first (updates snapshot_index etc.).
+    let resp = {
+        let mut node = state.raft_state.lock().expect("raft install_snapshot lock");
+        node.handle_install_snapshot(&req)
+    };
+
+    if resp.success && !req.rows.is_empty() {
+        // Replace row-store contents with the leader's snapshot.
+        let mut rs = state.row_store.lock().expect("row_store install_snapshot lock");
+        let xid = rs.begin_xid();
+        for (key, data) in &req.rows {
+            let _ = rs.begin_write_intent(xid, key);
+            rs.insert(xid, key, data.clone());
+        }
+        rs.release_write_intents(xid);
+    }
+
+    Ok(Json(resp))
 }
 

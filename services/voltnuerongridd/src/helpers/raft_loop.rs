@@ -18,7 +18,7 @@
 
 use std::time::Duration;
 use reqwest::Client;
-use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
+use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
 
 /// Trim the Raft log once the log grows beyond this many entries.
 const COMPACT_LOG_THRESHOLD: usize = 500;
@@ -54,20 +54,23 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
             let last_log_term = node.log.last().map(|e| e.term).unwrap_or(0);
             let snap = node.status();
             let commit_idx = snap.commit_index;
+            let snapshot_index = node.snapshot_index;
+            let snapshot_term = node.snapshot_term;
             // Per-peer entries: for each peer send only entries from next_index[peer] onward.
-            // If next_index is not yet initialised for a peer (just became leader), treat as
-            // commit_idx + 1 so we send all pending entries on the first heartbeat.
+            // If next_index[peer] <= snapshot_index the peer is too far behind; mark it for
+            // snapshot transfer (entries = empty sentinel, prev_log_index = 0 as flag).
             let peers: Vec<String> = state.raft_peers.as_ref().clone();
-            let per_peer: Vec<(String, u64, Vec<RaftLogEntry>)> = peers
+            let per_peer: Vec<(String, u64, Vec<RaftLogEntry>, bool)> = peers
                 .iter()
                 .map(|peer| {
                     let ni = *node.next_index.get(peer).unwrap_or(&(commit_idx + 1));
-                    let entries: Vec<RaftLogEntry> = node.log
-                        .iter()
-                        .filter(|e| e.index >= ni)
-                        .cloned()
-                        .collect();
-                    (peer.clone(), ni.saturating_sub(1), entries)
+                    let needs_snapshot = ni <= snapshot_index && snapshot_index > 0;
+                    let entries: Vec<RaftLogEntry> = if needs_snapshot {
+                        Vec::new()
+                    } else {
+                        node.log.iter().filter(|e| e.index >= ni).cloned().collect()
+                    };
+                    (peer.clone(), ni.saturating_sub(1), entries, needs_snapshot)
                 })
                 .collect();
             (
@@ -78,19 +81,22 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
                 snap.log_length as u64,
                 last_log_term,
                 commit_idx,
+                snapshot_index,
+                snapshot_term,
                 per_peer,
                 peers.len(),
             )
         };
         let (became_candidate, is_leader, term, node_id,
-             last_log_index, last_log_term, commit_index, per_peer, total_peers) = tick_info;
+             last_log_index, last_log_term, commit_index,
+             snapshot_index, snapshot_term, per_peer, total_peers) = tick_info;
 
         if became_candidate {
             run_election(&state, &client, term, &node_id, last_log_index, last_log_term).await;
         }
 
         if is_leader && tick_count % HEARTBEAT_EVERY_N_TICKS == 0 {
-            fanout_heartbeat(&state, &client, term, &node_id, commit_index, per_peer, total_peers).await;
+            fanout_heartbeat(&state, &client, term, &node_id, commit_index, snapshot_index, snapshot_term, per_peer, total_peers).await;
         }
 
         // Apply any newly committed log entries to the local state machine.
@@ -173,10 +179,12 @@ async fn run_election(
 }
 
 
-/// Send per-peer AppendEntries RPCs in parallel, then process responses to
-/// update `next_index` / `match_index` on the leader.
+/// Send per-peer AppendEntries (or InstallSnapshot) RPCs in parallel, then
+/// process responses to update `next_index` / `match_index` on the leader.
 ///
-/// `per_peer` is `(peer_url, prev_log_index, entries_from_next_index)`.
+/// `per_peer` is `(peer_url, prev_log_index, entries, needs_snapshot)`.
+/// When `needs_snapshot` is true the peer is too far behind; the leader sends
+/// an InstallSnapshot RPC instead of AppendEntries.
 /// `total_peers` is used to compute quorum when advancing `commit_index`.
 async fn fanout_heartbeat(
     state: &AppState,
@@ -184,7 +192,9 @@ async fn fanout_heartbeat(
     term: u64,
     node_id: &str,
     commit_index: u64,
-    per_peer: Vec<(String, u64, Vec<RaftLogEntry>)>,
+    snapshot_index: u64,
+    snapshot_term: u64,
+    per_peer: Vec<(String, u64, Vec<RaftLogEntry>, bool)>,
     total_peers: usize,
 ) {
     if per_peer.is_empty() {
@@ -193,41 +203,82 @@ async fn fanout_heartbeat(
     let token = state.cluster_token.as_deref().map(str::to_string);
     let total_nodes = total_peers + 1; // including self
 
-    let mut join_set: tokio::task::JoinSet<(String, Result<RaftAppendResponse, ()>)> =
+    // Snapshot the row-store once — only if any peer needs a full snapshot transfer.
+    let needs_any_snapshot = per_peer.iter().any(|(_, _, _, ns)| *ns);
+    let snapshot_rows: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
+        if needs_any_snapshot {
+            let rs = state.row_store.lock().expect("row_store snapshot export lock");
+            rs.export_rows_snapshot()
+                .into_iter()
+                .map(|(k, v)| (k, v))
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+
+    // Two separate JoinSets: one for AppendEntries, one for InstallSnapshot.
+    let mut append_set: tokio::task::JoinSet<(String, Result<RaftAppendResponse, ()>)> =
+        tokio::task::JoinSet::new();
+    let mut snapshot_set: tokio::task::JoinSet<(String, Result<RaftInstallSnapshotResponse, ()>)> =
         tokio::task::JoinSet::new();
 
-    for (peer_url, prev_log_index, entries) in per_peer {
-        let url = format!("{}/api/v1/cluster/raft/append", peer_url);
+    for (peer_url, prev_log_index, entries, needs_snapshot) in per_peer {
         let client = client.clone();
         let token = token.clone();
-        let req = RaftAppendRequest {
-            term,
-            leader_id: node_id.to_string(),
-            prev_log_index,
-            prev_log_term: 0,
-            entries,
-            leader_commit: commit_index,
-        };
         let peer_url_owned = peer_url.clone();
-        join_set.spawn(async move {
-            let mut builder = client.post(&url).json(&req);
-            if let Some(t) = &token {
-                builder = builder.header("Authorization", format!("Bearer {t}"));
-            }
-            let result = match builder.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    resp.json::<RaftAppendResponse>().await.map_err(|_| ())
-                }
-                _ => Err(()),
+
+        if needs_snapshot {
+            let url = format!("{}/api/v1/cluster/raft/install_snapshot", peer_url);
+            let req = RaftInstallSnapshotRequest {
+                term,
+                leader_id: node_id.to_string(),
+                snapshot_index,
+                snapshot_term,
+                rows: snapshot_rows.clone(),
             };
-            (peer_url_owned, result)
-        });
+            snapshot_set.spawn(async move {
+                let mut builder = client.post(&url).json(&req);
+                if let Some(t) = &token {
+                    builder = builder.header("Authorization", format!("Bearer {t}"));
+                }
+                let result = match builder.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        resp.json::<RaftInstallSnapshotResponse>().await.map_err(|_| ())
+                    }
+                    _ => Err(()),
+                };
+                (peer_url_owned, result)
+            });
+        } else {
+            let url = format!("{}/api/v1/cluster/raft/append", peer_url);
+            let req = RaftAppendRequest {
+                term,
+                leader_id: node_id.to_string(),
+                prev_log_index,
+                prev_log_term: 0,
+                entries,
+                leader_commit: commit_index,
+            };
+            append_set.spawn(async move {
+                let mut builder = client.post(&url).json(&req);
+                if let Some(t) = &token {
+                    builder = builder.header("Authorization", format!("Bearer {t}"));
+                }
+                let result = match builder.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        resp.json::<RaftAppendResponse>().await.map_err(|_| ())
+                    }
+                    _ => Err(()),
+                };
+                (peer_url_owned, result)
+            });
+        }
     }
 
-    while let Some(join_result) = join_set.join_next().await {
+    // Process AppendEntries responses.
+    while let Some(join_result) = append_set.join_next().await {
         let Ok((peer_url, rpc_result)) = join_result else { continue };
         let mut node = state.raft_state.lock().expect("raft fanout response lock");
-        // Only update progress if we're still leader in the same term.
         if node.role != RaftRole::Leader || node.current_term != term {
             break;
         }
@@ -236,10 +287,25 @@ async fn fanout_heartbeat(
                 node.record_append_success(&peer_url, resp.match_index, total_nodes);
             }
             Ok(_) => {
-                // Follower rejected — log inconsistency; back off next_index.
                 node.record_append_failure(&peer_url);
             }
-            Err(_) => {} // network error; next tick will retry
+            Err(_) => {}
+        }
+    }
+
+    // Process InstallSnapshot responses: on success, advance next_index to
+    // snapshot_index + 1 so the next heartbeat resumes normal log replication.
+    while let Some(join_result) = snapshot_set.join_next().await {
+        let Ok((peer_url, rpc_result)) = join_result else { continue };
+        let mut node = state.raft_state.lock().expect("raft snapshot response lock");
+        if node.role != RaftRole::Leader || node.current_term != term {
+            break;
+        }
+        if let Ok(resp) = rpc_result {
+            if resp.success {
+                node.next_index.insert(peer_url.clone(), snapshot_index + 1);
+                node.match_index.insert(peer_url, snapshot_index);
+            }
         }
     }
 }

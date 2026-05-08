@@ -17,7 +17,7 @@ use crate::{SqlTransactionResponse, PessimisticLockRecord, SqlTransactionGateway
 use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError, TransportKind};
 use crate::{now_unix_ms, build_http_envelope};
 use crate::{execute_transaction_statements, acquire_sql_data_plane_connection, release_sql_data_plane_connection};
-use crate::{acquire_pessimistic_lock, release_pessimistic_lock, parse_where_predicates};
+use crate::{acquire_pessimistic_lock, release_pessimistic_lock};
 use crate::{execute_olap_query, execute_oltp_select, execute_oltp_select_legacy, df_select_owned, run_async_in_executor};
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
@@ -1047,6 +1047,21 @@ pub(crate) async fn sql_execute(
                 }
             }
             rs.release_write_intents(xid);
+        }
+        // Replicate committed DML to the Raft log if this node is the leader.
+        // The entry is marked as already-applied (last_applied advances) so the
+        // apply loop won't double-execute what was just written to row_store.
+        {
+            let total_peers = state.raft_peers.len();
+            let mut node = state.raft_state.lock().expect("raft leader append lock");
+            if node.role == crate::RaftRole::Leader {
+                for stmt in &ddl_snapshot {
+                    let upper = stmt.trim_start().to_ascii_uppercase();
+                    if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
+                        node.append_command(stmt.clone(), total_peers);
+                    }
+                }
+            }
         }
     }
 

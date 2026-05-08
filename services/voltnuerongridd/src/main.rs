@@ -49,7 +49,7 @@ use voltnuerongrid_plugins::PluginLifecycleManager;
 
 pub(crate) mod raft;
 use raft::RaftNode;
-pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 pub mod resilience;
 pub mod observability;
@@ -98,7 +98,7 @@ pub(crate) use helpers::sql_parse::{
     extract_request_id, build_http_envelope,
     extract_delete_key_from_sql, extract_update_row_from_sql,
     extract_column_names_from_ddl, extract_insert_row_from_sql,
-    extract_all_insert_rows, parse_where_predicates,
+    extract_all_insert_rows,
 };
 // execution
 pub(crate) use helpers::execution::{
