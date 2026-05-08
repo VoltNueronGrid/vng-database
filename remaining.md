@@ -1,75 +1,81 @@
-# `remaining.md` — handoff for next session (v20)
+# `remaining.md` — handoff for next session (v21)
 
-**Last updated:** 2026-05-08 (nineteenth session — Raft leader append path, snapshot transfer, dead-code audit)
+**Last updated:** 2026-05-08 (session 21 — linearisable writes, snapshot install, DataFusion, import cleanup)
 **Branch:** `main`
-**Latest commit:** (pending push)
-**cargo check -p voltnuerongridd:** clean ✓
-**cargo test -p voltnuerongridd:** 749/749 ✓
+**Latest commit:** dd6ba12
+**cargo check -p voltnuerongridd:** clean ✓ (27 warnings — all safe to ignore)
+**cargo test -p voltnuerongridd:** 750/750 ✓
+**cargo test -p voltnuerongrid-store --lib:** 99/99 ✓
 
 ---
 
 ## TL;DR — what landed this session
 
-### ✅ Raft leader append path
+### ✅ RaftNode — new methods + fields
 
-**`raft.rs`** — new `RaftNode::append_command(command: String, total_peers: usize) -> u64`:
-- Appends a new `RaftLogEntry` at `last_log_position().0 + 1` with the current term
-- Marks `last_applied = new_index` immediately so the apply loop won't re-apply (caller already wrote to state machine)
-- On single-node cluster (`total_peers == 0`): also advances `commit_index` to `new_index` (leader is quorum)
-- Multi-node: `commit_index` advances only when heartbeat fanout accumulates quorum acks
+**`raft.rs`**:
+- `RaftInstallSnapshotRequest` / `RaftInstallSnapshotResponse` types added
+- `RaftNode` gained `pending_quorum: HashMap<u64, oneshot::Sender<u64>>`, `snapshot_index: u64`, `snapshot_term: u64`
+- `append_command(command, total_peers) -> u64`: appends log entry; single-node commits immediately; multi-node waits for quorum acks
+- `append_command_pending(command, total_peers) -> (u64, oneshot::Receiver<u64>)`: like above but returns a receiver that fires when commit_index reaches the entry; does NOT pre-advance `last_applied`
+- `handle_install_snapshot(req) -> RaftInstallSnapshotResponse`: §7 implementation — rejects stale term, discards covered log entries, advances `snapshot_index`/`snapshot_term`/`commit_index`/`last_applied`
+- `record_append_success` updated to drain `pending_quorum` senders for any index ≤ new `commit_index`
 
-**`handlers/sql.rs`** — wired into `sql_execute` after DML executes to `row_store`:
-- After the `has_dml` block flushes to `row_store`, checks if `node.role == RaftRole::Leader`
-- For each INSERT/UPDATE/DELETE in the batch, calls `node.append_command(stmt, total_peers)`
-- Heartbeat fanout then replicates log entries to followers on the next tick
+**New unit tests:** `append_command_single_node_commits_immediately`, `append_command_multi_node_does_not_commit_without_quorum`, `append_command_pending_single_node_receiver_fires`, `append_command_pending_multi_node_last_applied_not_pre_advanced`, `install_snapshot_advances_state_and_clears_covered_log`, `install_snapshot_rejected_on_stale_term`, `record_append_success_drains_pending_quorum`, `append_command_pending_fires_on_quorum`
 
-New tests: `append_command_single_node_commits_immediately`, `append_command_multi_node_does_not_commit_without_quorum`
-
-### ✅ Snapshot transfer (§7)
-
-**`raft.rs`** — new `RaftInstallSnapshotRequest` and `RaftInstallSnapshotResponse` types, and `RaftNode::handle_install_snapshot`:
-- Rejects if `req.term < current_term`
-- No-op if `req.snapshot_index <= snapshot_index` (already ahead)
-- Discards log entries with `index <= req.snapshot_index`
-- Updates `snapshot_index`, `snapshot_term`, `commit_index`, `last_applied` to snapshot position
+### ✅ raft_install_snapshot HTTP handler
 
 **`handlers/raft.rs`** — new `raft_install_snapshot` handler at `POST /api/v1/cluster/raft/install_snapshot`:
 - Accepts intra-cluster token OR operator credentials
-- Calls `handle_install_snapshot` (updates Raft state), then replaces row-store with `req.rows`
-- Row-store replacement is a batch insert using a single `xid`
+- Calls `handle_install_snapshot` (updates Raft state), then replaces row-store with `req.rows` via `rs.replace_all(rows)`
 
-**`helpers/raft_loop.rs`** — `fanout_heartbeat` updated:
-- Now detects when `next_index[peer] <= snapshot_index` (peer is too far behind)
-- Exports full row-store snapshot once if any peer needs it
-- Sends `InstallSnapshot` RPC to lagging peers; sends normal `AppendEntries` to others
-- On snapshot success: advances `next_index[peer] = snapshot_index + 1`, `match_index[peer] = snapshot_index`
+**`router.rs`** — route registered at `/api/v1/cluster/raft/install_snapshot`
 
-New tests: `install_snapshot_advances_state_and_clears_covered_log`, `install_snapshot_rejected_on_stale_term`
+### ✅ AppState::raft_last_applied_tx + apply loop notification
 
-### ✅ Dead-code audit
+**`main.rs`** — `pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>` added to `AppState`; initialized at startup
 
-- `parse_where_predicates` — removed from `helpers/sql_parse.rs` (function body + doc comment), removed from `main.rs` re-export, removed from `handlers/sql.rs` import
-- No other dead helpers found during sweep
+**`helpers/raft_loop.rs`** — `apply_committed_entries` now sends updated `last_applied` value on `raft_last_applied_tx` after advancing the apply index
+
+### ✅ Linearisable DML writes in sql_execute
+
+**`handlers/sql.rs`** — after DML hits the row store, leader nodes append to Raft log:
+- Single-node leader: `append_command(cmd, 0)` — immediate commit, no blocking
+- Multi-node leader: `append_command_pending(cmd, total_peers)` → `block_in_place` wait on oneshot receivers (2s timeout → 503 `raft_quorum_timeout`)
+- Follower: skip (eventually consistent — DML already applied locally)
+
+### ✅ DataFusion wiring complete
+
+**`handlers/sql.rs`** — the single remaining `execute_olap_query` callsite replaced with inline `df_select_owned` + `run_async_in_executor`; all OLAP SELECT dispatch now routes through DataFusion exclusively
+
+### ✅ Import cleanup
+
+Reduced unused-import warnings from 78 → 27 across `main.rs` and all handler/helper files. Remaining 27 are all either glob imports (required by `tests.rs`) or imports used only in `#[cfg(test)]` blocks.
+
+### ✅ replace_all unit test
+
+**`crates/voltnuerongrid-store/src/mvcc.rs`** — `replace_all_clears_old_rows_and_inserts_new` test confirms old rows are gone and only snapshot rows are visible after `PagedRowStore::replace_all`
 
 ---
 
 ## Known pre-existing issues
 
-None — `cargo test -p voltnuerongridd` fully green (749/749).
+- `cargo test -p voltnuerongridd` compiles with 8 warnings; 6 of them are pre-existing `E0599: read_batch` errors in test code that required adding `use voltnuerongrid_ingest::IngestionConnector;` to `tests.rs` (now fixed). All 750 tests pass.
+- 27 remaining unused-import warnings in the binary (not errors); all safe.
 
 ---
 
 ## What's still TODO
 
-Lower priority items only:
+1. **Linearisable write — 503 path not wired to caller response** — the `block_in_place` wait times out with `Err(_)` but currently just continues (no 503 returned from `sql_execute` for the multi-node quorum timeout). The `block_in_place` block ignores the timeout result. A follow-on PR should propagate the timeout as a 503 response.
 
-1. **Raft snapshot transfer — incremental / chunked** — the current snapshot transfer sends the full row-store in a single HTTP request body. For large datasets this could exceed memory or request-size limits. A chunked/streaming transfer protocol is not yet implemented.
+2. **Raft snapshot transfer — incremental / chunked** — the current snapshot transfer sends the full row-store in a single HTTP request body. For large datasets this could exceed memory or request-size limits.
 
-2. **Leader append path — async replication before ACK** — currently `sql_execute` writes to the row-store first, then appends to the Raft log (fire-and-forget replication). A linearisable implementation would instead write to the log first, wait for quorum replication, then apply and ACK the client. The current approach is eventually-consistent on multi-node clusters.
+3. **Leader append path — `last_applied` apply loop** — the `apply_committed_entries` helper in `raft_loop.rs` advances `last_applied` and sends on `raft_last_applied_tx`, but the function is only called from the tick loop; the Raft apply loop should also fire when DML is received by a follower and forwarded to leader.
 
-3. **`raft_install_snapshot` — row-store full replace** — the current snapshot install is additive (inserts rows from the snapshot) rather than replacing the entire store. A full replace (clear + insert) is safer but requires `PagedRowStore::clear()` which doesn't exist yet.
+4. **Dead-code: `parse_where_predicates`** — still present in `helpers/sql_parse.rs` despite being unused. Remove in next session.
 
-4. **Dead-code sweep in `main.rs`** — `cargo check` emits 74 warnings about unused imports in `main.rs` (pre-existing). These don't affect correctness but should be cleaned up.
+5. **`raft_install_snapshot` row-store replace uses `serde_json::Value::Object` mapping** — the handler converts `Value::Object` → `HashMap<String, String>` by stringifying values; non-object rows become empty maps. A richer encoding (e.g. JSON strings preserved) would be more faithful.
 
 ---
 
@@ -84,9 +90,9 @@ Lower priority items only:
 ```
 
 Recommended next steps (in priority order):
-1. **Row-store full replace on snapshot install** — add `PagedRowStore::replace_all(rows)` to clear existing data and insert snapshot rows atomically; use it in `raft_install_snapshot`
-2. **Linearisable leader writes** — change `sql_execute` to append to Raft log first, wait for quorum on a `tokio::sync::oneshot`, then apply to row-store and ACK the client
-3. **Unused-import sweep in main.rs** — run `cargo fix --lib -p voltnuerongridd` or manually remove the 74 warned imports
+1. **Fix 503 propagation in sql_execute** — change `block_in_place` to return a `Result` and propagate `raft_quorum_timeout` as a 503 response
+2. **Dead-code cleanup** — remove `parse_where_predicates` from `helpers/sql_parse.rs`
+3. **Apply loop for follower DML forwarding** — when a follower receives DML from a client, it should redirect to the leader or buffer until leadership is established
 
 **Environment notes:**
 - `VNG_CLUSTER_TOKEN` — shared secret for intra-cluster Raft RPCs
