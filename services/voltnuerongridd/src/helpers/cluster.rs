@@ -1,5 +1,7 @@
 //! Cluster topology, leader rotation, transport mutation helpers.
-use crate::AppState;
+use axum::http::{HeaderMap, StatusCode};
+use axum::Json;
+use crate::{AppState, AuthErrorResponse, PoolStatsResponse};
 
 
 pub(crate) fn pool_stats_response(stats: &voltnuerongrid_driver_rust::PoolStats) -> PoolStatsResponse {

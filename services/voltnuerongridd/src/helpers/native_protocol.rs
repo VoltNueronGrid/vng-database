@@ -1,4 +1,5 @@
 //! VNG native wire protocol helpers (TLS, frame types, auth).
+use crate::AppState;
 
 
 pub(crate) fn load_native_tls_acceptor(

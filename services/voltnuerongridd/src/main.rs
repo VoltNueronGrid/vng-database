@@ -86,6 +86,48 @@ use helpers::udf::*;
 use helpers::cluster::*;
 use helpers::boot::*;
 use helpers::native_protocol::*;
+// ─── Re-export helpers so handler modules can use `crate::X` ─────────────────
+// time
+pub(crate) use helpers::time::{now_unix_ms, now_unix_ms_u64, now_epoch_ms_chaos};
+// env
+pub(crate) use helpers::env_helpers::{read_env_bool, read_env_usize, read_env_u64};
+// sql_parse
+pub(crate) use helpers::sql_parse::{
+    extract_request_id, build_http_envelope,
+    extract_delete_key_from_sql, extract_update_row_from_sql,
+    extract_column_names_from_ddl, extract_insert_row_from_sql,
+    extract_all_insert_rows, parse_where_predicates,
+};
+// execution
+pub(crate) use helpers::execution::{
+    svc_unavailable_sql_response, execute_transaction_statements,
+    acquire_pessimistic_lock, release_pessimistic_lock,
+    execute_olap_query, execute_oltp_select, execute_oltp_select_legacy,
+};
+// udf
+pub(crate) use helpers::udf::{
+    execute_udf_runtime_scaffold, udf_function_catalog_contract,
+    udf_guard_policy_contract, build_udf_execution_plan,
+};
+// cluster
+pub(crate) use helpers::cluster::{
+    pool_stats_response, pool_acquire_error_state,
+    acquire_sql_data_plane_connection, release_sql_data_plane_connection,
+    rotate_leader, record_transport_mutation,
+    default_node_cpu_cores, default_node_ram_mb,
+};
+// dr_hook
+pub(crate) use helpers::dr_hook::{
+    failure_budget_snapshot, rate_limit_policy_snapshot,
+    evaluate_failure_budget_alert, enqueue_dr_hook_task,
+    execute_dr_hook, evaluate_rate_limit, build_retry_plan,
+};
+// boot
+pub(crate) use helpers::boot::{
+    persist_sql_statement, build_durability_engine,
+    replay_ddl_into, replay_dml_into,
+};
+
 
 static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);

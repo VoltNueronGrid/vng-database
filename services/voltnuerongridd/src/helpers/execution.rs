@@ -2,6 +2,7 @@
 use axum::http::StatusCode;
 use axum::Json;
 use crate::{AppState, AuthErrorResponse};
+use crate::handlers::sql::SqlExecuteResponse;
 
 
 /// Build a 503 SqlExecuteResponse for graceful degradation when an internal
