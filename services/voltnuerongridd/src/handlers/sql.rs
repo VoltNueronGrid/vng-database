@@ -1072,21 +1072,49 @@ pub(crate) async fn sql_execute(
                     }
                     drop(node);
                 } else {
-                    // Multi-node: append pending; fire-and-forget via block_in_place.
+                    // Multi-node: append pending and wait for quorum via block_in_place.
                     let indexed: Vec<(u64, tokio::sync::oneshot::Receiver<u64>)> =
                         dml_stmts.into_iter()
                             .map(|cmd| node.append_command_pending(cmd, total_peers))
                             .collect();
                     drop(node);
-                    // Wait synchronously using block_in_place (avoids !Send issue in async handler).
-                    tokio::task::block_in_place(|| {
+                    // Returns false if any receiver timed out (quorum not reached).
+                    let quorum_ok = tokio::task::block_in_place(|| {
                         let handle = tokio::runtime::Handle::current();
                         for (_, rx) in indexed {
                             use tokio::time::{timeout, Duration};
-                            let timed = timeout(Duration::from_secs(2), rx);
-                            let _ = handle.block_on(timed);
+                            match handle.block_on(timeout(Duration::from_secs(2), rx)) {
+                                Ok(_) => {},
+                                Err(_) => return false,
+                            }
                         }
+                        true
                     });
+                    if !quorum_ok {
+                        release_sql_data_plane_connection(&state, &connection_id);
+                        return Ok((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(SqlExecuteResponse {
+                                status: "error",
+                                route_path: route_path_name(decision.payload.path).to_string(),
+                                reason: "raft_quorum_timeout: DML could not be committed within 2s".to_string(),
+                                transaction: None,
+                                olap: None,
+                                rejected_statement_count: 0,
+                                udf_results: None,
+                                udf_guardrail_status: None,
+                                udf_function_catalog: vec![],
+                                udf_guard_policies: vec![],
+                                udf_execution_plan: vec![],
+                                legacy_agg_results: None,
+                                planner_path: None,
+                                oltp_rows: None,
+                                olap_agg_results: None,
+                                columns: None,
+                                rows: None,
+                            }),
+                        ));
+                    }
                 }
             } else {
                 drop(node); // Follower: apply was already done above, skip Raft leader path.

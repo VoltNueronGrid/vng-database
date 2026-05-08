@@ -3,8 +3,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Serialize;
 use voltnuerongrid_auth::PrivilegeAction;
-use crate::{AppState, AuthErrorResponse};
-use crate::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+use crate::{AppState, AuthErrorResponse, SnapshotChunkSession};
+use crate::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftSnapshotChunkResponse, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 use crate::auth::require_cluster_failover_privilege;
 
 /// Return `Ok(())` if the request carries a valid cluster token
@@ -473,5 +473,110 @@ pub(crate) async fn raft_install_snapshot(
         rs.replace_all(rows);
     }
     Ok(Json(resp))
+}
+
+
+// ─── §7-chunked: incremental snapshot transfer endpoint ──────────────────────
+
+/// Receive one chunk of an incremental snapshot transfer from the leader.
+///
+/// The leader splits the full row-store export into fixed-size chunks and sends
+/// them sequentially.  Each chunk carries the same `session_id`; the follower
+/// accumulates rows until `is_last == true`, then applies the snapshot atomically.
+pub(crate) async fn raft_install_snapshot_chunk(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RaftSnapshotChunkRequest>,
+) -> Result<Json<RaftSnapshotChunkResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    if check_cluster_token(&headers, &state).is_err() {
+        require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
+    }
+
+    // Guard: reject stale-term chunks.
+    {
+        let node = state.raft_state.lock().expect("raft_state lock");
+        if req.term < node.current_term {
+            return Ok(Json(RaftSnapshotChunkResponse {
+                term: node.current_term,
+                success: false,
+                next_expected_chunk: 0,
+                complete: false,
+            }));
+        }
+    }
+
+    let mut sessions = state.snapshot_chunk_sessions.lock().expect("chunk sessions lock");
+    let session = sessions.entry(req.session_id.clone()).or_insert_with(|| SnapshotChunkSession {
+        term: req.term,
+        leader_id: req.leader_id.clone(),
+        snapshot_index: req.snapshot_index,
+        snapshot_term: req.snapshot_term,
+        rows: Vec::new(),
+        next_expected_chunk: 0,
+    });
+
+    // Reject out-of-order chunks.
+    if req.chunk_index != session.next_expected_chunk {
+        let expected = session.next_expected_chunk;
+        return Ok(Json(RaftSnapshotChunkResponse {
+            term: req.term,
+            success: false,
+            next_expected_chunk: expected,
+            complete: false,
+        }));
+    }
+
+    session.rows.extend(req.rows.into_iter());
+    session.next_expected_chunk += 1;
+
+    if !req.is_last {
+        let next = session.next_expected_chunk;
+        return Ok(Json(RaftSnapshotChunkResponse {
+            term: req.term,
+            success: true,
+            next_expected_chunk: next,
+            complete: false,
+        }));
+    }
+
+    // Final chunk — apply the full snapshot.
+    let accumulated: Vec<(String, serde_json::Value)> = std::mem::take(&mut session.rows);
+    let snap_index = session.snapshot_index;
+    let snap_term = session.snapshot_term;
+    sessions.remove(&req.session_id);
+    drop(sessions);
+
+    // Build a synthetic install-snapshot request to reuse existing Raft state logic.
+    let install_req = RaftInstallSnapshotRequest {
+        term: req.term,
+        leader_id: req.leader_id.clone(),
+        snapshot_index: snap_index,
+        snapshot_term: snap_term,
+        rows: accumulated.clone(),
+    };
+    let resp = {
+        let mut node = state.raft_state.lock().expect("raft_state lock");
+        node.handle_install_snapshot(&install_req)
+    };
+    if resp.success {
+        let rows = accumulated.into_iter().map(|(k, v)| {
+            let data: std::collections::HashMap<String, String> = match v {
+                serde_json::Value::Object(m) => m.into_iter()
+                    .map(|(col_k, col_v)| (col_k, col_v.as_str().unwrap_or("").to_string()))
+                    .collect(),
+                _ => std::collections::HashMap::new(),
+            };
+            (k, data)
+        });
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        rs.replace_all(rows);
+    }
+
+    Ok(Json(RaftSnapshotChunkResponse {
+        term: req.term,
+        success: resp.success,
+        next_expected_chunk: 0,
+        complete: resp.success,
+    }))
 }
 

@@ -38,7 +38,7 @@ use voltnuerongrid_plugins::PluginLifecycleManager;
 
 pub(crate) mod raft;
 use raft::RaftNode;
-pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftSnapshotChunkResponse, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 pub mod resilience;
 pub mod observability;
@@ -490,10 +490,10 @@ pub(crate) struct AppState {
     /// `None` means no auth is required (single-node / dev).
     pub(crate) cluster_token: Arc<Option<String>>,
     /// Watch channel that broadcasts the latest `last_applied` Raft index.
-    /// The `apply_committed_entries` loop in `raft_loop.rs` sends on this whenever
-    /// `last_applied` advances; `sql_execute` (multi-node leader path) subscribes
-    /// to wait for quorum before returning 200 to the client.
     pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    /// In-progress chunked snapshot transfer sessions keyed by `session_id`.
+    /// Each entry accumulates row chunks from the leader until `is_last = true`.
+    pub(crate) snapshot_chunk_sessions: Arc<Mutex<HashMap<String, SnapshotChunkSession>>>,
     /// S9-WS8-02: Per-model-identity request counters for rate limiting.
     /// Maps model_id → request count in current window.
     pub(crate) ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
@@ -569,6 +569,18 @@ impl OperatorRole {
             Self::AiOperator => "ai_operator",
         }
     }
+}
+
+/// Accumulates row chunks from a leader snapshot-transfer session.
+/// Keyed in `AppState::snapshot_chunk_sessions` by `session_id`.
+#[derive(Clone)]
+pub(crate) struct SnapshotChunkSession {
+    pub(crate) term: u64,
+    pub(crate) leader_id: String,
+    pub(crate) snapshot_index: u64,
+    pub(crate) snapshot_term: u64,
+    pub(crate) rows: Vec<(String, serde_json::Value)>,
+    pub(crate) next_expected_chunk: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1451,6 +1463,7 @@ async fn main() {
         raft_peers: Arc::new(load_raft_peers()),
         cluster_token: Arc::new(load_cluster_token()),
         raft_last_applied_tx: raft_last_applied_tx.clone(),
+        snapshot_chunk_sessions: Arc::new(Mutex::new(HashMap::new())),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),

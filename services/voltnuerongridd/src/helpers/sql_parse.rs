@@ -291,38 +291,3 @@ pub(crate) fn extract_insert_row_from_sql_with_cols(
     let row_key = format!("{table}:{first_val}");
     Some((row_key, data))
 }
-
-/// S3-WS1-05: parse a WHERE clause string into `VectorizedFilter` predicates.
-/// Handles simple `col op val` expressions joined by ` AND `.
-pub(crate) fn parse_where_predicates(
-    where_clause: &str,
-) -> Option<Vec<voltnuerongrid_store::columnar::VectorizedFilter>> {
-    use voltnuerongrid_store::columnar::{FilterOp, VectorizedFilter};
-    let preds: Vec<VectorizedFilter> = where_clause
-        .split(" AND ")
-        .filter_map(|clause| {
-            let clause = clause.trim();
-            let ops: &[(&str, FilterOp)] = &[
-                (">=", FilterOp::Gte),
-                ("<=", FilterOp::Lte),
-                ("!=", FilterOp::Ne),
-                (">",  FilterOp::Gt),
-                ("<",  FilterOp::Lt),
-                ("=",  FilterOp::Eq),
-            ];
-            for (sym, op) in ops {
-                if let Some(pos) = clause.find(sym) {
-                    let col = clause[..pos].trim().to_string();
-                    let val = clause[pos + sym.len()..].trim()
-                        .trim_matches('\'').trim_matches('"').to_string();
-                    if !col.is_empty() {
-                        return Some(VectorizedFilter { column: col, op: op.clone(), value: val });
-                    }
-                }
-            }
-            None
-        })
-        .collect();
-    if preds.is_empty() { None } else { Some(preds) }
-}
-

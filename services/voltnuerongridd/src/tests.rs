@@ -84,6 +84,7 @@ fn state_with_key(key: Option<&str>) -> AppState {
         raft_peers: Arc::new(Vec::new()),
         cluster_token: Arc::new(None),
         raft_last_applied_tx: Arc::new(tokio::sync::watch::channel(0u64).0),
+        snapshot_chunk_sessions: Arc::new(Mutex::new(HashMap::new())),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),

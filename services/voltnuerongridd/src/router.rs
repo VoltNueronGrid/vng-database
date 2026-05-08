@@ -167,6 +167,8 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/cluster/raft/vote/stats", get(raft_vote_stats))
         // §7: Raft install-snapshot (leader → follower full state transfer)
         .route("/api/v1/cluster/raft/install_snapshot", post(raft_install_snapshot))
+        // §7-chunked: incremental snapshot transfer (large datasets)
+        .route("/api/v1/cluster/raft/install_snapshot/chunk", post(raft_install_snapshot_chunk))
         .route("/api/v1/store/rows/scan", post(store_rows_scan))
         // S4-WS3-04: HTAP sync export for OLAP consumers
         .route("/api/v1/store/htap/export", post(store_htap_export))

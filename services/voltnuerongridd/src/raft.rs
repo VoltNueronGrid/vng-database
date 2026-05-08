@@ -103,6 +103,39 @@ pub struct RaftInstallSnapshotResponse {
     pub success: bool,
 }
 
+/// One chunk of a multi-part snapshot transfer.
+///
+/// The leader splits a large row-store export into fixed-size chunks and
+/// sends them sequentially using the same `session_id`.  The follower
+/// accumulates chunks and applies the snapshot on the final chunk
+/// (`is_last = true`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftSnapshotChunkRequest {
+    /// Unique ID for this snapshot-transfer session (UUID or similar).
+    pub session_id: String,
+    pub term: u64,
+    pub leader_id: String,
+    pub snapshot_index: u64,
+    pub snapshot_term: u64,
+    /// 0-based index of this chunk.
+    pub chunk_index: u32,
+    /// True on the final chunk; triggers apply.
+    pub is_last: bool,
+    /// Row subset for this chunk.
+    pub rows: Vec<(String, serde_json::Value)>,
+}
+
+/// Reply to a single snapshot chunk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftSnapshotChunkResponse {
+    pub term: u64,
+    pub success: bool,
+    /// The chunk index the follower expects next.
+    pub next_expected_chunk: u32,
+    /// True once the final chunk was applied (session is done).
+    pub complete: bool,
+}
+
 /// Snapshot of the node's current Raft state (for the status endpoint).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaftStatusSnapshot {
