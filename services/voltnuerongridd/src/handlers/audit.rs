@@ -1,12 +1,14 @@
+use std::collections::BTreeMap;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use voltnuerongrid_audit::AuditEventKind;
+use serde_json::json;
+use voltnuerongrid_audit::{AuditEventKind, AppendOnlyAuditSink};
 use voltnuerongrid_auth::PrivilegeAction;
-use crate::{AppState, AuthErrorResponse, now_unix_ms_u64, RuntimeAccessPrincipal, AuditEvent};
-use crate::auth::{require_operator_auth, require_operator_privilege};
-use crate::audit_helpers::append_audit_event;
+use crate::{AppState, AuthErrorResponse, now_unix_ms_u64, RuntimeAccessPrincipal, AuditEvent, RaftLogEntry};
+use crate::auth::{require_operator_auth, require_operator_privilege, require_audit_runtime_principal};
+use crate::audit_helpers::{append_audit_event, append_runtime_audit_event, filter_audit_events_for_principal};
 
 // ─── Audit DTOs ───────────────────────────────────────────────────────────────
 

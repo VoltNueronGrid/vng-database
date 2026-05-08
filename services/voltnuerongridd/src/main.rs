@@ -47,8 +47,9 @@ use voltnuerongrid_ingest::{
 use voltnuerongrid_opt::DistributedCacheManager;
 use voltnuerongrid_plugins::PluginLifecycleManager;
 
-mod raft;
-use raft::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftNode, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+pub(crate) mod raft;
+use raft::RaftNode;
+pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 pub mod resilience;
 pub mod observability;
@@ -127,17 +128,58 @@ pub(crate) use helpers::boot::{
     persist_sql_statement, build_durability_engine,
     replay_ddl_into, replay_dml_into,
 };
+// ─── Re-export auth helpers so handler/helper modules can use `crate::fn` ────
+pub(crate) use auth::{
+    require_cluster_failover_privilege, require_audit_runtime_principal,
+};
+// ─── Re-export audit helpers ──────────────────────────────────────────────────
+pub(crate) use audit_helpers::{append_runtime_audit_event, filter_audit_events_for_principal};
+// ─── Re-export native protocol helpers ───────────────────────────────────────
+pub(crate) use helpers::native_protocol::{
+    load_native_tls_acceptor, vng_native_listener_log,
+};
+// ─── Re-export cluster helpers ────────────────────────────────────────────────
+pub(crate) use helpers::cluster::{
+    build_failover_handoff_report,
+};
+// ─── Re-export dr_hook helpers ────────────────────────────────────────────────
+pub(crate) use helpers::dr_hook::dequeue_dr_hook_task;
+// ─── Re-export wal helpers ────────────────────────────────────────────────────
+pub(crate) use handlers::wal::{contains_table_alias_sql, contains_column_alias_sql};
+// ─── Re-export SRE types needed by helpers ────────────────────────────────────
+pub(crate) use handlers::sre::{
+    DrHookExecutionRecord, DrHookPolicyConfig, DrHookPolicyState,
+    DrHookPolicyStateEnvelope, DrHookPolicyStateSnapshot, DrHookRetryPlanStep,
+    DrHookRuntimeState, DrHookScheduledTask,
+    FailureBudgetAlertResponse, FailureBudgetSnapshot,
+    RateLimitPolicySnapshot, SreGateCriterion, SreGateEvaluationResponse,
+};
+// ─── Re-export SQL handler types needed by helpers ────────────────────────────
+// Note: SqlTransactionResponse and PessimisticLockRecord are defined in main.rs, not sql.rs
+pub(crate) use handlers::sql::{
+    OlapQueryRequest, OlapQueryResponse, OltpRowResult,
+    PessimisticLockResponse,
+    UdfExecutionResult, UdfExecutionPlanStep, UdfFunctionCatalogEntry,
+    UdfInvocationPlan, UdfLanguageGuardPolicy,
+};
+// ─── Re-export misc handler types needed by helpers ───────────────────────────
+pub(crate) use handlers::misc::{
+    NativeFrame, NativeListenerConfig,
+    FailoverHandoffGapResponse, FailoverHandoffReportResponse,
+};
+// ─── Re-export auth helpers ────────────────────────────────────────────────────
+pub(crate) use auth::locale_from_headers;
 
 
-static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
+pub(crate) static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub(crate) static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
-static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
+pub(crate) static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// REQ-22 / WS22: Gate-export counters (incremented in `acquire_pessimistic_lock` for trend artifacts).
-static WS22_GATE_DEADLOCK_DETECTIONS: AtomicU64 = AtomicU64::new(0);
-static WS22_GATE_SCAN_CAP_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static WS22_GATE_DEADLOCK_DETECTIONS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static WS22_GATE_SCAN_CAP_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static DRIVER_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
-const DEADLOCK_SCAN_MAX_HOPS: usize = 8;
+pub(crate) const DEADLOCK_SCAN_MAX_HOPS: usize = 8;
 
 pub(crate) const CONTROL_PLANE_OPERATOR_ROLES: [OperatorRole; 4] = [
     OperatorRole::Dba,
@@ -380,7 +422,7 @@ impl AcidTransactionRegistry {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DeadlockScanOutcome {
+pub(crate) enum DeadlockScanOutcome {
     CycleDetected,
     ScanCapReached,
     NoCycle,
@@ -653,7 +695,7 @@ pub(crate) struct CanonicalError {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeFrameType {
+pub(crate) enum NativeFrameType {
     Hello,
     HelloAck,
     Auth,
@@ -671,7 +713,7 @@ enum NativeFrameType {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeCommandKind {
+pub(crate) enum NativeCommandKind {
     Health,
     SqlAnalyze,
     SqlRoute,
@@ -1422,103 +1464,6 @@ async fn main() {
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
 
-    async fn add_cors(req: Request<axum::body::Body>, next: Next) -> Response {
-        let mut res = next.run(req).await;
-        res.headers_mut().insert(
-            "Access-Control-Allow-Origin",
-            axum::http::HeaderValue::from_static("*"),
-        );
-        res.headers_mut().insert(
-            "Access-Control-Allow-Methods",
-            axum::http::HeaderValue::from_static("GET,POST,OPTIONS"),
-        );
-        res.headers_mut().insert(
-            "Access-Control-Allow-Headers",
-            axum::http::HeaderValue::from_static("content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id"),
-        );
-        res
-    }
-
-    async fn options_preflight() -> Response {
-        let res = axum::http::Response::builder()
-            .status(StatusCode::NO_CONTENT)
-            .header("Access-Control-Allow-Origin", "*")
-            .header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-            .header(
-                "Access-Control-Allow-Headers",
-                "content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id",
-            )
-            .body(axum::body::Body::empty())
-            .unwrap();
-        res
-    }
-
-    /// Phase 0.4 follow-up: emit `vng_http_requests_total` for every route, labeled
-    /// by method, route template (when matched), and response status class.
-    /// Also emits `vng_http_request_duration_seconds` as a histogram.
-    /// Skips itself for `/metrics` to avoid recursive label cardinality.
-    async fn track_http_metrics(req: Request<axum::body::Body>, next: Next) -> Response {
-        let method = req.method().clone();
-        let path = req.uri().path().to_string();
-        let started = std::time::Instant::now();
-
-        let response = next.run(req).await;
-
-        // Don't tag the metrics endpoint itself — Prometheus scrapes are
-        // not interesting application traffic and would skew histograms.
-        if path != "/metrics" {
-            let status = response.status().as_u16();
-            // Coarse status class (2xx / 3xx / 4xx / 5xx) keeps cardinality small.
-            let status_class = match status {
-                100..=199 => "1xx",
-                200..=299 => "2xx",
-                300..=399 => "3xx",
-                400..=499 => "4xx",
-                500..=599 => "5xx",
-                _ => "other",
-            };
-            // Coarsen unbounded paths to template-like buckets so we don't
-            // create one time-series per random ID. This is a pragmatic
-            // approximation; a future PR can plug into axum's matched-path
-            // info for precise route templates.
-            let route_label = coarsen_route_for_metrics(&path);
-
-            metrics::counter!(
-                "vng_http_requests_total",
-                "method" => method.as_str().to_string(),
-                "route" => route_label.clone(),
-                "status_class" => status_class,
-            )
-            .increment(1);
-
-            metrics::histogram!(
-                "vng_http_request_duration_seconds",
-                "method" => method.as_str().to_string(),
-                "route" => route_label,
-            )
-            .record(started.elapsed().as_secs_f64());
-        }
-
-        response
-    }
-
-    /// Map a request path to a low-cardinality route label.
-    /// e.g. `/api/v1/admin/databases/foo` → `/api/v1/admin/databases/:name`.
-    /// Conservative: only does well-known transformations; returns the path
-    /// as-is if no rule matches.
-    fn coarsen_route_for_metrics(path: &str) -> String {
-        // Path-id parameters that we know about so far. Add to this list as
-        // routes with dynamic segments are introduced.
-        for (prefix, replacement) in &[
-            ("/api/v1/admin/databases/", "/api/v1/admin/databases/:name"),
-        ] {
-            if path.starts_with(prefix) && path.len() > prefix.len() {
-                return replacement.to_string();
-            }
-        }
-        path.to_string()
-    }
-
     let app = build_router(state.clone());
     if native_listener_config.enabled {
         vng_native_listener_log(
@@ -1550,7 +1495,7 @@ async fn main() {
     axum::serve(listener, app).await.expect("server failed");
 }
 
-async fn native_read_framed<S: AsyncRead + Unpin>(
+pub(crate) async fn native_read_framed<S: AsyncRead + Unpin>(
     socket: &mut S,
     max_payload_bytes: usize,
 ) -> Result<Vec<u8>, std::io::Error> {
@@ -1589,7 +1534,7 @@ async fn native_write_framed_json<S: AsyncWrite + Unpin>(
     Ok(())
 }
 
-async fn run_native_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(
+pub(crate) async fn run_native_connection<S: AsyncRead + AsyncWrite + Send + Unpin>(
     mut socket: S,
     state: AppState,
     config: NativeListenerConfig,

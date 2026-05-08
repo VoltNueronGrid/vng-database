@@ -1,8 +1,21 @@
 //! OLAP/OLTP execution helpers, transaction executor, pessimistic locking.
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 use axum::http::StatusCode;
 use axum::Json;
+use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 use crate::{AppState, AuthErrorResponse};
 use crate::handlers::sql::SqlExecuteResponse;
+use crate::{
+    DEADLOCK_SCAN_MAX_HOPS, PESSIMISTIC_LOCK_COUNTER, TX_COUNTER,
+    WS22_GATE_DEADLOCK_DETECTIONS, WS22_GATE_SCAN_CAP_TIMEOUTS,
+    DeadlockScanOutcome,
+    OlapQueryResponse, OltpRowResult,
+    PessimisticLockRecord, PessimisticLockResponse,
+    SqlTransactionResponse, UdfExecutionResult,
+};
+use crate::{udf_guard_policy_contract, udf_function_catalog_contract};
 
 
 /// Build a 503 SqlExecuteResponse for graceful degradation when an internal

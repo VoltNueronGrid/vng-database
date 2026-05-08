@@ -1,6 +1,6 @@
 //! SQL parsing helpers shared across handler modules.
 use axum::http::HeaderMap;
-use crate::{CanonicalCommandEnvelope, CanonicalSuccess};
+use crate::{CanonicalCommandEnvelope, CanonicalCommandName, CanonicalSuccess, TransportKind};
 
 
 pub(crate) fn extract_request_id(headers: &HeaderMap, fallback: &str) -> String {

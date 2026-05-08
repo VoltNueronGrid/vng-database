@@ -1,5 +1,8 @@
 //! VNG native wire protocol helpers (TLS, frame types, auth).
+use std::sync::Arc;
+use serde_json::json;
 use crate::AppState;
+use crate::{NativeCommandKind, NativeFrameType, NativeFrame, NativeListenerConfig};
 
 
 pub(crate) fn load_native_tls_acceptor(

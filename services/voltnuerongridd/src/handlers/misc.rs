@@ -1,31 +1,54 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+use tokio::sync::Semaphore;
+use tokio::io::AsyncWriteExt;
+use std::env;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::{AppState, AuthErrorResponse, now_unix_ms, now_unix_ms_u64};
-use crate::auth::{require_operator_auth, require_operator_privilege};
+use voltnuerongrid_audit::AuditEventKind;
+use voltnuerongrid_auth::PrivilegeAction;
+use voltnuerongrid_mcp::{McpRequest, McpServerCapabilities, process_request};
+use voltnuerongrid_sql::{I18nCatalog, SupportedLocale};
+use voltnuerongrid_store::htap_sync::MutationOp;
+use crate::{AppState, AuthErrorResponse, now_unix_ms, now_unix_ms_u64, now_epoch_ms_chaos};
+use crate::{NativeCommandKind, NativeFrameType};
+use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError, TransportKind};
+use crate::{RedisCacheCommandRequest, RedisCacheCommandResponse};
+use crate::{CanonicalCommandEnvelope, CanonicalSuccess, ConnectorHealthEntry, ConnectorHealthResponse};
+use crate::{FulltextSearchRequest, FulltextSearchResponse, FulltextNotEnabledError};
+use crate::{OlapQueryRequest, OlapQueryResponse};
+use crate::{DumpExportQuery, DumpExportResponse, ObjectHistoryQuery, ObjectHistoryResponse};
+use crate::auth::{require_operator_auth, require_operator_privilege, require_cluster_failover_privilege};
 use crate::audit_helpers::append_audit_event;
+use crate::{execute_olap_query, record_transport_mutation, rotate_leader};
+use crate::{build_failover_handoff_report, dequeue_dr_hook_task, execute_dr_hook};
+use crate::{load_native_tls_acceptor, vng_native_listener_log, run_native_connection};
+use crate::observability;
 
 // ─── Misc DTOs ──────────────────────────────────────────────────────────
 
 
 #[derive(Serialize)]
 pub(crate) struct HealthResponse {
-    status: &'static str,
-    node_id: String,
-    cluster_mode: String,
+    pub(crate) status: &'static str,
+    pub(crate) node_id: String,
+    pub(crate) cluster_mode: String,
 }
 
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct NativeFrame {
-    frame_type: NativeFrameType,
-    request_id: String,
-    session_id: Option<String>,
-    command: Option<NativeCommandKind>,
-    payload_json: Option<serde_json::Value>,
+    pub(crate) frame_type: NativeFrameType,
+    pub(crate) request_id: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) command: Option<NativeCommandKind>,
+    pub(crate) payload_json: Option<serde_json::Value>,
 }
 
 
@@ -35,7 +58,7 @@ pub(crate) struct NativeAdapter;
 
 impl NativeAdapter {
     #[allow(dead_code)]
-    fn from_command_frame<TPayload>(
+    pub(crate) fn from_command_frame<TPayload>(
         frame: &NativeFrame,
         command: CanonicalCommandName,
         payload: TPayload,
@@ -65,7 +88,7 @@ impl NativeAdapter {
     }
 
     #[allow(dead_code)]
-    fn success_to_result_frame<TPayload: Serialize>(
+    pub(crate) fn success_to_result_frame<TPayload: Serialize>(
         success: &CanonicalSuccess<TPayload>,
     ) -> NativeFrame {
         let payload_json = serde_json::to_value(&success.payload).ok();
@@ -79,7 +102,7 @@ impl NativeAdapter {
     }
 
     #[allow(dead_code)]
-    fn error_to_error_frame(error: &CanonicalError) -> NativeFrame {
+    pub(crate) fn error_to_error_frame(error: &CanonicalError) -> NativeFrame {
         NativeFrame {
             frame_type: NativeFrameType::Error,
             request_id: error.request_id.clone(),
@@ -211,22 +234,22 @@ pub(crate) struct FailoverSimulateResponse {
 
 #[derive(Serialize)]
 pub(crate) struct FailoverHandoffGapResponse {
-    expected: u64,
-    actual: u64,
+    pub(crate) expected: u64,
+    pub(crate) actual: u64,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct FailoverHandoffReportResponse {
-    handoff_state: &'static str,
-    source_node_id: String,
-    target_node_id: String,
-    last_applied_sequence_before: u64,
-    last_applied_sequence_after: u64,
-    replay_batch_size: usize,
-    applied_count: usize,
-    gap_count: usize,
-    gaps: Vec<FailoverHandoffGapResponse>,
+    pub(crate) handoff_state: &'static str,
+    pub(crate) source_node_id: String,
+    pub(crate) target_node_id: String,
+    pub(crate) last_applied_sequence_before: u64,
+    pub(crate) last_applied_sequence_after: u64,
+    pub(crate) replay_batch_size: usize,
+    pub(crate) applied_count: usize,
+    pub(crate) gap_count: usize,
+    pub(crate) gaps: Vec<FailoverHandoffGapResponse>,
 }
 
 
@@ -247,22 +270,20 @@ pub(crate) struct I18nMessagesResponse {
 
 #[derive(Debug, Clone)]
 pub(crate) struct NativeListenerConfig {
-    enabled: bool,
-    bind: String,
-    tls_enabled: bool,
-    tls_cert_path: Option<String>,
-    tls_key_path: Option<String>,
-    /// When set, requires a valid client certificate (mTLS) issued by this CA (PEM).
-    tls_client_ca_path: Option<String>,
-    max_connections: usize,
-    idle_timeout_ms: u64,
-    handshake_timeout_ms: u64,
-    heartbeat_interval_ms: u64,
-    max_frame_bytes: usize,
-    compression_enabled: bool,
-    compression_threshold_bytes: usize,
-    /// NT-S6-001: optional bearer token accepted in native Auth frames (VNG_NATIVE_BEARER_TOKEN).
-    pub bearer_token: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) bind: String,
+    pub(crate) tls_enabled: bool,
+    pub(crate) tls_cert_path: Option<String>,
+    pub(crate) tls_key_path: Option<String>,
+    pub(crate) tls_client_ca_path: Option<String>,
+    pub(crate) max_connections: usize,
+    pub(crate) idle_timeout_ms: u64,
+    pub(crate) handshake_timeout_ms: u64,
+    pub(crate) heartbeat_interval_ms: u64,
+    pub(crate) max_frame_bytes: usize,
+    pub(crate) compression_enabled: bool,
+    pub(crate) compression_threshold_bytes: usize,
+    pub(crate) bearer_token: Option<String>,
 }
 
 

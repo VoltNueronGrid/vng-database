@@ -1,9 +1,13 @@
-use axum::extract::{State};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
+use voltnuerongrid_auth::PrivilegeAction;
 use crate::{AppState, AuthErrorResponse, now_unix_ms};
-use crate::auth::{require_operator_auth, require_operator_privilege};
+use crate::NativeFrameType;
+use crate::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+use crate::auth::{require_operator_auth, require_operator_privilege, require_cluster_failover_privilege};
 
 // ─── Raft DTOs ──────────────────────────────────────────────────────────
 
@@ -143,7 +147,7 @@ pub(crate) struct RaftStatusResponse {
 pub(crate) struct RaftTickResponse {
     status: &'static str,
     ticks_since_heartbeat: u64,
-    role: raft::RaftRole,
+    role: RaftRole,
     current_term: u64,
     election_triggered: bool,
 }

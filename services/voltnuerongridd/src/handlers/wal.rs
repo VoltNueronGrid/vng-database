@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use crate::{AppState, AuthErrorResponse, now_unix_ms};
-use crate::auth::{require_operator_auth};
+use crate::auth::{require_operator_auth, require_audit_runtime_principal};
 
 // ─── WAL DTOs ─────────────────────────────────────────────────────────────────
 

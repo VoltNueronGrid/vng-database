@@ -2,23 +2,24 @@
 /// Build the full axum router with all 330+ routes wired to handler functions.
 /// Extracted from main() in Slice 8 to keep main() readable.
 pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
-    use axum::routing::{delete, get, post, put};
+    use axum::routing::{delete, get, options, post, put};
     use axum::Router;
-    use handlers::audit::*;
-    use handlers::rows::*;
-    use handlers::raft::*;
-    use handlers::misc::*;
-    use handlers::wal::*;
-    use handlers::sql::*;
-    use handlers::sre::*;
-    use handlers::store::*;
-    use handlers::cdc::*;
-    use handlers::catalog::*;
-    use handlers::autonomous::*;
-    use handlers::security::*;
-    use handlers::admin::*;
-    use handlers::driver::*;
-    use handlers::ingest::*;
+    use axum::middleware::from_fn;
+    use crate::handlers::audit::*;
+    use crate::handlers::rows::*;
+    use crate::handlers::raft::*;
+    use crate::handlers::misc::*;
+    use crate::handlers::wal::*;
+    use crate::handlers::sql::*;
+    use crate::handlers::sre::*;
+    use crate::handlers::store::*;
+    use crate::handlers::cdc::*;
+    use crate::handlers::catalog::*;
+    use crate::handlers::autonomous::*;
+    use crate::handlers::security::*;
+    use crate::handlers::admin::*;
+    use crate::handlers::driver::*;
+    use crate::handlers::ingest::*;
 
     let app = Router::new()
         .route("/health", get(health))
@@ -531,4 +532,83 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
 
 
     app
+}
+
+pub(crate) async fn add_cors(req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    res.headers_mut().insert(
+        "Access-Control-Allow-Origin",
+        axum::http::HeaderValue::from_static("*"),
+    );
+    res.headers_mut().insert(
+        "Access-Control-Allow-Methods",
+        axum::http::HeaderValue::from_static("GET,POST,OPTIONS"),
+    );
+    res.headers_mut().insert(
+        "Access-Control-Allow-Headers",
+        axum::http::HeaderValue::from_static("content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id"),
+    );
+    res
+}
+
+pub(crate) async fn options_preflight() -> axum::response::Response {
+    axum::http::Response::builder()
+        .status(axum::http::StatusCode::NO_CONTENT)
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        .header(
+            "Access-Control-Allow-Headers",
+            "content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id",
+        )
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+pub(crate) async fn track_http_metrics(req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next) -> axum::response::Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let started = std::time::Instant::now();
+
+    let response = next.run(req).await;
+
+    if path != "/metrics" {
+        let status = response.status().as_u16();
+        let status_class = match status {
+            100..=199 => "1xx",
+            200..=299 => "2xx",
+            300..=399 => "3xx",
+            400..=499 => "4xx",
+            500..=599 => "5xx",
+            _ => "other",
+        };
+        let route_label = coarsen_route_for_metrics(&path);
+
+        metrics::counter!(
+            "vng_http_requests_total",
+            "method" => method.as_str().to_string(),
+            "route" => route_label.clone(),
+            "status_class" => status_class,
+        )
+        .increment(1);
+
+        metrics::histogram!(
+            "vng_http_request_duration_seconds",
+            "method" => method.as_str().to_string(),
+            "route" => route_label,
+        )
+        .record(started.elapsed().as_secs_f64());
+    }
+
+    response
+}
+
+fn coarsen_route_for_metrics(path: &str) -> String {
+    for (prefix, replacement) in &[
+        ("/api/v1/admin/databases/", "/api/v1/admin/databases/:name"),
+    ] {
+        if path.starts_with(prefix) && path.len() > prefix.len() {
+            return replacement.to_string();
+        }
+    }
+    path.to_string()
 }

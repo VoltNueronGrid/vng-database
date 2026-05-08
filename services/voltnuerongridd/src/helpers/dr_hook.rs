@@ -1,5 +1,19 @@
 //! DR hook, SRE gate, failure budget, rate limiting helpers.
+use std::fs;
+use std::sync::atomic::Ordering;
+use serde_json::json;
+use voltnuerongrid_sql::SqlAnalyzer;
+use voltnuerongrid_store::htap_sync::MutationOp;
 use crate::AppState;
+use crate::{DR_HOOK_COUNTER, AutonomousMode, now_unix_ms};
+use crate::{
+    DrHookExecutionRecord, DrHookPolicyConfig, DrHookPolicyState,
+    DrHookPolicyStateEnvelope, DrHookPolicyStateSnapshot, DrHookRetryPlanStep,
+    DrHookRuntimeState, DrHookScheduledTask,
+    FailureBudgetAlertResponse, FailureBudgetSnapshot,
+    RateLimitPolicySnapshot, SreGateCriterion, SreGateEvaluationResponse,
+};
+use crate::{record_transport_mutation, rotate_leader, udf_function_catalog_contract};
 
 
 pub(crate) fn failure_budget_snapshot(consumed_percent: f64) -> FailureBudgetSnapshot {

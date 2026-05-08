@@ -1,7 +1,18 @@
 //! Cluster topology, leader rotation, transport mutation helpers.
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::env;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use serde_json::json;
+use voltnuerongrid_audit::AuditEventKind;
+use voltnuerongrid_driver_rust::PoolAcquireError;
+use voltnuerongrid_store::BoxedDurabilityEngine;
+use voltnuerongrid_store::htap_sync::{MutationOp, ReplicaReplayState};
 use crate::{AppState, AuthErrorResponse, PoolStatsResponse};
+use crate::{ClusterNodeRuntime, RuntimeAccessPrincipal, now_unix_ms_u64};
+use crate::{FailoverHandoffGapResponse, FailoverHandoffReportResponse};
+use crate::{append_runtime_audit_event, locale_from_headers};
 
 
 pub(crate) fn pool_stats_response(stats: &voltnuerongrid_driver_rust::PoolStats) -> PoolStatsResponse {

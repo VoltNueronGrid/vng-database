@@ -1,4 +1,6 @@
 //! Environment variable helpers.
+use std::env;
+use crate::CanonicalCommandName;
 
 
 pub(crate) fn read_env_bool(name: &str, default: bool) -> bool {

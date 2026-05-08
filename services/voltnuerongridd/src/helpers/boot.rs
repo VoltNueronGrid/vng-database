@@ -1,5 +1,12 @@
 //! Boot-time WAL replay, durability engine init, RBAC defaults.
+use std::sync::{Arc, Mutex};
+use voltnuerongrid_auth::{PrivilegeAction, RbacPrivilegeMatrix, ResourceGrant};
+use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
+use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, DdlCatalog};
+use voltnuerongrid_store::mvcc::PagedRowStore;
 use crate::AppState;
+use crate::{OperatorRole, now_unix_ms};
+use crate::{extract_all_insert_rows, extract_delete_key_from_sql, extract_update_row_from_sql};
 
 
 /// Write a SQL statement to the durability engine (RocksDB or in-memory).
