@@ -208,6 +208,17 @@ pub(crate) fn load_raft_peers() -> Vec<String> {
 }
 
 
+/// Read `VNG_CLUSTER_TOKEN` — a shared secret used to authenticate intra-cluster
+/// Raft RPCs (vote and heartbeat fanout). Returns `None` when unset (single-node
+/// / dev deployments that don't need auth between nodes).
+pub(crate) fn load_cluster_token() -> Option<String> {
+    env::var("VNG_CLUSTER_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+
 pub(crate) fn load_ingest_event_bus() -> ManagedEventBusTransport {
     let broker_mode = env::var("VNG_INGEST_OUTBOX_BROKER_MODE")
         .ok()

@@ -5,12 +5,16 @@
 //!   2. When a Follower times out and becomes a Candidate, runs an election
 //!      by sending RequestVote RPCs to all configured peers.  On a single-node
 //!      cluster (no peers) the node wins immediately and becomes Leader.
-//!   3. While Leader, sends a periodic empty AppendEntries heartbeat to every
-//!      peer every ~450 ms (3 ticks) to suppress their election timers.
+//!   3. While Leader, sends AppendEntries (with any uncommitted log entries)
+//!      to every peer every ~450 ms (3 ticks) to replicate and suppress timers.
+//!
+//! When `VNG_CLUSTER_TOKEN` is set, every outgoing Raft RPC carries an
+//! `Authorization: Bearer <token>` header so peers can reject unauthenticated
+//! intra-cluster requests.
 
 use std::time::Duration;
 use reqwest::Client;
-use crate::{AppState, RaftAppendRequest, RaftRole, RaftVoteRequest, RaftVoteResponse};
+use crate::{AppState, RaftAppendRequest, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
 
 const TICK_INTERVAL_MS: u64 = 150;
 const HEARTBEAT_EVERY_N_TICKS: u64 = 3;
@@ -30,7 +34,7 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
         interval.tick().await;
         tick_count += 1;
 
-        let (became_candidate, is_leader, term, node_id, last_log_index, last_log_term, commit_index) = {
+        let (became_candidate, is_leader, term, node_id, last_log_index, last_log_term, commit_index, pending_entries) = {
             let mut node = state.raft_state.lock().expect("raft tick lock");
             let role_before = node.role;
             node.tick();
@@ -39,6 +43,13 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
             let is_leader = node.role == RaftRole::Leader;
             let last_log_term = node.log.last().map(|e| e.term).unwrap_or(0);
             let snap = node.status();
+            // Collect entries not yet committed — these are sent to followers for replication.
+            let commit_idx = snap.commit_index;
+            let pending: Vec<RaftLogEntry> = node.log
+                .iter()
+                .filter(|e| e.index > commit_idx)
+                .cloned()
+                .collect();
             (
                 became_candidate,
                 is_leader,
@@ -46,7 +57,8 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
                 snap.node_id.clone(),
                 snap.log_length as u64,
                 last_log_term,
-                snap.commit_index,
+                commit_idx,
+                pending,
             )
         };
 
@@ -55,7 +67,7 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
         }
 
         if is_leader && tick_count % HEARTBEAT_EVERY_N_TICKS == 0 {
-            fanout_heartbeat(&state, &client, term, &node_id, commit_index).await;
+            fanout_heartbeat(&state, &client, term, &node_id, commit_index, pending_entries).await;
         }
     }
 }
@@ -76,6 +88,7 @@ async fn run_election(
     let peers = state.raft_peers.as_slice();
     let total_nodes = peers.len() + 1;
     let quorum = (total_nodes + 1) / 2;
+    let token = state.cluster_token.as_deref().map(str::to_string);
 
     let mut votes_granted: usize = 1; // self-vote already cast in become_candidate()
 
@@ -92,9 +105,13 @@ async fn run_election(
             let url = format!("{}/api/v1/cluster/raft/vote", peer_url);
             let client = client.clone();
             let req = req.clone();
+            let token = token.clone();
             join_set.spawn(async move {
-                let result = client.post(&url).json(&req).send().await;
-                match result {
+                let mut builder = client.post(&url).json(&req);
+                if let Some(t) = &token {
+                    builder = builder.header("Authorization", format!("Bearer {t}"));
+                }
+                match builder.send().await {
                     Ok(resp) if resp.status().is_success() => {
                         resp.json::<RaftVoteResponse>().await
                             .map(|r| r.vote_granted)
@@ -122,27 +139,36 @@ async fn run_election(
 }
 
 
-/// Send empty AppendEntries (heartbeat) to all peers in parallel (fire-and-forget).
+/// Send AppendEntries (with uncommitted log entries) to all peers in parallel
+/// (fire-and-forget). Doubles as heartbeat when `entries` is empty.
 async fn fanout_heartbeat(
     state: &AppState,
     client: &Client,
     term: u64,
     node_id: &str,
     commit_index: u64,
+    entries: Vec<RaftLogEntry>,
 ) {
+    let token = state.cluster_token.as_deref().map(str::to_string);
     for peer_url in state.raft_peers.iter() {
         let url = format!("{}/api/v1/cluster/raft/append", peer_url);
         let client = client.clone();
+        let entries = entries.clone();
+        let token = token.clone();
         let req = RaftAppendRequest {
             term,
             leader_id: node_id.to_string(),
             prev_log_index: commit_index,
             prev_log_term: 0,
-            entries: vec![],
+            entries,
             leader_commit: commit_index,
         };
         tokio::spawn(async move {
-            let _ = client.post(&url).json(&req).send().await;
+            let mut builder = client.post(&url).json(&req);
+            if let Some(t) = &token {
+                builder = builder.header("Authorization", format!("Bearer {t}"));
+            }
+            let _ = builder.send().await;
         });
     }
 }

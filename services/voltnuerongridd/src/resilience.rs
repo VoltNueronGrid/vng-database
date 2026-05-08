@@ -92,7 +92,7 @@ mod tests {
         match lock_or_unavailable(&m, "test") {
             LockOutcome::Held(g) => assert_eq!(*g, 7),
             LockOutcome::Poisoned { .. } => panic!("expected Held"),
-        }
+        };
     }
 
     #[test]
@@ -107,6 +107,6 @@ mod tests {
         match lock_or_unavailable(&m, "test") {
             LockOutcome::Held(_) => panic!("expected Poisoned"),
             LockOutcome::Poisoned { resource } => assert_eq!(resource, "test"),
-        }
+        };
     }
 }

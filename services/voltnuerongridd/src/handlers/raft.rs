@@ -17,10 +17,10 @@ use crate::auth::{require_operator_auth, require_operator_privilege, require_clu
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RaftLogResponse {
-    status: &'static str,
-    log_length: usize,
-    commit_index: u64,
-    entries: Vec<RaftLogEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) log_length: usize,
+    pub(crate) commit_index: u64,
+    pub(crate) entries: Vec<RaftLogEntry>,
 }
 
 
@@ -28,11 +28,11 @@ pub(crate) struct RaftLogResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RaftHeartbeatResponse {
-    status: &'static str,
-    role: String,
-    term: u64,
-    ticks_reset_to: u64,
-    heartbeat_accepted: bool,
+    pub(crate) status: &'static str,
+    pub(crate) role: String,
+    pub(crate) term: u64,
+    pub(crate) ticks_reset_to: u64,
+    pub(crate) heartbeat_accepted: bool,
 }
 
 
@@ -40,18 +40,18 @@ pub(crate) struct RaftHeartbeatResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RaftMemberEntry {
-    node_id: String,
-    role: String,
-    term: u64,
-    fencing_token: u64,
+    pub(crate) node_id: String,
+    pub(crate) role: String,
+    pub(crate) term: u64,
+    pub(crate) fencing_token: u64,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RaftMemberListResponse {
-    status: &'static str,
-    member_count: usize,
-    members: Vec<RaftMemberEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) member_count: usize,
+    pub(crate) members: Vec<RaftMemberEntry>,
 }
 
 
@@ -59,10 +59,10 @@ pub(crate) struct RaftMemberListResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RaftVoteStatsResponse {
-    status: &'static str,
-    current_term: u64,
-    total_votes_granted: u64,
-    total_votes_rejected: u64,
+    pub(crate) status: &'static str,
+    pub(crate) current_term: u64,
+    pub(crate) total_votes_granted: u64,
+    pub(crate) total_votes_rejected: u64,
 }
 
 
@@ -70,12 +70,12 @@ pub(crate) struct RaftVoteStatsResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RaftLeaderResponse {
-    status: &'static str,
-    node_id: String,
-    role: String,
-    current_term: u64,
-    is_leader: bool,
-    fencing_token: u64,
+    pub(crate) status: &'static str,
+    pub(crate) node_id: String,
+    pub(crate) role: String,
+    pub(crate) current_term: u64,
+    pub(crate) is_leader: bool,
+    pub(crate) fencing_token: u64,
 }
 
 
@@ -83,13 +83,13 @@ pub(crate) struct RaftLeaderResponse {
 
 #[derive(Serialize)]
 pub(crate) struct RaftSnapshotResponse {
-    status: &'static str,
-    node_id: String,
-    term: u64,
-    commit_index: u64,
-    last_applied: u64,
-    log_length: usize,
-    fencing_token: u64,
+    pub(crate) status: &'static str,
+    pub(crate) node_id: String,
+    pub(crate) term: u64,
+    pub(crate) commit_index: u64,
+    pub(crate) last_applied: u64,
+    pub(crate) log_length: usize,
+    pub(crate) fencing_token: u64,
 }
 
 
@@ -97,11 +97,11 @@ pub(crate) struct RaftSnapshotResponse {
 
 #[derive(Serialize)]
 pub(crate) struct RaftCommitProgressResponse {
-    status: &'static str,
-    commit_index: u64,
-    last_applied: u64,
-    log_length: usize,
-    uncommitted: usize,
+    pub(crate) status: &'static str,
+    pub(crate) commit_index: u64,
+    pub(crate) last_applied: u64,
+    pub(crate) log_length: usize,
+    pub(crate) uncommitted: usize,
 }
 
 
@@ -109,12 +109,12 @@ pub(crate) struct RaftCommitProgressResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RaftElectionStatusResponse {
-    status: &'static str,
-    role: RaftRole,
-    ticks_since_heartbeat: u64,
-    election_timeout_ticks: u64,
-    remaining_ticks: u64,
-    is_election_pending: bool,
+    pub(crate) status: &'static str,
+    pub(crate) role: RaftRole,
+    pub(crate) ticks_since_heartbeat: u64,
+    pub(crate) election_timeout_ticks: u64,
+    pub(crate) remaining_ticks: u64,
+    pub(crate) is_election_pending: bool,
 }
 
 
@@ -122,10 +122,10 @@ pub(crate) struct RaftElectionStatusResponse {
 
 #[derive(Serialize)]
 pub(crate) struct RaftFenceResponse {
-    status: &'static str,
-    fencing_token: u64,
-    role: RaftRole,
-    current_term: u64,
+    pub(crate) status: &'static str,
+    pub(crate) fencing_token: u64,
+    pub(crate) role: RaftRole,
+    pub(crate) current_term: u64,
 }
 
 
@@ -134,8 +134,8 @@ pub(crate) struct RaftFenceResponse {
 
 #[derive(Serialize)]
 pub(crate) struct RaftStatusResponse {
-    status: &'static str,
-    raft: RaftStatusSnapshot,
+    pub(crate) status: &'static str,
+    pub(crate) raft: RaftStatusSnapshot,
 }
 
 
@@ -145,11 +145,11 @@ pub(crate) struct RaftStatusResponse {
 /// enables deterministic testing without real timers.
 #[derive(Serialize)]
 pub(crate) struct RaftTickResponse {
-    status: &'static str,
-    ticks_since_heartbeat: u64,
-    role: RaftRole,
-    current_term: u64,
-    election_triggered: bool,
+    pub(crate) status: &'static str,
+    pub(crate) ticks_since_heartbeat: u64,
+    pub(crate) role: RaftRole,
+    pub(crate) current_term: u64,
+    pub(crate) election_triggered: bool,
 }
 
 

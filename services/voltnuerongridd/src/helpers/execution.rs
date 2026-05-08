@@ -321,15 +321,64 @@ pub(crate) fn cleanup_wait_edges_for_resource(
 }
 
 
-pub(crate) fn execute_olap_query(query: String, max_rows: Option<usize>) -> OlapQueryResponse {
+/// Owned-argument wrapper so the returned future is `'static` (required by
+/// `run_async_in_executor` when it needs to cross a thread boundary).
+async fn df_select_owned(
+    sql: String,
+    table_rows: HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>>,
+    max_rows: usize,
+) -> Result<voltnuerongrid_exec_datafusion::SelectOutput, voltnuerongrid_exec_datafusion::ExecError> {
+    voltnuerongrid_exec_datafusion::datafusion::execute_select_from_rows(&sql, table_rows, max_rows).await
+}
+
+/// Execute an OLAP SELECT query through the DataFusion engine.
+///
+/// Extracts all referenced table names, builds per-table row snapshots, then
+/// drives `execute_select_from_rows`. Falls back to a stub count on errors so
+/// callers never see a hard failure from the OLAP path.
+pub(crate) fn execute_olap_query(
+    query: String,
+    max_rows: Option<usize>,
+    rs: &voltnuerongrid_store::mvcc::PagedRowStore,
+) -> OlapQueryResponse {
+    use voltnuerongrid_exec_datafusion::{collect_query_table_names, SelectOutput};
+
     let started = Instant::now();
-    let elapsed = started.elapsed().as_millis();
-    let resolved_max_rows = max_rows.unwrap_or(1000);
+    let resolved_max_rows = max_rows.unwrap_or(1_000).min(100_000);
+
+    let table_names = collect_query_table_names(&query);
+    let all_rows = rs.export_rows_snapshot();
+    let mut table_rows: HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
+        HashMap::new();
+    for name in &table_names {
+        let prefix = format!("{name}:");
+        let filtered: Vec<_> = all_rows
+            .iter()
+            .filter(|(k, _)| *k == name.as_str() || k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        table_rows.insert(name.clone(), filtered);
+    }
+    if table_rows.is_empty() {
+        // No tables recognised — register all rows under an implicit table.
+        table_rows.insert("rows".to_string(), all_rows);
+    }
+
+    let row_count = match run_async_in_executor(df_select_owned(
+        query.clone(),
+        table_rows,
+        resolved_max_rows,
+    )) {
+        Ok(SelectOutput::Rows(rows)) => rows.len(),
+        Ok(SelectOutput::Aggregate(_)) => 1,
+        Err(_) => 0,
+    };
+
     OlapQueryResponse {
         status: "ok",
         query_signature: query.chars().take(64).collect(),
-        elapsed_ms: elapsed,
-        rows: resolved_max_rows.min(10_000),
+        elapsed_ms: started.elapsed().as_millis(),
+        rows: row_count,
     }
 }
 
@@ -342,7 +391,6 @@ pub(crate) fn execute_oltp_select(
     limit: usize,
 ) -> Vec<OltpRowResult> {
     use voltnuerongrid_exec_datafusion::{execute_select, SelectOutput, ExecError};
-    use voltnuerongrid_exec_datafusion::datafusion::execute_select_from_rows;
     use voltnuerongrid_sql::{parse_one, Statement};
 
     let mut results: Vec<OltpRowResult> = Vec::new();
@@ -383,7 +431,7 @@ pub(crate) fn execute_oltp_select(
             }
 
             let df_result = run_async_in_executor(
-                execute_select_from_rows(stmt_str, table_rows, remaining)
+                df_select_owned(stmt_str.to_string(), table_rows, remaining)
             );
 
             match df_result {
@@ -483,17 +531,32 @@ pub(crate) fn execute_oltp_select(
 
 /// Drive an async future to completion from synchronous code within a tokio runtime.
 ///
-/// Uses `block_in_place` when a multi-thread handle is available (service path)
-/// and falls back to a fresh single-threaded runtime for test contexts.
+/// On a multi-thread scheduler (production): uses `block_in_place` so we stay
+/// on the calling thread without spawning.
+///
+/// On a `current_thread` scheduler (tests, `#[tokio::test]`): `block_in_place`
+/// would panic, so we spawn a dedicated OS thread with its own runtime instead.
+///
+/// Outside any tokio context: same dedicated-thread path.
 pub(crate) fn run_async_in_executor<F, T>(fut: F) -> T
 where
-    F: std::future::Future<Output = T>,
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
 {
+    use tokio::runtime::RuntimeFlavor;
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
-        Err(_) => tokio::runtime::Runtime::new()
-            .expect("tokio runtime for DataFusion")
-            .block_on(fut),
+        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        }
+        _ => std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("DataFusion runtime")
+                .block_on(fut)
+        })
+        .join()
+        .expect("DataFusion thread join"),
     }
 }
 

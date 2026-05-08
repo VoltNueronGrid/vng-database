@@ -123,61 +123,61 @@ impl NativeAdapter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ChaosEvent {
     /// The type of fault, e.g. `"network_partition"`, `"node_crash"`, `"packet_loss"`.
-    fault_type: String,
+    pub(crate) fault_type: String,
     /// Optional target node identifier.
-    target_node: Option<String>,
+    pub(crate) target_node: Option<String>,
     /// Arbitrary key–value parameters for the fault (e.g. `{ "loss_pct": "30" }`).
-    parameters: HashMap<String, String>,
+    pub(crate) parameters: HashMap<String, String>,
     /// Epoch-millisecond timestamp when the fault was injected.
-    injected_at_ms: u64,
+    pub(crate) injected_at_ms: u64,
     /// Epoch-millisecond timestamp when the fault was cleared, if any.
-    cleared_at_ms: Option<u64>,
+    pub(crate) cleared_at_ms: Option<u64>,
 }
 
 
 /// Mutable chaos state (active faults + history).
 #[derive(Debug, Default)]
 pub(crate) struct ChaosState {
-    active_faults: Vec<ChaosEvent>,
-    event_history: Vec<ChaosEvent>,
+    pub(crate) active_faults: Vec<ChaosEvent>,
+    pub(crate) event_history: Vec<ChaosEvent>,
 }
 
 
 /// Request body for `POST /api/v1/cluster/chaos/inject`.
 #[derive(Deserialize)]
 pub(crate) struct ChaosInjectRequest {
-    fault_type: String,
-    target_node: Option<String>,
+    pub(crate) fault_type: String,
+    pub(crate) target_node: Option<String>,
     #[serde(default)]
-    parameters: HashMap<String, String>,
+    pub(crate) parameters: HashMap<String, String>,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct ChaosStatusResponse {
-    status: &'static str,
-    active_fault_count: usize,
-    total_injected: usize,
-    active_faults: Vec<ChaosEvent>,
+    pub(crate) status: &'static str,
+    pub(crate) active_fault_count: usize,
+    pub(crate) total_injected: usize,
+    pub(crate) active_faults: Vec<ChaosEvent>,
 }
 
 
 /// Response for `GET /api/v1/cluster/chaos/health`.
 #[derive(Serialize)]
 pub(crate) struct ChaosHealthResponse {
-    status: &'static str,
-    cluster_healthy: bool,
-    active_fault_count: usize,
-    history_len: usize,
+    pub(crate) status: &'static str,
+    pub(crate) cluster_healthy: bool,
+    pub(crate) active_fault_count: usize,
+    pub(crate) history_len: usize,
 }
 
 
 /// Response for `GET /api/v1/cluster/chaos/history`.
 #[derive(Serialize)]
 pub(crate) struct ChaosHistoryResponse {
-    status: &'static str,
-    history_len: usize,
-    events: Vec<ChaosEvent>,
+    pub(crate) status: &'static str,
+    pub(crate) history_len: usize,
+    pub(crate) events: Vec<ChaosEvent>,
 }
 
 
@@ -187,48 +187,48 @@ pub(crate) struct ChaosHistoryResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChaosFireDrillRequest {
-    drill_type: String,
-    target_node: Option<String>,
+    pub(crate) drill_type: String,
+    pub(crate) target_node: Option<String>,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ChaosFireDrillResponse {
-    status: &'static str,
-    drill_type: String,
-    faults_injected: usize,
-    target_node: String,
+    pub(crate) status: &'static str,
+    pub(crate) drill_type: String,
+    pub(crate) faults_injected: usize,
+    pub(crate) target_node: String,
 }
 
 
 
 #[derive(Serialize)]
 pub(crate) struct FailoverStatusResponse {
-    status: &'static str,
-    cluster_mode: String,
-    leader_node_id: String,
-    unresolved_critical_count: usize,
-    rto_seconds_target: u32,
-    rpo_data_loss_rows_target: u32,
+    pub(crate) status: &'static str,
+    pub(crate) cluster_mode: String,
+    pub(crate) leader_node_id: String,
+    pub(crate) unresolved_critical_count: usize,
+    pub(crate) rto_seconds_target: u32,
+    pub(crate) rpo_data_loss_rows_target: u32,
 }
 
 
 #[derive(Deserialize)]
 pub(crate) struct FailoverSimulateRequest {
-    new_leader_node_id: String,
-    reason: Option<String>,
-    requested_by: Option<String>,
+    pub(crate) new_leader_node_id: String,
+    pub(crate) reason: Option<String>,
+    pub(crate) requested_by: Option<String>,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct FailoverSimulateResponse {
-    status: &'static str,
-    previous_leader_node_id: String,
-    new_leader_node_id: String,
-    reason: String,
-    requested_by: String,
-    handoff_report: FailoverHandoffReportResponse,
+    pub(crate) status: &'static str,
+    pub(crate) previous_leader_node_id: String,
+    pub(crate) new_leader_node_id: String,
+    pub(crate) reason: String,
+    pub(crate) requested_by: String,
+    pub(crate) handoff_report: FailoverHandoffReportResponse,
 }
 
 
@@ -255,15 +255,15 @@ pub(crate) struct FailoverHandoffReportResponse {
 
 #[derive(Deserialize)]
 pub(crate) struct I18nMessagesQuery {
-    locale: Option<String>,
+    pub(crate) locale: Option<String>,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct I18nMessagesResponse {
-    status: &'static str,
-    locale: String,
-    messages: std::collections::BTreeMap<String, String>,
+    pub(crate) status: &'static str,
+    pub(crate) locale: String,
+    pub(crate) messages: std::collections::BTreeMap<String, String>,
 }
 
 
@@ -305,35 +305,35 @@ pub(crate) struct NativeListenerConfig {
 #[derive(Deserialize)]
 pub(crate) struct BenchmarkIngestRequest {
     /// Number of synthetic records to generate (default: 10_000)
-    record_count: Option<usize>,
+    pub(crate) record_count: Option<usize>,
     /// Target chunk size (default: 256)
-    chunk_target_rows: Option<usize>,
+    pub(crate) chunk_target_rows: Option<usize>,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct BenchmarkIngestResponse {
-    status: &'static str,
-    record_count: usize,
-    chunk_count: usize,
-    wall_time_ms: u128,
-    records_per_second: f64,
+    pub(crate) status: &'static str,
+    pub(crate) record_count: usize,
+    pub(crate) chunk_count: usize,
+    pub(crate) wall_time_ms: u128,
+    pub(crate) records_per_second: f64,
 }
 
 
 #[derive(Deserialize)]
 pub(crate) struct BenchmarkQueryRequest {
     /// Number of SQL classification ops to run (default: 10_000)
-    op_count: Option<usize>,
+    pub(crate) op_count: Option<usize>,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct BenchmarkQueryResponse {
-    status: &'static str,
-    op_count: usize,
-    wall_time_ms: u128,
-    ops_per_second: f64,
+    pub(crate) status: &'static str,
+    pub(crate) op_count: usize,
+    pub(crate) wall_time_ms: u128,
+    pub(crate) ops_per_second: f64,
 }
 
 
@@ -341,16 +341,16 @@ pub(crate) struct BenchmarkQueryResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ImportSqlRequest {
-    sql_script: String,
-    dry_run: Option<bool>,
-    stop_on_error: Option<bool>,
+    pub(crate) sql_script: String,
+    pub(crate) dry_run: Option<bool>,
+    pub(crate) stop_on_error: Option<bool>,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ImportSqlResponse {
-    statements_executed: usize,
-    errors: Vec<String>,
+    pub(crate) statements_executed: usize,
+    pub(crate) errors: Vec<String>,
 }
 
 
@@ -495,8 +495,12 @@ pub(crate) async fn metrics_handler() -> (axum::http::StatusCode, [(axum::http::
 }
 
 
-pub(crate) async fn olap_query(Json(req): Json<OlapQueryRequest>) -> Json<OlapQueryResponse> {
-    Json(execute_olap_query(req.query, req.max_rows))
+pub(crate) async fn olap_query(
+    State(state): State<AppState>,
+    Json(req): Json<OlapQueryRequest>,
+) -> Json<OlapQueryResponse> {
+    let rs = state.row_store.lock().expect("row_store lock olap_query");
+    Json(execute_olap_query(req.query, req.max_rows, &rs))
 }
 
 

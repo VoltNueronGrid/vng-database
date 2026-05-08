@@ -16,11 +16,11 @@ use crate::audit_helpers::append_audit_event;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsPageStatsResponse {
-    status: &'static str,
-    page_count: usize,
-    total_rows: usize,
-    visible_rows: usize,
-    current_xid: u64,
+    pub(crate) status: &'static str,
+    pub(crate) page_count: usize,
+    pub(crate) total_rows: usize,
+    pub(crate) visible_rows: usize,
+    pub(crate) current_xid: u64,
 }
 
 
@@ -28,16 +28,16 @@ pub(crate) struct RowsPageStatsResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RowsModifiedQuery {
-    since_xid: u64,
+    pub(crate) since_xid: u64,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsModifiedResponse {
-    status: &'static str,
-    modified_count: usize,
-    since_xid: u64,
-    keys: Vec<String>,
+    pub(crate) status: &'static str,
+    pub(crate) modified_count: usize,
+    pub(crate) since_xid: u64,
+    pub(crate) keys: Vec<String>,
 }
 
 
@@ -45,9 +45,9 @@ pub(crate) struct RowsModifiedResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsXidResponse {
-    status: &'static str,
-    current_xid: u64,
-    next_xid: u64,
+    pub(crate) status: &'static str,
+    pub(crate) current_xid: u64,
+    pub(crate) next_xid: u64,
 }
 
 
@@ -55,9 +55,9 @@ pub(crate) struct RowsXidResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsVisibleResponse {
-    status: &'static str,
-    snapshot_xid: u64,
-    visible_row_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) snapshot_xid: u64,
+    pub(crate) visible_row_count: usize,
 }
 
 
@@ -65,8 +65,8 @@ pub(crate) struct RowsVisibleResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsTotalResponse {
-    status: &'static str,
-    total_row_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) total_row_count: usize,
 }
 
 
@@ -74,8 +74,8 @@ pub(crate) struct RowsTotalResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeysCountResponse {
-    status: &'static str,
-    key_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) key_count: usize,
 }
 
 
@@ -83,22 +83,22 @@ pub(crate) struct RowsKeysCountResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RowsScanVisibleQuery {
-    limit: Option<usize>,
+    pub(crate) limit: Option<usize>,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowScanEntry {
-    key: String,
+    pub(crate) key: String,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsScanVisibleResponse {
-    status: &'static str,
-    snapshot_xid: u64,
-    row_count: usize,
-    rows: Vec<RowScanEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) snapshot_xid: u64,
+    pub(crate) row_count: usize,
+    pub(crate) rows: Vec<RowScanEntry>,
 }
 
 
@@ -106,8 +106,8 @@ pub(crate) struct RowsScanVisibleResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsTombstoneCountResponse {
-    status: &'static str,
-    tombstone_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) tombstone_count: usize,
 }
 
 
@@ -115,26 +115,26 @@ pub(crate) struct RowsTombstoneCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsXidHistoryResponse {
-    status: &'static str,
-    current_xid: u64,
-    next_xid: u64,
-    total_transactions: u64,
+    pub(crate) status: &'static str,
+    pub(crate) current_xid: u64,
+    pub(crate) next_xid: u64,
+    pub(crate) total_transactions: u64,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsFirstKeyResponse {
-    status: &'static str,
-    has_key: bool,
-    first_key: String,
+    pub(crate) status: &'static str,
+    pub(crate) has_key: bool,
+    pub(crate) first_key: String,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsLastKeyResponse {
-    status: &'static str,
-    has_key: bool,
-    last_key: String,
+    pub(crate) status: &'static str,
+    pub(crate) has_key: bool,
+    pub(crate) last_key: String,
 }
 
 
@@ -142,61 +142,61 @@ pub(crate) struct RowsLastKeyResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsCountDistinctResponse {
-    status: &'static str,
-    distinct_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) distinct_value_count: usize,
 }
 
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RowsKeyExistsQuery {
-    key: String,
+    pub(crate) key: String,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyExistsResponse {
-    status: &'static str,
-    key: String,
-    exists: bool,
+    pub(crate) status: &'static str,
+    pub(crate) key: String,
+    pub(crate) exists: bool,
 }
 
 
 // ─── S11-WS1-25: Rows value search + WAL record count structs ──────────────────────────────────
 #[derive(Debug, Deserialize)]
 pub(crate) struct RowsValueSearchQuery {
-    value: String,
+    pub(crate) value: String,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueSearchResponse {
-    status: &'static str,
-    match_count: usize,
-    matches: Vec<String>,
+    pub(crate) status: &'static str,
+    pub(crate) match_count: usize,
+    pub(crate) matches: Vec<String>,
 }
 
 
 // ─── S11-WS1-26: Rows count range + WAL checkpoint age structs ───────────────────────────────
 #[derive(Debug, Deserialize)]
 pub(crate) struct RowsCountRangeQuery {
-    prefix: Option<String>,
+    pub(crate) prefix: Option<String>,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsCountRangeResponse {
-    status: &'static str,
-    row_count: usize,
-    prefix: Option<String>,
+    pub(crate) status: &'static str,
+    pub(crate) row_count: usize,
+    pub(crate) prefix: Option<String>,
 }
 
 
 // ─── S11-WS1-27: Rows payload size + WAL flush count structs ───────────────────────────────
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsPayloadSizeResponse {
-    status: &'static str,
-    total_fields: usize,
-    row_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) total_fields: usize,
+    pub(crate) row_count: usize,
 }
 
 
@@ -204,18 +204,18 @@ pub(crate) struct RowsPayloadSizeResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsFieldCountResponse {
-    status: &'static str,
-    total_fields: usize,
-    row_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) total_fields: usize,
+    pub(crate) row_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyLongestResponse {
-    status: &'static str,
-    longest_key: String,
-    key_length: usize,
-    row_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) longest_key: String,
+    pub(crate) key_length: usize,
+    pub(crate) row_count: usize,
 }
 
 
@@ -223,422 +223,422 @@ pub(crate) struct RowsKeyLongestResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyShortestResponse {
-    status: &'static str,
-    shortest_key: String,
-    key_length: usize,
-    row_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) shortest_key: String,
+    pub(crate) key_length: usize,
+    pub(crate) row_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsCountAllResponse {
-    status: &'static str,
-    total_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) total_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsSnapshotSizeResponse {
-    status: &'static str,
-    snapshot_row_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) snapshot_row_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsVersionLatestResponse {
-    status: &'static str,
-    latest_version: u64,
+    pub(crate) status: &'static str,
+    pub(crate) latest_version: u64,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsDistinctCountResponse {
-    status: &'static str,
-    distinct_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) distinct_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyMedianResponse {
-    status: &'static str,
-    has_key: bool,
-    median_key: String,
+    pub(crate) status: &'static str,
+    pub(crate) has_key: bool,
+    pub(crate) median_key: String,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsChecksumResponse {
-    status: &'static str,
-    checksum: u64,
-    row_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) checksum: u64,
+    pub(crate) row_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsFieldTypesResponse {
-    status: &'static str,
-    field_count: usize,
-    unique_type_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) field_count: usize,
+    pub(crate) unique_type_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyEmptyCountResponse {
-    status: &'static str,
-    empty_key_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) empty_key_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyMinResponse {
-    status: &'static str,
-    has_key: bool,
-    min_key: String,
+    pub(crate) status: &'static str,
+    pub(crate) has_key: bool,
+    pub(crate) min_key: String,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsFieldCardinalityResponse {
-    status: &'static str,
-    distinct_field_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) distinct_field_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyMaxResponse {
-    status: &'static str,
-    has_key: bool,
-    max_key: String,
+    pub(crate) status: &'static str,
+    pub(crate) has_key: bool,
+    pub(crate) max_key: String,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueNonNullCountResponse {
-    status: &'static str,
-    non_null_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) non_null_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueEmptyCountResponse {
-    status: &'static str,
-    empty_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) empty_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueNonEmptyCountResponse {
-    status: &'static str,
-    non_empty_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) non_empty_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyNonEmptyCountResponse {
-    status: &'static str,
-    non_empty_key_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) non_empty_key_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueNonBlankCountResponse {
-    status: &'static str,
-    non_blank_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) non_blank_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyNonBlankCountResponse {
-    status: &'static str,
-    non_blank_key_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) non_blank_key_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueBlankCountResponse {
-    status: &'static str,
-    blank_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) blank_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsKeyDuplicatesCountResponse {
-    status: &'static str,
-    duplicate_key_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) duplicate_key_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueDuplicatesCountResponse {
-    status: &'static str,
-    duplicate_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) duplicate_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueDistinctCountResponse {
-    status: &'static str,
-    distinct_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) distinct_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueUniqueCountResponse {
-    status: &'static str,
-    unique_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) unique_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueTrimmedCountResponse {
-    status: &'static str,
-    trimmed_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) trimmed_value_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsValueCaseVariantCountResponse {
-    status: &'static str,
-    case_variant_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) case_variant_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsOrderByDescDirectionCountResponse {
-    status: &'static str,
-    desc_direction_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) desc_direction_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsOrderByRandomCountResponse {
-    status: &'static str,
-    random_order_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) random_order_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsOrderByRandomSeededCountResponse {
-    status: &'static str,
-    random_seeded_order_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) random_seeded_order_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsOrderByAscDirectionCountResponse {
-    status: &'static str,
-    asc_direction_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) asc_direction_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsOrderByRandAliasCountResponse {
-    status: &'static str,
-    rand_alias_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) rand_alias_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsOrderByMultiColumnCountResponse {
-    status: &'static str,
-    multi_column_order_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) multi_column_order_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsPaginationLimitOffsetCountResponse {
-    status: &'static str,
-    limit_offset_pagination_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) limit_offset_pagination_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsPaginationOffsetOnlyCountResponse {
-    status: &'static str,
-    offset_only_pagination_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) offset_only_pagination_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsHavingWithoutGroupByCountResponse {
-    status: &'static str,
-    having_without_group_by_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) having_without_group_by_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsHavingWithGroupByCountResponse {
-    status: &'static str,
-    having_with_group_by_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) having_with_group_by_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsGroupByRollupCountResponse {
-    status: &'static str,
-    group_by_rollup_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) group_by_rollup_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsGroupByCubeCountResponse {
-    status: &'static str,
-    group_by_cube_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) group_by_cube_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsSelectDistinctOnCountResponse {
-    status: &'static str,
-    select_distinct_on_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) select_distinct_on_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsForUpdateCountResponse {
-    status: &'static str,
-    for_update_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) for_update_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsLeftJoinCountResponse {
-    status: &'static str,
-    left_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) left_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsRightJoinCountResponse {
-    status: &'static str,
-    right_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) right_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsFullOuterJoinCountResponse {
-    status: &'static str,
-    full_outer_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) full_outer_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsInnerJoinCountResponse {
-    status: &'static str,
-    inner_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) inner_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsStraightJoinCountResponse {
-    status: &'static str,
-    straight_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) straight_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsSemiJoinCountResponse {
-    status: &'static str,
-    semi_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) semi_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsAntiJoinCountResponse {
-    status: &'static str,
-    anti_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) anti_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsCrossApplyCountResponse {
-    status: &'static str,
-    cross_apply_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) cross_apply_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsOuterApplyCountResponse {
-    status: &'static str,
-    outer_apply_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) outer_apply_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsApplyCountResponse {
-    status: &'static str,
-    apply_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) apply_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsLeftSemiJoinCountResponse {
-    status: &'static str,
-    left_semi_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) left_semi_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsLeftAntiJoinCountResponse {
-    status: &'static str,
-    left_anti_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) left_anti_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsRightSemiJoinCountResponse {
-    status: &'static str,
-    right_semi_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) right_semi_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsRightAntiJoinCountResponse {
-    status: &'static str,
-    right_anti_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) right_anti_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsFullSemiJoinCountResponse {
-    status: &'static str,
-    full_semi_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) full_semi_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsFullAntiJoinCountResponse {
-    status: &'static str,
-    full_anti_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) full_anti_join_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsUnionAllCountResponse {
-    status: &'static str,
-    union_all_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) union_all_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsAggregateDistinctCountResponse {
-    status: &'static str,
-    aggregate_distinct_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) aggregate_distinct_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsTableAliasCountResponse {
-    status: &'static str,
-    table_alias_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) table_alias_count: usize,
 }
 
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RowsColumnAliasCountResponse {
-    status: &'static str,
-    column_alias_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) column_alias_count: usize,
 }
 
 

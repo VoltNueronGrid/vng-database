@@ -14,25 +14,25 @@ use crate::auth::{require_operator_auth, require_audit_runtime_principal};
 /// Response for `GET /api/v1/store/wal/status`.
 #[derive(Serialize)]
 pub(crate) struct WalStatusResponse {
-    status: &'static str,
-    wal_len: usize,
-    latest_sequence: u64,
-    checkpoint_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) wal_len: usize,
+    pub(crate) latest_sequence: u64,
+    pub(crate) checkpoint_count: usize,
 }
 
 /// Request body for `POST /api/v1/store/wal/recover`.
 #[derive(Deserialize)]
 pub(crate) struct WalRecoverRequest {
     /// When `true`, log what would be replayed without actually writing to the row store.
-    dry_run: Option<bool>,
+    pub(crate) dry_run: Option<bool>,
 }
 
 /// Response for `POST /api/v1/store/wal/recover`.
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRecoverResponse {
-    status: &'static str,
-    records_replayed: usize,
-    dry_run: bool,
+    pub(crate) status: &'static str,
+    pub(crate) records_replayed: usize,
+    pub(crate) dry_run: bool,
 }
 
 
@@ -40,154 +40,154 @@ pub(crate) struct WalRecoverResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalForceCheckpointResponse {
-    status: &'static str,
-    wal_len_before: usize,
-    wal_len_after: usize,
-    checkpoint_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) wal_len_before: usize,
+    pub(crate) wal_len_after: usize,
+    pub(crate) checkpoint_count: usize,
 }
 
 // ─── S2-WS2-02: WAL statistics response ──────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalStatsResponse {
-    status: &'static str,
-    record_count: usize,
-    checkpoint_count: usize,
-    mutation_rate_estimate: f64,
+    pub(crate) status: &'static str,
+    pub(crate) record_count: usize,
+    pub(crate) checkpoint_count: usize,
+    pub(crate) mutation_rate_estimate: f64,
 }
 
 // ─── S2-WS2-02: WAL compact response ─────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalCompactResponse {
-    status: &'static str,
-    records_before: usize,
-    records_after: usize,
-    checkpoint_count: usize,
-    compacted: bool,
+    pub(crate) status: &'static str,
+    pub(crate) records_before: usize,
+    pub(crate) records_after: usize,
+    pub(crate) checkpoint_count: usize,
+    pub(crate) compacted: bool,
 }
 
 // ─── S2-WS2-02: WAL bounds response ─────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalBoundsResponse {
-    status: &'static str,
-    record_count: usize,
-    checkpoint_count: usize,
-    oldest_sequence: Option<u64>,
-    newest_sequence: Option<u64>,
+    pub(crate) status: &'static str,
+    pub(crate) record_count: usize,
+    pub(crate) checkpoint_count: usize,
+    pub(crate) oldest_sequence: Option<u64>,
+    pub(crate) newest_sequence: Option<u64>,
 }
 
 // ─── S2-WS2-02: WAL replay (filtered read-back) structs ─────────────────────
 
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct WalReplayQuery {
-    table_filter: Option<String>,
-    op_filter: Option<String>,
+    pub(crate) table_filter: Option<String>,
+    pub(crate) op_filter: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalReplayEntry {
-    sequence: u64,
-    key: String,
-    value: String,
+    pub(crate) sequence: u64,
+    pub(crate) key: String,
+    pub(crate) value: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalReplayResponse {
-    status: &'static str,
-    total_records: usize,
-    matched_records: usize,
-    entries: Vec<WalReplayEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) total_records: usize,
+    pub(crate) matched_records: usize,
+    pub(crate) entries: Vec<WalReplayEntry>,
 }
 
 // ─── S2-WS2-02: WAL tail structs ─────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct WalTailQuery {
-    limit: Option<usize>,
+    pub(crate) limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalTailResponse {
-    status: &'static str,
-    record_count: usize,
-    limit_applied: usize,
-    entries: Vec<WalReplayEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) record_count: usize,
+    pub(crate) limit_applied: usize,
+    pub(crate) entries: Vec<WalReplayEntry>,
 }
 
 // ─── S2-WS2-03: WAL mutations query structs ───────────────────────────────────
 
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct WalMutationsQuery {
-    limit: Option<usize>,
+    pub(crate) limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalMutationRecord {
-    sequence: u64,
-    key: String,
-    value: String,
+    pub(crate) sequence: u64,
+    pub(crate) key: String,
+    pub(crate) value: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalMutationsResponse {
-    status: &'static str,
-    mutation_count: usize,
-    limit_applied: usize,
-    mutations: Vec<WalMutationRecord>,
+    pub(crate) status: &'static str,
+    pub(crate) mutation_count: usize,
+    pub(crate) limit_applied: usize,
+    pub(crate) mutations: Vec<WalMutationRecord>,
 }
 
 // ─── S2-WS2-02: WAL segment list structs ─────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalSegment {
-    segment_id: u64,
-    is_active: bool,
-    record_count: usize,
-    start_sequence: Option<u64>,
-    end_sequence: Option<u64>,
+    pub(crate) segment_id: u64,
+    pub(crate) is_active: bool,
+    pub(crate) record_count: usize,
+    pub(crate) start_sequence: Option<u64>,
+    pub(crate) end_sequence: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalSegmentListResponse {
-    status: &'static str,
-    segment_count: usize,
-    completed_segments: usize,
-    active_record_count: usize,
-    segments: Vec<WalSegment>,
+    pub(crate) status: &'static str,
+    pub(crate) segment_count: usize,
+    pub(crate) completed_segments: usize,
+    pub(crate) active_record_count: usize,
+    pub(crate) segments: Vec<WalSegment>,
 }
 
 // ─── S2-WS2-02: WAL checkpoint history structs ────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalCheckpointEntry {
-    checkpoint_id: u64,
-    record_count_at_checkpoint: usize,
+    pub(crate) checkpoint_id: u64,
+    pub(crate) record_count_at_checkpoint: usize,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalCheckpointHistoryResponse {
-    status: &'static str,
-    total_checkpoints: usize,
-    entries: Vec<WalCheckpointEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) total_checkpoints: usize,
+    pub(crate) entries: Vec<WalCheckpointEntry>,
 }
 
 // ─── S2-WS2-02: WAL replay count structs ──────────────────────────────────────
 
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct WalReplayCountQuery {
-    table_filter: Option<String>,
-    op_filter: Option<String>,
+    pub(crate) table_filter: Option<String>,
+    pub(crate) op_filter: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalReplayCountResponse {
-    status: &'static str,
-    total_records: usize,
-    matched_count: usize,
-    table_filter: Option<String>,
-    op_filter: Option<String>,
+    pub(crate) status: &'static str,
+    pub(crate) total_records: usize,
+    pub(crate) matched_count: usize,
+    pub(crate) table_filter: Option<String>,
+    pub(crate) op_filter: Option<String>,
 }
 
 
@@ -196,15 +196,15 @@ pub(crate) struct WalReplayCountResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WalTruncateRequest {
-    up_to_sequence: u64,
+    pub(crate) up_to_sequence: u64,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalTruncateResponse {
-    status: &'static str,
-    records_removed: usize,
-    new_record_count: usize,
-    truncated: bool,
+    pub(crate) status: &'static str,
+    pub(crate) records_removed: usize,
+    pub(crate) new_record_count: usize,
+    pub(crate) truncated: bool,
 }
 
 
@@ -212,32 +212,32 @@ pub(crate) struct WalTruncateResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalSeqResponse {
-    status: &'static str,
-    latest_sequence: u64,
-    wal_len: usize,
-    checkpoint_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) latest_sequence: u64,
+    pub(crate) wal_len: usize,
+    pub(crate) checkpoint_count: usize,
 }
 
 // ─── S11-WS1-14: WAL head structs ────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WalHeadQuery {
-    limit: Option<usize>,
+    pub(crate) limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalHeadEntry {
-    sequence: u64,
-    key: String,
-    value: String,
+    pub(crate) sequence: u64,
+    pub(crate) key: String,
+    pub(crate) value: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalHeadResponse {
-    status: &'static str,
-    record_count: usize,
-    limit_applied: usize,
-    entries: Vec<WalHeadEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) record_count: usize,
+    pub(crate) limit_applied: usize,
+    pub(crate) entries: Vec<WalHeadEntry>,
 }
 
 
@@ -245,24 +245,24 @@ pub(crate) struct WalHeadResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WalRangeQuery {
-    from_seq: u64,
-    to_seq: Option<u64>,
+    pub(crate) from_seq: u64,
+    pub(crate) to_seq: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRangeEntry {
-    sequence: u64,
-    key: String,
-    value: String,
+    pub(crate) sequence: u64,
+    pub(crate) key: String,
+    pub(crate) value: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRangeResponse {
-    status: &'static str,
-    record_count: usize,
-    from_seq: u64,
-    to_seq: u64,
-    entries: Vec<WalRangeEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) record_count: usize,
+    pub(crate) from_seq: u64,
+    pub(crate) to_seq: u64,
+    pub(crate) entries: Vec<WalRangeEntry>,
 }
 
 
@@ -270,9 +270,9 @@ pub(crate) struct WalRangeResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalSizeResponse {
-    status: &'static str,
-    record_count: usize,
-    estimated_bytes: usize,
+    pub(crate) status: &'static str,
+    pub(crate) record_count: usize,
+    pub(crate) estimated_bytes: usize,
 }
 
 
@@ -280,11 +280,11 @@ pub(crate) struct WalSizeResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalLatestResponse {
-    status: &'static str,
-    sequence: u64,
-    key: String,
-    value: String,
-    has_record: bool,
+    pub(crate) status: &'static str,
+    pub(crate) sequence: u64,
+    pub(crate) key: String,
+    pub(crate) value: String,
+    pub(crate) has_record: bool,
 }
 
 
@@ -292,22 +292,22 @@ pub(crate) struct WalLatestResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WalByKeyQuery {
-    key_prefix: String,
+    pub(crate) key_prefix: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalByKeyEntry {
-    sequence: u64,
-    key: String,
-    value: String,
+    pub(crate) sequence: u64,
+    pub(crate) key: String,
+    pub(crate) value: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalByKeyResponse {
-    status: &'static str,
-    key_prefix: String,
-    record_count: usize,
-    entries: Vec<WalByKeyEntry>,
+    pub(crate) status: &'static str,
+    pub(crate) key_prefix: String,
+    pub(crate) record_count: usize,
+    pub(crate) entries: Vec<WalByKeyEntry>,
 }
 
 
@@ -315,9 +315,9 @@ pub(crate) struct WalByKeyResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalCheckpointLatestResponse {
-    status: &'static str,
-    checkpoint_id: u64,
-    record_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) checkpoint_id: u64,
+    pub(crate) record_count: usize,
 }
 
 
@@ -325,10 +325,10 @@ pub(crate) struct WalCheckpointLatestResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalDeltaResponse {
-    status: &'static str,
-    insert_count: usize,
-    delete_count: usize,
-    total_records: usize,
+    pub(crate) status: &'static str,
+    pub(crate) insert_count: usize,
+    pub(crate) delete_count: usize,
+    pub(crate) total_records: usize,
 }
 
 
@@ -336,8 +336,8 @@ pub(crate) struct WalDeltaResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalUniqueKeysResponse {
-    status: &'static str,
-    unique_key_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) unique_key_count: usize,
 }
 
 
@@ -345,10 +345,10 @@ pub(crate) struct WalUniqueKeysResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalAgeResponse {
-    status: &'static str,
-    oldest_sequence: u64,
-    newest_sequence: u64,
-    sequence_span: u64,
+    pub(crate) status: &'static str,
+    pub(crate) oldest_sequence: u64,
+    pub(crate) newest_sequence: u64,
+    pub(crate) sequence_span: u64,
 }
 
 
@@ -356,49 +356,49 @@ pub(crate) struct WalAgeResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalKeysListResponse {
-    status: &'static str,
-    key_count: usize,
-    keys: Vec<String>,
+    pub(crate) status: &'static str,
+    pub(crate) key_count: usize,
+    pub(crate) keys: Vec<String>,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRecordCountResponse {
-    status: &'static str,
-    record_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) record_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalCheckpointAgeResponse {
-    status: &'static str,
-    checkpoint_count: usize,
-    oldest_sequence: u64,
-    newest_sequence: u64,
+    pub(crate) status: &'static str,
+    pub(crate) checkpoint_count: usize,
+    pub(crate) oldest_sequence: u64,
+    pub(crate) newest_sequence: u64,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalFlushCountResponse {
-    status: &'static str,
-    flush_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) flush_count: usize,
 }
 
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalEntryLatestResponse {
-    status: &'static str,
-    has_entry: bool,
-    entry_sequence: u64,
+    pub(crate) status: &'static str,
+    pub(crate) has_entry: bool,
+    pub(crate) entry_sequence: u64,
 }
 
 // S3-WS1-29: wal/write/count + rows/key/longest structs
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalWriteCountResponse {
-    status: &'static str,
-    write_count: usize,
-    total_records: usize,
+    pub(crate) status: &'static str,
+    pub(crate) write_count: usize,
+    pub(crate) total_records: usize,
 }
 
 
@@ -406,9 +406,9 @@ pub(crate) struct WalWriteCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalMinSeqResponse {
-    status: &'static str,
-    min_sequence: u64,
-    has_records: bool,
+    pub(crate) status: &'static str,
+    pub(crate) min_sequence: u64,
+    pub(crate) has_records: bool,
 }
 
 
@@ -416,9 +416,9 @@ pub(crate) struct WalMinSeqResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalMaxSeqResponse {
-    status: &'static str,
-    max_sequence: u64,
-    has_records: bool,
+    pub(crate) status: &'static str,
+    pub(crate) max_sequence: u64,
+    pub(crate) has_records: bool,
 }
 
 
@@ -426,8 +426,8 @@ pub(crate) struct WalMaxSeqResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalEntryCountResponse {
-    status: &'static str,
-    entry_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) entry_count: usize,
 }
 
 
@@ -435,8 +435,8 @@ pub(crate) struct WalEntryCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalSizeBytesResponse {
-    status: &'static str,
-    size_bytes: usize,
+    pub(crate) status: &'static str,
+    pub(crate) size_bytes: usize,
 }
 
 
@@ -444,8 +444,8 @@ pub(crate) struct WalSizeBytesResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalDeleteCountResponse {
-    status: &'static str,
-    delete_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) delete_count: usize,
 }
 
 
@@ -453,9 +453,9 @@ pub(crate) struct WalDeleteCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalValidateResponse {
-    status: &'static str,
-    valid: bool,
-    record_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) valid: bool,
+    pub(crate) record_count: usize,
 }
 
 
@@ -463,9 +463,9 @@ pub(crate) struct WalValidateResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalEntryOldestResponse {
-    status: &'static str,
-    has_entry: bool,
-    entry_sequence: u64,
+    pub(crate) status: &'static str,
+    pub(crate) has_entry: bool,
+    pub(crate) entry_sequence: u64,
 }
 
 
@@ -473,10 +473,10 @@ pub(crate) struct WalEntryOldestResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalSeqSpanResponse {
-    status: &'static str,
-    oldest_sequence: u64,
-    newest_sequence: u64,
-    sequence_span: u64,
+    pub(crate) status: &'static str,
+    pub(crate) oldest_sequence: u64,
+    pub(crate) newest_sequence: u64,
+    pub(crate) sequence_span: u64,
 }
 
 
@@ -484,8 +484,8 @@ pub(crate) struct WalSeqSpanResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRecordActiveResponse {
-    status: &'static str,
-    active_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) active_count: usize,
 }
 
 
@@ -493,8 +493,8 @@ pub(crate) struct WalRecordActiveResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRecordMutationsResponse {
-    status: &'static str,
-    mutation_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) mutation_count: usize,
 }
 
 
@@ -502,8 +502,8 @@ pub(crate) struct WalRecordMutationsResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRecordDeletedResponse {
-    status: &'static str,
-    deleted_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) deleted_count: usize,
 }
 
 
@@ -511,10 +511,10 @@ pub(crate) struct WalRecordDeletedResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalMutationSpanResponse {
-    status: &'static str,
-    oldest_sequence: u64,
-    newest_sequence: u64,
-    mutation_span: u64,
+    pub(crate) status: &'static str,
+    pub(crate) oldest_sequence: u64,
+    pub(crate) newest_sequence: u64,
+    pub(crate) mutation_span: u64,
 }
 
 
@@ -522,8 +522,8 @@ pub(crate) struct WalMutationSpanResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalMutationNonDeletedCountResponse {
-    status: &'static str,
-    non_deleted_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) non_deleted_count: usize,
 }
 
 
@@ -531,10 +531,10 @@ pub(crate) struct WalMutationNonDeletedCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalNonDeletedSpanResponse {
-    status: &'static str,
-    oldest_sequence: u64,
-    newest_sequence: u64,
-    non_deleted_span: u64,
+    pub(crate) status: &'static str,
+    pub(crate) oldest_sequence: u64,
+    pub(crate) newest_sequence: u64,
+    pub(crate) non_deleted_span: u64,
 }
 
 
@@ -542,8 +542,8 @@ pub(crate) struct WalNonDeletedSpanResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalNonDeletedCountResponse {
-    status: &'static str,
-    non_deleted_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) non_deleted_count: usize,
 }
 
 
@@ -551,8 +551,8 @@ pub(crate) struct WalNonDeletedCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalNonDeletedLatestResponse {
-    status: &'static str,
-    latest_non_deleted_sequence: u64,
+    pub(crate) status: &'static str,
+    pub(crate) latest_non_deleted_sequence: u64,
 }
 
 
@@ -560,8 +560,8 @@ pub(crate) struct WalNonDeletedLatestResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalNonDeletedOldestResponse {
-    status: &'static str,
-    oldest_non_deleted_sequence: u64,
+    pub(crate) status: &'static str,
+    pub(crate) oldest_non_deleted_sequence: u64,
 }
 
 
@@ -569,8 +569,8 @@ pub(crate) struct WalNonDeletedOldestResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalNonDeletedNewestResponse {
-    status: &'static str,
-    newest_non_deleted_sequence: u64,
+    pub(crate) status: &'static str,
+    pub(crate) newest_non_deleted_sequence: u64,
 }
 
 
@@ -578,8 +578,8 @@ pub(crate) struct WalNonDeletedNewestResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRecordTotalResponse {
-    status: &'static str,
-    total_record_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) total_record_count: usize,
 }
 
 
@@ -587,8 +587,8 @@ pub(crate) struct WalRecordTotalResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalValueDuplicatesCountResponse {
-    status: &'static str,
-    duplicate_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) duplicate_value_count: usize,
 }
 
 
@@ -596,8 +596,8 @@ pub(crate) struct WalValueDuplicatesCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalValueDistinctCountResponse {
-    status: &'static str,
-    distinct_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) distinct_value_count: usize,
 }
 
 
@@ -605,8 +605,8 @@ pub(crate) struct WalValueDistinctCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalValueUniqueCountResponse {
-    status: &'static str,
-    unique_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) unique_value_count: usize,
 }
 
 
@@ -614,8 +614,8 @@ pub(crate) struct WalValueUniqueCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalValueTrimmedCountResponse {
-    status: &'static str,
-    trimmed_value_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) trimmed_value_count: usize,
 }
 
 
@@ -623,8 +623,8 @@ pub(crate) struct WalValueTrimmedCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalValueCaseVariantCountResponse {
-    status: &'static str,
-    case_variant_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) case_variant_count: usize,
 }
 
 
@@ -632,8 +632,8 @@ pub(crate) struct WalValueCaseVariantCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalOrderByDescDirectionCountResponse {
-    status: &'static str,
-    desc_direction_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) desc_direction_count: usize,
 }
 
 
@@ -641,8 +641,8 @@ pub(crate) struct WalOrderByDescDirectionCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalOrderByRandomCountResponse {
-    status: &'static str,
-    random_order_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) random_order_count: usize,
 }
 
 
@@ -650,8 +650,8 @@ pub(crate) struct WalOrderByRandomCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalOrderByRandomSeededCountResponse {
-    status: &'static str,
-    random_seeded_order_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) random_seeded_order_count: usize,
 }
 
 
@@ -659,8 +659,8 @@ pub(crate) struct WalOrderByRandomSeededCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalOrderByAscDirectionCountResponse {
-    status: &'static str,
-    asc_direction_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) asc_direction_count: usize,
 }
 
 
@@ -668,8 +668,8 @@ pub(crate) struct WalOrderByAscDirectionCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalOrderByRandAliasCountResponse {
-    status: &'static str,
-    rand_alias_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) rand_alias_count: usize,
 }
 
 
@@ -677,8 +677,8 @@ pub(crate) struct WalOrderByRandAliasCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalOrderByMultiColumnCountResponse {
-    status: &'static str,
-    multi_column_order_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) multi_column_order_count: usize,
 }
 
 
@@ -686,8 +686,8 @@ pub(crate) struct WalOrderByMultiColumnCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalPaginationLimitOffsetCountResponse {
-    status: &'static str,
-    limit_offset_pagination_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) limit_offset_pagination_count: usize,
 }
 
 
@@ -695,8 +695,8 @@ pub(crate) struct WalPaginationLimitOffsetCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalPaginationOffsetOnlyCountResponse {
-    status: &'static str,
-    offset_only_pagination_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) offset_only_pagination_count: usize,
 }
 
 
@@ -704,8 +704,8 @@ pub(crate) struct WalPaginationOffsetOnlyCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalHavingWithoutGroupByCountResponse {
-    status: &'static str,
-    having_without_group_by_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) having_without_group_by_count: usize,
 }
 
 
@@ -713,8 +713,8 @@ pub(crate) struct WalHavingWithoutGroupByCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalHavingWithGroupByCountResponse {
-    status: &'static str,
-    having_with_group_by_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) having_with_group_by_count: usize,
 }
 
 
@@ -722,8 +722,8 @@ pub(crate) struct WalHavingWithGroupByCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalGroupByRollupCountResponse {
-    status: &'static str,
-    group_by_rollup_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) group_by_rollup_count: usize,
 }
 
 
@@ -731,8 +731,8 @@ pub(crate) struct WalGroupByRollupCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalGroupByCubeCountResponse {
-    status: &'static str,
-    group_by_cube_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) group_by_cube_count: usize,
 }
 
 
@@ -740,8 +740,8 @@ pub(crate) struct WalGroupByCubeCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalSelectDistinctOnCountResponse {
-    status: &'static str,
-    select_distinct_on_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) select_distinct_on_count: usize,
 }
 
 
@@ -749,8 +749,8 @@ pub(crate) struct WalSelectDistinctOnCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalForUpdateCountResponse {
-    status: &'static str,
-    for_update_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) for_update_count: usize,
 }
 
 
@@ -758,8 +758,8 @@ pub(crate) struct WalForUpdateCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalLeftJoinCountResponse {
-    status: &'static str,
-    left_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) left_join_count: usize,
 }
 
 
@@ -767,8 +767,8 @@ pub(crate) struct WalLeftJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRightJoinCountResponse {
-    status: &'static str,
-    right_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) right_join_count: usize,
 }
 
 
@@ -776,8 +776,8 @@ pub(crate) struct WalRightJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalFullOuterJoinCountResponse {
-    status: &'static str,
-    full_outer_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) full_outer_join_count: usize,
 }
 
 
@@ -785,8 +785,8 @@ pub(crate) struct WalFullOuterJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalInnerJoinCountResponse {
-    status: &'static str,
-    inner_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) inner_join_count: usize,
 }
 
 
@@ -794,8 +794,8 @@ pub(crate) struct WalInnerJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalStraightJoinCountResponse {
-    status: &'static str,
-    straight_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) straight_join_count: usize,
 }
 
 
@@ -803,8 +803,8 @@ pub(crate) struct WalStraightJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalSemiJoinCountResponse {
-    status: &'static str,
-    semi_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) semi_join_count: usize,
 }
 
 
@@ -812,8 +812,8 @@ pub(crate) struct WalSemiJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalAntiJoinCountResponse {
-    status: &'static str,
-    anti_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) anti_join_count: usize,
 }
 
 
@@ -821,8 +821,8 @@ pub(crate) struct WalAntiJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalCrossApplyCountResponse {
-    status: &'static str,
-    cross_apply_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) cross_apply_count: usize,
 }
 
 
@@ -830,8 +830,8 @@ pub(crate) struct WalCrossApplyCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalOuterApplyCountResponse {
-    status: &'static str,
-    outer_apply_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) outer_apply_count: usize,
 }
 
 
@@ -839,8 +839,8 @@ pub(crate) struct WalOuterApplyCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalApplyCountResponse {
-    status: &'static str,
-    apply_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) apply_count: usize,
 }
 
 
@@ -848,8 +848,8 @@ pub(crate) struct WalApplyCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalLeftSemiJoinCountResponse {
-    status: &'static str,
-    left_semi_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) left_semi_join_count: usize,
 }
 
 
@@ -857,8 +857,8 @@ pub(crate) struct WalLeftSemiJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalLeftAntiJoinCountResponse {
-    status: &'static str,
-    left_anti_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) left_anti_join_count: usize,
 }
 
 
@@ -866,8 +866,8 @@ pub(crate) struct WalLeftAntiJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRightSemiJoinCountResponse {
-    status: &'static str,
-    right_semi_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) right_semi_join_count: usize,
 }
 
 
@@ -875,8 +875,8 @@ pub(crate) struct WalRightSemiJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalRightAntiJoinCountResponse {
-    status: &'static str,
-    right_anti_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) right_anti_join_count: usize,
 }
 
 
@@ -884,8 +884,8 @@ pub(crate) struct WalRightAntiJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalFullSemiJoinCountResponse {
-    status: &'static str,
-    full_semi_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) full_semi_join_count: usize,
 }
 
 
@@ -893,8 +893,8 @@ pub(crate) struct WalFullSemiJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalFullAntiJoinCountResponse {
-    status: &'static str,
-    full_anti_join_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) full_anti_join_count: usize,
 }
 
 
@@ -902,8 +902,8 @@ pub(crate) struct WalFullAntiJoinCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalUnionAllCountResponse {
-    status: &'static str,
-    union_all_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) union_all_count: usize,
 }
 
 
@@ -911,8 +911,8 @@ pub(crate) struct WalUnionAllCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalAggregateDistinctCountResponse {
-    status: &'static str,
-    aggregate_distinct_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) aggregate_distinct_count: usize,
 }
 
 
@@ -920,8 +920,8 @@ pub(crate) struct WalAggregateDistinctCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalTableAliasCountResponse {
-    status: &'static str,
-    table_alias_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) table_alias_count: usize,
 }
 
 
@@ -929,8 +929,8 @@ pub(crate) struct WalTableAliasCountResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WalColumnAliasCountResponse {
-    status: &'static str,
-    column_alias_count: usize,
+    pub(crate) status: &'static str,
+    pub(crate) column_alias_count: usize,
 }
 
 

@@ -81,6 +81,7 @@ fn state_with_key(key: Option<&str>) -> AppState {
         audit_log_path: None,
         raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
         raft_peers: Arc::new(Vec::new()),
+        cluster_token: Arc::new(None),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
@@ -6206,17 +6207,21 @@ fn s5_ws4_store_rows_scan_respects_limit() {
 
 #[tokio::test]
 async fn s4_ws3_sql_execute_oltp_path_returns_rows_from_row_store() {
-    // Insert two rows via PagedRowStore directly
+    // Insert two rows via PagedRowStore directly.
+    // Keys use the "<table>:<id>" convention so the table-prefix filter and
+    // the `id` predicate both fire correctly.
     let state = state_with_key(Some("test-key"));
     {
         let mut rs = state.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         let mut d = std::collections::HashMap::new();
         d.insert("value".to_string(), "42".to_string());
-        rs.insert(xid, "oltp-key-1", d.clone());
+        d.insert("id".to_string(), "oltp-key-1".to_string());
+        rs.insert(xid, "rows:oltp-key-1", d.clone());
         let xid2 = rs.begin_xid();
         d.insert("value".to_string(), "99".to_string());
-        rs.insert(xid2, "oltp-key-2", d);
+        d.insert("id".to_string(), "oltp-key-2".to_string());
+        rs.insert(xid2, "rows:oltp-key-2", d);
     }
     // Point SELECT with WHERE targeting oltp-key-1 → planner routes as oltp
     let req = SqlExecuteRequest {

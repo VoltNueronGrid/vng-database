@@ -499,6 +499,9 @@ pub(crate) struct AppState {
     pub(crate) raft_state: Arc<Mutex<RaftNode>>,
     /// Raft peer base URLs loaded from `VNG_RAFT_PEERS`. Empty on single-node deployments.
     pub(crate) raft_peers: Arc<Vec<String>>,
+    /// Shared secret for intra-cluster Raft RPCs, loaded from `VNG_CLUSTER_TOKEN`.
+    /// `None` means no auth is required (single-node / dev).
+    pub(crate) cluster_token: Arc<Option<String>>,
     /// S9-WS8-02: Per-model-identity request counters for rate limiting.
     /// Maps model_id → request count in current window.
     pub(crate) ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
@@ -1451,6 +1454,7 @@ async fn main() {
         audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
         raft_state: Arc::new(Mutex::new(RaftNode::new(&node_id))),
         raft_peers: Arc::new(load_raft_peers()),
+        cluster_token: Arc::new(load_cluster_token()),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),

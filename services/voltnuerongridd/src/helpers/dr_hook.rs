@@ -11,7 +11,7 @@ use crate::{
     DrHookPolicyStateEnvelope, DrHookPolicyStateSnapshot, DrHookRetryPlanStep,
     DrHookRuntimeState, DrHookScheduledTask,
     FailureBudgetAlertResponse, FailureBudgetSnapshot,
-    RateLimitPolicySnapshot, SreGateCriterion, SreGateEvaluationResponse,
+    RateLimitPolicySnapshot,
 };
 use crate::{record_transport_mutation, rotate_leader, udf_function_catalog_contract};
 
@@ -274,81 +274,6 @@ pub(crate) fn dequeue_dr_hook_task(state: &AppState) -> Option<DrHookScheduledTa
         .lock()
         .ok()
         .and_then(|mut queue| queue.pop_front())
-}
-
-
-pub(crate) fn build_sre_gate_evaluation(state: &AppState) -> SreGateEvaluationResponse {
-    let failure_budget = failure_budget_snapshot(12.5);
-    let queue_depth = state.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(usize::MAX);
-    let unresolved_critical_signals = state
-        .cluster_failure_signals
-        .lock()
-        .map(|signals| {
-            signals
-                .iter()
-                .filter(|s| s.severity.eq_ignore_ascii_case("critical") && !s.resolved)
-                .count()
-        })
-        .unwrap_or(usize::MAX);
-    let persistence_configured = state
-        .dr_hook_state_path
-        .as_ref()
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-
-    let criteria = vec![
-        SreGateCriterion {
-            name: "failure_budget_below_warning".to_string(),
-            passed: failure_budget.consumed_percent < 50.0,
-            detail: format!("consumed_percent={}", failure_budget.consumed_percent),
-        },
-        SreGateCriterion {
-            name: "dr_queue_depth_below_threshold".to_string(),
-            passed: queue_depth < 100,
-            detail: format!("queue_depth={queue_depth} threshold=100"),
-        },
-        SreGateCriterion {
-            name: "no_unresolved_critical_signals".to_string(),
-            passed: unresolved_critical_signals == 0,
-            detail: format!("unresolved_critical_signals={unresolved_critical_signals}"),
-        },
-        SreGateCriterion {
-            name: "dr_state_persistence_configured".to_string(),
-            passed: persistence_configured,
-            detail: format!("state_path={:?}", state.dr_hook_state_path),
-        },
-    ];
-    let failed: Vec<&SreGateCriterion> = criteria.iter().filter(|c| !c.passed).collect();
-    let gate_result = if failed.is_empty() {
-        "pass"
-    } else if failed.len() == 1 {
-        "warn"
-    } else {
-        "fail"
-    };
-    let recommended_actions = failed
-        .iter()
-        .map(|criterion| format!("resolve_{}", criterion.name))
-        .collect::<Vec<_>>();
-
-    SreGateEvaluationResponse {
-        status: "ok",
-        gate_result,
-        criteria,
-        recommended_actions,
-    }
-}
-
-
-pub(crate) fn export_gate_report(path: &str, evaluation: &SreGateEvaluationResponse) {
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            let _ = fs::create_dir_all(parent);
-        }
-    }
-    if let Ok(encoded) = serde_json::to_string_pretty(evaluation) {
-        let _ = fs::write(path, encoded);
-    }
 }
 
 

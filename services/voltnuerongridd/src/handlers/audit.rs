@@ -16,10 +16,10 @@ use crate::audit_helpers::{append_audit_event, append_runtime_audit_event, filte
 // S9-WS8A-02: audit chain verify response
 #[derive(Serialize)]
 pub(crate) struct AuditChainVerifyResponse {
-    status: &'static str,
-    event_count: usize,
-    chain_valid: bool,
-    genesis_hash: &'static str,
+    pub(crate) status: &'static str,
+    pub(crate) event_count: usize,
+    pub(crate) chain_valid: bool,
+    pub(crate) genesis_hash: &'static str,
 }
 
 
@@ -29,11 +29,11 @@ pub(crate) struct AuditChainVerifyResponse {
 /// Response for `GET /api/v1/audit/cli/summary`.
 #[derive(Serialize)]
 pub(crate) struct AuditCliSummaryResponse {
-    status: &'static str,
-    total_events: usize,
-    chain_valid: bool,
-    last_event_kind: String,
-    export_hint: &'static str,
+    pub(crate) status: &'static str,
+    pub(crate) total_events: usize,
+    pub(crate) chain_valid: bool,
+    pub(crate) last_event_kind: String,
+    pub(crate) export_hint: &'static str,
 }
 
 
@@ -41,21 +41,21 @@ pub(crate) struct AuditCliSummaryResponse {
 
 #[derive(Deserialize, Default)]
 pub(crate) struct AuditExportQuery {
-    cursor: Option<usize>,
-    limit: Option<usize>,
+    pub(crate) cursor: Option<usize>,
+    pub(crate) limit: Option<usize>,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct AuditExportResponse {
-    status: &'static str,
-    event_count: usize,
-    total_event_count: usize,
-    cursor: usize,
-    limit: usize,
-    file_backed: bool,
-    audit_log_path: Option<String>,
-    events: Vec<AuditEvent>,
+    pub(crate) status: &'static str,
+    pub(crate) event_count: usize,
+    pub(crate) total_event_count: usize,
+    pub(crate) cursor: usize,
+    pub(crate) limit: usize,
+    pub(crate) file_backed: bool,
+    pub(crate) audit_log_path: Option<String>,
+    pub(crate) events: Vec<AuditEvent>,
 }
 
 
@@ -63,11 +63,11 @@ pub(crate) struct AuditExportResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AuditSnapshotResponse {
-    status: &'static str,
-    snapshot_at_ms: u64,
-    event_count: usize,
-    chain_valid: bool,
-    genesis_hash: &'static str,
+    pub(crate) status: &'static str,
+    pub(crate) snapshot_at_ms: u64,
+    pub(crate) event_count: usize,
+    pub(crate) chain_valid: bool,
+    pub(crate) genesis_hash: &'static str,
 }
 
 
@@ -76,29 +76,29 @@ pub(crate) struct AuditSnapshotResponse {
 #[derive(Deserialize)]
 pub(crate) struct AuditPurgeRequest {
     #[allow(dead_code)]
-    confirm: bool,
+    pub(crate) confirm: bool,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct AuditPurgeResponse {
-    status: &'static str,
-    events_purged: usize,
-    chain_reset: bool,
+    pub(crate) status: &'static str,
+    pub(crate) events_purged: usize,
+    pub(crate) chain_reset: bool,
 }
 
 
 #[derive(Deserialize)]
 pub(crate) struct AuditEventsQuery {
-    max_items: Option<usize>,
+    pub(crate) max_items: Option<usize>,
 }
 
 
 #[derive(Serialize)]
 pub(crate) struct AuditEventsResponse {
-    status: &'static str,
-    total_events: usize,
-    events: Vec<AuditEvent>,
+    pub(crate) status: &'static str,
+    pub(crate) total_events: usize,
+    pub(crate) events: Vec<AuditEvent>,
 }
 
 
