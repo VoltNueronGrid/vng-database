@@ -9,6 +9,27 @@ use crate::NativeFrameType;
 use crate::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 use crate::auth::{require_operator_auth, require_operator_privilege, require_cluster_failover_privilege};
 
+/// Return `Ok(())` if the request carries a valid cluster token
+/// (`Authorization: Bearer <VNG_CLUSTER_TOKEN>`).
+///
+/// Used by Raft intra-cluster endpoints so peers can authenticate without
+/// needing an operator account — they just need the shared cluster secret.
+fn check_cluster_token(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<(), ()> {
+    let configured = match state.cluster_token.as_ref().as_deref() {
+        Some(t) => t,
+        None => return Err(()), // no token configured — cannot satisfy
+    };
+    let bearer = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if bearer == configured { Ok(()) } else { Err(()) }
+}
+
 // ─── Raft DTOs ──────────────────────────────────────────────────────────
 
 
@@ -376,7 +397,10 @@ pub(crate) async fn raft_vote(
     headers: HeaderMap,
     Json(req): Json<RaftVoteRequest>,
 ) -> Result<Json<RaftVoteResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
+    // Accept intra-cluster token OR operator credentials — whichever is present.
+    if check_cluster_token(&headers, &state).is_err() {
+        require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
+    }
     let resp = state.raft_state.lock().expect("raft_state lock").handle_vote_request(&req);
     Ok(Json(resp))
 }
@@ -388,7 +412,10 @@ pub(crate) async fn raft_append(
     headers: HeaderMap,
     Json(req): Json<RaftAppendRequest>,
 ) -> Result<Json<RaftAppendResponse>, (StatusCode, Json<AuthErrorResponse>)> {
-    let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
+    // Accept intra-cluster token OR operator credentials — whichever is present.
+    if check_cluster_token(&headers, &state).is_err() {
+        require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
+    }
     let resp = state.raft_state.lock().expect("raft_state lock").handle_append_entries(&req);
     Ok(Json(resp))
 }

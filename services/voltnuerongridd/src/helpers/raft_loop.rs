@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 use reqwest::Client;
-use crate::{AppState, RaftAppendRequest, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
+use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
 
 const TICK_INTERVAL_MS: u64 = 150;
 const HEARTBEAT_EVERY_N_TICKS: u64 = 3;
@@ -34,7 +34,8 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
         interval.tick().await;
         tick_count += 1;
 
-        let (became_candidate, is_leader, term, node_id, last_log_index, last_log_term, commit_index, pending_entries) = {
+        // Snapshot the state we need for this tick outside the lock.
+        let tick_info = {
             let mut node = state.raft_state.lock().expect("raft tick lock");
             let role_before = node.role;
             node.tick();
@@ -43,12 +44,22 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
             let is_leader = node.role == RaftRole::Leader;
             let last_log_term = node.log.last().map(|e| e.term).unwrap_or(0);
             let snap = node.status();
-            // Collect entries not yet committed — these are sent to followers for replication.
             let commit_idx = snap.commit_index;
-            let pending: Vec<RaftLogEntry> = node.log
+            // Per-peer entries: for each peer send only entries from next_index[peer] onward.
+            // If next_index is not yet initialised for a peer (just became leader), treat as
+            // commit_idx + 1 so we send all pending entries on the first heartbeat.
+            let peers: Vec<String> = state.raft_peers.as_ref().clone();
+            let per_peer: Vec<(String, u64, Vec<RaftLogEntry>)> = peers
                 .iter()
-                .filter(|e| e.index > commit_idx)
-                .cloned()
+                .map(|peer| {
+                    let ni = *node.next_index.get(peer).unwrap_or(&(commit_idx + 1));
+                    let entries: Vec<RaftLogEntry> = node.log
+                        .iter()
+                        .filter(|e| e.index >= ni)
+                        .cloned()
+                        .collect();
+                    (peer.clone(), ni.saturating_sub(1), entries)
+                })
                 .collect();
             (
                 became_candidate,
@@ -58,16 +69,19 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
                 snap.log_length as u64,
                 last_log_term,
                 commit_idx,
-                pending,
+                per_peer,
+                peers.len(),
             )
         };
+        let (became_candidate, is_leader, term, node_id,
+             last_log_index, last_log_term, commit_index, per_peer, total_peers) = tick_info;
 
         if became_candidate {
             run_election(&state, &client, term, &node_id, last_log_index, last_log_term).await;
         }
 
         if is_leader && tick_count % HEARTBEAT_EVERY_N_TICKS == 0 {
-            fanout_heartbeat(&state, &client, term, &node_id, commit_index, pending_entries).await;
+            fanout_heartbeat(&state, &client, term, &node_id, commit_index, per_peer, total_peers).await;
         }
     }
 }
@@ -134,42 +148,82 @@ async fn run_election(
         // Guard: only promote if we're still in the same term as a Candidate.
         if node.role == RaftRole::Candidate && node.current_term == term {
             node.become_leader();
+            // Initialise per-peer progress indices (§5.3).
+            let peer_urls: Vec<String> = state.raft_peers.as_ref().clone();
+            node.init_leader_indices(&peer_urls);
         }
     }
 }
 
 
-/// Send AppendEntries (with uncommitted log entries) to all peers in parallel
-/// (fire-and-forget). Doubles as heartbeat when `entries` is empty.
+/// Send per-peer AppendEntries RPCs in parallel, then process responses to
+/// update `next_index` / `match_index` on the leader.
+///
+/// `per_peer` is `(peer_url, prev_log_index, entries_from_next_index)`.
+/// `total_peers` is used to compute quorum when advancing `commit_index`.
 async fn fanout_heartbeat(
     state: &AppState,
     client: &Client,
     term: u64,
     node_id: &str,
     commit_index: u64,
-    entries: Vec<RaftLogEntry>,
+    per_peer: Vec<(String, u64, Vec<RaftLogEntry>)>,
+    total_peers: usize,
 ) {
+    if per_peer.is_empty() {
+        return;
+    }
     let token = state.cluster_token.as_deref().map(str::to_string);
-    for peer_url in state.raft_peers.iter() {
+    let total_nodes = total_peers + 1; // including self
+
+    let mut join_set: tokio::task::JoinSet<(String, Result<RaftAppendResponse, ()>)> =
+        tokio::task::JoinSet::new();
+
+    for (peer_url, prev_log_index, entries) in per_peer {
         let url = format!("{}/api/v1/cluster/raft/append", peer_url);
         let client = client.clone();
-        let entries = entries.clone();
         let token = token.clone();
         let req = RaftAppendRequest {
             term,
             leader_id: node_id.to_string(),
-            prev_log_index: commit_index,
+            prev_log_index,
             prev_log_term: 0,
             entries,
             leader_commit: commit_index,
         };
-        tokio::spawn(async move {
+        let peer_url_owned = peer_url.clone();
+        join_set.spawn(async move {
             let mut builder = client.post(&url).json(&req);
             if let Some(t) = &token {
                 builder = builder.header("Authorization", format!("Bearer {t}"));
             }
-            let _ = builder.send().await;
+            let result = match builder.send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    resp.json::<RaftAppendResponse>().await.map_err(|_| ())
+                }
+                _ => Err(()),
+            };
+            (peer_url_owned, result)
         });
+    }
+
+    while let Some(join_result) = join_set.join_next().await {
+        let Ok((peer_url, rpc_result)) = join_result else { continue };
+        let mut node = state.raft_state.lock().expect("raft fanout response lock");
+        // Only update progress if we're still leader in the same term.
+        if node.role != RaftRole::Leader || node.current_term != term {
+            break;
+        }
+        match rpc_result {
+            Ok(resp) if resp.success => {
+                node.record_append_success(&peer_url, resp.match_index, total_nodes);
+            }
+            Ok(_) => {
+                // Follower rejected — log inconsistency; back off next_index.
+                node.record_append_failure(&peer_url);
+            }
+            Err(_) => {} // network error; next tick will retry
+        }
     }
 }
 

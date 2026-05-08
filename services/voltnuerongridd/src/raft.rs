@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -129,6 +130,12 @@ pub struct RaftNode {
     pub election_timeout_ticks: u64,
     /// S7-WS6-03: Fencing token — increments each time this node becomes Leader.
     pub fencing_token: u64,
+    /// Per-peer next log index the leader should send next (§5.3).
+    /// Only meaningful when `role == Leader`. Keyed by peer node URL.
+    pub next_index: HashMap<String, u64>,
+    /// Per-peer highest log index known to be replicated (§5.3).
+    /// Only meaningful when `role == Leader`. Keyed by peer node URL.
+    pub match_index: HashMap<String, u64>,
 }
 
 impl RaftNode {
@@ -145,6 +152,8 @@ impl RaftNode {
             ticks_since_heartbeat: 0,
             election_timeout_ticks: 10,
             fencing_token: 0,
+            next_index: HashMap::new(),
+            match_index: HashMap::new(),
         }
     }
 
@@ -164,6 +173,49 @@ impl RaftNode {
     pub fn become_leader(&mut self) {
         self.fencing_token += 1;
         self.role = RaftRole::Leader;
+        // Clear per-peer progress; caller should call `init_leader_indices` next.
+        self.next_index.clear();
+        self.match_index.clear();
+    }
+
+    /// Initialise `next_index` and `match_index` for all known peers.
+    ///
+    /// Called immediately after `become_leader` once the peer list is known.
+    /// Per §5.3: `next_index[peer] = last_log_index + 1`, `match_index[peer] = 0`.
+    pub fn init_leader_indices(&mut self, peers: &[String]) {
+        let next = self.last_log_position().0 + 1;
+        for peer in peers {
+            self.next_index.insert(peer.clone(), next);
+            self.match_index.insert(peer.clone(), 0);
+        }
+    }
+
+    /// Record a successful AppendEntries response from `peer`.
+    ///
+    /// Updates `next_index` and `match_index` and advances `commit_index` if
+    /// a new entry has been replicated to a quorum.
+    pub fn record_append_success(&mut self, peer: &str, peer_match_index: u64, total_nodes: usize) {
+        self.next_index.insert(peer.to_string(), peer_match_index + 1);
+        self.match_index.insert(peer.to_string(), peer_match_index);
+
+        // Advance commit_index if a quorum has replicated the new entry.
+        let quorum = (total_nodes + 1) / 2;
+        for n in (self.commit_index + 1)..=peer_match_index {
+            let replication_count = 1 + // self
+                self.match_index.values().filter(|&&m| m >= n).count();
+            if replication_count >= quorum {
+                self.commit_index = n;
+            }
+        }
+    }
+
+    /// Record a failed AppendEntries response from `peer` (log inconsistency).
+    ///
+    /// Decrements `next_index[peer]` by one so the next heartbeat retries
+    /// with an earlier entry (standard Raft back-off, §5.3).
+    pub fn record_append_failure(&mut self, peer: &str) {
+        let ni = self.next_index.get(peer).copied().unwrap_or(1);
+        self.next_index.insert(peer.to_string(), ni.saturating_sub(1).max(1));
     }
 
     /// Revert to Follower (e.g. after seeing a higher term).

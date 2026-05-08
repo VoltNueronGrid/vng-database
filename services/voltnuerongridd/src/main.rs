@@ -105,6 +105,7 @@ pub(crate) use helpers::execution::{
     svc_unavailable_sql_response, execute_transaction_statements,
     acquire_pessimistic_lock, release_pessimistic_lock,
     execute_olap_query, execute_oltp_select, execute_oltp_select_legacy,
+    df_select_owned, run_async_in_executor,
 };
 // udf
 pub(crate) use helpers::udf::{

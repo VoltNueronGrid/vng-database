@@ -18,7 +18,7 @@ use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError, TransportKi
 use crate::{now_unix_ms, build_http_envelope};
 use crate::{execute_transaction_statements, acquire_sql_data_plane_connection, release_sql_data_plane_connection};
 use crate::{acquire_pessimistic_lock, release_pessimistic_lock, parse_where_predicates};
-use crate::{execute_olap_query, execute_oltp_select, execute_oltp_select_legacy};
+use crate::{execute_olap_query, execute_oltp_select, execute_oltp_select_legacy, df_select_owned, run_async_in_executor};
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
@@ -1148,65 +1148,75 @@ pub(crate) async fn sql_execute(
             None
         };
 
-    // S3-WS1-05: vectorized OLAP executor dispatch — if planner says olap/hybrid,
-    // run filter_batch (predicate pushdown from WHERE clause) then aggregate_batch over a
-    // columnar scan of the committed PagedRowStore snapshot.
+    // S3-WS1-05 (DataFusion): OLAP / hybrid aggregate dispatch.
+    // Runs the first OLAP SELECT through DataFusion and maps the output to
+    // `OlapVecAggResult` rows.  Aggregate queries produce one result per
+    // output column; plain SELECTs produce a single "row_count" summary.
     let olap_agg_results: Option<Vec<OlapVecAggResult>> =
         if matches!(planner_path.as_deref(), Some("olap") | Some("hybrid")) {
-            use voltnuerongrid_store::columnar::{
-                vectorized_scan, aggregate_batch, filter_batch, VectorizedAggOp,
-            };
-            use voltnuerongrid_sql::{parse_one, Statement};
-            let rs = state.row_store.lock().expect("row_store lock olap dispatch");
-            let snapshot_xid = rs.current_xid();
-            // Collect into owned (String, HashMap) so the lock can be released before scan.
-            let rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
-                .scan_at_snapshot(snapshot_xid)
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
-            drop(rs);
+            use voltnuerongrid_exec_datafusion::{collect_query_table_names, SelectOutput, AggregateCell};
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
-            let (batch, _stats) = vectorized_scan(&rows, limit);
-            if batch.row_count() == 0 {
-                None
-            } else {
-                // S3-WS1-05: extract WHERE predicates from the first parseable SELECT
-                // and push them into filter_batch before aggregating.
-                let predicates = olap_statements.iter().find_map(|sql| {
-                    if let Ok(Statement::Select(sel)) = parse_one(sql) {
-                        sel.where_clause
-                            .as_deref()
-                            .and_then(parse_where_predicates)
-                    } else {
-                        None
-                    }
-                });
-                let filtered = match predicates {
-                    Some(preds) if !preds.is_empty() => filter_batch(&batch, &preds),
-                    _ => batch,
-                };
-                if filtered.row_count() == 0 {
-                    None
-                } else {
-                    // Apply Count on every column in the filtered batch.
-                    let mut ops = std::collections::HashMap::new();
-                    for col_name in filtered.columns.keys() {
-                        ops.insert(col_name.clone(), VectorizedAggOp::Count);
-                    }
-                    let count_results = aggregate_batch(&filtered, &ops);
-                    let mut agg_out: Vec<OlapVecAggResult> = count_results
-                        .into_iter()
-                        .map(|(col, res)| OlapVecAggResult {
-                            column: col,
-                            op: format!("{:?}", res.op).to_ascii_lowercase(),
-                            value: res.value,
-                            row_count: res.row_count,
-                        })
+            // Use the first OLAP statement (dominant one).
+            let first_sql = olap_statements.first().map(|s| s.clone());
+            if let Some(sql) = first_sql {
+                // Snapshot rows for all referenced tables.
+                let rs = state.row_store.lock().expect("row_store lock olap agg df");
+                let table_names = collect_query_table_names(&sql);
+                let all_rows = rs.export_rows_snapshot();
+                drop(rs);
+                let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
+                    std::collections::HashMap::new();
+                for name in &table_names {
+                    let prefix = format!("{name}:");
+                    let filtered: Vec<_> = all_rows
+                        .iter()
+                        .filter(|(k, _)| *k == name.as_str() || k.starts_with(&prefix))
+                        .cloned()
                         .collect();
-                    agg_out.sort_by(|a, b| a.column.cmp(&b.column));
-                    Some(agg_out)
+                    table_rows.insert(name.clone(), filtered);
                 }
+                if table_rows.is_empty() {
+                    table_rows.insert("rows".to_string(), all_rows);
+                }
+                match run_async_in_executor(df_select_owned(sql, table_rows, limit)) {
+                    Ok(SelectOutput::Aggregate(agg)) => {
+                        let mut out: Vec<OlapVecAggResult> = agg.columns.iter()
+                            .zip(agg.values.iter())
+                            .map(|(col, val)| {
+                                let value_str = match val {
+                                    AggregateCell::Int(i) => i.to_string(),
+                                    AggregateCell::Float(f) => f.to_string(),
+                                    AggregateCell::Text(t) => t.clone(),
+                                    AggregateCell::Null => String::new(),
+                                };
+                                OlapVecAggResult {
+                                    column: col.clone(),
+                                    op: "aggregate".to_string(),
+                                    value: value_str,
+                                    row_count: 1,
+                                }
+                            })
+                            .collect();
+                        out.sort_by(|a, b| a.column.cmp(&b.column));
+                        if out.is_empty() { None } else { Some(out) }
+                    }
+                    Ok(SelectOutput::Rows(rows)) => {
+                        if rows.is_empty() {
+                            None
+                        } else {
+                            // Non-aggregate OLAP: emit a single row-count summary entry.
+                            Some(vec![OlapVecAggResult {
+                                column: "*".to_string(),
+                                op: "count".to_string(),
+                                value: rows.len().to_string(),
+                                row_count: rows.len(),
+                            }])
+                        }
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
             }
         } else {
             None

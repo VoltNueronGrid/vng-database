@@ -323,7 +323,7 @@ pub(crate) fn cleanup_wait_edges_for_resource(
 
 /// Owned-argument wrapper so the returned future is `'static` (required by
 /// `run_async_in_executor` when it needs to cross a thread boundary).
-async fn df_select_owned(
+pub(crate) async fn df_select_owned(
     sql: String,
     table_rows: HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>>,
     max_rows: usize,
