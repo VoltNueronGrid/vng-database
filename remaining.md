@@ -1,81 +1,68 @@
-# `remaining.md` — handoff for next session (v15)
+# `remaining.md` — handoff for next session (v16)
 
-**Last updated:** 2026-05-08 (fourteenth session — full modular refactor complete + compile fixed)
+**Last updated:** 2026-05-08 (fifteenth session — Phase 3: Real RBAC + Raft replication)
 **Branch:** `main`
-**Total unit tests:** 556 passing (voltnuerongridd service; pre-existing failures in resilience.rs / exec-datafusion unchanged)
-**Phase:** main.rs modular refactor DONE — all slices merged, compile verified clean
+**Latest commit:** `bfd797d` — pushed to `origin/main` and `vng-database/main`
+**cargo check -p voltnuerongridd:** clean ✓
 
 ---
 
 ## TL;DR — what landed this session
 
-### ✅ main.rs modular refactor — Slices 5–10 (merged from vng-database/main)
+### ✅ Phase 3 — Real RBAC
 
-All remaining handler and helper modules were merged from the upstream branch. The post-merge tree had **422 compile errors** caused by missing `use` statements in each extracted module (previously everything lived in main.rs scope). All 422 errors were fixed, achieving a clean compile.
+**`config_init.rs`**
+- `load_rbac_privilege_matrix()` — reads `VNG_RBAC_POLICY_PATH` JSON file (full `RbacPrivilegeMatrix` struct); falls back silently to `default_rbac_privilege_matrix()` if unset or parse fails
+- JSON format: `{"grants_by_role": {"dba": [{"resource": "...", "scopes": ["..."], "actions": ["read"]}]}}`
 
-**Final module layout:**
+**`main.rs`**
+- `default_rbac_privilege_matrix()` → `load_rbac_privilege_matrix()` at startup
 
-```
-handlers/
-  audit.rs      rows.rs       wal.rs
-  cluster.rs    sre.rs
-  dr.rs         sql.rs
-  misc.rs       store.rs
-  raft.rs
+### ✅ Phase 3 — Raft replication
 
-helpers/
-  boot.rs           env_helpers.rs    native_protocol.rs
-  cluster.rs        execution.rs      sql_parse.rs
-  dr_hook.rs        time.rs           udf.rs
-```
+**`config_init.rs`**
+- `load_raft_peers()` — reads `VNG_RAFT_PEERS` (comma-separated base URLs, e.g. `http://node-2:8080,http://node-3:8080`); returns empty vec for single-node default
 
-**Key fixes applied (422 → 0 errors):**
+**`helpers/raft_loop.rs`** (new file)
+- `run_raft_tick_loop(state)` — 150ms tick loop spawned at startup
+  - Calls `RaftNode::tick()` each iteration; drives Follower→Candidate transition
+  - On election start: sends `POST /api/v1/cluster/raft/vote` to all peers via reqwest (100ms timeout); counts votes; quorum = ceil(n/2); single-node wins immediately (no peers → votes=1, quorum=1)
+  - On Leader: sends empty `POST /api/v1/cluster/raft/append` heartbeat to each peer every 3 ticks (~450ms) to suppress their election timers
 
-1. `router.rs` — changed `use handlers::*` → `use crate::handlers::*` for all 15 handler modules; added `use axum::routing::options;` and `use axum::middleware::from_fn;`; moved inner middleware functions from `main()` to module level: `add_cors`, `options_preflight`, `track_http_metrics`, `coarsen_route_for_metrics`
+**`main.rs`**
+- Fixed hardcoded `RaftNode::new("node-1")` → `RaftNode::new(&node_id)` (uses actual `VNG_NODE_ID`)
+- Added `raft_peers: Arc<Vec<String>>` to `AppState`
+- Spawns `run_raft_tick_loop(state.clone())` at startup alongside dr_hook_scheduler
 
-2. `main.rs` — made the following `pub(crate)`:
-   - Statics: `TX_COUNTER`, `PESSIMISTIC_LOCK_COUNTER`, `WS22_GATE_DEADLOCK_DETECTIONS`, `WS22_GATE_SCAN_CAP_TIMEOUTS`
-   - Const: `DEADLOCK_SCAN_MAX_HOPS`
-   - Enums: `NativeFrameType`, `NativeCommandKind`, `DeadlockScanOutcome`
-   - Functions: `run_native_connection`, `native_read_framed`
-   - Added comprehensive re-export block (`pub(crate) use auth::...`, `pub(crate) use handlers::sre::...`, etc.)
-   - Fixed duplicate raft import: kept `use raft::RaftNode;` + `pub(crate) use raft::{all other types};`
+**`Cargo.toml`**
+- Added `reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }`
 
-3. `handlers/misc.rs` — made `NativeFrame`, `NativeListenerConfig`, `NativeAdapter`, `HealthResponse`, `FailoverHandoffGapResponse`, `FailoverHandoffReportResponse` fields all `pub(crate)`; added full import block including `use tokio::io::AsyncWriteExt;`
+---
 
-4. `handlers/raft.rs` — fixed `role: raft::RaftRole` → `role: RaftRole`; added crate-level imports for Raft types
+## Known pre-existing issues (not introduced by Phase 3)
 
-5. All handler/helper modules — added their required `use` statements (std, serde, voltnuerongrid-*, crate::)
+`cargo test -p voltnuerongridd` fails to compile the test binary (519 errors):
+- **E0616** (~500) — `tests.rs` accesses private fields of response structs defined in handler modules. Fields need `pub(crate)` or tests need to use constructors.
+- **E0597** (2) — lifetime issue in `resilience.rs`.
+- **E0659** (2) — ambiguous name `build_sre_gate_evaluation`.
 
-**main.rs line count:** ~24,962 (Slice 4) → **1,936 lines** (all slices complete)
-
-**`cargo check -p voltnuerongridd`**: clean ✓  
-**`cargo test -p voltnuerongridd`**: 556 passing ✓  
-**Latest commit:** `a50ece1` — pushed to both `origin/claude/friendly-hertz-3b69fb` and `vng-database/main`
+These predate Phase 3. `cargo check -p voltnuerongridd` (no test binary) is fully clean.
 
 ---
 
 ## What's still TODO
 
-### Verification
+### High priority
 
-1. **Phase 2.3 check** — verify deprecated text WAL helpers are gone:
-   ```
-   grep -rn "#\[deprecated\]" services/voltnuerongridd/src/
-   ```
+1. **Fix tests.rs E0616 / E0659** — ~500 field-privacy errors prevent the test binary from building. Fix: add `pub(crate)` to all fields of handler response structs (raft, wal, sre, audit, misc), or refactor tests to avoid direct field access.
 
-### Phase 3 extended
+2. **DataFusion wiring** — `voltnuerongrid-exec-datafusion` crate has a working executor, but `handlers/sql.rs` still calls hand-rolled OLAP paths. Wire `OlapQueryRequest` through the DataFusion executor.
 
-2. **Real RBAC** — `helpers/boot.rs::default_rbac_privilege_matrix()` is hardcoded. Replace with configurable matrix loaded from `config_init.rs`. The `voltnuerongrid-config` crate already has the scaffolding.
+### Medium priority
 
-3. **Replication** — wire up the Raft skeleton for leader/follower replication:
-   - `raft_append` / `raft_vote` handlers exist in `handlers/raft.rs`
-   - The `RaftNode` in `main.rs` needs a background tick task + HTTP fanout to peers
-   - Peer list comes from `ClusterNodeRuntime` map in `AppState`
+3. **Raft log replication** — heartbeat fanout works but leaders don't yet replicate actual log entries to followers. Wire `raft_state.log` entries into `AppendEntries.entries` before each heartbeat.
 
-### Phase 4
-
-4. **DataFusion integration** — `voltnuerongrid-exec-datafusion` crate exists and compiles, but `handlers/sql.rs` still calls hand-rolled OLAP paths. Wire `OlapQueryRequest` through the DataFusion executor.
+4. **Vote response parsing** — `run_election` currently checks `resp.vote_granted` from peer JSON. The peer `raft_vote` handler requires a valid operator auth header. Either bypass auth for intra-cluster RPCs or add a cluster-identity bearer token (`VNG_CLUSTER_TOKEN`).
 
 ---
 
@@ -83,18 +70,15 @@ helpers/
 
 ```
 @remaining.md
-@services/voltnuerongridd/src/main.rs
-@services/voltnuerongridd/src/handlers/
-@services/voltnuerongridd/src/helpers/
+@services/voltnuerongridd/src/helpers/raft_loop.rs
+@services/voltnuerongridd/src/tests.rs
+@services/voltnuerongridd/src/handlers/raft.rs
 ```
 
 Recommended next steps (in priority order):
-1. **Phase 2.3 verification** — `grep -rn "#\[deprecated\]" services/voltnuerongridd/src/`
-2. **Real RBAC** — replace hardcoded `default_rbac_privilege_matrix` in `helpers/boot.rs` with config-driven matrix
-3. **Raft replication** — background tick + peer fanout
-4. **DataFusion wiring** — route OLAP queries through exec-datafusion executor
+1. **Fix tests.rs** — make handler response struct fields `pub(crate)`; fix E0659 by qualifying the ambiguous name
+2. **DataFusion wiring** — route OLAP queries through exec-datafusion executor
+3. **Raft log replication** — send actual log entries in leader heartbeats
+4. **Cluster auth token** — add `VNG_CLUSTER_TOKEN` for intra-cluster Raft RPCs
 
-**Key invariants to preserve:**
-- All types that are `AppState` fields stay in `main.rs` as `pub(crate)` — never move to handler modules
-- `cargo check -p voltnuerongridd` must be clean after every change
-- 556 unit tests must continue passing
+**Environment note:** `VNG_RBAC_POLICY_PATH` and `VNG_RAFT_PEERS` are new env vars. Unset = safe defaults (hardcoded RBAC, single-node Raft).
