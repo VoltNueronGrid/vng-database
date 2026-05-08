@@ -5,7 +5,6 @@ use std::time::Instant;
 use axum::http::StatusCode;
 use axum::Json;
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
-use crate::{AppState, AuthErrorResponse};
 use crate::handlers::sql::SqlExecuteResponse;
 use crate::{
     DEADLOCK_SCAN_MAX_HOPS, PESSIMISTIC_LOCK_COUNTER, TX_COUNTER,
@@ -13,7 +12,7 @@ use crate::{
     DeadlockScanOutcome,
     OlapQueryResponse, OltpRowResult,
     PessimisticLockRecord, PessimisticLockResponse,
-    SqlTransactionResponse, UdfExecutionResult,
+    SqlTransactionResponse,
 };
 use crate::{udf_guard_policy_contract, udf_function_catalog_contract};
 

@@ -1,13 +1,11 @@
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
+use serde::Serialize;
 use voltnuerongrid_auth::PrivilegeAction;
-use crate::{AppState, AuthErrorResponse, now_unix_ms};
-use crate::NativeFrameType;
-use crate::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
-use crate::auth::{require_operator_auth, require_operator_privilege, require_cluster_failover_privilege};
+use crate::{AppState, AuthErrorResponse};
+use crate::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+use crate::auth::require_cluster_failover_privilege;
 
 /// Return `Ok(())` if the request carries a valid cluster token
 /// (`Authorization: Bearer <VNG_CLUSTER_TOKEN>`).
@@ -437,5 +435,43 @@ pub(crate) async fn raft_tick(
         current_term: node.current_term,
         election_triggered,
     }))
+}
+
+
+// ─── Raft snapshot install endpoint ─────────────────────────────────────────
+
+/// Install a snapshot from the leader (§7).
+///
+/// Accepts intra-cluster token OR operator credentials.
+/// Calls `handle_install_snapshot` to update Raft state, then replaces the
+/// row-store with the snapshot rows using `PagedRowStore::replace_all`.
+pub(crate) async fn raft_install_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RaftInstallSnapshotRequest>,
+) -> Result<Json<RaftInstallSnapshotResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    // Accept intra-cluster token OR operator credentials.
+    if check_cluster_token(&headers, &state).is_err() {
+        require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
+    }
+    let resp = {
+        let mut node = state.raft_state.lock().expect("raft_state lock");
+        node.handle_install_snapshot(&req)
+    };
+    if resp.success {
+        // Replace row-store with snapshot rows.
+        let rows = req.rows.into_iter().map(|(k, v)| {
+            let data: std::collections::HashMap<String, String> = match v {
+                serde_json::Value::Object(m) => m.into_iter()
+                    .map(|(col_k, col_v)| (col_k, col_v.as_str().unwrap_or("").to_string()))
+                    .collect(),
+                _ => std::collections::HashMap::new(),
+            };
+            (k, data)
+        });
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        rs.replace_all(rows);
+    }
+    Ok(Json(resp))
 }
 

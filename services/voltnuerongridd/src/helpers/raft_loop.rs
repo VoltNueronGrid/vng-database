@@ -83,6 +83,10 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
         if is_leader && tick_count % HEARTBEAT_EVERY_N_TICKS == 0 {
             fanout_heartbeat(&state, &client, term, &node_id, commit_index, per_peer, total_peers).await;
         }
+
+        // Advance last_applied up to commit_index and broadcast the new value
+        // so that any waiters in sql_execute (multi-node leader path) can unblock.
+        apply_committed_entries(&state);
     }
 }
 
@@ -225,6 +229,24 @@ async fn fanout_heartbeat(
             Err(_) => {} // network error; next tick will retry
         }
     }
+}
+
+
+/// Advance `last_applied` to match `commit_index` and broadcast the new value
+/// on `raft_last_applied_tx`.
+///
+/// Called once per tick so followers and leaders both keep `last_applied`
+/// current.  The watch channel fires to unblock any waiters in `sql_execute`
+/// (multi-node leader linearisable-write path).
+fn apply_committed_entries(state: &AppState) {
+    let mut node = state.raft_state.lock().expect("raft apply_committed lock");
+    if node.last_applied >= node.commit_index {
+        return; // nothing to apply
+    }
+    node.last_applied = node.commit_index;
+    let last_applied = node.last_applied;
+    drop(node);
+    let _ = state.raft_last_applied_tx.send(last_applied);
 }
 
 

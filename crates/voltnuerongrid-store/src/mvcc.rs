@@ -535,4 +535,26 @@ mod tests {
         // For a key that was not modified, should return false.
         assert!(!store.was_modified_after("item:99", snapshot));
     }
+
+    #[test]
+    fn replace_all_clears_old_rows_and_inserts_new() {
+        use std::collections::HashMap;
+        let mut store = PagedRowStore::new(256);
+        // Insert initial rows.
+        let xid1 = store.begin_xid();
+        store.insert(xid1, "old-key-1", HashMap::new());
+        store.insert(xid1, "old-key-2", HashMap::new());
+        // Verify old rows visible.
+        let snap1 = store.scan_at_snapshot(xid1);
+        assert!(snap1.iter().any(|(k, _)| *k == "old-key-1"), "old rows should be visible before replace_all");
+        // Replace all with a single new row.
+        let mut new_cols = HashMap::new();
+        new_cols.insert("col".to_string(), "v".to_string());
+        store.replace_all(vec![("new-key-1".to_string(), new_cols)]);
+        let snap2 = store.scan_at_snapshot(store.current_xid());
+        let keys: Vec<&str> = snap2.iter().map(|(k, _)| *k).collect();
+        assert!(!keys.iter().any(|k| *k == "old-key-1"), "old-key-1 must not appear after replace_all");
+        assert!(!keys.iter().any(|k| *k == "old-key-2"), "old-key-2 must not appear after replace_all");
+        assert!(keys.iter().any(|k| *k == "new-key-1"), "new-key-1 must appear after replace_all");
+    }
 }

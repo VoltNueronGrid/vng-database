@@ -1,55 +1,44 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Semaphore;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::middleware::{Next, from_fn};
-use axum::http::Request;
-use axum::response::Response;
-use base64::Engine;
-use axum::routing::{get, post, options};
-use axum::{Json, Router};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use voltnuerongrid_auth::{
     ConfiguredKmsProviderAdapter, KmsKeyResolution,
-    PrivilegeAction, RbacPrivilegeMatrix, ResourceGrant, SecurityConfigContract,
+    PrivilegeAction, RbacPrivilegeMatrix, SecurityConfigContract,
 };
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
-use voltnuerongrid_sql::{
-    eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale,
-};
-use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
+use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind, SupportedLocale};
 use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
-use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult, DdlCatalog};
+use voltnuerongrid_store::ddl_catalog::DdlCatalog;
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
-use voltnuerongrid_mcp::{McpRequest, McpServerCapabilities, process_request};
-use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
+use voltnuerongrid_driver_rust::ConnectionPoolManager;
 use voltnuerongrid_ingest::{
-    IngestionConnector, ManagedEventBusTransport, ManagedReplayCursorStore,
-    ReplayCursorStore, StreamDirection,
+    ManagedEventBusTransport, ManagedReplayCursorStore,
 };
 use voltnuerongrid_opt::DistributedCacheManager;
 use voltnuerongrid_plugins::PluginLifecycleManager;
 
 pub(crate) mod raft;
 use raft::RaftNode;
-pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 pub mod resilience;
 pub mod observability;
@@ -95,16 +84,16 @@ pub(crate) use helpers::time::{now_unix_ms, now_unix_ms_u64, now_epoch_ms_chaos}
 pub(crate) use helpers::env_helpers::{read_env_bool, read_env_usize, read_env_u64};
 // sql_parse
 pub(crate) use helpers::sql_parse::{
-    extract_request_id, build_http_envelope,
+    build_http_envelope,
     extract_delete_key_from_sql, extract_update_row_from_sql,
     extract_column_names_from_ddl, extract_insert_row_from_sql,
-    extract_all_insert_rows, parse_where_predicates,
+    extract_all_insert_rows,
 };
 // execution
 pub(crate) use helpers::execution::{
     svc_unavailable_sql_response, execute_transaction_statements,
     acquire_pessimistic_lock, release_pessimistic_lock,
-    execute_olap_query, execute_oltp_select, execute_oltp_select_legacy,
+    execute_olap_query, execute_oltp_select,
     df_select_owned, run_async_in_executor,
 };
 // udf
@@ -131,11 +120,8 @@ pub(crate) use helpers::boot::{
     replay_ddl_into, replay_dml_into,
 };
 // ─── Re-export auth helpers so handler/helper modules can use `crate::fn` ────
-pub(crate) use auth::{
-    require_cluster_failover_privilege, require_audit_runtime_principal,
-};
 // ─── Re-export audit helpers ──────────────────────────────────────────────────
-pub(crate) use audit_helpers::{append_runtime_audit_event, filter_audit_events_for_principal};
+pub(crate) use audit_helpers::append_runtime_audit_event;
 // ─── Re-export native protocol helpers ───────────────────────────────────────
 pub(crate) use helpers::native_protocol::{
     load_native_tls_acceptor, vng_native_listener_log,
@@ -154,7 +140,7 @@ pub(crate) use handlers::sre::{
     DrHookPolicyStateEnvelope, DrHookPolicyStateSnapshot, DrHookRetryPlanStep,
     DrHookRuntimeState, DrHookScheduledTask,
     FailureBudgetAlertResponse, FailureBudgetSnapshot,
-    RateLimitPolicySnapshot, SreGateCriterion, SreGateEvaluationResponse,
+    RateLimitPolicySnapshot,
 };
 // ─── Re-export SQL handler types needed by helpers ────────────────────────────
 // Note: SqlTransactionResponse and PessimisticLockRecord are defined in main.rs, not sql.rs
@@ -503,6 +489,11 @@ pub(crate) struct AppState {
     /// Shared secret for intra-cluster Raft RPCs, loaded from `VNG_CLUSTER_TOKEN`.
     /// `None` means no auth is required (single-node / dev).
     pub(crate) cluster_token: Arc<Option<String>>,
+    /// Watch channel that broadcasts the latest `last_applied` Raft index.
+    /// The `apply_committed_entries` loop in `raft_loop.rs` sends on this whenever
+    /// `last_applied` advances; `sql_execute` (multi-node leader path) subscribes
+    /// to wait for quorum before returning 200 to the client.
+    pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>,
     /// S9-WS8-02: Per-model-identity request counters for rate limiting.
     /// Maps model_id → request count in current window.
     pub(crate) ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
@@ -1396,6 +1387,9 @@ async fn main() {
     ).increment(1);
     let wal_engine = Arc::new(Mutex::new(wal_engine_boxed));
 
+    let (raft_last_applied_tx, _raft_last_applied_rx) = tokio::sync::watch::channel(0u64);
+    let raft_last_applied_tx = Arc::new(raft_last_applied_tx);
+
     let state = AppState {
         node_id: node_id.clone(),
         cluster_mode,
@@ -1456,6 +1450,7 @@ async fn main() {
         raft_state: Arc::new(Mutex::new(RaftNode::new(&node_id))),
         raft_peers: Arc::new(load_raft_peers()),
         cluster_token: Arc::new(load_cluster_token()),
+        raft_last_applied_tx: raft_last_applied_tx.clone(),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),

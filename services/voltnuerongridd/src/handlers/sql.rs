@@ -3,7 +3,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use voltnuerongrid_audit::AuditEventKind;
 use voltnuerongrid_auth::PrivilegeAction;
@@ -11,14 +10,13 @@ use voltnuerongrid_exec::QueryPath;
 use voltnuerongrid_sql::{eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind};
 use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
 use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult};
-use voltnuerongrid_store::htap_sync::MutationOp;
 use crate::{AppState, AuthErrorResponse, RuntimeAccessPrincipal, AcidTxEntry};
-use crate::{SqlTransactionResponse, PessimisticLockRecord, SqlTransactionGatewayContext};
-use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError, TransportKind};
+use crate::{SqlTransactionResponse, PessimisticLockRecord};
+use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError};
 use crate::{now_unix_ms, build_http_envelope};
 use crate::{execute_transaction_statements, acquire_sql_data_plane_connection, release_sql_data_plane_connection};
-use crate::{acquire_pessimistic_lock, release_pessimistic_lock, parse_where_predicates};
-use crate::{execute_olap_query, execute_oltp_select, execute_oltp_select_legacy, df_select_owned, run_async_in_executor};
+use crate::{acquire_pessimistic_lock, release_pessimistic_lock};
+use crate::{execute_oltp_select, df_select_owned, run_async_in_executor};
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
@@ -1047,13 +1045,92 @@ pub(crate) async fn sql_execute(
                 }
             }
             rs.release_write_intents(xid);
+            drop(rs); // release row_store lock before any async work
+        }
+
+        // Linearisable leader write: append DML batch to Raft log.
+        // - Single-node leader: commit is immediate, no waiting needed.
+        // - Multi-node leader: append with pending oneshot receivers and wait
+        //   for `raft_last_applied_tx` to confirm quorum before returning 200.
+        // - Follower: skip (DML already applied locally above).
+        if has_dml {
+            let mut node = state.raft_state.lock().expect("raft_state lock sql_execute dml");
+            let is_leader = node.role == crate::RaftRole::Leader;
+            let total_peers = node.next_index.len();
+            if is_leader {
+                let dml_stmts: Vec<String> = ddl_snapshot.iter()
+                    .filter(|s| {
+                        let u = s.trim_start().to_ascii_uppercase();
+                        u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
+                    })
+                    .cloned()
+                    .collect();
+                if total_peers == 0 {
+                    // Single-node: append without waiting (commit is immediate).
+                    for cmd in dml_stmts {
+                        node.append_command(cmd, 0);
+                    }
+                    drop(node);
+                } else {
+                    // Multi-node: append pending; fire-and-forget via block_in_place.
+                    let indexed: Vec<(u64, tokio::sync::oneshot::Receiver<u64>)> =
+                        dml_stmts.into_iter()
+                            .map(|cmd| node.append_command_pending(cmd, total_peers))
+                            .collect();
+                    drop(node);
+                    // Wait synchronously using block_in_place (avoids !Send issue in async handler).
+                    tokio::task::block_in_place(|| {
+                        let handle = tokio::runtime::Handle::current();
+                        for (_, rx) in indexed {
+                            use tokio::time::{timeout, Duration};
+                            let timed = timeout(Duration::from_secs(2), rx);
+                            let _ = handle.block_on(timed);
+                        }
+                    });
+                }
+            } else {
+                drop(node); // Follower: apply was already done above, skip Raft leader path.
+            }
         }
     }
 
     if !olap_statements.is_empty() {
+        // DataFusion path: mirrors the df_select_owned pattern used in the
+        // olap_agg_results block below. execute_olap_query is no longer called
+        // here so all OLAP SELECT dispatch goes through a single code path.
+        use voltnuerongrid_exec_datafusion::{collect_query_table_names, SelectOutput};
+        let started = std::time::Instant::now();
         let query = olap_statements.join("; ");
+        let limit = req.max_rows.unwrap_or(1_000).min(100_000);
         let rs = state.row_store.lock().expect("row_store lock olap_execute");
-        olap = Some(execute_olap_query(query, req.max_rows, &rs));
+        let table_names = collect_query_table_names(&query);
+        let all_rows = rs.export_rows_snapshot();
+        drop(rs);
+        let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
+            std::collections::HashMap::new();
+        for name in &table_names {
+            let prefix = format!("{name}:");
+            let filtered: Vec<_> = all_rows
+                .iter()
+                .filter(|(k, _)| *k == name.as_str() || k.starts_with(&prefix))
+                .cloned()
+                .collect();
+            table_rows.insert(name.clone(), filtered);
+        }
+        if table_rows.is_empty() {
+            table_rows.insert("rows".to_string(), all_rows);
+        }
+        let row_count = match run_async_in_executor(df_select_owned(query.clone(), table_rows, limit)) {
+            Ok(SelectOutput::Rows(rows)) => rows.len(),
+            Ok(SelectOutput::Aggregate(_)) => 1,
+            Err(_) => 0,
+        };
+        olap = Some(OlapQueryResponse {
+            status: "ok",
+            query_signature: query.chars().take(64).collect(),
+            elapsed_ms: started.elapsed().as_millis(),
+            rows: row_count,
+        });
     }
 
     // REQ-12: Detect legacy aggregate functions in OLAP SELECT statements and

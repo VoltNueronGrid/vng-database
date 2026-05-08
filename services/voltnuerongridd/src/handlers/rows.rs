@@ -3,11 +3,9 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use crate::{AppState, AuthErrorResponse, now_unix_ms};
-use crate::RaftLogEntry;
+use crate::{AppState, AuthErrorResponse};
 use crate::{contains_table_alias_sql, contains_column_alias_sql};
-use crate::auth::{require_operator_auth, require_operator_privilege};
-use crate::audit_helpers::append_audit_event;
+use crate::auth::require_operator_auth;
 
 // ─── Rows DTOs ──────────────────────────────────────────────────────────
 

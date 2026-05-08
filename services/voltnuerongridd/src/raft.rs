@@ -9,7 +9,9 @@
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
+use tokio::sync::oneshot;
 use serde::{Deserialize, Serialize};
+use serde_json;
 
 // ---------------------------------------------------------------------------
 // Roles
@@ -83,6 +85,24 @@ pub struct RaftAppendResponse {
     pub match_index: u64,
 }
 
+/// InstallSnapshot RPC arguments (§7).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftInstallSnapshotRequest {
+    pub term: u64,
+    pub leader_id: String,
+    pub snapshot_index: u64,
+    pub snapshot_term: u64,
+    /// Full serialised row-store snapshot (key → JSON value).
+    pub rows: Vec<(String, serde_json::Value)>,
+}
+
+/// InstallSnapshot RPC reply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftInstallSnapshotResponse {
+    pub term: u64,
+    pub success: bool,
+}
+
 /// Snapshot of the node's current Raft state (for the status endpoint).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaftStatusSnapshot {
@@ -136,6 +156,13 @@ pub struct RaftNode {
     /// Per-peer highest log index known to be replicated (§5.3).
     /// Only meaningful when `role == Leader`. Keyed by peer node URL.
     pub match_index: HashMap<String, u64>,
+    /// Pending oneshot senders waiting for quorum confirmation.
+    /// Key = log index; value = sender to fire when commit_index reaches that index.
+    pub pending_quorum: HashMap<u64, oneshot::Sender<u64>>,
+    /// Index of the last snapshot that was installed (§7).
+    pub snapshot_index: u64,
+    /// Term of the last snapshot entry (§7).
+    pub snapshot_term: u64,
 }
 
 impl RaftNode {
@@ -154,6 +181,9 @@ impl RaftNode {
             fencing_token: 0,
             next_index: HashMap::new(),
             match_index: HashMap::new(),
+            pending_quorum: HashMap::new(),
+            snapshot_index: 0,
+            snapshot_term: 0,
         }
     }
 
@@ -207,6 +237,18 @@ impl RaftNode {
                 self.commit_index = n;
             }
         }
+        // Fire pending quorum waiters for any newly committed indices.
+        let newly_committed: Vec<u64> = self
+            .pending_quorum
+            .keys()
+            .copied()
+            .filter(|&idx| idx <= self.commit_index)
+            .collect();
+        for idx in newly_committed {
+            if let Some(tx) = self.pending_quorum.remove(&idx) {
+                let _ = tx.send(idx);
+            }
+        }
     }
 
     /// Record a failed AppendEntries response from `peer` (log inconsistency).
@@ -216,6 +258,101 @@ impl RaftNode {
     pub fn record_append_failure(&mut self, peer: &str) {
         let ni = self.next_index.get(peer).copied().unwrap_or(1);
         self.next_index.insert(peer.to_string(), ni.saturating_sub(1).max(1));
+    }
+
+    /// Append a new command to the log as the current leader.
+    ///
+    /// - Builds a `RaftLogEntry` at `last_log_index + 1` with the current term.
+    /// - On a single-node cluster (`total_peers == 0`) immediately advances
+    ///   `commit_index` to the new index (the leader IS the quorum).
+    /// - On multi-node clusters `commit_index` only advances when
+    ///   `record_append_success` accumulates quorum acks.
+    /// - Does NOT pre-advance `last_applied`; the apply loop handles that.
+    ///
+    /// Returns the log index assigned to the new entry.
+    pub fn append_command(&mut self, command: String, total_peers: usize) -> u64 {
+        let (last_index, _) = self.last_log_position();
+        let new_index = last_index + 1;
+        self.log.push(RaftLogEntry {
+            index: new_index,
+            term: self.current_term,
+            command,
+        });
+        if total_peers == 0 {
+            // Single-node: leader is the only quorum member — commit immediately.
+            self.commit_index = new_index;
+        }
+        new_index
+    }
+
+    /// Append a new command to the log as the current leader, and return a
+    /// `oneshot::Receiver` that fires once the entry is committed by quorum.
+    ///
+    /// The receiver resolves to the committed log index.  On a single-node
+    /// cluster the receiver fires immediately (commit is synchronous).
+    ///
+    /// `last_applied` is NOT advanced here; callers must wait for the receiver
+    /// before applying to the state machine.
+    pub fn append_command_pending(
+        &mut self,
+        command: String,
+        total_peers: usize,
+    ) -> (u64, oneshot::Receiver<u64>) {
+        let (tx, rx) = oneshot::channel();
+        let (last_index, _) = self.last_log_position();
+        let new_index = last_index + 1;
+        self.log.push(RaftLogEntry {
+            index: new_index,
+            term: self.current_term,
+            command,
+        });
+        if total_peers == 0 {
+            self.commit_index = new_index;
+            // Single-node: send immediately (ignore if receiver dropped).
+            let _ = tx.send(new_index);
+        } else {
+            self.pending_quorum.insert(new_index, tx);
+        }
+        (new_index, rx)
+    }
+
+    /// Handle an incoming `InstallSnapshot` RPC (§7).
+    ///
+    /// - Rejects if `req.term < current_term`.
+    /// - No-op (success) if `req.snapshot_index <= self.snapshot_index` (already ahead).
+    /// - Discards log entries covered by the snapshot.
+    /// - Advances `snapshot_index`, `snapshot_term`, `commit_index`, `last_applied`.
+    pub fn handle_install_snapshot(
+        &mut self,
+        req: &RaftInstallSnapshotRequest,
+    ) -> RaftInstallSnapshotResponse {
+        if req.term < self.current_term {
+            return RaftInstallSnapshotResponse {
+                term: self.current_term,
+                success: false,
+            };
+        }
+        // Step down if we see a higher term.
+        if req.term > self.current_term {
+            self.become_follower(req.term);
+        }
+        // Already at or ahead of this snapshot.
+        if req.snapshot_index <= self.snapshot_index {
+            return RaftInstallSnapshotResponse {
+                term: self.current_term,
+                success: true,
+            };
+        }
+        // Discard log entries covered by the snapshot.
+        self.log.retain(|e| e.index > req.snapshot_index);
+        self.snapshot_index = req.snapshot_index;
+        self.snapshot_term = req.snapshot_term;
+        self.commit_index = self.commit_index.max(req.snapshot_index);
+        self.last_applied = self.last_applied.max(req.snapshot_index);
+        RaftInstallSnapshotResponse {
+            term: self.current_term,
+            success: true,
+        }
     }
 
     /// Revert to Follower (e.g. after seeing a higher term).
@@ -508,5 +645,133 @@ mod tests {
         let snap = node.status();
         assert_eq!(snap.election_timeout_ticks, 10);
         assert_eq!(snap.ticks_since_heartbeat, 0);
+    }
+
+    #[test]
+    fn append_command_single_node_commits_immediately() {
+        let mut node = RaftNode::new("node-1");
+        node.become_candidate();
+        node.become_leader();
+        let idx = node.append_command("INSERT INTO t VALUES (1)".into(), 0);
+        assert_eq!(idx, 1);
+        assert_eq!(node.commit_index, 1, "single-node: commit_index must advance");
+        assert_eq!(node.log.len(), 1);
+        assert_eq!(node.last_applied, 0, "last_applied not pre-advanced by append_command");
+    }
+
+    #[test]
+    fn append_command_multi_node_does_not_commit_without_quorum() {
+        let mut node = RaftNode::new("node-1");
+        node.become_candidate();
+        node.become_leader();
+        // 2 peers → cluster of 3 → quorum = 2.
+        let idx = node.append_command("INSERT INTO t VALUES (2)".into(), 2);
+        assert_eq!(idx, 1);
+        assert_eq!(node.commit_index, 0, "multi-node: commit_index must not advance before quorum");
+    }
+
+    #[test]
+    fn append_command_pending_single_node_receiver_fires() {
+        let mut node = RaftNode::new("node-1");
+        node.become_candidate();
+        node.become_leader();
+        let (idx, mut rx) = node.append_command_pending("INSERT INTO t VALUES (3)".into(), 0);
+        assert_eq!(idx, 1);
+        assert_eq!(node.commit_index, 1);
+        // Single-node: receiver should be ready immediately.
+        let received = rx.try_recv().expect("receiver must be ready after single-node commit");
+        assert_eq!(received, 1);
+    }
+
+    #[test]
+    fn append_command_pending_multi_node_last_applied_not_pre_advanced() {
+        let mut node = RaftNode::new("node-1");
+        node.become_candidate();
+        node.become_leader();
+        let (_idx, _rx) = node.append_command_pending("INSERT INTO t VALUES (4)".into(), 2);
+        assert_eq!(node.commit_index, 0, "multi-node: commit_index must not advance before quorum");
+        assert_eq!(node.last_applied, 0, "last_applied must NOT be pre-advanced in multi-node case");
+    }
+
+    #[test]
+    fn install_snapshot_advances_state_and_clears_covered_log() {
+        let mut node = RaftNode::new("node-1");
+        // Add some log entries first.
+        node.log.push(RaftLogEntry { index: 1, term: 1, command: "cmd1".into() });
+        node.log.push(RaftLogEntry { index: 2, term: 1, command: "cmd2".into() });
+        node.log.push(RaftLogEntry { index: 3, term: 1, command: "cmd3".into() });
+        node.current_term = 1;
+
+        let req = RaftInstallSnapshotRequest {
+            term: 1,
+            leader_id: "node-2".into(),
+            snapshot_index: 2,
+            snapshot_term: 1,
+            rows: vec![],
+        };
+        let resp = node.handle_install_snapshot(&req);
+        assert!(resp.success);
+        assert_eq!(node.snapshot_index, 2);
+        assert_eq!(node.last_applied, 2);
+        assert_eq!(node.commit_index, 2);
+        // Entries 1 and 2 should be discarded; entry 3 stays.
+        assert_eq!(node.log.len(), 1);
+        assert_eq!(node.log[0].index, 3);
+    }
+
+    #[test]
+    fn install_snapshot_rejected_on_stale_term() {
+        let mut node = RaftNode::new("node-1");
+        node.current_term = 5;
+        let req = RaftInstallSnapshotRequest {
+            term: 3,
+            leader_id: "node-2".into(),
+            snapshot_index: 10,
+            snapshot_term: 3,
+            rows: vec![],
+        };
+        let resp = node.handle_install_snapshot(&req);
+        assert!(!resp.success);
+        assert_eq!(resp.term, 5);
+    }
+
+    #[test]
+    fn record_append_success_drains_pending_quorum() {
+        let mut node = RaftNode::new("node-1");
+        node.become_candidate();
+        node.become_leader();
+        node.init_leader_indices(&["node-2".to_string(), "node-3".to_string()]);
+        // Append a command and keep the receiver.
+        let (_idx, mut rx) = node.append_command_pending("cmd".into(), 2);
+        // Simulate peer-2 replicating index 1 — that's quorum (leader + 1 of 2 peers).
+        node.record_append_success("node-2", 1, 3);
+        // commit_index should have advanced to 1.
+        assert_eq!(node.commit_index, 1, "quorum ack should advance commit_index");
+        // The pending receiver should fire.
+        let committed = rx.try_recv().expect("quorum reached — receiver must fire");
+        assert_eq!(committed, 1);
+    }
+
+    #[tokio::test]
+    async fn append_command_pending_fires_on_quorum() {
+        let mut node = RaftNode::new("node-1");
+        node.become_candidate();
+        node.become_leader();
+        node.init_leader_indices(&["node-2".to_string()]);
+
+        // Multi-node: entry is NOT committed until quorum acks.
+        let (idx, mut rx) = node.append_command_pending("INSERT INTO t VALUES (99)".into(), 1);
+        assert_eq!(node.commit_index, 0, "not committed yet");
+        assert!(rx.try_recv().is_err(), "receiver not ready yet");
+
+        // Simulate peer-2 acking — that's quorum (leader + 1 of 1 peer = 2/2).
+        // total_nodes = 1 (self) + 1 (peer) = 2; quorum = ceil(2/2) = 1... wait,
+        // quorum = (total_nodes + 1) / 2 = (2+1)/2 = 1 (integer div). leader counts as 1.
+        // So replication_count = 1 (leader self) >= quorum(1). But commit_index only
+        // advances after record_append_success sees peer ack. Let's use total_nodes = 2.
+        node.record_append_success("node-2", idx, 2);
+        assert_eq!(node.commit_index, idx, "quorum reached");
+        let committed = rx.try_recv().expect("quorum fires receiver");
+        assert_eq!(committed, idx);
     }
 }
