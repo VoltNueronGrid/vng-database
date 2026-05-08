@@ -6856,15 +6856,17 @@ async fn s7_ws6_03_raft_tick_increments_counter() {
 async fn s7_ws6_03_raft_tick_triggers_election_after_timeout() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
-    // Default timeout is 10 ticks; fire 9 ticks without triggering.
-    for _ in 0..9 {
+    // Read the node's actual election timeout (randomised per node_id).
+    let timeout = state.raft_state.lock().unwrap().election_timeout_ticks;
+    // Fire (timeout - 1) ticks without triggering an election.
+    for _ in 0..timeout - 1 {
         raft_tick(State(state.clone()), headers.clone()).await.unwrap();
     }
     let snap = raft_status(State(state.clone()), headers.clone()).await.unwrap();
     assert_eq!(snap.0.raft.role, raft::RaftRole::Follower);
-    // 10th tick triggers election.
+    // The final tick must trigger the election.
     let resp = raft_tick(State(state.clone()), headers.clone()).await.unwrap();
-    assert!(resp.0.election_triggered, "10th tick must trigger election");
+    assert!(resp.0.election_triggered, "last tick must trigger election");
     assert_eq!(resp.0.role, raft::RaftRole::Candidate);
     assert_eq!(resp.0.current_term, 1);
 }

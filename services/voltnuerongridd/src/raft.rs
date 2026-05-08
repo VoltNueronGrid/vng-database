@@ -136,13 +136,24 @@ pub struct RaftNode {
     /// Per-peer highest log index known to be replicated (§5.3).
     /// Only meaningful when `role == Leader`. Keyed by peer node URL.
     pub match_index: HashMap<String, u64>,
+    /// Last log index included in the most recent compaction snapshot.
+    /// Entries with `index <= snapshot_index` have been trimmed from `log`.
+    pub snapshot_index: u64,
+    /// Term of the `snapshot_index` entry (needed for consistency checks after trim).
+    pub snapshot_term: u64,
 }
 
 impl RaftNode {
     /// Create a new node in Follower state at term 0.
+    ///
+    /// `election_timeout_ticks` is randomised in [10, 20) using a simple hash
+    /// of `node_id` so that nodes in the same cluster have different timeouts,
+    /// reducing the probability of split votes (§5.2).
     pub fn new(node_id: impl Into<String>) -> Self {
+        let id: String = node_id.into();
+        let timeout = election_timeout_for(&id);
         RaftNode {
-            node_id: node_id.into(),
+            node_id: id,
             current_term: 0,
             voted_for: None,
             role: RaftRole::Follower,
@@ -150,7 +161,9 @@ impl RaftNode {
             commit_index: 0,
             last_applied: 0,
             ticks_since_heartbeat: 0,
-            election_timeout_ticks: 10,
+            election_timeout_ticks: timeout,
+            snapshot_index: 0,
+            snapshot_term: 0,
             fencing_token: 0,
             next_index: HashMap::new(),
             match_index: HashMap::new(),
@@ -286,9 +299,14 @@ impl RaftNode {
         // Consistency check: does our log contain an entry at prev_log_index
         // with the expected prev_log_term?
         if req.prev_log_index > 0 {
-            let ok = self.log.get((req.prev_log_index - 1) as usize)
-                .map(|e| e.term == req.prev_log_term)
-                .unwrap_or(false);
+            // If prev_log_index is within the snapshot, use snapshot_term for match.
+            let ok = if req.prev_log_index == self.snapshot_index {
+                req.prev_log_term == self.snapshot_term
+            } else {
+                self.log_entry_at(req.prev_log_index)
+                    .map(|e| e.term == req.prev_log_term)
+                    .unwrap_or(false)
+            };
             if !ok {
                 return RaftAppendResponse {
                     term: self.current_term,
@@ -299,12 +317,16 @@ impl RaftNode {
         }
 
         // Append new entries, truncating any conflicting tail.
-        for (offset, entry) in req.entries.iter().enumerate() {
-            let idx = req.prev_log_index as usize + offset;
-            if idx < self.log.len() {
-                if self.log[idx].term != entry.term {
-                    // Conflict — truncate and append.
-                    self.log.truncate(idx);
+        // Physical index = logical_index - snapshot_index - 1.
+        for entry in req.entries.iter() {
+            let phys = if entry.index <= self.snapshot_index {
+                continue; // already compacted; skip
+            } else {
+                (entry.index - self.snapshot_index - 1) as usize
+            };
+            if phys < self.log.len() {
+                if self.log[phys].term != entry.term {
+                    self.log.truncate(phys);
                     self.log.push(entry.clone());
                 }
                 // else: existing entry matches; skip.
@@ -363,15 +385,75 @@ impl RaftNode {
     }
 
     // -----------------------------------------------------------------------
+    // Log compaction (§7)
+    // -----------------------------------------------------------------------
+
+    /// Discard all log entries with `index <= up_to_index`.
+    ///
+    /// Records the last-trimmed entry's term in `snapshot_term` so the
+    /// consistency check in `handle_append_entries` still works correctly
+    /// after the trim.  The caller is responsible for persisting the
+    /// associated state-machine snapshot before calling this.
+    ///
+    /// No-op if `up_to_index <= snapshot_index` or the log is already empty.
+    pub fn compact_log(&mut self, up_to_index: u64) {
+        if up_to_index <= self.snapshot_index {
+            return;
+        }
+        // Find the term of the last entry we're about to trim.
+        if let Some(last_kept_term) = self.log_entry_at(up_to_index).map(|e| e.term) {
+            self.snapshot_term = last_kept_term;
+        } else if up_to_index >= self.last_log_position().0 {
+            // up_to_index covers the entire log.
+            self.snapshot_term = self.last_log_position().1;
+            self.log.clear();
+            self.snapshot_index = up_to_index;
+            return;
+        }
+        self.log.retain(|e| e.index > up_to_index);
+        self.snapshot_index = up_to_index;
+    }
+
+    // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+
+    /// Look up a log entry by logical index, accounting for the snapshot offset.
+    fn log_entry_at(&self, index: u64) -> Option<&RaftLogEntry> {
+        if index == 0 || index <= self.snapshot_index {
+            return None;
+        }
+        let offset = (index - self.snapshot_index - 1) as usize;
+        self.log.get(offset)
+    }
 
     fn last_log_position(&self) -> (u64, u64) {
         match self.log.last() {
             Some(e) => (e.index, e.term),
+            // Log is empty but we may have a non-empty snapshot.
+            None if self.snapshot_index > 0 => (self.snapshot_index, self.snapshot_term),
             None => (0, 0),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Derive a per-node election timeout in the range [10, 20) ticks by hashing
+/// the node_id string.  No external crate needed — just FNV-1a fold-fold.
+///
+/// Different nodes get different timeouts, reducing split-vote probability
+/// in even-sized clusters (§5.2 of the Raft paper).
+pub(crate) fn election_timeout_for(node_id: &str) -> u64 {
+    // FNV-1a 64-bit hash over the UTF-8 bytes of node_id.
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+    let hash = node_id.bytes().fold(FNV_OFFSET, |acc, b| {
+        acc.wrapping_mul(FNV_PRIME) ^ (b as u64)
+    });
+    10 + (hash % 10)
 }
 
 // ---------------------------------------------------------------------------
@@ -466,18 +548,20 @@ mod tests {
     #[test]
     fn tick_below_timeout_does_not_trigger_election() {
         let mut node = RaftNode::new("node-1");
-        assert_eq!(node.election_timeout_ticks, 10);
-        for _ in 0..9 {
+        let timeout = node.election_timeout_ticks;
+        assert!((10..20).contains(&timeout));
+        for _ in 0..timeout - 1 {
             node.tick();
         }
         assert_eq!(node.role, RaftRole::Follower);
-        assert_eq!(node.ticks_since_heartbeat, 9);
+        assert_eq!(node.ticks_since_heartbeat, timeout - 1);
     }
 
     #[test]
     fn tick_at_timeout_converts_follower_to_candidate() {
         let mut node = RaftNode::new("node-1");
-        for _ in 0..10 {
+        let timeout = node.election_timeout_ticks;
+        for _ in 0..timeout {
             node.tick();
         }
         assert_eq!(node.role, RaftRole::Candidate);
@@ -506,7 +590,49 @@ mod tests {
     fn status_snapshot_includes_tick_fields() {
         let node = RaftNode::new("node-x");
         let snap = node.status();
-        assert_eq!(snap.election_timeout_ticks, 10);
+        // election_timeout_ticks is randomised per node_id; just check range [10, 20).
+        assert!((10..20).contains(&snap.election_timeout_ticks),
+            "expected timeout in [10,20) but got {}", snap.election_timeout_ticks);
         assert_eq!(snap.ticks_since_heartbeat, 0);
+    }
+
+    #[test]
+    fn election_timeout_differs_by_node_id() {
+        let t1 = election_timeout_for("node-1");
+        let t2 = election_timeout_for("node-2");
+        let t3 = election_timeout_for("node-3");
+        for t in [t1, t2, t3] {
+            assert!((10..20).contains(&t), "timeout {t} out of range");
+        }
+        // Not all three should be equal (they could collide but it is astronomically unlikely).
+        assert!(!(t1 == t2 && t2 == t3), "all three nodes got the same timeout");
+    }
+
+    #[test]
+    fn compact_log_trims_entries_and_updates_snapshot_fields() {
+        let mut node = RaftNode::new("node-1");
+        for i in 1u64..=5 {
+            node.log.push(RaftLogEntry { index: i, term: 1, command: format!("cmd{i}") });
+        }
+        node.commit_index = 3;
+        node.last_applied = 3;
+        node.compact_log(3);
+        assert_eq!(node.snapshot_index, 3);
+        assert_eq!(node.snapshot_term, 1);
+        assert_eq!(node.log.len(), 2); // entries 4 and 5 remain
+        assert_eq!(node.log[0].index, 4);
+    }
+
+    #[test]
+    fn compact_log_full_trim_leaves_empty_log() {
+        let mut node = RaftNode::new("node-1");
+        for i in 1u64..=3 {
+            node.log.push(RaftLogEntry { index: i, term: 2, command: String::new() });
+        }
+        node.compact_log(3);
+        assert!(node.log.is_empty());
+        assert_eq!(node.snapshot_index, 3);
+        // last_log_position should fall back to (snapshot_index, snapshot_term).
+        assert_eq!(node.last_log_position(), (3, 2));
     }
 }

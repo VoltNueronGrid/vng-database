@@ -7,6 +7,10 @@
 //!      cluster (no peers) the node wins immediately and becomes Leader.
 //!   3. While Leader, sends AppendEntries (with any uncommitted log entries)
 //!      to every peer every ~450 ms (3 ticks) to replicate and suppress timers.
+//!   4. Every tick: applies any newly committed log entries to `PagedRowStore`
+//!      (§5.3 — advance `last_applied` up to `commit_index`).
+//!   5. Every `COMPACT_EVERY_N_TICKS` ticks: trims log entries up to
+//!      `last_applied` to bound memory usage (§7).
 //!
 //! When `VNG_CLUSTER_TOKEN` is set, every outgoing Raft RPC carries an
 //! `Authorization: Bearer <token>` header so peers can reject unauthenticated
@@ -15,6 +19,11 @@
 use std::time::Duration;
 use reqwest::Client;
 use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
+
+/// Trim the Raft log once the log grows beyond this many entries.
+const COMPACT_LOG_THRESHOLD: usize = 500;
+/// Check compaction every N ticks (~450 ms at default tick rate).
+const COMPACT_EVERY_N_TICKS: u64 = 3;
 
 const TICK_INTERVAL_MS: u64 = 150;
 const HEARTBEAT_EVERY_N_TICKS: u64 = 3;
@@ -82,6 +91,14 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
 
         if is_leader && tick_count % HEARTBEAT_EVERY_N_TICKS == 0 {
             fanout_heartbeat(&state, &client, term, &node_id, commit_index, per_peer, total_peers).await;
+        }
+
+        // Apply any newly committed log entries to the local state machine.
+        apply_committed_entries(&state);
+
+        // Periodically compact the log to bound memory usage.
+        if tick_count % COMPACT_EVERY_N_TICKS == 0 {
+            compact_if_needed(&state);
         }
     }
 }
@@ -224,6 +241,108 @@ async fn fanout_heartbeat(
             }
             Err(_) => {} // network error; next tick will retry
         }
+    }
+}
+
+
+/// Apply committed Raft log entries to the local `PagedRowStore`.
+///
+/// Processes every entry in `(last_applied, commit_index]`, interprets the
+/// `command` field as a raw SQL DML statement (INSERT / UPDATE / DELETE),
+/// applies it to the row store, and advances `last_applied`.
+///
+/// This function holds at most one lock at a time to avoid deadlocks with the
+/// handler paths that hold `row_store` lock while calling helpers.
+fn apply_committed_entries(state: &AppState) {
+    // Step 1: collect the entries we need to apply (brief lock on raft_state).
+    let entries_to_apply: Vec<crate::RaftLogEntry> = {
+        let node = state.raft_state.lock().expect("raft apply read lock");
+        let from = node.last_applied + 1;
+        let to = node.commit_index;
+        if from > to {
+            return;
+        }
+        node.log
+            .iter()
+            .filter(|e| e.index >= from && e.index <= to)
+            .cloned()
+            .collect()
+    };
+
+    if entries_to_apply.is_empty() {
+        return;
+    }
+
+    // Step 2: apply each command to the row store (holds row_store lock per entry).
+    {
+        let mut rs = state.row_store.lock().expect("raft apply row_store lock");
+        let xid = rs.begin_xid();
+        for entry in &entries_to_apply {
+            apply_dml_command(&entry.command, &mut rs, xid);
+        }
+        rs.release_write_intents(xid);
+    }
+
+    // Step 3: advance last_applied (re-acquire raft_state lock briefly).
+    if let Some(last) = entries_to_apply.last() {
+        let mut node = state.raft_state.lock().expect("raft apply update lock");
+        // Guard: only advance if still monotone (another path could have updated it).
+        if last.index > node.last_applied {
+            node.last_applied = last.index;
+        }
+    }
+}
+
+/// Parse a single DML command string and apply it to the row store.
+///
+/// Supports INSERT, UPDATE, and DELETE.  Unknown or unparseable commands are
+/// silently skipped — the Raft log is the source of truth and we never want a
+/// bad entry to stall the apply loop.
+fn apply_dml_command(
+    command: &str,
+    rs: &mut voltnuerongrid_store::mvcc::PagedRowStore,
+    xid: u64,
+) {
+    use crate::{extract_all_insert_rows, extract_update_row_from_sql, extract_delete_key_from_sql};
+    let upper = command.trim_start().to_ascii_uppercase();
+    if upper.starts_with("INSERT") {
+        for (k, d, _) in extract_all_insert_rows(command) {
+            let _ = rs.begin_write_intent(xid, &k);
+            rs.insert(xid, &k, d);
+        }
+    } else if upper.starts_with("UPDATE") {
+        if let Some((k, d)) = extract_update_row_from_sql(command) {
+            let _ = rs.begin_write_intent(xid, &k);
+            rs.insert(xid, &k, d);
+        }
+    } else if upper.starts_with("DELETE") {
+        if let Some(k) = extract_delete_key_from_sql(command) {
+            let _ = rs.begin_write_intent(xid, &k);
+            rs.delete(xid, &k);
+        }
+    }
+    // SELECT / DDL / unknown — no-op.
+}
+
+/// Compact the Raft log if it has grown past `COMPACT_LOG_THRESHOLD` entries.
+///
+/// Trims all entries with `index <= last_applied` since those have already
+/// been applied to the state machine.  The current `PagedRowStore` contents
+/// serve as the implicit snapshot.
+fn compact_if_needed(state: &AppState) {
+    let mut node = state.raft_state.lock().expect("raft compact lock");
+    if node.log.len() < COMPACT_LOG_THRESHOLD {
+        return;
+    }
+    let up_to = node.last_applied;
+    if up_to > node.snapshot_index {
+        node.compact_log(up_to);
+        tracing::debug!(
+            target: "vng.raft",
+            snapshot_index = up_to,
+            remaining_entries = node.log.len(),
+            "raft log compacted"
+        );
     }
 }
 
