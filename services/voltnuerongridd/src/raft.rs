@@ -436,6 +436,33 @@ impl RaftNode {
         new_index
     }
 
+    /// Append a new command to the leader's log for the **linearisable write
+    /// path** — without pre-advancing `last_applied`.
+    ///
+    /// The apply loop will write the command to the state machine once the
+    /// entry reaches quorum commit, and then advance `last_applied`.  The
+    /// calling handler waits for `last_applied >= returned_index` before
+    /// acknowledging the client.
+    ///
+    /// On single-node clusters, advances `commit_index` immediately (leader
+    /// is quorum), so the apply loop fires on the very next tick.
+    ///
+    /// Should only be called when `role == Leader`.
+    pub fn append_command_pending(&mut self, command: String, total_peers: usize) -> u64 {
+        let new_index = self.last_log_position().0 + 1;
+        self.log.push(RaftLogEntry {
+            index: new_index,
+            term: self.current_term,
+            command,
+        });
+        // Single-node cluster: leader is quorum; commit immediately so the
+        // apply loop can fire without waiting for a heartbeat round.
+        if total_peers == 0 && new_index > self.commit_index {
+            self.commit_index = new_index;
+        }
+        new_index
+    }
+
     // -----------------------------------------------------------------------
     // InstallSnapshot RPC handler (§7)
     // -----------------------------------------------------------------------

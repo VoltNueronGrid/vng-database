@@ -351,11 +351,16 @@ fn apply_committed_entries(state: &AppState) {
 
     // Step 3: advance last_applied (re-acquire raft_state lock briefly).
     if let Some(last) = entries_to_apply.last() {
-        let mut node = state.raft_state.lock().expect("raft apply update lock");
-        // Guard: only advance if still monotone (another path could have updated it).
-        if last.index > node.last_applied {
-            node.last_applied = last.index;
-        }
+        let new_last_applied = {
+            let mut node = state.raft_state.lock().expect("raft apply update lock");
+            // Guard: only advance if still monotone (another path could have updated it).
+            if last.index > node.last_applied {
+                node.last_applied = last.index;
+            }
+            node.last_applied
+        };
+        // Notify any handlers waiting for linearisable confirmation.
+        let _ = state.raft_last_applied_tx.send(new_last_applied);
     }
 }
 

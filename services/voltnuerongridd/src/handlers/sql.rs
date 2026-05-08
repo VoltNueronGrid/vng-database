@@ -3,7 +3,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use voltnuerongrid_audit::AuditEventKind;
 use voltnuerongrid_auth::PrivilegeAction;
@@ -11,14 +10,13 @@ use voltnuerongrid_exec::QueryPath;
 use voltnuerongrid_sql::{eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind};
 use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
 use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult};
-use voltnuerongrid_store::htap_sync::MutationOp;
 use crate::{AppState, AuthErrorResponse, RuntimeAccessPrincipal, AcidTxEntry};
-use crate::{SqlTransactionResponse, PessimisticLockRecord, SqlTransactionGatewayContext};
-use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError, TransportKind};
+use crate::{SqlTransactionResponse, PessimisticLockRecord};
+use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError};
 use crate::{now_unix_ms, build_http_envelope};
 use crate::{execute_transaction_statements, acquire_sql_data_plane_connection, release_sql_data_plane_connection};
 use crate::{acquire_pessimistic_lock, release_pessimistic_lock};
-use crate::{execute_olap_query, execute_oltp_select, execute_oltp_select_legacy, df_select_owned, run_async_in_executor};
+use crate::{execute_olap_query, execute_oltp_select, df_select_owned, run_async_in_executor};
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
@@ -1014,51 +1012,115 @@ pub(crate) async fn sql_execute(
         }
     }
     // Execute DML (INSERT/UPDATE/DELETE) against the row store for ALL committed
-    // non-SELECT transactions — pure DML, mixed DDL+DML, etc. Each row is individually
-    // written and appended to the DML WAL so data survives a server restart.
+    // non-SELECT transactions — pure DML, mixed DDL+DML, etc.
+    //
+    // Two paths depending on Raft role:
+    //   • Multi-node leader  → linearisable: append to Raft log first, wait for
+    //     apply-loop quorum confirmation, then ACK client (§5.3).
+    //   • Single-node leader / follower / non-Raft → direct: write to row_store
+    //     immediately, then fire-and-forget append to Raft log so followers can
+    //     replicate on the next heartbeat tick.
     if transaction.as_ref().map(|r| r.statements_executed > 0).unwrap_or(false) {
         let has_dml = ddl_snapshot.iter().any(|s| {
             let u = s.trim_start().to_ascii_uppercase();
             u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
         });
         if has_dml {
-            let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
-            let xid = rs.begin_xid();
-            for stmt in &ddl_snapshot {
-                let upper = stmt.trim_start().to_ascii_uppercase();
-                if upper.starts_with("INSERT") {
-                    for (k, d, single_sql) in extract_all_insert_rows(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.insert(xid, &k, d);
-                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
+            let total_peers = state.raft_peers.len();
+            let is_multi_node_leader = {
+                let node = state.raft_state.lock().expect("raft role check lock");
+                node.role == crate::RaftRole::Leader && total_peers > 0
+            };
+
+            if is_multi_node_leader {
+                // ── Linearisable path ────────────────────────────────────────────
+                // 1. Append every DML command to the Raft log (no row_store write yet).
+                let mut max_pending_index: u64 = 0;
+                {
+                    let mut node = state.raft_state.lock().expect("raft linearisable append lock");
+                    for stmt in &ddl_snapshot {
+                        let upper = stmt.trim_start().to_ascii_uppercase();
+                        if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
+                            let idx = node.append_command_pending(stmt.clone(), total_peers);
+                            if idx > max_pending_index { max_pending_index = idx; }
+                        }
                     }
-                } else if upper.starts_with("UPDATE") {
-                    if let Some((k, d)) = extract_update_row_from_sql(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.insert(xid, &k, d);
-                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
-                    }
-                } else if upper.starts_with("DELETE") {
-                    if let Some(k) = extract_delete_key_from_sql(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.delete(xid, &k);
+                }
+                // 2. Persist to WAL for local durability (before waiting for quorum).
+                for stmt in &ddl_snapshot {
+                    let upper = stmt.trim_start().to_ascii_uppercase();
+                    if upper.starts_with("INSERT") {
+                        for (_, _, single_sql) in extract_all_insert_rows(stmt) {
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
+                        }
+                    } else if upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
                         persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                     }
                 }
-            }
-            rs.release_write_intents(xid);
-        }
-        // Replicate committed DML to the Raft log if this node is the leader.
-        // The entry is marked as already-applied (last_applied advances) so the
-        // apply loop won't double-execute what was just written to row_store.
-        {
-            let total_peers = state.raft_peers.len();
-            let mut node = state.raft_state.lock().expect("raft leader append lock");
-            if node.role == crate::RaftRole::Leader {
+                // 3. Wait for the apply loop to commit and apply (up to 2 s).
+                if max_pending_index > 0 {
+                    let mut rx = state.raft_last_applied_tx.subscribe();
+                    let wait_ok = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        rx.wait_for(|&applied| applied >= max_pending_index),
+                    ).await.is_ok();
+                    if !wait_ok {
+                        release_sql_data_plane_connection(&state, &connection_id);
+                        return Ok((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(SqlExecuteResponse {
+                                status: "error",
+                                route_path: route_path_name(decision.payload.path).to_string(),
+                                reason: "raft_quorum_timeout".to_string(),
+                                transaction, olap: None,
+                                rejected_statement_count,
+                                udf_results: None, udf_guardrail_status: None,
+                                udf_function_catalog, udf_guard_policies, udf_execution_plan,
+                                legacy_agg_results: None, planner_path: None,
+                                oltp_rows: None, olap_agg_results: None,
+                                columns: None, rows: None,
+                            }),
+                        ));
+                    }
+                }
+            } else {
+                // ── Direct path (single-node leader / follower / non-Raft) ────────
+                let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
+                let xid = rs.begin_xid();
                 for stmt in &ddl_snapshot {
                     let upper = stmt.trim_start().to_ascii_uppercase();
-                    if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
-                        node.append_command(stmt.clone(), total_peers);
+                    if upper.starts_with("INSERT") {
+                        for (k, d, single_sql) in extract_all_insert_rows(stmt) {
+                            let _ = rs.begin_write_intent(xid, &k);
+                            rs.insert(xid, &k, d);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
+                        }
+                    } else if upper.starts_with("UPDATE") {
+                        if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                            let _ = rs.begin_write_intent(xid, &k);
+                            rs.insert(xid, &k, d);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                        }
+                    } else if upper.starts_with("DELETE") {
+                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                            let _ = rs.begin_write_intent(xid, &k);
+                            rs.delete(xid, &k);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                        }
+                    }
+                }
+                rs.release_write_intents(xid);
+                // Fire-and-forget: replicate to Raft log so followers catch up.
+                // append_command pre-advances last_applied so the apply loop skips re-execution.
+                {
+                    let mut node = state.raft_state.lock().expect("raft leader append lock");
+                    if node.role == crate::RaftRole::Leader {
+                        for stmt in &ddl_snapshot {
+                            let upper = stmt.trim_start().to_ascii_uppercase();
+                            if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
+                                node.append_command(stmt.clone(), total_peers);
+                            }
+                        }
                     }
                 }
             }

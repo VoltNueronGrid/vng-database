@@ -328,6 +328,26 @@ impl PagedRowStore {
             .collect()
     }
 
+    /// Replace all rows atomically with the given snapshot data.
+    ///
+    /// Clears every existing page (resetting to a single empty page) and
+    /// inserts each row from `rows` under a fresh transaction id.  The
+    /// `next_xid` counter is preserved so future writes get monotonically
+    /// higher xids than any prior version.
+    ///
+    /// Intended for Raft snapshot installation (§7): the leader's full
+    /// row-store snapshot replaces the follower's diverged state entirely.
+    pub fn replace_all(&mut self, rows: impl IntoIterator<Item = (String, RowData)>) {
+        // Reset to a single empty page; keep next_xid monotone.
+        self.pages = vec![StorePage::new(0)];
+        self.next_page_id = 1;
+        self.write_intents.clear();
+        let xid = self.begin_xid();
+        for (key, data) in rows {
+            self.insert(xid, &key, data);
+        }
+    }
+
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------

@@ -7,7 +7,6 @@ use axum::Json;
 use serde_json::json;
 use voltnuerongrid_audit::AuditEventKind;
 use voltnuerongrid_driver_rust::PoolAcquireError;
-use voltnuerongrid_store::BoxedDurabilityEngine;
 use voltnuerongrid_store::htap_sync::{MutationOp, ReplicaReplayState};
 use crate::{AppState, AuthErrorResponse, PoolStatsResponse};
 use crate::{ClusterNodeRuntime, RuntimeAccessPrincipal, now_unix_ms_u64};

@@ -503,6 +503,10 @@ pub(crate) struct AppState {
     /// Shared secret for intra-cluster Raft RPCs, loaded from `VNG_CLUSTER_TOKEN`.
     /// `None` means no auth is required (single-node / dev).
     pub(crate) cluster_token: Arc<Option<String>>,
+    /// Broadcast channel: the apply loop sends the latest `last_applied` value
+    /// each time it advances.  Handlers waiting for linearisable confirmation
+    /// subscribe and wait until `last_applied >= their_entry_index`.
+    pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>,
     /// S9-WS8-02: Per-model-identity request counters for rate limiting.
     /// Maps model_id → request count in current window.
     pub(crate) ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
@@ -1456,6 +1460,7 @@ async fn main() {
         raft_state: Arc::new(Mutex::new(RaftNode::new(&node_id))),
         raft_peers: Arc::new(load_raft_peers()),
         cluster_token: Arc::new(load_cluster_token()),
+        raft_last_applied_tx: Arc::new(tokio::sync::watch::channel(0).0),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),

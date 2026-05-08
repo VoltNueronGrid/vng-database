@@ -2,7 +2,7 @@
 /// Build the full axum router with all 330+ routes wired to handler functions.
 /// Extracted from main() in Slice 8 to keep main() readable.
 pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
-    use axum::routing::{delete, get, options, post, put};
+    use axum::routing::{get, options, post};
     use axum::Router;
     use axum::middleware::from_fn;
     use crate::handlers::audit::*;

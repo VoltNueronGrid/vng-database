@@ -1,13 +1,11 @@
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
+use serde::Serialize;
 use voltnuerongrid_auth::PrivilegeAction;
-use crate::{AppState, AuthErrorResponse, now_unix_ms};
-use crate::NativeFrameType;
+use crate::{AppState, AuthErrorResponse};
 use crate::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
-use crate::auth::{require_operator_auth, require_operator_privilege, require_cluster_failover_privilege};
+use crate::auth::require_cluster_failover_privilege;
 
 /// Return `Ok(())` if the request carries a valid cluster token
 /// (`Authorization: Bearer <VNG_CLUSTER_TOKEN>`).
@@ -461,15 +459,12 @@ pub(crate) async fn raft_install_snapshot(
         node.handle_install_snapshot(&req)
     };
 
-    if resp.success && !req.rows.is_empty() {
-        // Replace row-store contents with the leader's snapshot.
+    if resp.success {
+        // Atomically replace the entire row-store with the leader's snapshot.
+        // replace_all clears existing data before inserting, so the follower's
+        // diverged state is fully overwritten rather than merged.
         let mut rs = state.row_store.lock().expect("row_store install_snapshot lock");
-        let xid = rs.begin_xid();
-        for (key, data) in &req.rows {
-            let _ = rs.begin_write_intent(xid, key);
-            rs.insert(xid, key, data.clone());
-        }
-        rs.release_write_intents(xid);
+        rs.replace_all(req.rows.into_iter());
     }
 
     Ok(Json(resp))

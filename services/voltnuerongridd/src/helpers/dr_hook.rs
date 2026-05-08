@@ -2,7 +2,6 @@
 use std::fs;
 use std::sync::atomic::Ordering;
 use serde_json::json;
-use voltnuerongrid_sql::SqlAnalyzer;
 use voltnuerongrid_store::htap_sync::MutationOp;
 use crate::AppState;
 use crate::{DR_HOOK_COUNTER, AutonomousMode, now_unix_ms};
@@ -13,7 +12,7 @@ use crate::{
     FailureBudgetAlertResponse, FailureBudgetSnapshot,
     RateLimitPolicySnapshot,
 };
-use crate::{record_transport_mutation, rotate_leader, udf_function_catalog_contract};
+use crate::{record_transport_mutation, rotate_leader};
 
 
 pub(crate) fn failure_budget_snapshot(consumed_percent: f64) -> FailureBudgetSnapshot {

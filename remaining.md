@@ -1,52 +1,66 @@
-# `remaining.md` — handoff for next session (v16)
+# `remaining.md` — handoff for next session (v21)
 
-**Last updated:** 2026-05-08 (fifteenth session — Phase 3: Real RBAC + Raft replication)
-**Branch:** `main`
-**Latest commit:** `bfd797d` — pushed to `origin/main` and `vng-database/main`
-**cargo check -p voltnuerongridd:** clean ✓
-
----
-
-## TL;DR — what landed this session
-
-### ✅ Phase 3 — Real RBAC
-
-**`config_init.rs`**
-- `load_rbac_privilege_matrix()` — reads `VNG_RBAC_POLICY_PATH` JSON file (full `RbacPrivilegeMatrix` struct); falls back silently to `default_rbac_privilege_matrix()` if unset or parse fails
-- JSON format: `{"grants_by_role": {"dba": [{"resource": "...", "scopes": ["..."], "actions": ["read"]}]}}`
-
-**`main.rs`**
-- `default_rbac_privilege_matrix()` → `load_rbac_privilege_matrix()` at startup
-
-### ✅ Phase 3 — Raft replication
-
-**`config_init.rs`**
-- `load_raft_peers()` — reads `VNG_RAFT_PEERS` (comma-separated base URLs, e.g. `http://node-2:8080,http://node-3:8080`); returns empty vec for single-node default
-
-**`helpers/raft_loop.rs`** (new file)
-- `run_raft_tick_loop(state)` — 150ms tick loop spawned at startup
-  - Calls `RaftNode::tick()` each iteration; drives Follower→Candidate transition
-  - On election start: sends `POST /api/v1/cluster/raft/vote` to all peers via reqwest (100ms timeout); counts votes; quorum = ceil(n/2); single-node wins immediately (no peers → votes=1, quorum=1)
-  - On Leader: sends empty `POST /api/v1/cluster/raft/append` heartbeat to each peer every 3 ticks (~450ms) to suppress their election timers
-
-**`main.rs`**
-- Fixed hardcoded `RaftNode::new("node-1")` → `RaftNode::new(&node_id)` (uses actual `VNG_NODE_ID`)
-- Added `raft_peers: Arc<Vec<String>>` to `AppState`
-- Spawns `run_raft_tick_loop(state.clone())` at startup alongside dr_hook_scheduler
-
-**`Cargo.toml`**
-- Added `reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }`
+**Last updated:** 2026-05-08 (session 20 — Raft snapshot install, linearisable writes)
+**Branch:** `claude/friendly-hertz-3b69fb`
+**Latest commit:** session 20 (pending push)
+**cargo test -p voltnuerongridd:** 749 passed, 0 failed ✓
 
 ---
 
-## Known pre-existing issues (not introduced by Phase 3)
+## TL;DR — what landed in session 20
 
-`cargo test -p voltnuerongridd` fails to compile the test binary (519 errors):
-- **E0616** (~500) — `tests.rs` accesses private fields of response structs defined in handler modules. Fields need `pub(crate)` or tests need to use constructors.
-- **E0597** (2) — lifetime issue in `resilience.rs`.
-- **E0659** (2) — ambiguous name `build_sre_gate_evaluation`.
+### ✅ PagedRowStore::replace_all (snapshot install)
 
-These predate Phase 3. `cargo check -p voltnuerongridd` (no test binary) is fully clean.
+**`crates/voltnuerongrid-store/src/mvcc.rs`**
+- Added `replace_all(&mut self, rows: impl IntoIterator<Item = (String, RowData)>)` — resets pages to a single empty page, clears write intents, then inserts all rows in a new transaction.
+- Used by `raft_install_snapshot` to atomically replace the full row-store state from a leader snapshot.
+
+**`services/voltnuerongridd/src/handlers/raft.rs`**
+- Added `raft_install_snapshot` handler at `POST /api/v1/cluster/raft/install_snapshot`
+- Accepts intra-cluster token OR operator credentials (same dual-auth as `raft_append`)
+- Calls `RaftNode::handle_install_snapshot` first (advances `snapshot_index`, `last_applied`), then `rs.replace_all(req.rows)` if successful
+
+**`services/voltnuerongridd/src/router.rs`**
+- Registered `POST /api/v1/cluster/raft/install_snapshot`
+
+### ✅ RaftNode methods for leader append
+
+**`services/voltnuerongridd/src/raft.rs`**
+- `append_command(command, total_peers) -> u64` — fire-and-forget: appends entry, pre-advances `last_applied` so the apply loop never re-executes, advances `commit_index` on single-node.
+- `append_command_pending(command, total_peers) -> u64` — linearisable path: appends entry, does NOT advance `last_applied` (apply loop is sole writer), advances `commit_index` on single-node only.
+- `handle_install_snapshot(req) -> RaftInstallSnapshotResponse` — truncates log, updates snapshot_index/term, advances commit_index/last_applied to snapshot boundary.
+- `RaftInstallSnapshotRequest` / `RaftInstallSnapshotResponse` structs added.
+
+### ✅ Linearisable leader writes in sql_execute
+
+**`services/voltnuerongridd/src/handlers/sql.rs`**
+- DML path branches on `is_multi_node_leader` (role=Leader AND peers>0):
+  - **Multi-node leader**: calls `append_command_pending` for each DML statement, then subscribes to `raft_last_applied_tx` watch channel and waits up to 2s for `last_applied >= max_pending_index`. Returns HTTP 503 `raft_quorum_timeout` if quorum not reached.
+  - **Single-node / non-leader**: direct row_store write + `append_command` (unchanged behaviour).
+
+**`services/voltnuerongridd/src/main.rs`** / **`tests.rs`**
+- Added `raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>` to `AppState`.
+- Initialized as `tokio::sync::watch::channel(0).0` in both `main()` and test fixture.
+
+**`services/voltnuerongridd/src/helpers/raft_loop.rs`**
+- `apply_committed_entries` now sends to `raft_last_applied_tx` after advancing `last_applied`, unblocking any waiting linearisable write handlers.
+- `fanout_heartbeat` detects `needs_snapshot` (when `next_index[peer] <= snapshot_index`) and sends `POST /install_snapshot` with the full row-store snapshot instead of log entries.
+
+### ✅ Dead-code audit (partial)
+
+**`services/voltnuerongridd/src/helpers/sql_parse.rs`**
+- Removed `parse_where_predicates` function (dead code).
+
+**Note on unused-import sweep**: `cargo fix --bin voltnuerongridd --allow-dirty` removed too aggressively — glob imports needed by `tests.rs` were dropped, causing 1385 test compile errors. The fix was reverted for `main.rs`. ~20 warnings remain (unused standalone imports in `main.rs` + handler files). These are safe to remove but require careful per-line edits that don't disturb the glob imports that `tests.rs` relies on.
+
+---
+
+## Previous sessions summary (sessions 16–19)
+
+- Session 16: tests green, DataFusion OLAP wire-up, Raft log replication, cluster auth
+- Session 17: Raft `next_index`, cluster auth handlers, DataFusion `olap_agg`
+- Session 18: Raft apply loop, randomised timeouts, log compaction
+- Session 19: Leader append path, snapshot transfer DTOs, dead-code audit start
 
 ---
 
@@ -54,15 +68,17 @@ These predate Phase 3. `cargo check -p voltnuerongridd` (no test binary) is full
 
 ### High priority
 
-1. **Fix tests.rs E0616 / E0659** — ~500 field-privacy errors prevent the test binary from building. Fix: add `pub(crate)` to all fields of handler response structs (raft, wal, sre, audit, misc), or refactor tests to avoid direct field access.
+1. **Verify linearisable write path end-to-end** — the watch channel and `append_command_pending` are wired up, but no integration test covers the multi-node quorum wait. Add a test that spawns two `AppState` instances (or mocks two peers) and confirms a DML write blocks until `raft_last_applied_tx.send()` fires.
 
-2. **DataFusion wiring** — `voltnuerongrid-exec-datafusion` crate has a working executor, but `handlers/sql.rs` still calls hand-rolled OLAP paths. Wire `OlapQueryRequest` through the DataFusion executor.
+2. **DataFusion wiring** — `voltnuerongrid-exec-datafusion` has a working executor, but `handlers/sql.rs` still calls hand-rolled OLAP paths for some query shapes. Validate coverage and fill gaps.
 
 ### Medium priority
 
-3. **Raft log replication** — heartbeat fanout works but leaders don't yet replicate actual log entries to followers. Wire `raft_state.log` entries into `AppendEntries.entries` before each heartbeat.
+3. **Unused-import sweep (safe subset)** — ~20 standalone `use` warnings remain in `main.rs`. Remove them line by line, being careful NOT to remove glob imports (`use handlers::cdc::*` etc.) that `tests.rs` depends on. Alternatively, make tests.rs import explicitly so glob imports can be safely removed.
 
-4. **Vote response parsing** — `run_election` currently checks `resp.vote_granted` from peer JSON. The peer `raft_vote` handler requires a valid operator auth header. Either bypass auth for intra-cluster RPCs or add a cluster-identity bearer token (`VNG_CLUSTER_TOKEN`).
+4. **replace_all test** — add a unit test in `crates/voltnuerongrid-store/src/mvcc.rs` (or its test file) that exercises `replace_all` (insert rows, call replace_all with new rows, verify old rows are gone).
+
+5. **append_command_pending test** — add a test in `services/voltnuerongridd/src/raft.rs` that verifies `last_applied` is NOT pre-advanced (multi-node case) but `commit_index` IS advanced (single-node case).
 
 ---
 
@@ -70,15 +86,15 @@ These predate Phase 3. `cargo check -p voltnuerongridd` (no test binary) is full
 
 ```
 @remaining.md
+@services/voltnuerongridd/src/handlers/sql.rs
 @services/voltnuerongridd/src/helpers/raft_loop.rs
-@services/voltnuerongridd/src/tests.rs
-@services/voltnuerongridd/src/handlers/raft.rs
+@services/voltnuerongridd/src/raft.rs
 ```
 
 Recommended next steps (in priority order):
-1. **Fix tests.rs** — make handler response struct fields `pub(crate)`; fix E0659 by qualifying the ambiguous name
-2. **DataFusion wiring** — route OLAP queries through exec-datafusion executor
-3. **Raft log replication** — send actual log entries in leader heartbeats
-4. **Cluster auth token** — add `VNG_CLUSTER_TOKEN` for intra-cluster Raft RPCs
+1. **Integration test for linearisable writes** — confirm quorum wait works
+2. **DataFusion coverage** — audit which OLAP shapes are wired vs. hand-rolled
+3. **Standalone import cleanup** — surgical removal of the ~20 non-glob warnings
+4. **replace_all + append_command_pending unit tests**
 
-**Environment note:** `VNG_RBAC_POLICY_PATH` and `VNG_RAFT_PEERS` are new env vars. Unset = safe defaults (hardcoded RBAC, single-node Raft).
+**Environment note:** `VNG_CLUSTER_TOKEN`, `VNG_RAFT_PEERS`, `VNG_RBAC_POLICY_PATH`, `VNG_NODE_ID` are the key env vars. All default safely for single-node dev.

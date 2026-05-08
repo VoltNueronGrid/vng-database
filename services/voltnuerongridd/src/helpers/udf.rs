@@ -1,6 +1,4 @@
 //! UDF runtime scaffold and catalog contract.
-use voltnuerongrid_audit::AuditEventKind;
-use voltnuerongrid_driver_rust::PoolAcquireError;
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 use crate::{
     UdfExecutionResult, UdfExecutionPlanStep, UdfFunctionCatalogEntry,
