@@ -1117,7 +1117,42 @@ pub(crate) async fn sql_execute(
                     }
                 }
             } else {
-                drop(node); // Follower: apply was already done above, skip Raft leader path.
+                // Follower: DML was applied locally but won't be replicated without
+                // going through the leader.  In a multi-node cluster, signal the client
+                // to retry against the leader.  On a single-node cluster the node hasn't
+                // won its first election yet — let DML fall through (applied locally).
+                let peer_count = state.raft_peers.len();
+                let leader_url = state.current_leader_url.lock().expect("leader_url lock").clone();
+                drop(node);
+                if peer_count > 0 {
+                    let reason = match &leader_url {
+                        Some(url) => format!("not_leader: retry DML against leader at {url}"),
+                        None => "not_leader: no known leader yet; retry later".to_string(),
+                    };
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(SqlExecuteResponse {
+                            status: "error",
+                            route_path: route_path_name(decision.payload.path).to_string(),
+                            reason,
+                            transaction: None,
+                            olap: None,
+                            rejected_statement_count: 0,
+                            udf_results: None,
+                            udf_guardrail_status: None,
+                            udf_function_catalog: vec![],
+                            udf_guard_policies: vec![],
+                            udf_execution_plan: vec![],
+                            legacy_agg_results: None,
+                            planner_path: None,
+                            oltp_rows: None,
+                            olap_agg_results: None,
+                            columns: None,
+                            rows: None,
+                        }),
+                    ));
+                }
             }
         }
     }

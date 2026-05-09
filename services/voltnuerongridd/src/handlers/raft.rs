@@ -414,6 +414,10 @@ pub(crate) async fn raft_append(
     if check_cluster_token(&headers, &state).is_err() {
         require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     }
+    // Store the leader's advertised URL so followers can forward DML writes.
+    if let Some(leader_url) = headers.get("x-vng-leader-url").and_then(|v| v.to_str().ok()) {
+        *state.current_leader_url.lock().expect("leader_url lock") = Some(leader_url.to_string());
+    }
     let resp = state.raft_state.lock().expect("raft_state lock").handle_append_entries(&req);
     Ok(Json(resp))
 }
@@ -440,6 +444,18 @@ pub(crate) async fn raft_tick(
 
 // ─── Raft snapshot install endpoint ─────────────────────────────────────────
 
+/// Convert a JSON value to its string representation for row-store storage.
+/// Strings are returned as-is (no quotes); numbers and booleans use their
+/// display form; null becomes empty string.  Avoids silent data loss from
+/// `.as_str().unwrap_or("")` which drops non-string scalars.
+fn json_value_to_str(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
 /// Install a snapshot from the leader (§7).
 ///
 /// Accepts intra-cluster token OR operator credentials.
@@ -463,7 +479,7 @@ pub(crate) async fn raft_install_snapshot(
         let rows = req.rows.into_iter().map(|(k, v)| {
             let data: std::collections::HashMap<String, String> = match v {
                 serde_json::Value::Object(m) => m.into_iter()
-                    .map(|(col_k, col_v)| (col_k, col_v.as_str().unwrap_or("").to_string()))
+                    .map(|(col_k, col_v)| (col_k, json_value_to_str(&col_v)))
                     .collect(),
                 _ => std::collections::HashMap::new(),
             };
@@ -562,7 +578,7 @@ pub(crate) async fn raft_install_snapshot_chunk(
         let rows = accumulated.into_iter().map(|(k, v)| {
             let data: std::collections::HashMap<String, String> = match v {
                 serde_json::Value::Object(m) => m.into_iter()
-                    .map(|(col_k, col_v)| (col_k, col_v.as_str().unwrap_or("").to_string()))
+                    .map(|(col_k, col_v)| (col_k, json_value_to_str(&col_v)))
                     .collect(),
                 _ => std::collections::HashMap::new(),
             };

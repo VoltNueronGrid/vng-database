@@ -491,6 +491,12 @@ pub(crate) struct AppState {
     pub(crate) cluster_token: Arc<Option<String>>,
     /// Watch channel that broadcasts the latest `last_applied` Raft index.
     pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    /// This node's own advertised base URL, loaded from `VNG_NODE_URL`.
+    /// Sent in AppendEntries so followers can forward DML writes to the leader.
+    pub(crate) node_url: Arc<Option<String>>,
+    /// URL of the current Raft leader, learned from `x-vng-leader-url` headers.
+    /// Updated on every accepted AppendEntries. Used by follower DML forwarding.
+    pub(crate) current_leader_url: Arc<Mutex<Option<String>>>,
     /// In-progress chunked snapshot transfer sessions keyed by `session_id`.
     /// Each entry accumulates row chunks from the leader until `is_last = true`.
     pub(crate) snapshot_chunk_sessions: Arc<Mutex<HashMap<String, SnapshotChunkSession>>>,
@@ -1463,6 +1469,8 @@ async fn main() {
         raft_peers: Arc::new(load_raft_peers()),
         cluster_token: Arc::new(load_cluster_token()),
         raft_last_applied_tx: raft_last_applied_tx.clone(),
+        node_url: Arc::new(std::env::var("VNG_NODE_URL").ok()),
+        current_leader_url: Arc::new(Mutex::new(None)),
         snapshot_chunk_sessions: Arc::new(Mutex::new(HashMap::new())),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),

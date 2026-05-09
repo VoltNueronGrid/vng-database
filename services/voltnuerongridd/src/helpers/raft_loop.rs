@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 use reqwest::Client;
-use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftVoteRequest, RaftVoteResponse};
+use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftSnapshotChunkResponse, RaftVoteRequest, RaftVoteResponse};
 
 const TICK_INTERVAL_MS: u64 = 150;
 const HEARTBEAT_EVERY_N_TICKS: u64 = 3;
@@ -190,6 +190,8 @@ async fn fanout_heartbeat(
         return;
     }
     let token = state.cluster_token.as_deref().map(str::to_string);
+    // Advertise our own URL so followers can forward DML writes to us.
+    let leader_url = state.node_url.as_deref().map(str::to_string);
     let total_nodes = total_peers + 1; // including self
 
     let mut join_set: tokio::task::JoinSet<(String, Result<RaftAppendResponse, ()>)> =
@@ -203,8 +205,11 @@ async fn fanout_heartbeat(
             let client = client.clone();
             let token = token.clone();
             let peer_url_clone = peer_url.clone();
-            let session_id = format!("snap-{}-{}", node_id, peer_url);
+            // Stable session-id: includes snapshot_index so each unique snapshot
+            // version gets its own session; retries of the same snapshot reuse it.
+            let session_id = format!("snap-{}-{}-{}", node_id, peer_url, snapshot_index);
             let node_id_owned = node_id.to_string();
+            let state_clone = state.clone();
             // Export current row store for this snapshot.
             let all_rows: Vec<(String, serde_json::Value)> = {
                 let rs = state.row_store.lock().expect("row_store snapshot lock");
@@ -223,7 +228,6 @@ async fn fanout_heartbeat(
                 .map(|c| c.to_vec())
                 .collect();
             let total_chunks = chunks.len();
-            // Fire-and-forget — send all chunks sequentially in a spawned task.
             tokio::spawn(async move {
                 for (i, chunk) in chunks.into_iter().enumerate() {
                     let is_last = i + 1 == total_chunks;
@@ -243,12 +247,31 @@ async fn fanout_heartbeat(
                         builder = builder.header("Authorization", format!("Bearer {t}"));
                     }
                     match builder.send().await {
-                        Ok(resp) if resp.status().is_success() => {}
-                        _ => break, // abort on first error; next tick retries from chunk 0
+                        Ok(resp) if resp.status().is_success() => {
+                            if is_last {
+                                // On final chunk: parse response and advance next_index if complete.
+                                if let Ok(chunk_resp) = resp.json::<RaftSnapshotChunkResponse>().await {
+                                    if chunk_resp.complete {
+                                        let mut node = state_clone.raft_state.lock()
+                                            .expect("raft advance lock");
+                                        if node.role == RaftRole::Leader && node.current_term == term {
+                                            // Advance next_index past the snapshot so this peer
+                                            // receives normal AppendEntries on the next heartbeat.
+                                            node.record_append_success(
+                                                &peer_url_clone,
+                                                snapshot_index,
+                                                total_nodes + 1,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => break, // abort; next tick retries from chunk 0 if session is new
                     }
                 }
             });
-            // Do not add to join_set — snapshot fanout is fire-and-forget for this tick.
+            // Do not add to join_set — snapshot fanout result is handled inside the task.
             continue;
         }
 
@@ -264,10 +287,14 @@ async fn fanout_heartbeat(
             leader_commit: commit_index,
         };
         let peer_url_owned = peer_url.clone();
+        let leader_url_clone = leader_url.clone();
         join_set.spawn(async move {
             let mut builder = client.post(&url).json(&req);
             if let Some(t) = &token {
                 builder = builder.header("Authorization", format!("Bearer {t}"));
+            }
+            if let Some(lurl) = &leader_url_clone {
+                builder = builder.header("x-vng-leader-url", lurl.as_str());
             }
             let result = match builder.send().await {
                 Ok(resp) if resp.status().is_success() => {
