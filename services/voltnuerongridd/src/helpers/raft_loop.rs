@@ -223,10 +223,15 @@ async fn fanout_heartbeat(
                     })
                     .collect()
             };
-            let chunks: Vec<Vec<(String, serde_json::Value)>> = all_rows
+            let mut chunks: Vec<Vec<(String, serde_json::Value)>> = all_rows
                 .chunks(SNAPSHOT_CHUNK_SIZE)
                 .map(|c| c.to_vec())
                 .collect();
+            // Empty store: always send at least one terminal chunk so the follower
+            // applies the snapshot (clearing its state) even when there are no rows.
+            if chunks.is_empty() {
+                chunks.push(Vec::new());
+            }
             let total_chunks = chunks.len();
             tokio::spawn(async move {
                 for (i, chunk) in chunks.into_iter().enumerate() {

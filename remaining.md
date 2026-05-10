@@ -1,50 +1,57 @@
-# `remaining.md` — handoff for next session (v23)
+# `remaining.md` — handoff for next session (v25)
 
-**Last updated:** 2026-05-08 (session 23 — chunked snapshot improvements, encoding fidelity, follower DML forwarding)
+**Last updated:** 2026-05-10 (session 25 — full proxy response fidelity, VNG_NODE_URL docs)
 **Branch:** `main`
 **Latest commit:** (to be set after commit)
-**cargo check -p voltnuerongridd:** clean ✓ (27 warnings — all safe to ignore)
+**cargo check -p voltnuerongridd:** clean ✓ (25 warnings — all safe to ignore)
 **cargo test -p voltnuerongridd:** 750/750 ✓
 
 ---
 
 ## TL;DR — what landed this session
 
-### ✅ next_index advance after chunked snapshot (Item 1)
+### ✅ Full proxy response fidelity (handlers/sql.rs, helpers/execution.rs, main.rs)
 
-**`helpers/raft_loop.rs`** — the spawned chunk-send task now parses the final `RaftSnapshotChunkResponse`.  When `complete == true`, the leader calls `record_append_success(peer_url, snapshot_index, total_nodes)` which advances `next_index[peer] = snapshot_index + 1`. This stops the leader re-sending the full snapshot on every heartbeat tick.
+`SqlExecuteResponse.status` changed from `&'static str` to `String`; `#[derive(Serialize, Deserialize)]` added.  The same change cascaded to all nested types that were blocking `Deserialize`:
 
-### ✅ Stable session-id for chunk resume (Item 2)
+| Type | Change |
+|---|---|
+| `SqlExecuteResponse.status` | `&'static str` → `String` |
+| `OlapQueryResponse.status` | `&'static str` → `String` |
+| `LegacyAggResult.source` | `&'static str` → `String` |
+| `SqlTransactionResponse.status` | `&'static str` → `String` |
+| `OlapVecAggResult` | added `Deserialize` |
+| `LegacyAggResult` | added `Deserialize` |
+| `OlapQueryResponse` | added `Deserialize` |
+| `SqlTransactionResponse` | added `Deserialize` |
 
-**`helpers/raft_loop.rs`** — session-id changed from `snap-{node_id}-{peer_url}` to `snap-{node_id}-{peer_url}-{snapshot_index}`. Each unique snapshot version gets its own session key, so incomplete sessions from older snapshots never interfere with a newer snapshot transfer.
+UDF types (`UdfExecutionResult`, `UdfFunctionCatalogEntry`, `UdfLanguageGuardPolicy`, `UdfInvocationPlan`) still have `&'static str` fields; their corresponding fields in `SqlExecuteResponse` are annotated `#[serde(skip_deserializing, default)]` so the outer struct can implement `Deserialize` without touching them.
 
-### ✅ Row-store encoding fidelity (Item 3)
+All `status: "..."` / `source: "..."` constructors across `handlers/sql.rs`, `helpers/execution.rs`, and `main.rs` updated to `.to_string()`.
 
-**`handlers/raft.rs`** — added `fn json_value_to_str(v: &serde_json::Value) -> String` helper. Replaces `.as_str().unwrap_or("")` in both `raft_install_snapshot` and `raft_install_snapshot_chunk`. Numbers, booleans, and other non-string JSON scalars now round-trip correctly instead of becoming empty strings.
+The transparent proxy in `sql_execute` now fully deserializes the leader's response:
 
-### ✅ Follower DML forwarding (Item 4)
+```rust
+if let Ok(body) = leader_resp.json::<SqlExecuteResponse>().await {
+    return Ok((leader_status, Json(body)));
+}
+```
 
-**`main.rs`** — two new `AppState` fields:
-- `node_url: Arc<Option<String>>` — loaded from `VNG_NODE_URL` env var; the leader's own advertised base URL
-- `current_leader_url: Arc<Mutex<Option<String>>>` — updated from `x-vng-leader-url` header on every accepted AppendEntries
+This replaces the previous partial `serde_json::Value` parsing that only forwarded `status`, `reason`, `oltp_rows`, `columns`, `rows`.
 
-**`helpers/raft_loop.rs`** — `fanout_heartbeat` sends `x-vng-leader-url: <VNG_NODE_URL>` header in every AppendEntries RPC so followers learn the leader's URL.
+### ✅ VNG_NODE_URL documented (deploy/local/vng.env.example)
 
-**`handlers/raft.rs`** (`raft_append`) — stores `x-vng-leader-url` header into `state.current_leader_url` when an AppendEntries is accepted.
-
-**`handlers/sql.rs`** (`sql_execute`) — follower DML path now returns HTTP 503 with reason `"not_leader: retry DML against leader at <url>"` (or `"not_leader: no known leader yet; retry later"`) in multi-node clusters (`state.raft_peers.len() > 0`). Single-node mode falls through unchanged so existing single-node tests pass.
+Added commented entries for `VNG_CLUSTER_TOKEN` and `VNG_NODE_URL` to the Multi-node / HA section, with explanations of their purpose and the DML proxy forwarding mechanism.
 
 ---
 
 ## What's still TODO
 
-1. **Follower DML — pre-apply check** — the local row-store write still happens before the leadership check returns 503. A future PR could add an early leadership check at the top of the DML execution path to avoid the wasted write on followers.
+1. **UDF type cleanup** — `UdfExecutionResult`, `UdfFunctionCatalogEntry`, `UdfLanguageGuardPolicy`, `UdfInvocationPlan` still use `&'static str` fields.  These are skipped during deserialization (`#[serde(skip_deserializing, default)]`) and are not forwarded through the proxy.  A follow-on could change them to `String` for consistency.
 
-2. **`VNG_NODE_URL` documentation** — the new env var for leader URL broadcasting is not yet mentioned in any README or deployment guide.
+2. **`VNG_NODE_URL` in cloud deploy READMEs** — the env var is documented in `deploy/local/vng.env.example` but not yet in `deploy/cloud/aws/README.md`, `deploy/cloud/azure/README.md`, `deploy/cloud/gcp/README.md` (those files cover CI pipeline variables, not service runtime vars; a dedicated runtime vars section could be added).
 
-3. **Chunked snapshot — `is_last` edge case for empty row stores** — when the row store is empty (0 rows), `chunks` is empty and `total_chunks = 0`, so the loop body never executes and no final chunk is sent to the follower. The follower's session is never completed. A guard should send a single empty `is_last=true` chunk.
-
-4. **Follower DML forwarding — transparent proxy** — current implementation returns 503 and asks the client to retry. A future improvement could transparently proxy the forwarded request to the leader and return the leader's response directly.
+3. **Proxy auth token forwarding** — the follower proxy should also forward `VNG_CLUSTER_TOKEN` as a `Bearer` token for internal authentication when forwarding DML to the leader, rather than relying solely on the client's operator headers.
 
 ---
 
@@ -52,19 +59,17 @@
 
 ```
 @remaining.md
-@services/voltnuerongridd/src/raft.rs
-@services/voltnuerongridd/src/helpers/raft_loop.rs
-@services/voltnuerongridd/src/handlers/raft.rs
 @services/voltnuerongridd/src/handlers/sql.rs
+@services/voltnuerongridd/src/helpers/execution.rs
+@services/voltnuerongridd/src/main.rs
 ```
 
 Recommended next steps (in priority order):
-1. **Fix empty row-store edge case** — when `all_rows` is empty, emit one chunk with `is_last=true` and `rows=[]`
-2. **Pre-apply leadership check in sql_execute** — check leader role before the DML row-store block, return 503 early
-3. **Document `VNG_NODE_URL`** in deployment notes
+1. **Proxy cluster token forwarding** — in `sql_execute` proxy path, add `VNG_CLUSTER_TOKEN` as `Authorization: Bearer <token>` when forwarding to leader
+2. **UDF `&'static str` cleanup** — change UDF struct fields from `&'static str` to `String` (no behaviour change, just consistency)
 
 **Environment notes:**
 - `VNG_CLUSTER_TOKEN` — shared secret for intra-cluster Raft RPCs
 - `VNG_RAFT_PEERS` — comma-separated peer base URLs
-- `VNG_NODE_URL` — this node's own advertised base URL (new — used by followers to learn leader URL)
+- `VNG_NODE_URL` — this node's own advertised base URL (leader broadcasts via `x-vng-leader-url` header; followers use it to proxy DML writes)
 - `VNG_RBAC_POLICY_PATH` — JSON RBAC privilege matrix

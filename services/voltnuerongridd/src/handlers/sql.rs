@@ -88,7 +88,7 @@ pub(crate) struct SqlExecuteRequest {
     pub(crate) max_rows: Option<usize>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct LegacyAggResult {
     /// Aggregate function name (e.g. `"SUM"`, `"COUNT"`).
     pub(crate) aggregation: String,
@@ -97,21 +97,25 @@ pub(crate) struct LegacyAggResult {
     /// Error message when evaluation failed.
     pub(crate) error: Option<String>,
     /// Indicates this result came through the legacy aggregation routing path.
-    pub(crate) source: &'static str,
+    pub(crate) source: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct SqlExecuteResponse {
-    pub(crate) status: &'static str,
+    pub(crate) status: String,
     pub(crate) route_path: String,
     pub(crate) reason: String,
     pub(crate) transaction: Option<SqlTransactionResponse>,
     pub(crate) olap: Option<OlapQueryResponse>,
     pub(crate) rejected_statement_count: usize,
+    #[serde(skip_deserializing, default)]
     pub(crate) udf_results: Option<Vec<UdfExecutionResult>>,
     pub(crate) udf_guardrail_status: Option<String>,
+    #[serde(skip_deserializing, default)]
     pub(crate) udf_function_catalog: Vec<UdfFunctionCatalogEntry>,
+    #[serde(skip_deserializing, default)]
     pub(crate) udf_guard_policies: Vec<UdfLanguageGuardPolicy>,
+    #[serde(skip_deserializing, default)]
     pub(crate) udf_execution_plan: Vec<UdfExecutionPlanStep>,
     pub(crate) legacy_agg_results: Option<Vec<LegacyAggResult>>,
     /// Dominant cost-model recommended path for the batch (S3-WS1-05).
@@ -127,14 +131,14 @@ pub(crate) struct SqlExecuteResponse {
 }
 
 /// S4-WS3-02: a single result row returned by the physical OLTP executor.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct OltpRowResult {
     pub(crate) key: String,
     pub(crate) data: std::collections::HashMap<String, String>,
 }
 
 /// S4-WS3-02: a single vectorized aggregation result from the OLAP columnar executor.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct OlapVecAggResult {
     pub(crate) column: String,
     pub(crate) op: String,
@@ -243,9 +247,9 @@ pub(crate) struct OlapQueryRequest {
     pub(crate) max_rows: Option<usize>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct OlapQueryResponse {
-    pub(crate) status: &'static str,
+    pub(crate) status: String,
     pub(crate) query_signature: String,
     pub(crate) elapsed_ms: u128,
     pub(crate) rows: usize,
@@ -787,7 +791,7 @@ pub(crate) async fn sql_execute(
             let response = Ok((
                 StatusCode::BAD_REQUEST,
                 Json(SqlExecuteResponse {
-                    status: "error",
+                    status: "error".to_string(),
                     route_path: route_path_name(decision.payload.path).to_string(),
                     reason: canonical_error.message,
                     transaction: None,
@@ -828,7 +832,7 @@ pub(crate) async fn sql_execute(
         let response = Ok((
             StatusCode::BAD_REQUEST,
             Json(SqlExecuteResponse {
-                status: "error",
+                status: "error".to_string(),
                 route_path: "unknown".to_string(),
                 reason: decision.payload.reason,
                 transaction: None,
@@ -893,7 +897,7 @@ pub(crate) async fn sql_execute(
             let response = Ok((
                 status,
                 Json(SqlExecuteResponse {
-                    status: "error",
+                    status: "error".to_string(),
                     route_path: route_path_name(decision.payload.path).to_string(),
                     reason: decision.payload.reason,
                     transaction: Some(response),
@@ -984,7 +988,7 @@ pub(crate) async fn sql_execute(
                     let err_response = Ok((
                         StatusCode::CONFLICT,
                         Json(SqlExecuteResponse {
-                            status: "error",
+                            status: "error".to_string(),
                             route_path: route_path_name(decision.payload.path).to_string(),
                             reason: warn_msg.clone(),
                             transaction: None,
@@ -1020,6 +1024,68 @@ pub(crate) async fn sql_execute(
             u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
         });
         if has_dml {
+            // Pre-apply leadership check: in a multi-node cluster, followers must
+            // not write DML locally — they have no way to replicate.  Try to proxy
+            // the request transparently to the current leader; fall back to 503.
+            let peer_count = state.raft_peers.len();
+            if peer_count > 0 {
+                let is_leader = {
+                    let node = state.raft_state.lock().expect("raft_state lock leadership_precheck");
+                    node.role == crate::RaftRole::Leader
+                };
+                if !is_leader {
+                    let leader_url = state.current_leader_url.lock().expect("leader_url lock").clone();
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    if let Some(ref url) = leader_url {
+                        let forward_body = serde_json::json!({
+                            "sql_batch": req.sql_batch,
+                            "max_rows": req.max_rows,
+                        });
+                        let mut builder = reqwest::Client::new()
+                            .post(format!("{url}/api/v1/sql/execute"))
+                            .json(&forward_body);
+                        for hdr in &["x-vng-admin-key", "x-vng-operator-id", "authorization",
+                                     "x-vng-session-id", "x-request-id"] {
+                            if let Some(val) = headers.get(*hdr).and_then(|v| v.to_str().ok()) {
+                                builder = builder.header(*hdr, val);
+                            }
+                        }
+                        if let Ok(leader_resp) = builder.send().await {
+                            let leader_status = StatusCode::from_u16(leader_resp.status().as_u16())
+                                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                            if let Ok(body) = leader_resp.json::<SqlExecuteResponse>().await {
+                                return Ok((leader_status, Json(body)));
+                            }
+                        }
+                    }
+                    // Leader URL unknown or forward failed — return 503 with hint.
+                    let reason = match &leader_url {
+                        Some(url) => format!("not_leader: forward to {url} failed; retry directly"),
+                        None => "not_leader: no known leader yet; retry later".to_string(),
+                    };
+                    return Ok((StatusCode::SERVICE_UNAVAILABLE, Json(SqlExecuteResponse {
+                        status: "error".to_string(),
+                        route_path: route_path_name(decision.payload.path).to_string(),
+                        reason,
+                        transaction: None,
+                        olap: None,
+                        rejected_statement_count: 0,
+                        udf_results: None,
+                        udf_guardrail_status: None,
+                        udf_function_catalog: vec![],
+                        udf_guard_policies: vec![],
+                        udf_execution_plan: vec![],
+                        legacy_agg_results: None,
+                        planner_path: None,
+                        oltp_rows: None,
+                        olap_agg_results: None,
+                        columns: None,
+                        rows: None,
+                    })));
+                }
+            }
+
+            // Apply DML to row store (we're leader, or single-node with no peers).
             let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
             let xid = rs.begin_xid();
             for stmt in &ddl_snapshot {
@@ -1095,7 +1161,7 @@ pub(crate) async fn sql_execute(
                         return Ok((
                             StatusCode::SERVICE_UNAVAILABLE,
                             Json(SqlExecuteResponse {
-                                status: "error",
+                                status: "error".to_string(),
                                 route_path: route_path_name(decision.payload.path).to_string(),
                                 reason: "raft_quorum_timeout: DML could not be committed within 2s".to_string(),
                                 transaction: None,
@@ -1117,42 +1183,7 @@ pub(crate) async fn sql_execute(
                     }
                 }
             } else {
-                // Follower: DML was applied locally but won't be replicated without
-                // going through the leader.  In a multi-node cluster, signal the client
-                // to retry against the leader.  On a single-node cluster the node hasn't
-                // won its first election yet — let DML fall through (applied locally).
-                let peer_count = state.raft_peers.len();
-                let leader_url = state.current_leader_url.lock().expect("leader_url lock").clone();
-                drop(node);
-                if peer_count > 0 {
-                    let reason = match &leader_url {
-                        Some(url) => format!("not_leader: retry DML against leader at {url}"),
-                        None => "not_leader: no known leader yet; retry later".to_string(),
-                    };
-                    release_sql_data_plane_connection(&state, &connection_id);
-                    return Ok((
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(SqlExecuteResponse {
-                            status: "error",
-                            route_path: route_path_name(decision.payload.path).to_string(),
-                            reason,
-                            transaction: None,
-                            olap: None,
-                            rejected_statement_count: 0,
-                            udf_results: None,
-                            udf_guardrail_status: None,
-                            udf_function_catalog: vec![],
-                            udf_guard_policies: vec![],
-                            udf_execution_plan: vec![],
-                            legacy_agg_results: None,
-                            planner_path: None,
-                            oltp_rows: None,
-                            olap_agg_results: None,
-                            columns: None,
-                            rows: None,
-                        }),
-                    ));
-                }
+                drop(node); // Single-node follower: DML applied locally, no replication needed.
             }
         }
     }
@@ -1189,7 +1220,7 @@ pub(crate) async fn sql_execute(
             Err(_) => 0,
         };
         olap = Some(OlapQueryResponse {
-            status: "ok",
+            status: "ok".to_string(),
             query_signature: query.chars().take(64).collect(),
             elapsed_ms: started.elapsed().as_millis(),
             rows: row_count,
@@ -1244,7 +1275,7 @@ pub(crate) async fn sql_execute(
                         aggregation: agg.to_string(),
                         result: eval.as_ref().ok().copied(),
                         error: eval.err(),
-                        source: "legacy_agg_olap_path",
+                        source: "legacy_agg_olap_path".to_string(),
                     });
                 }
             }
@@ -1480,7 +1511,7 @@ pub(crate) async fn sql_execute(
         };
 
     let response = SqlExecuteResponse {
-        status: "ok",
+        status: "ok".to_string(),
         route_path: route_path_name(decision.payload.path).to_string(),
         reason: decision.payload.reason,
         transaction,

@@ -1143,9 +1143,9 @@ pub(crate) struct DriverSession {
     pub(crate) pooled_connection_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SqlTransactionResponse {
-    pub(crate) status: &'static str,
+    pub(crate) status: String,
     pub(crate) transaction_id: String,
     pub(crate) statements_executed: usize,
     pub(crate) requires_transaction: bool,
@@ -1765,11 +1765,11 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     let udf_guard_policies = udf_guard_policy_contract();
     let udf_execution_plan = build_udf_execution_plan(&req.sql_batch);
     Some(Ok((StatusCode::OK, Json(SqlExecuteResponse {
-        status: "ok",
+        status: "ok".to_string(),
         route_path: "oltp".to_string(),
         reason: format!("inserted {inserted} demo rows into {table_name}"),
         transaction: Some(SqlTransactionResponse {
-            status: "committed",
+            status: "committed".to_string(),
             transaction_id: format!("call-{start_ms}"),
             statements_executed: inserted,
             requires_transaction: false,
