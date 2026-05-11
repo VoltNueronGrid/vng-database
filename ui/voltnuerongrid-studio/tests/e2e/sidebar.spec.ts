@@ -29,10 +29,11 @@ test.describe("Sidebar", () => {
     await expect(mockedPage.locator(".sidebar")).toBeVisible();
   });
 
-  test("shows four activity buttons: Schema, Users, History, Saved", async ({ mockedPage }) => {
+  test("shows five activity buttons: Schema, DBs, Users, History, Saved", async ({ mockedPage }) => {
     const btns = mockedPage.locator(".activity-btn");
-    await expect(btns).toHaveCount(4);
+    await expect(btns).toHaveCount(5);
     await expect(mockedPage.locator(".activity-btn", { hasText: "Schema" })).toBeVisible();
+    await expect(mockedPage.locator(".activity-btn", { hasText: "DBs" })).toBeVisible();
     await expect(mockedPage.locator(".activity-btn", { hasText: "Users" })).toBeVisible();
     await expect(mockedPage.locator(".activity-btn", { hasText: "History" })).toBeVisible();
     await expect(mockedPage.locator(".activity-btn", { hasText: "Saved" })).toBeVisible();
@@ -119,7 +120,7 @@ test.describe("Sidebar", () => {
 
   test("schema tree table node expands on click to show columns", async ({ mockedPage }) => {
     await mockedPage.waitForTimeout(500);
-    const tableNode = mockedPage.locator(".tree-node .tree-icon", { hasText: "📋" }).first();
+    const tableNode = mockedPage.locator(".tree-node").filter({ hasText: "users" }).first();
     if (await tableNode.isVisible()) {
       await tableNode.click();
       // After expanding, column chips should appear

@@ -46,6 +46,12 @@ impl HtapQueryRouter {
             SqlStatementKind::Insert
             | SqlStatementKind::Update
             | SqlStatementKind::Delete
+            | SqlStatementKind::Merge
+            | SqlStatementKind::UseDatabase
+            | SqlStatementKind::CreateUser
+            | SqlStatementKind::CreateRole
+            | SqlStatementKind::Grant
+            | SqlStatementKind::Call
             | SqlStatementKind::Begin
             | SqlStatementKind::Commit
             | SqlStatementKind::Rollback
@@ -78,6 +84,9 @@ impl HtapQueryRouter {
                 }
             }
             SqlStatementKind::CreateTable
+            | SqlStatementKind::CreateDatabase
+            | SqlStatementKind::CreateSchema
+            | SqlStatementKind::CreateIndex
             | SqlStatementKind::CreateView
             | SqlStatementKind::CreateMaterializedView
             | SqlStatementKind::CreateFunction

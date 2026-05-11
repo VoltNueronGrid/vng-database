@@ -183,9 +183,9 @@ test.describe("ContextMenu — Schema tree", () => {
   });
 
   test("right-clicking a table node shows table context menu", async ({ mockedPage }) => {
-    const tableNode = mockedPage.locator(".tree-node .tree-icon", { hasText: "📋" }).first();
+    const tableNode = mockedPage.locator(".tree-node").filter({ hasText: "users" }).first();
     if (await tableNode.isVisible()) {
-      await tableNode.locator("..").click({ button: "right" });
+      await tableNode.click({ button: "right" });
       await expect(mockedPage.locator(".ctx-menu")).toBeVisible();
       await expect(
         mockedPage.locator(".ctx-menu-item .ctx-menu-label", { hasText: "View DDL" })

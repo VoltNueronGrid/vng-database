@@ -26,12 +26,21 @@ pub enum SqlStatementKind {
     Insert,
     Update,
     Delete,
+    Merge,
     CreateTable,
     CreateView,
     CreateMaterializedView,
     CreateFunction,
     CreateTrigger,
     CreateEvent,
+    CreateDatabase,
+    UseDatabase,
+    CreateSchema,
+    CreateUser,
+    CreateRole,
+    CreateIndex,
+    Grant,
+    Call,
     AlterTable,
     DropTable,
     DropView,
@@ -219,15 +228,26 @@ impl SqlAnalyzer {
 
         match (tokens.first().copied(), tokens.get(1).copied(), tokens.get(2).copied()) {
             (Some("SELECT"), _, _) => SqlStatementKind::Select,
+            (Some("WITH"), _, _) => SqlStatementKind::Select,
             (Some("INSERT"), _, _) => SqlStatementKind::Insert,
             (Some("UPDATE"), _, _) => SqlStatementKind::Update,
             (Some("DELETE"), _, _) => SqlStatementKind::Delete,
+            (Some("MERGE"), _, _) => SqlStatementKind::Merge,
+            (Some("CALL"), _, _) => SqlStatementKind::Call,
+            (Some("USE"), _, _) => SqlStatementKind::UseDatabase,
+            (Some("GRANT"), _, _) => SqlStatementKind::Grant,
+            (Some("CREATE"), Some("DATABASE"), _) => SqlStatementKind::CreateDatabase,
+            (Some("CREATE"), Some("SCHEMA"), _) => SqlStatementKind::CreateSchema,
+            (Some("CREATE"), Some("USER"), _) => SqlStatementKind::CreateUser,
+            (Some("CREATE"), Some("ROLE"), _) => SqlStatementKind::CreateRole,
+            (Some("CREATE"), Some("INDEX"), _) => SqlStatementKind::CreateIndex,
             (Some("CREATE"), Some("TABLE"), _) => SqlStatementKind::CreateTable,
             (Some("CREATE"), Some("VIEW"), _) => SqlStatementKind::CreateView,
             (Some("CREATE"), Some("MATERIALIZED"), Some("VIEW")) => {
                 SqlStatementKind::CreateMaterializedView
             }
             (Some("CREATE"), Some("FUNCTION"), _) => SqlStatementKind::CreateFunction,
+            (Some("CREATE"), Some("PROCEDURE"), _) => SqlStatementKind::CreateFunction,
             (Some("CREATE"), Some("TRIGGER"), _) => SqlStatementKind::CreateTrigger,
             (Some("CREATE"), Some("EVENT"), _) => SqlStatementKind::CreateEvent,
             (Some("ALTER"), Some("TABLE"), _) => SqlStatementKind::AlterTable,
@@ -248,18 +268,138 @@ impl SqlAnalyzer {
     }
 
     pub fn parse_batch(sql_batch: &str) -> Vec<SqlStatement> {
-        sql_batch
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            // Skip statements whose entire content is comments (e.g. `-- create table …`)
-            // normalize_sql_for_match strips -- comments; if nothing remains it's comment-only.
-            .filter(|s| !normalize_sql_for_match(s).is_empty())
-            .map(|s| SqlStatement {
-                raw: s.to_string(),
-                kind: Self::classify_statement(s),
-            })
-            .collect()
+        let mut statements = Vec::new();
+        let mut current = String::new();
+        let mut chars = sql_batch.char_indices().peekable();
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let mut dollar_quote_tag: Option<String> = None;
+
+        while let Some((idx, ch)) = chars.next() {
+            if in_line_comment {
+                current.push(ch);
+                if ch == '\n' {
+                    in_line_comment = false;
+                }
+                continue;
+            }
+
+            if in_block_comment {
+                current.push(ch);
+                if ch == '*' {
+                    if let Some((_, next_ch)) = chars.peek() {
+                        if *next_ch == '/' {
+                            current.push('/');
+                            chars.next();
+                            in_block_comment = false;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if let Some(tag) = dollar_quote_tag.as_ref() {
+                current.push(ch);
+                if ch == '$' && sql_batch[idx..].starts_with(tag) {
+                    let trailing = &tag[1..];
+                    current.push_str(trailing);
+                    for _ in 0..trailing.chars().count() {
+                        chars.next();
+                    }
+                    dollar_quote_tag = None;
+                }
+                continue;
+            }
+
+            if in_single_quote {
+                current.push(ch);
+                if ch == '\'' {
+                    if let Some((_, next_ch)) = chars.peek() {
+                        if *next_ch == '\'' {
+                            current.push('\'');
+                            chars.next();
+                        } else {
+                            in_single_quote = false;
+                        }
+                    } else {
+                        in_single_quote = false;
+                    }
+                }
+                continue;
+            }
+
+            if in_double_quote {
+                current.push(ch);
+                if ch == '"' {
+                    if let Some((_, next_ch)) = chars.peek() {
+                        if *next_ch == '"' {
+                            current.push('"');
+                            chars.next();
+                        } else {
+                            in_double_quote = false;
+                        }
+                    } else {
+                        in_double_quote = false;
+                    }
+                }
+                continue;
+            }
+
+            match ch {
+                '-' => {
+                    if let Some((_, next_ch)) = chars.peek() {
+                        if *next_ch == '-' {
+                            current.push('-');
+                            current.push('-');
+                            chars.next();
+                            in_line_comment = true;
+                            continue;
+                        }
+                    }
+                    current.push(ch);
+                }
+                '/' => {
+                    if let Some((_, next_ch)) = chars.peek() {
+                        if *next_ch == '*' {
+                            current.push('/');
+                            current.push('*');
+                            chars.next();
+                            in_block_comment = true;
+                            continue;
+                        }
+                    }
+                    current.push(ch);
+                }
+                '\'' => {
+                    in_single_quote = true;
+                    current.push(ch);
+                }
+                '"' => {
+                    in_double_quote = true;
+                    current.push(ch);
+                }
+                '$' => {
+                    if let Some(tag) = parse_dollar_quote_tag(&sql_batch[idx..]) {
+                        current.push_str(&tag);
+                        for _ in 0..tag.chars().count() - 1 {
+                            chars.next();
+                        }
+                        dollar_quote_tag = Some(tag);
+                    } else {
+                        current.push(ch);
+                    }
+                }
+                ';' => {
+                    push_statement(&mut statements, &mut current);
+                }
+                _ => current.push(ch),
+            }
+        }
+
+        push_statement(&mut statements, &mut current);
+        statements
     }
 
     pub fn analyze_statement(sql: &str) -> AnalysisResult {
@@ -270,12 +410,20 @@ impl SqlAnalyzer {
                 SqlStatementKind::Insert
                     | SqlStatementKind::Update
                     | SqlStatementKind::Delete
+                    | SqlStatementKind::Merge
                     | SqlStatementKind::CreateTable
                     | SqlStatementKind::CreateView
                     | SqlStatementKind::CreateMaterializedView
                     | SqlStatementKind::CreateFunction
                     | SqlStatementKind::CreateTrigger
                     | SqlStatementKind::CreateEvent
+                    | SqlStatementKind::CreateDatabase
+                    | SqlStatementKind::CreateSchema
+                    | SqlStatementKind::CreateUser
+                    | SqlStatementKind::CreateRole
+                    | SqlStatementKind::CreateIndex
+                    | SqlStatementKind::Grant
+                    | SqlStatementKind::Call
                     | SqlStatementKind::AlterTable
                     | SqlStatementKind::DropTable
                     | SqlStatementKind::DropView
@@ -291,6 +439,8 @@ impl SqlAnalyzer {
                     | SqlStatementKind::CreateFunction
                     | SqlStatementKind::CreateTrigger
                     | SqlStatementKind::CreateEvent
+                    | SqlStatementKind::CreateDatabase
+                    | SqlStatementKind::CreateSchema
                     | SqlStatementKind::AlterTable
                     | SqlStatementKind::DropTable
                     | SqlStatementKind::DropView
@@ -371,6 +521,32 @@ fn normalize_ident(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
+fn push_statement(statements: &mut Vec<SqlStatement>, current: &mut String) {
+    let statement = current.trim();
+    if !statement.is_empty() && !normalize_sql_for_match(statement).is_empty() {
+        statements.push(SqlStatement {
+            raw: statement.to_string(),
+            kind: SqlAnalyzer::classify_statement(statement),
+        });
+    }
+    current.clear();
+}
+
+fn parse_dollar_quote_tag(sql: &str) -> Option<String> {
+    let bytes = sql.as_bytes();
+    if bytes.first().copied()? != b'$' {
+        return None;
+    }
+    for idx in 1..bytes.len() {
+        match bytes[idx] {
+            b'$' => return Some(sql[..=idx].to_string()),
+            b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => continue,
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn normalize_sql_for_match(sql: &str) -> String {
     let stripped = sql.trim_start_matches('\u{feff}').trim();
     let mut result = String::with_capacity(stripped.len());
@@ -403,11 +579,43 @@ mod tests {
             SqlStatementKind::Select
         );
         assert_eq!(
+            SqlAnalyzer::classify_statement("WITH x AS (SELECT 1) SELECT * FROM x"),
+            SqlStatementKind::Select
+        );
+        assert_eq!(
             SqlAnalyzer::classify_statement(" CREATE TABLE t(id int)"),
             SqlStatementKind::CreateTable
         );
         assert_eq!(
             SqlAnalyzer::classify_statement("-- cmt\ncreate function f()"),
+            SqlStatementKind::CreateFunction
+        );
+        assert_eq!(
+            SqlAnalyzer::classify_statement("CREATE DATABASE demo"),
+            SqlStatementKind::CreateDatabase
+        );
+        assert_eq!(
+            SqlAnalyzer::classify_statement("USE demo"),
+            SqlStatementKind::UseDatabase
+        );
+        assert_eq!(
+            SqlAnalyzer::classify_statement("CREATE INDEX idx_t_id ON t(id)"),
+            SqlStatementKind::CreateIndex
+        );
+        assert_eq!(
+            SqlAnalyzer::classify_statement("GRANT SELECT ON t TO analyst"),
+            SqlStatementKind::Grant
+        );
+        assert_eq!(
+            SqlAnalyzer::classify_statement("CALL refresh_views()"),
+            SqlStatementKind::Call
+        );
+        assert_eq!(
+            SqlAnalyzer::classify_statement("MERGE INTO t USING s ON t.id = s.id"),
+            SqlStatementKind::Merge
+        );
+        assert_eq!(
+            SqlAnalyzer::classify_statement("CREATE PROCEDURE p() LANGUAGE SQL AS $$ SELECT 1 $$"),
             SqlStatementKind::CreateFunction
         );
     }
@@ -420,6 +628,16 @@ mod tests {
         assert_eq!(parsed.len(), 4);
         assert_eq!(parsed[0].kind, SqlStatementKind::Begin);
         assert_eq!(parsed[1].kind, SqlStatementKind::Insert);
+
+    #[test]
+    fn parse_batch_keeps_semicolons_inside_dollar_quoted_bodies() {
+        let parsed = SqlAnalyzer::parse_batch(
+            "CREATE FUNCTION demo.fn() RETURNS TRIGGER LANGUAGE SQL AS $$ BEGIN UPDATE t SET v = 1; RETURN NEW; END; $$; SELECT 1;",
+        );
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].kind, SqlStatementKind::CreateFunction);
+        assert_eq!(parsed[1].kind, SqlStatementKind::Select);
+    }
         assert_eq!(parsed[3].kind, SqlStatementKind::Commit);
     }
 

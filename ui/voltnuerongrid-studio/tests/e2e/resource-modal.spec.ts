@@ -104,16 +104,12 @@ test.describe("ResourceModal — Create Database", () => {
     await expect(mockedPage.locator('input[placeholder="e.g. analytics"]')).toBeVisible();
   });
 
-  test("shows encoding dropdown with UTF8 default", async ({ mockedPage }) => {
-    const encSelect = mockedPage.locator(".form-select").first();
-    await expect(encSelect).toBeVisible();
-    await expect(encSelect).toHaveValue("UTF8");
+  test("shows helper copy for database bootstrap flow", async ({ mockedPage }) => {
+    await expect(mockedPage.locator(".conn-panel-body")).toContainText("Creates the new database by placing a system init table inside it");
   });
 
-  test("shows Route Hint dropdown", async ({ mockedPage }) => {
-    const selects = mockedPage.locator(".form-select");
-    // Two selects: Encoding and Route Hint
-    await expect(selects).toHaveCount(2);
+  test("create database action is disabled until a name is entered", async ({ mockedPage }) => {
+    await expect(mockedPage.locator(".btn-wide.primary")).toBeDisabled();
   });
 
   test("Cancel button closes the modal without opening a tab", async ({ mockedPage }) => {
@@ -134,9 +130,9 @@ test.describe("ResourceModal — Create Database", () => {
 
   test("Generate SQL button without a name does not close the modal", async ({ mockedPage }) => {
     // Leave name empty
-    await mockedPage.locator(".btn-wide.primary").click();
+    await expect(mockedPage.locator(".btn-wide.primary")).toBeDisabled();
     // Modal stays open because name is required
-    await expect(mockedPage.locator(".overlay")).toBeVisible();
+    await expect(mockedPage.locator(".conn-panel-title")).toContainText("Create Database");
   });
 });
 
