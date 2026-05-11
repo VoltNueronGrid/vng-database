@@ -33,3 +33,4 @@ ui/voltnuerongrid-studio/dist/
 ui/voltnuerongrid-studio/src-tauri/target/
 ui/voltnuerongrid-studio/playwright-report/
 ui/voltnuerongrid-studio/test-results/
+data/
