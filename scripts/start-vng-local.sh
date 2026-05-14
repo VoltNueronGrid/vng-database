@@ -4,7 +4,16 @@ set -euo pipefail
 
 MODE="${1:-both}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "${SCRIPT_DIR}/../polap-db" && pwd)"
+
+if [[ -f "${SCRIPT_DIR}/../Cargo.toml" ]]; then
+  REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+elif [[ -f "${SCRIPT_DIR}/../polap-db/Cargo.toml" ]]; then
+  REPO_DIR="$(cd "${SCRIPT_DIR}/../polap-db" && pwd)"
+else
+  echo "Unable to locate the polap-db repository from ${SCRIPT_DIR}" >&2
+  exit 1
+fi
+
 UI_DIR="${REPO_DIR}/ui/voltnuerongrid-studio"
 
 if [[ ! -d "${REPO_DIR}" ]]; then
@@ -28,24 +37,30 @@ Options:
 EOF
 }
 
+shell_quote() {
+  printf '%q' "$1"
+}
+
 open_terminal_window() {
   local command="$1"
 
-  osascript <<EOF
+  osascript - "$command" <<'EOF'
+on run argv
 tell application "Terminal"
   activate
-  do script ${command@Q}
+  do script (item 1 of argv)
 end tell
+end run
 EOF
 }
 
 start_db() {
-  local db_command="cd ${REPO_DIR@Q} && export VNG_ADMIN_API_KEY=secret && cargo run -p voltnuerongridd"
+  local db_command="cd $(shell_quote "${REPO_DIR}") && export VNG_ADMIN_API_KEY=secret && cargo run -p voltnuerongridd"
   open_terminal_window "${db_command}"
 }
 
 start_ui() {
-  local ui_command="cd ${UI_DIR@Q} && export VITE_VNG_DEV_URL=http://127.0.0.1:8080 && npm run dev"
+  local ui_command="cd $(shell_quote "${UI_DIR}") && export VITE_VNG_DEV_URL=http://127.0.0.1:8080 && npm run dev"
   open_terminal_window "${ui_command}"
 }
 
