@@ -1050,6 +1050,9 @@ pub(crate) async fn sql_execute(
                                 builder = builder.header(*hdr, val);
                             }
                         }
+                        if let Some(token) = state.cluster_token.as_ref().as_deref() {
+                            builder = builder.header("x-vng-cluster-token", token);
+                        }
                         if let Ok(leader_resp) = builder.send().await {
                             let leader_status = StatusCode::from_u16(leader_resp.status().as_u16())
                                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
