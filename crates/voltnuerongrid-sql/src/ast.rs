@@ -321,6 +321,43 @@ pub fn parse_one(sql: &str) -> Result<Statement, String> {
 
 // ─── Internal parser ──────────────────────────────────────────────────────────
 
+/// Returns `true` when `keyword` (already upper-cased) appears in `up` (an
+/// upper-cased SQL string) **outside** of single-quoted string literals.
+///
+/// Plain `str::contains` would produce false positives for queries like
+///   `SELECT * FROM t WHERE note = 'GROUP BY foo'`
+/// This helper skips over `'…'` regions before checking.
+fn keyword_outside_strings(up: &str, keyword: &str) -> bool {
+    let klen = keyword.len();
+    let bytes = up.as_bytes();
+    let n = bytes.len();
+    let mut i = 0usize;
+    let mut in_str = false;
+    while i < n {
+        if in_str {
+            if bytes[i] == b'\'' {
+                // Escaped quote inside string: '' → stay in string
+                if i + 1 < n && bytes[i + 1] == b'\'' {
+                    i += 2;
+                } else {
+                    in_str = false;
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        } else if bytes[i] == b'\'' {
+            in_str = true;
+            i += 1;
+        } else if i + klen <= n && &up[i..i + klen] == keyword {
+            return true;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
     match tokens.first() {
         Some(Token::Keyword(k)) => match k.to_ascii_uppercase().as_str() {
@@ -362,7 +399,9 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     stmt.has_null_literal = true;
                 }
                 // Detect GROUP BY clause (S3-WS1-06).
-                if up.contains("GROUP BY") {
+                // Use keyword_outside_strings to avoid false positives from
+                // string literals like WHERE note = 'GROUP BY foo'.
+                if keyword_outside_strings(&up, "GROUP BY") {
                     stmt.has_group_by = true;
                 }
                 if has_table_alias(&up) {
@@ -372,11 +411,11 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     stmt.has_column_alias = true;
                 }
                 // Detect ORDER BY clause (S3-WS1-06).
-                if up.contains("ORDER BY") {
+                if keyword_outside_strings(&up, "ORDER BY") {
                     stmt.has_order_by = true;
                 }
                 // Detect HAVING clause (S3-WS1-06).
-                if up.contains("HAVING") {
+                if keyword_outside_strings(&up, "HAVING") {
                     stmt.has_having = true;
                 }
                 // Detect IN list predicate in WHERE (S3-WS1-07).

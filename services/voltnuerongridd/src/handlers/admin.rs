@@ -932,6 +932,13 @@ pub(crate) async fn admin_databases_create(
                 owner = ?record.owner,
                 "database created"
             );
+            // Persist to WAL so the database catalog survives restarts
+            if let Ok(mut wal) = state.wal_engine.lock() {
+                let _ = wal.append_sql(
+                    voltnuerongrid_store::SqlWalKind::Ddl,
+                    &format!("CREATE DATABASE {}", record.name),
+                );
+            }
             metrics::counter!(
                 "vng_database_lifecycle_total",
                 "operation" => "create",
@@ -1028,6 +1035,13 @@ pub(crate) async fn admin_databases_drop(
         Ok(Some(db)) => {
             let record = AdminDatabaseRecord::from(&db);
             tracing::info!(target: "vng.database", name = %record.name, "database dropped");
+            // Persist DROP to WAL so the catalog stays consistent across restarts
+            if let Ok(mut wal) = state.wal_engine.lock() {
+                let _ = wal.append_sql(
+                    voltnuerongrid_store::SqlWalKind::Ddl,
+                    &format!("DROP DATABASE {}", record.name),
+                );
+            }
             metrics::counter!(
                 "vng_database_lifecycle_total",
                 "operation" => "drop",

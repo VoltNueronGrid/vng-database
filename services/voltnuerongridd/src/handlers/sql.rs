@@ -732,6 +732,31 @@ pub(crate) async fn sql_execute(
         PrivilegeAction::Execute,
         "sql/execute",
     )?;
+
+    // Extract x-vng-database header for database-scoped query execution.
+    // When present, all DDL/DML/SELECT operations are scoped to this database.
+    let active_database: Option<String> = headers
+        .get("x-vng-database")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+
+    // RBAC database-level access check: if a database is specified and the
+    // principal is not a DBA, verify they have an explicit database-level grant.
+    if let Some(ref db) = active_database {
+        if !crate::auth::principal_has_database_access(&principal, db, &state) {
+            return Err((
+                axum::http::StatusCode::FORBIDDEN,
+                axum::Json(crate::AuthErrorResponse {
+                    status: "error",
+                    reason: format!("access denied to database '{db}'"),
+                    locale: "en".to_string(),
+                    localized_message: format!("You do not have access to database '{db}'"),
+                }),
+            ));
+        }
+    }
+
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/execute")?;
     let dispatcher = CommandDispatcher::new();
     let envelope = build_http_envelope(

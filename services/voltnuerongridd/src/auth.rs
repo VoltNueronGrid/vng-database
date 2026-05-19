@@ -312,3 +312,34 @@ pub(crate) fn locale_from_headers(headers: &HeaderMap) -> SupportedLocale {
         .map(SupportedLocale::parse)
         .unwrap_or(SupportedLocale::EnUs)
 }
+
+/// Check whether a `RuntimeAccessPrincipal` may access a specific database.
+///
+/// Rules:
+/// - Admin API key holders (`Operator` with `OperatorRole::Dba`) always have access.
+/// - Other operators need an explicit database-level grant in the RBAC matrix:
+///   resource `database/<name>` or wildcard `database/*` with `Execute` action.
+/// - Tenant users always have access to any database (they are scoped by tenant namespace
+///   at the table level, not at the database level — this may be tightened in future).
+pub(crate) fn principal_has_database_access(
+    principal: &crate::RuntimeAccessPrincipal,
+    database: &str,
+    state: &AppState,
+) -> bool {
+    match principal {
+        crate::RuntimeAccessPrincipal::Operator(op) => {
+            // DBA always has full access
+            if op.role == crate::OperatorRole::Dba {
+                return true;
+            }
+            // Check database-specific grant
+            let db_resource = format!("database/{}", database);
+            state.rbac_privilege_matrix.allows(op.role.as_str(), &db_resource, "sql", PrivilegeAction::Execute)
+                || state.rbac_privilege_matrix.allows(op.role.as_str(), "database/*", "sql", PrivilegeAction::Execute)
+        }
+        crate::RuntimeAccessPrincipal::TenantUser(_) => {
+            // Tenant users are not database-scoped at this layer (scoped by table prefix)
+            true
+        }
+    }
+}

@@ -4148,7 +4148,7 @@ fn ws2_admin_schema_tree_returns_views_functions_triggers_and_events() {
     }
 
     let response = rt
-        .block_on(admin_schema_tree(State(state.clone()), admin_headers("secret")))
+        .block_on(admin_schema_tree(State(state.clone()), admin_headers("secret"), Query(SchemaTreeQuery::default())))
         .expect("admin schema tree should succeed");
 
     assert_eq!(response.0, StatusCode::OK);

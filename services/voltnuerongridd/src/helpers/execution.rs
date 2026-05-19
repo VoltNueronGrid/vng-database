@@ -586,17 +586,32 @@ pub(crate) fn execute_oltp_select_legacy(
             .map(|l| l as usize)
             .unwrap_or(limit)
             .min(limit);
-        let prefix: Option<String> = sel.where_clause.as_deref().and_then(|w| {
+        // Parse WHERE col = 'val' into (column_name, expected_value). Falls back
+        // to a key substring match if the column name cannot be extracted, so that
+        // legacy tests that assert on the row key still work.
+        let where_filter: Option<(String, String)> = sel.where_clause.as_deref().and_then(|w| {
             let eq = w.find('=')?;
+            let lhs = w[..eq].trim().to_ascii_lowercase();
             let rhs = w[eq + 1..].trim();
             let val = rhs.trim_matches('\'').trim_matches('"').trim();
-            if val.is_empty() { None } else { Some(val.to_string()) }
+            if lhs.is_empty() || val.is_empty() {
+                None
+            } else {
+                Some((lhs, val.to_string()))
+            }
         });
-        let prefix_str = prefix.as_deref().unwrap_or("");
         let remaining = sql_limit.saturating_sub(results.len());
         let batch: Vec<OltpRowResult> = all_rows
             .iter()
-            .filter(|(k, _)| prefix_str.is_empty() || k.contains(prefix_str))
+            .filter(|(k, d)| match &where_filter {
+                None => true,
+                Some((col, val)) => {
+                    // Try exact column-value match first; fall back to key substring.
+                    d.get(col.as_str())
+                        .map(|v| v.eq_ignore_ascii_case(val))
+                        .unwrap_or_else(|| k.contains(val.as_str()))
+                }
+            })
             .take(remaining)
             .map(|(k, d)| OltpRowResult { key: k.clone(), data: d.clone() })
             .collect();

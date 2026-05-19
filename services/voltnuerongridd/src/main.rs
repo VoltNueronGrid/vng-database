@@ -128,7 +128,7 @@ pub(crate) use helpers::dr_hook::{
 // boot
 pub(crate) use helpers::boot::{
     persist_sql_statement, build_durability_engine,
-    replay_ddl_into, replay_dml_into,
+    replay_ddl_into, replay_dml_into, replay_database_catalog_into,
 };
 // ─── Re-export auth helpers so handler/helper modules can use `crate::fn` ────
 pub(crate) use auth::{
@@ -1399,6 +1399,8 @@ async fn main() {
         "engine" => wal_engine_boxed.engine_kind().to_string(),
     ).increment(1);
     let wal_engine = Arc::new(Mutex::new(wal_engine_boxed));
+    // Clone before the struct literal consumes `wal_engine` via the field assignment.
+    let wal_engine_for_catalog = wal_engine.clone();
 
     let state = AppState {
         node_id: node_id.clone(),
@@ -1468,10 +1470,14 @@ async fn main() {
         connector_registry: Arc::new(Mutex::new(Vec::new())),
         tde_override: Arc::new(Mutex::new(None)),
         cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
-        // Phase 1.3 — first-class DatabaseCatalog. Empty at boot; populated
-        // via CREATE DATABASE. Future Phase 2 work will restore this from
-        // RocksDB instead of starting empty.
-        database_catalog: Arc::new(Mutex::new(voltnuerongrid_meta::DatabaseCatalog::new())),
+        // Phase 1.3 — first-class DatabaseCatalog. Restored from WAL at boot
+        // by replaying CREATE DATABASE / DROP DATABASE statements recorded when
+        // each database was created.
+        database_catalog: Arc::new(Mutex::new({
+            let mut db_cat = voltnuerongrid_meta::DatabaseCatalog::new();
+            replay_database_catalog_into(&mut db_cat, &wal_engine_for_catalog);
+            db_cat
+        })),
         // Phase 0 — read-only runtime config selected at boot.
         runtime_config: Arc::new(runtime_config),
     };

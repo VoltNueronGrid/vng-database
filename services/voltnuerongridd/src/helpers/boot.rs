@@ -118,6 +118,48 @@ pub(crate) fn build_durability_engine(
 // The engine-first path is the reason for the SqlWalKind extension to the
 // trait. Once all deployments have migrated, the legacy path can be removed.
 
+/// Replay `CREATE DATABASE` / `DROP DATABASE` statements from the DDL WAL into
+/// the `DatabaseCatalog`.  Must be called before `replay_ddl_into` so that
+/// the database name registry is populated before DDL objects are catalogued.
+pub(crate) fn replay_database_catalog_into(
+    db_catalog: &mut voltnuerongrid_meta::DatabaseCatalog,
+    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    use voltnuerongrid_store::SqlWalKind;
+
+    let stmts: Vec<String> = {
+        let guard = engine.lock().expect("wal_engine lock for replay_db_catalog");
+        if guard.persists_sql() && guard.sql_count(SqlWalKind::Ddl) > 0 {
+            guard.iter_sql(SqlWalKind::Ddl)
+        } else {
+            Vec::new()
+        }
+    };
+
+    let now_ms = now_unix_ms() as u128;
+    let mut applied = 0usize;
+    for sql in &stmts {
+        let up = sql.trim().to_ascii_uppercase();
+        if let Some(rest) = up.strip_prefix("CREATE DATABASE ") {
+            let db_name = rest.trim().to_ascii_lowercase();
+            if !db_name.is_empty() {
+                let _ = db_catalog.create(&db_name, now_ms, None, None);
+                applied += 1;
+            }
+        } else if let Some(rest) = up.strip_prefix("DROP DATABASE ") {
+            let db_name = rest.trim().to_ascii_lowercase();
+            if !db_name.is_empty() {
+                let _ = db_catalog.drop_database(&db_name, true);
+                applied += 1;
+            }
+        }
+    }
+    if applied > 0 {
+        eprintln!("[vng-wal] replayed {} CREATE/DROP DATABASE statement(s) from WAL", applied);
+    }
+}
+
+
 /// Replay DDL into a freshly-created catalog from the durability engine.
 pub(crate) fn replay_ddl_into(
     catalog: &mut DdlCatalog,
