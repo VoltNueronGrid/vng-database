@@ -20,6 +20,7 @@ use crate::{execute_olap_query, execute_oltp_select, df_select_owned, run_async_
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
+use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix};
 use crate::{persist_sql_statement};
 use crate::auth::{require_sql_runtime_principal, locale_from_headers};
 use crate::audit_helpers::append_runtime_audit_event;
@@ -285,6 +286,13 @@ pub(crate) async fn sql_transaction(
     let statements = tx_context.payload.statements;
     let requested_isolation_level = tx_context.payload.isolation_level;
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/transaction")?;
+    // Gap #2: database scope for this transaction (prefix all row keys).
+    let db: String = headers
+        .get("x-vng-database")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
     // REQ-23: ACID transaction state machine tracking
     {
         let now_ms = now_unix_ms();
@@ -384,15 +392,15 @@ pub(crate) async fn sql_transaction(
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
                         if let Some((k, _)) = extract_insert_row_from_sql(stmt) {
-                            write_keys.push(k);
+                            write_keys.push(db_prefix_key(&db, &k));
                         }
                     } else if upper.starts_with("UPDATE") {
                         if let Some((k, _)) = extract_update_row_from_sql(stmt) {
-                            write_keys.push(k);
+                            write_keys.push(db_prefix_key(&db, &k));
                         }
                     } else if upper.starts_with("DELETE") {
                         if let Some(k) = extract_delete_key_from_sql(stmt) {
-                            write_keys.push(k);
+                            write_keys.push(db_prefix_key(&db, &k));
                         }
                     }
                 }
@@ -441,19 +449,22 @@ pub(crate) async fn sql_transaction(
                     if upper.starts_with("INSERT") {
                         // Use extract_all_insert_rows to handle multi-row INSERT correctly.
                         // Each row is individually inserted and individually WAL-persisted.
-                        for (k, d, single_sql) in extract_all_insert_rows(stmt) {
+                        for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                         }
                     } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                        if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     } else if upper.starts_with("UPDATE") {
-                        if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                        if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
@@ -467,16 +478,19 @@ pub(crate) async fn sql_transaction(
                     for stmt in &req.statements {
                         let upper = stmt.trim_start().to_ascii_uppercase();
                         if upper.starts_with("INSERT") {
-                            if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
+                            if let Some((raw_k, d)) = extract_insert_row_from_sql(stmt) {
+                                let k = db_prefix_key(&db, &raw_k);
                                 let val = serde_json::to_string(&d).unwrap_or_default();
                                 wal.append_mutation(&k, &val);
                             }
                         } else if upper.starts_with("DELETE") {
-                            if let Some(k) = extract_delete_key_from_sql(stmt) {
+                            if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                                let k = db_prefix_key(&db, &raw_k);
                                 wal.append_mutation(&k, "__deleted__");
                             }
                         } else if upper.starts_with("UPDATE") {
-                            if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                            if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
+                                let k = db_prefix_key(&db, &raw_k);
                                 let val = serde_json::to_string(&d).unwrap_or_default();
                                 wal.append_mutation(&k, &val);
                             }
@@ -494,15 +508,18 @@ pub(crate) async fn sql_transaction(
                 for stmt in &req.statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
-                        if let Some((k, _d)) = extract_insert_row_from_sql(stmt) {
+                        if let Some((raw_k, _d)) = extract_insert_row_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             origin.append("row_store", &k, stmt, MutationOp::Insert);
                         }
                     } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                        if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             origin.append("row_store", &k, stmt, MutationOp::Delete);
                         }
                     } else if upper.starts_with("UPDATE") {
-                        if let Some((k, _d)) = extract_update_row_from_sql(stmt) {
+                        if let Some((raw_k, _d)) = extract_update_row_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             origin.append("row_store", &k, stmt, MutationOp::Update);
                         }
                     }
@@ -741,6 +758,10 @@ pub(crate) async fn sql_execute(
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
 
+    // Gap #2: db scope string — used to prefix all row keys for true DB isolation.
+    // Empty when no database header is present (backward compat, single-DB deployments).
+    let db: String = active_database.clone().unwrap_or_default();
+
     // RBAC database-level access check: if a database is specified and the
     // principal is not a DBA, verify they have an explicit database-level grant.
     if let Some(ref db) = active_database {
@@ -774,10 +795,49 @@ pub(crate) async fn sql_execute(
     // that synthesises rows with heuristic values. Once CREATE PROCEDURE / UDF
     // execution lands, remove this and route through the real catalog.
     // Tracked as gap §4.3 in gaps-may26-1.md.
-    if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req) {
+    if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req, &db) {
         return early;
     }
 
+    // Virtual catalog interception: information_schema.* and pg_catalog.*
+    // Must come before OLAP/OLTP routing so DBeaver, TablePlus, psql and
+    // SQLAlchemy get synthesized metadata rows without touching the row store.
+    if crate::helpers::information_schema::is_virtual_catalog_query(&req.sql_batch) {
+        let (cols, rows) = crate::helpers::information_schema::synthesize_virtual_catalog_response(
+            &req.sql_batch, &state,
+        );
+        append_runtime_audit_event(
+            &state,
+            AuditEventKind::Sql,
+            &principal,
+            "virtual_catalog_query",
+            "ok",
+            serde_json::json!({ "route_scope": "sql/execute", "batch_snippet": &req.sql_batch.chars().take(64).collect::<String>() }),
+        );
+        release_sql_data_plane_connection(&state, &connection_id);
+        return Ok((
+            StatusCode::OK,
+            Json(SqlExecuteResponse {
+                status: "ok",
+                route_path: "virtual_catalog".to_string(),
+                reason: "information_schema_intercept".to_string(),
+                transaction: None,
+                olap: None,
+                rejected_statement_count: 0,
+                udf_results: None,
+                udf_guardrail_status: Some("passed".to_string()),
+                udf_function_catalog: vec![],
+                udf_guard_policies: vec![],
+                udf_execution_plan: vec![],
+                legacy_agg_results: None,
+                planner_path: Some("virtual_catalog".to_string()),
+                oltp_rows: None,
+                olap_agg_results: None,
+                columns: if cols.is_empty() { None } else { Some(cols) },
+                rows: if rows.is_empty() { None } else { Some(rows) },
+            }),
+        ));
+    }
 
     let udf_function_catalog = udf_function_catalog_contract();
     let udf_guard_policies = udf_guard_policy_contract();
@@ -1115,19 +1175,22 @@ pub(crate) async fn sql_execute(
                 for stmt in &ddl_snapshot {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
-                        for (k, d, single_sql) in extract_all_insert_rows(stmt) {
+                        for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                         }
                     } else if upper.starts_with("UPDATE") {
-                        if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                        if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                        if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
@@ -1155,7 +1218,7 @@ pub(crate) async fn sql_execute(
     if !olap_statements.is_empty() {
         let query = olap_statements.join("; ");
         let rs = state.row_store.lock().expect("row_store lock olap_execute");
-        olap = Some(execute_olap_query(query, req.max_rows, &rs));
+        olap = Some(execute_olap_query(query, req.max_rows, &rs, &db));
     }
 
     // REQ-12: Detect legacy aggregate functions in OLAP SELECT statements and
@@ -1244,7 +1307,7 @@ pub(crate) async fn sql_execute(
         if planner_path.as_deref() == Some("oltp") && !olap_statements.is_empty() {
             let rs = state.row_store.lock().expect("row_store lock oltp select");
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
-            let rows = execute_oltp_select(&olap_statements, &rs, limit);
+            let rows = execute_oltp_select(&olap_statements, &rs, limit, &db);
             if rows.is_empty() { None } else { Some(rows) }
         } else {
             None
@@ -1269,11 +1332,17 @@ pub(crate) async fn sql_execute(
                 let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
                     std::collections::HashMap::new();
                 for name in &table_names {
-                    let prefix = format!("{name}:");
+                    let prefix = make_table_scan_prefix(&db, name);
                     let filtered: Vec<_> = all_rows
                         .iter()
                         .filter(|(k, _)| *k == name.as_str() || k.starts_with(&prefix))
-                        .cloned()
+                        // Strip db prefix so DataFusion resolves by plain table name.
+                        .map(|(k, v)| {
+                            let stripped = if db.is_empty() { k.clone() } else {
+                                k.strip_prefix(&format!("{db}.")).unwrap_or(k).to_string()
+                            };
+                            (stripped, v.clone())
+                        })
                         .collect();
                     table_rows.insert(name.clone(), filtered);
                 }
@@ -1331,10 +1400,19 @@ pub(crate) async fn sql_execute(
             use voltnuerongrid_sql::{parse_one, Statement};
             let rs = state.row_store.lock().expect("row_store lock select_result_builder");
             let snapshot_xid = rs.current_xid();
+            let db_prefix_filter = if db.is_empty() { String::new() } else { format!("{db}.") };
             let all_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
                 .scan_at_snapshot(snapshot_xid)
                 .into_iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
+                // Filter to rows belonging to the active database, then strip the prefix
+                // so downstream table-name matching still works on plain keys.
+                .filter(|(k, _)| db_prefix_filter.is_empty() || k.starts_with(&db_prefix_filter))
+                .map(|(k, v)| {
+                    let stripped = if db_prefix_filter.is_empty() { k.to_string() } else {
+                        k.strip_prefix(&db_prefix_filter).unwrap_or(k).to_string()
+                    };
+                    (stripped, v.clone())
+                })
                 .collect();
             drop(rs);
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);

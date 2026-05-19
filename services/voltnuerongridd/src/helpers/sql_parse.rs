@@ -41,6 +41,13 @@ pub(crate) fn build_http_envelope<TPayload>(
 }
 
 
+/// Extract the storage key for a DELETE statement.
+///
+/// Returns `"table:where_value"` — the same format used by INSERT row keys —
+/// so that callers can prefix with a database name via [`db_prefix_key`] when
+/// operating in multi-database mode.
+///
+/// Returns `None` for non-DELETE statements or statements without a WHERE clause.
 pub(crate) fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
     use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
     let tokens = semantic_tokens(sql);
@@ -48,14 +55,39 @@ pub(crate) fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
     if !upper.starts_with("DELETE") {
         return None;
     }
+    // Extract table name from `DELETE FROM <table>`
+    let mut table_name: Option<String> = None;
+    let mut past_from = false;
+    for tok in &tokens {
+        match tok {
+            Token::Keyword(k) if k.eq_ignore_ascii_case("FROM") => past_from = true,
+            Token::Identifier(t) | Token::Keyword(t) if past_from && table_name.is_none() => {
+                // Strip schema qualifier if present (public.customers → customers)
+                let unqualified = t.rsplit('.').next().unwrap_or(t.as_str());
+                table_name = Some(unqualified.to_ascii_lowercase());
+            }
+            _ => {}
+        }
+    }
+    // Extract WHERE clause value
     let mut after_where = false;
     let mut past_eq = false;
     for tok in &tokens {
         match tok {
             Token::Keyword(k) if k.eq_ignore_ascii_case("WHERE") => after_where = true,
             Token::Symbol(s) if s == "=" && after_where => past_eq = true,
-            Token::StringLiteral(s) if past_eq => return Some(s.clone()),
-            Token::Number(n) if past_eq => return Some(n.clone()),
+            Token::StringLiteral(s) if past_eq => {
+                return Some(match table_name {
+                    Some(t) => format!("{t}:{s}"),
+                    None => s.clone(),
+                });
+            }
+            Token::Number(n) if past_eq => {
+                return Some(match table_name {
+                    Some(t) => format!("{t}:{n}"),
+                    None => n.clone(),
+                });
+            }
             _ => {}
         }
     }
@@ -290,6 +322,45 @@ pub(crate) fn extract_insert_row_from_sql_with_cols(
     let first_val = row_vals[0].as_str();
     let row_key = format!("{table}:{first_val}");
     Some((row_key, data))
+}
+
+
+// ─── Gap #2: row key DB prefix helpers ────────────────────────────────────────
+
+/// Build a fully-qualified row key for storage in `PagedRowStore`.
+///
+/// When `db` is non-empty: `"{db}.{table}:{row_id}"` — true per-database isolation.
+/// When `db` is empty:     `"{table}:{row_id}"` — backward-compatible (WAL replay, tests).
+pub(crate) fn make_row_key(db: &str, table: &str, row_id: &str) -> String {
+    if db.is_empty() {
+        format!("{table}:{row_id}")
+    } else {
+        format!("{db}.{table}:{row_id}")
+    }
+}
+
+/// Build the key scan prefix for a table in a given database.
+///
+/// `make_table_scan_prefix("", "customers")` → `"customers:"`
+/// `make_table_scan_prefix("mydb", "customers")` → `"mydb.customers:"`
+pub(crate) fn make_table_scan_prefix(db: &str, table: &str) -> String {
+    if db.is_empty() {
+        format!("{table}:")
+    } else {
+        format!("{db}.{table}:")
+    }
+}
+
+/// Apply the database prefix to an already-formed `"table:value"` key.
+///
+/// When `db` is empty, returns `raw_key` unchanged (backward compat for WAL replay
+/// and single-database deployments).
+pub(crate) fn db_prefix_key(db: &str, raw_key: &str) -> String {
+    if db.is_empty() {
+        raw_key.to_string()
+    } else {
+        format!("{db}.{raw_key}")
+    }
 }
 
 

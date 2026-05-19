@@ -327,7 +327,16 @@ pub fn parse_one(sql: &str) -> Result<Statement, String> {
 /// Plain `str::contains` would produce false positives for queries like
 ///   `SELECT * FROM t WHERE note = 'GROUP BY foo'`
 /// This helper skips over `'…'` regions before checking.
-fn keyword_outside_strings(up: &str, keyword: &str) -> bool {
+pub(crate) fn keyword_outside_strings(up: &str, keyword: &str) -> bool {
+    find_keyword_outside_strings(up, keyword).is_some()
+}
+
+/// Returns the byte offset of the first occurrence of `keyword` in `up`
+/// that falls **outside** a single-quoted string literal, or `None`.
+///
+/// Used by `keyword_outside_strings` and by `has_order_by_*` helpers that
+/// need to slice the string after the keyword position.
+pub(crate) fn find_keyword_outside_strings(up: &str, keyword: &str) -> Option<usize> {
     let klen = keyword.len();
     let bytes = up.as_bytes();
     let n = bytes.len();
@@ -336,9 +345,8 @@ fn keyword_outside_strings(up: &str, keyword: &str) -> bool {
     while i < n {
         if in_str {
             if bytes[i] == b'\'' {
-                // Escaped quote inside string: '' → stay in string
                 if i + 1 < n && bytes[i + 1] == b'\'' {
-                    i += 2;
+                    i += 2; // escaped ''
                 } else {
                     in_str = false;
                     i += 1;
@@ -350,12 +358,12 @@ fn keyword_outside_strings(up: &str, keyword: &str) -> bool {
             in_str = true;
             i += 1;
         } else if i + klen <= n && &up[i..i + klen] == keyword {
-            return true;
+            return Some(i);
         } else {
             i += 1;
         }
     }
-    false
+    None
 }
 
 fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
@@ -420,23 +428,23 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 }
                 // Detect IN list predicate in WHERE (S3-WS1-07).
                 // Exclude subquery form "IN (SELECT ..." so has_subquery stays exclusive.
-                if up.contains(" IN (") && !up.contains("(SELECT") {
+                if keyword_outside_strings(&up, " IN (") && !keyword_outside_strings(&up, "(SELECT") {
                     stmt.has_in_list = true;
                 }
                 // Detect BETWEEN ... AND predicate in WHERE (S3-WS1-08).
-                if up.contains(" BETWEEN ") && up.contains(" AND ") {
+                if keyword_outside_strings(&up, " BETWEEN ") && keyword_outside_strings(&up, " AND ") {
                     stmt.has_between = true;
                 }
                 // Detect LIKE / ILIKE predicate in WHERE (S3-WS1-09).
-                if up.contains(" LIKE ") || up.contains(" ILIKE ") {
+                if keyword_outside_strings(&up, " LIKE ") || keyword_outside_strings(&up, " ILIKE ") {
                     stmt.has_like = true;
                 }
                 // Detect NOT keyword predicate in WHERE (S3-WS1-10); exclude IS NOT NULL and NOT IN patterns.
-                if up.contains(" NOT ") && !up.contains("IS NOT") && !up.contains("NOT IN") {
+                if keyword_outside_strings(&up, " NOT ") && !keyword_outside_strings(&up, "IS NOT") && !keyword_outside_strings(&up, "NOT IN") {
                     stmt.has_not = true;
                 }
                 // Detect CASE WHEN expression anywhere in the query (S3-WS1-11).
-                if up.contains("CASE WHEN") {
+                if keyword_outside_strings(&up, "CASE WHEN") {
                     stmt.has_case = true;
                 }
                 // Detect COALESCE() expression anywhere in the query (S3-WS1-12).
@@ -479,7 +487,7 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     stmt.has_any_all = true;
                 }
                 // Detect NOT IN predicate (S3-WS1-21).
-                if up.contains("NOT IN (") || up.contains("NOT IN(") {
+                if keyword_outside_strings(&up, "NOT IN (") || keyword_outside_strings(&up, "NOT IN(") {
                     stmt.has_not_in = true;
                 }
                 // Detect TRIM / LTRIM / RTRIM function calls (S3-WS1-22).
@@ -491,7 +499,7 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     stmt.has_interval = true;
                 }
                 // Detect IN (SELECT ...) subquery predicate (S3-WS1-24).
-                if up.contains("IN (SELECT") || up.contains("IN(SELECT") {
+                if keyword_outside_strings(&up, "IN (SELECT") || keyword_outside_strings(&up, "IN(SELECT") {
                     stmt.has_in_subquery = true;
                 }
                 // Detect IS NULL / IS NOT NULL predicate (S3-WS1-25).
@@ -535,7 +543,7 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     stmt.has_full_text_search = true;
                 }
                 // Detect GROUPING SETS construct in GROUP BY (S3-WS1-35).
-                if up.contains("GROUPING SETS") {
+                if keyword_outside_strings(&up, "GROUPING SETS") {
                     stmt.has_grouping_sets = true;
                 }
                 // Detect NATURAL JOIN clause (S3-WS1-36).
@@ -547,7 +555,7 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     stmt.has_using_join = true;
                 }
                 // Detect EXCEPT set operation (S3-WS1-38).
-                if up.contains(" EXCEPT ") {
+                if keyword_outside_strings(&up, " EXCEPT ") {
                     stmt.has_except = true;
                 }
                 // Detect INTERSECT set operation (S3-WS1-39).
@@ -587,23 +595,25 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                     stmt.has_named_window = true;
                 }
                 // Detect window PARTITION BY usage (S3-WS1-47).
-                if up.contains("PARTITION BY") {
+                if keyword_outside_strings(&up, "PARTITION BY") {
                     stmt.has_window_partition = true;
                 }
                 // Detect window ORDER BY usage without PARTITION BY (S3-WS1-48).
                 if ((up.contains("OVER (") || up.contains("OVER("))
                     || (up.contains(" WINDOW ") && up.contains(" AS (")))
-                    && up.contains("ORDER BY")
-                    && !up.contains("PARTITION BY")
+                    && keyword_outside_strings(&up, "ORDER BY")
+                    && !keyword_outside_strings(&up, "PARTITION BY")
                 {
                     stmt.has_window_order = true;
                 }
                 // Detect NULLS FIRST/LAST ordering (S3-WS1-49).
-                if up.contains("ORDER BY") && (up.contains("NULLS FIRST") || up.contains("NULLS LAST")) {
+                if keyword_outside_strings(&up, "ORDER BY")
+                    && (keyword_outside_strings(&up, "NULLS FIRST") || keyword_outside_strings(&up, "NULLS LAST"))
+                {
                     stmt.has_nulls_ordering = true;
                 }
                 // Detect ORDER BY ... COLLATE ... usage (S3-WS1-50).
-                if up.contains("ORDER BY") && up.contains("COLLATE") {
+                if keyword_outside_strings(&up, "ORDER BY") && keyword_outside_strings(&up, "COLLATE") {
                     stmt.has_order_by_collation = true;
                 }
                 // Detect positional ORDER BY (S3-WS1-51).
@@ -734,7 +744,7 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.trim_start().starts_with("WITH RECURSIVE ") && up.contains(" AS (") {
                     stmt.has_recursive_cte = true;
                 }
-                if up.contains("GROUP BY") {
+                if keyword_outside_strings(&up, "GROUP BY") {
                     stmt.has_group_by = true;
                 }
                 if has_table_alias(&up) {
@@ -743,7 +753,7 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if has_column_alias(&up) {
                     stmt.has_column_alias = true;
                 }
-                if up.contains("HAVING") {
+                if keyword_outside_strings(&up, "HAVING") {
                     stmt.has_having = true;
                 }
                 if up.contains("NOT EXISTS(") || up.contains("NOT EXISTS (") {
@@ -762,20 +772,22 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
                 if up.contains(" WINDOW ") && up.contains(" AS (") {
                     stmt.has_named_window = true;
                 }
-                if up.contains("PARTITION BY") {
+                if keyword_outside_strings(&up, "PARTITION BY") {
                     stmt.has_window_partition = true;
                 }
                 if ((up.contains("OVER (") || up.contains("OVER("))
                     || (up.contains(" WINDOW ") && up.contains(" AS (")))
-                    && up.contains("ORDER BY")
-                    && !up.contains("PARTITION BY")
+                    && keyword_outside_strings(&up, "ORDER BY")
+                    && !keyword_outside_strings(&up, "PARTITION BY")
                 {
                     stmt.has_window_order = true;
                 }
-                if up.contains("ORDER BY") && (up.contains("NULLS FIRST") || up.contains("NULLS LAST")) {
+                if keyword_outside_strings(&up, "ORDER BY")
+                    && (keyword_outside_strings(&up, "NULLS FIRST") || keyword_outside_strings(&up, "NULLS LAST"))
+                {
                     stmt.has_nulls_ordering = true;
                 }
-                if up.contains("ORDER BY") && up.contains("COLLATE") {
+                if keyword_outside_strings(&up, "ORDER BY") && keyword_outside_strings(&up, "COLLATE") {
                     stmt.has_order_by_collation = true;
                 }
                 if has_order_by_positional(&up) {
@@ -897,7 +909,7 @@ fn parse_tokens(raw: &str, tokens: &[Token]) -> Result<Statement, String> {
 // ─── SELECT ───────────────────────────────────────────────────────────────────
 
 fn has_order_by_positional(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = up[idx + "ORDER BY".len()..].trim_start();
         return tail
             .chars()
@@ -3341,7 +3353,7 @@ mod order_by_positional_tests {
 }
 
 fn has_order_by_expression(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = up[idx + "ORDER BY".len()..].trim_start();
         return tail.contains('(')
             || tail.contains(" + ")
@@ -3385,7 +3397,7 @@ mod order_by_expression_tests {
 }
 
 fn has_order_by_function_expression(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = up[idx + "ORDER BY".len()..].trim_start();
         if let Some(open_idx) = tail.find('(') {
             let prefix = tail[..open_idx].trim_end();
@@ -3438,7 +3450,7 @@ mod order_by_function_expression_tests {
 }
 
 fn has_order_by_case_expression(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = &up[idx + "ORDER BY".len()..];
         return tail.contains("CASE") && tail.contains("END");
     }
@@ -3446,7 +3458,7 @@ fn has_order_by_case_expression(up: &str) -> bool {
 }
 
 fn has_order_by_desc_direction(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = &up[idx + "ORDER BY".len()..];
         return tail.to_uppercase().contains(" DESC") || tail.starts_with("DESC");
     }
@@ -3454,7 +3466,7 @@ fn has_order_by_desc_direction(up: &str) -> bool {
 }
 
 fn has_order_by_asc_direction(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = &up[idx + "ORDER BY".len()..];
         let tail_upper = tail.to_uppercase();
         return tail_upper.contains(" ASC") || tail_upper.starts_with("ASC");
@@ -3463,7 +3475,7 @@ fn has_order_by_asc_direction(up: &str) -> bool {
 }
 
 fn has_order_by_random(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = &up[idx + "ORDER BY".len()..];
         let tail_upper = tail.to_uppercase();
         return tail_upper.contains("RANDOM()")
@@ -3474,7 +3486,7 @@ fn has_order_by_random(up: &str) -> bool {
 }
 
 fn has_order_by_random_seeded(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = &up[idx + "ORDER BY".len()..];
         let tail_upper = tail.to_uppercase();
         if tail_upper.contains("RANDOM()") {
@@ -3489,7 +3501,7 @@ fn has_order_by_random_seeded(up: &str) -> bool {
 }
 
 fn has_order_by_rand_alias(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = &up[idx + "ORDER BY".len()..];
         let tail_upper = tail.to_uppercase();
         return tail_upper.contains("RAND()");
@@ -3498,7 +3510,7 @@ fn has_order_by_rand_alias(up: &str) -> bool {
 }
 
 fn has_order_by_multi_column(up: &str) -> bool {
-    if let Some(idx) = up.find("ORDER BY") {
+    if let Some(idx) = find_keyword_outside_strings(up, "ORDER BY") {
         let tail = &up[idx + "ORDER BY".len()..];
         let first_clause = tail
             .split(" LIMIT")
@@ -3537,11 +3549,11 @@ fn has_having_with_group_by(stmt: &SelectStatement) -> bool {
 }
 
 fn has_group_by_rollup(up: &str) -> bool {
-    up.contains("GROUP BY ROLLUP(") || up.contains("GROUP BY ROLLUP (")
+    keyword_outside_strings(up, "GROUP BY ROLLUP(") || keyword_outside_strings(up, "GROUP BY ROLLUP (")
 }
 
 fn has_group_by_cube(up: &str) -> bool {
-    up.contains("GROUP BY CUBE(") || up.contains("GROUP BY CUBE (")
+    keyword_outside_strings(up, "GROUP BY CUBE(") || keyword_outside_strings(up, "GROUP BY CUBE (")
 }
 
 fn has_select_distinct_on(up: &str) -> bool {

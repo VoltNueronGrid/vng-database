@@ -339,8 +339,10 @@ pub(crate) fn execute_olap_query(
     query: String,
     max_rows: Option<usize>,
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
+    db: &str,
 ) -> OlapQueryResponse {
     use voltnuerongrid_exec_datafusion::{collect_query_table_names, SelectOutput};
+    use crate::helpers::sql_parse::make_table_scan_prefix;
 
     let started = Instant::now();
     let resolved_max_rows = max_rows.unwrap_or(1_000).min(100_000);
@@ -350,11 +352,19 @@ pub(crate) fn execute_olap_query(
     let mut table_rows: HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
         HashMap::new();
     for name in &table_names {
-        let prefix = format!("{name}:");
+        let prefix = make_table_scan_prefix(db, name);
+        let unqualified = name.as_str();
         let filtered: Vec<_> = all_rows
             .iter()
-            .filter(|(k, _)| *k == name.as_str() || k.starts_with(&prefix))
-            .cloned()
+            .filter(|(k, _)| *k == unqualified || k.starts_with(&prefix))
+            // Strip the db prefix from the key before passing to DataFusion so
+            // table resolution inside the executor still matches the plain table name.
+            .map(|(k, v)| {
+                let stripped = if db.is_empty() { k.clone() } else {
+                    k.strip_prefix(&format!("{db}.")).unwrap_or(k).to_string()
+                };
+                (stripped, v.clone())
+            })
             .collect();
         table_rows.insert(name.clone(), filtered);
     }
@@ -384,13 +394,16 @@ pub(crate) fn execute_olap_query(
 
 /// S4-WS3-02: physical OLTP executor — runs point SELECT queries against `PagedRowStore`.
 /// Extracts an optional key/prefix constraint from the WHERE clause and filters visible rows.
+/// `db` scopes the scan to rows stored under the given database prefix (empty = no scoping).
 pub(crate) fn execute_oltp_select(
     statements: &[String],
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     limit: usize,
+    db: &str,
 ) -> Vec<OltpRowResult> {
     use voltnuerongrid_exec_datafusion::{execute_select, SelectOutput, ExecError};
     use voltnuerongrid_sql::{parse_one, Statement};
+    use crate::helpers::sql_parse::make_table_scan_prefix;
 
     let mut results: Vec<OltpRowResult> = Vec::new();
     for stmt_str in statements {
@@ -420,11 +433,17 @@ pub(crate) fn execute_oltp_select(
             let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
                 std::collections::HashMap::new();
             for name in &table_names {
-                let prefix = format!("{name}:");
+                let prefix = make_table_scan_prefix(db, name);
                 let filtered: Vec<_> = all_rows
                     .iter()
                     .filter(|(k, _)| k == name || k.starts_with(&prefix))
-                    .cloned()
+                    // Strip db prefix so DataFusion table resolution works on plain name.
+                    .map(|(k, v)| {
+                        let stripped = if db.is_empty() { k.clone() } else {
+                            k.strip_prefix(&format!("{db}.")).unwrap_or(k).to_string()
+                        };
+                        (stripped, v.clone())
+                    })
                     .collect();
                 table_rows.insert(name.clone(), filtered);
             }
@@ -522,7 +541,7 @@ pub(crate) fn execute_oltp_select(
         }
 
         // Legacy substring fallback path.
-        execute_oltp_select_legacy(stmt_str, rs, limit, &mut results);
+        execute_oltp_select_legacy(stmt_str, rs, limit, &mut results, db);
     }
     results
 }
@@ -572,13 +591,30 @@ pub(crate) fn execute_oltp_select_legacy(
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     limit: usize,
     results: &mut Vec<OltpRowResult>,
+    db: &str,
 ) {
     use voltnuerongrid_sql::{parse_one, Statement};
+    use crate::helpers::sql_parse::make_table_scan_prefix;
     let snapshot_xid = rs.current_xid();
     let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = rs
         .scan_at_snapshot(snapshot_xid)
         .into_iter()
-        .map(|(k, d)| (k.to_string(), d.clone()))
+        // Only include rows that belong to this database scope.
+        .filter(|(k, _)| {
+            if db.is_empty() {
+                // No db scope — include all rows (backward compat).
+                true
+            } else {
+                k.starts_with(&format!("{db}."))
+            }
+        })
+        // Strip db prefix so the rest of the scan logic works on plain `"table:value"` keys.
+        .map(|(k, d)| {
+            let stripped = if db.is_empty() { k.to_string() } else {
+                k.strip_prefix(&format!("{db}.")).unwrap_or(&k).to_string()
+            };
+            (stripped, d.clone())
+        })
         .collect();
     if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
         let sql_limit: usize = sel

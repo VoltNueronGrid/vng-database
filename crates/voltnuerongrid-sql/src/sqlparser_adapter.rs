@@ -14,7 +14,7 @@ use sqlparser::ast as sa;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
-use crate::ast::{JoinClause, OrderByClause, SelectStatement, Statement};
+use crate::ast::{find_keyword_outside_strings, keyword_outside_strings, JoinClause, OrderByClause, SelectStatement, Statement};
 
 /// Parse `sql` using `sqlparser-rs`. Returns `Some(stmt)` on success, `None`
 /// for statements not yet adapted (caller should fall back to the legacy parser).
@@ -254,11 +254,11 @@ fn backfill_extended_flags_from_raw(sql: &str, out: &mut SelectStatement) {
     if up.contains("CROSS APPLY") || up.contains("OUTER APPLY") { out.has_apply = true; }
     if up.contains("CROSS APPLY") { out.has_cross_apply = true; }
     if up.contains("OUTER APPLY") { out.has_outer_apply = true; }
-    if up.contains(" EXCEPT ") || up.contains("EXCEPT ALL") { out.has_except = true; }
-    if up.contains(" INTERSECT ") || up.contains("INTERSECT ALL") { out.has_intersect = true; }
-    if up.contains("CUBE") && up.contains("GROUP BY") { out.has_group_by_cube = true; }
-    if up.contains("ROLLUP") && up.contains("GROUP BY") { out.has_group_by_rollup = true; }
-    if up.contains("GROUPING SETS") { out.has_grouping_sets = true; }
+    if keyword_outside_strings(&up, " EXCEPT ") || keyword_outside_strings(&up, "EXCEPT ALL") { out.has_except = true; }
+    if keyword_outside_strings(&up, " INTERSECT ") || keyword_outside_strings(&up, "INTERSECT ALL") { out.has_intersect = true; }
+    if keyword_outside_strings(&up, "CUBE") && keyword_outside_strings(&up, "GROUP BY") { out.has_group_by_cube = true; }
+    if keyword_outside_strings(&up, "ROLLUP") && keyword_outside_strings(&up, "GROUP BY") { out.has_group_by_rollup = true; }
+    if keyword_outside_strings(&up, "GROUPING SETS") { out.has_grouping_sets = true; }
     if out.has_having && out.has_group_by { out.has_having_with_group_by = true; }
     if out.has_having && !out.has_group_by { out.has_having_without_group_by = true; }
     if up.contains("FOR UPDATE") || up.contains("FOR SHARE") { out.has_for_update = true; }
@@ -269,9 +269,9 @@ fn backfill_extended_flags_from_raw(sql: &str, out: &mut SelectStatement) {
         if out.order_by.iter().any(|o| !o.descending) { out.has_order_by_asc_direction = true; }
         if out.order_by.iter().any(|o| o.descending) { out.has_order_by_desc_direction = true; }
         if out.order_by.len() > 1 { out.has_order_by_multi_column = true; }
-        if up.contains("NULLS FIRST") || up.contains("NULLS LAST") { out.has_nulls_ordering = true; }
-        if up.contains("COLLATE") { out.has_order_by_collation = true; }
-        let ob_part = up.find("ORDER BY").map(|p| &up[p..]).unwrap_or("");
+        if keyword_outside_strings(&up, "NULLS FIRST") || keyword_outside_strings(&up, "NULLS LAST") { out.has_nulls_ordering = true; }
+        if keyword_outside_strings(&up, "COLLATE") { out.has_order_by_collation = true; }
+        let ob_part = find_keyword_outside_strings(&up, "ORDER BY").map(|p| &up[p..]).unwrap_or("");
         // Positional: check the structural order_by list — sqlparser renders
         // positional references as plain numbers in the column string.
         let is_positional = out.order_by.iter().any(|o| o.column.trim().parse::<u64>().is_ok());
@@ -279,7 +279,7 @@ fn backfill_extended_flags_from_raw(sql: &str, out: &mut SelectStatement) {
         let nt = up.replace(' ', "");
         if nt.contains("RAND()") || nt.contains("RANDOM()") { out.has_order_by_random = true; }
         if nt.contains("RANDOM(") && !nt.contains("RANDOM()") { out.has_order_by_random_seeded = true; }
-        if up.contains("ORDER BY") && up.contains("CASE") { out.has_order_by_case_expression = true; }
+        if keyword_outside_strings(&up, "ORDER BY") && keyword_outside_strings(&up, "CASE") { out.has_order_by_case_expression = true; }
         // ORDER BY with expression (function call, arithmetic, CASE, etc.).
         // Detect by checking if any order_by column string isn't a simple identifier/number.
         let has_ob_expr = out.order_by.iter().any(|o| {
@@ -301,7 +301,7 @@ fn backfill_extended_flags_from_raw(sql: &str, out: &mut SelectStatement) {
         });
         if rand_col { out.has_order_by_rand_alias = true; }
     }
-    if up.contains("PARTITION BY") { out.has_window_partition = true; }
+    if keyword_outside_strings(&up, "PARTITION BY") { out.has_window_partition = true; }
     if out.has_window_fn { out.has_window_agg = true; }
     if up.contains("->") || up.contains("->>") { out.has_json_op = true; }
     if up.contains("MATCH (") || up.contains("MATCH(") || up.contains("TSVECTOR") {
@@ -312,9 +312,9 @@ fn backfill_extended_flags_from_raw(sql: &str, out: &mut SelectStatement) {
     if up.contains("INTERVAL") { out.has_interval = true; }
 
     // NOT IN / NOT EXISTS / IN subquery.
-    if up.contains("NOT IN") { out.has_not_in = true; }
-    if up.contains("NOT EXISTS") { out.has_not_exists = true; }
-    if up.contains("IN (SELECT") || up.contains("IN(SELECT") { out.has_in_subquery = true; }
+    if keyword_outside_strings(&up, "NOT IN") { out.has_not_in = true; }
+    if keyword_outside_strings(&up, "NOT EXISTS") { out.has_not_exists = true; }
+    if keyword_outside_strings(&up, "IN (SELECT") || keyword_outside_strings(&up, "IN(SELECT") { out.has_in_subquery = true; }
 
     // IS NULL / IS NOT NULL (the structural walker sets has_null_literal; legacy tests use has_is_null).
     if up.contains("IS NULL") || up.contains("IS NOT NULL") { out.has_is_null = true; }
@@ -341,8 +341,10 @@ fn backfill_extended_flags_from_raw(sql: &str, out: &mut SelectStatement) {
     // Window ORDER (only inside OVER clause, not outer query ORDER BY).
     // Set only if there's an OVER clause with ORDER BY but WITHOUT PARTITION BY.
     // If PARTITION BY is present the window is classified as has_window_partition.
-    if (up.contains("OVER (") || up.contains("OVER(") || up.contains("WINDOW ")) && up.contains("ORDER BY") {
-        if !up.contains("PARTITION BY") {
+    if (up.contains("OVER (") || up.contains("OVER(") || up.contains("WINDOW "))
+        && keyword_outside_strings(&up, "ORDER BY")
+    {
+        if !keyword_outside_strings(&up, "PARTITION BY") {
             out.has_window_order = true;
         }
     }

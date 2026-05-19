@@ -20,6 +20,7 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
     use crate::handlers::admin::*;
     use crate::handlers::driver::*;
     use crate::handlers::ingest::*;
+    use crate::handlers::user_mgmt::{admin_create_user, admin_delete_user, auth_login};
 
     let app = Router::new()
         .route("/health", get(health))
@@ -45,6 +46,10 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/admin/cluster/topology", get(admin_cluster_topology))
         .route("/api/v1/admin/schema/tree", get(admin_schema_tree))
+        // Gap #7: user management + authentication
+        .route("/api/v1/admin/users", post(admin_create_user))
+        .route("/api/v1/admin/users/:id", axum::routing::delete(admin_delete_user))
+        .route("/api/v1/auth/login", post(auth_login))
         // Phase 1.3 — first-class database lifecycle.
         .route("/api/v1/admin/databases", get(admin_databases_list).post(admin_databases_create))
         .route("/api/v1/admin/databases/:name", axum::routing::delete(admin_databases_drop))

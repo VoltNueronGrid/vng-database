@@ -151,8 +151,46 @@ pub(crate) fn require_runtime_principal(
         return Ok(RuntimeAccessPrincipal::Operator(operator));
     }
 
+    // Gap #7: fall back to session token authentication (`Authorization: Bearer <token>`).
+    if let Some(principal) = session_identity_from_headers(headers, state) {
+        return Ok(principal);
+    }
+
     let user = require_tenant_user_privilege(headers, state, resource, scope, action)?;
     Ok(RuntimeAccessPrincipal::TenantUser(user))
+}
+
+/// Extract a `RuntimeAccessPrincipal` from a session token in the `Authorization: Bearer <token>`
+/// header. Returns `None` if no token is present, the token is invalid/expired, or the user
+/// is not found in the session store.
+pub(crate) fn session_identity_from_headers(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Option<RuntimeAccessPrincipal> {
+    let auth_header = headers.get("authorization")?.to_str().ok()?;
+    let token = auth_header.strip_prefix("Bearer ")?.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let fingerprint = crate::user_store::SessionSigner::fingerprint(token);
+    let sessions = state.session_store.lock().ok()?;
+    let entry = sessions.lookup(&fingerprint)?.clone();
+    drop(sessions);
+
+    // Map the session entry to a RuntimeAccessPrincipal.
+    let principal = if let Some(op_role) = crate::OperatorRole::parse(&entry.role) {
+        RuntimeAccessPrincipal::Operator(OperatorIdentity {
+            operator_id: entry.user_id.clone(),
+            role: op_role,
+        })
+    } else {
+        RuntimeAccessPrincipal::TenantUser(TenantUserIdentity {
+            user_id: entry.user_id.clone(),
+            tenant_id: entry.tenant_id.clone().unwrap_or_default(),
+            role: entry.role.clone(),
+        })
+    };
+    Some(principal)
 }
 
 pub(crate) fn tenant_scoped_scope(tenant_id: &str, scope: &str) -> String {

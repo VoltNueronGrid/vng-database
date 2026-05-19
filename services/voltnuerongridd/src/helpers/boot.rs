@@ -253,6 +253,42 @@ pub(crate) fn apply_dml_to_rowstore(rs: &mut PagedRowStore, xid: voltnuerongrid_
 }
 
 
+/// Replay user accounts from the DDL WAL into `user_store` at boot time.
+/// Handles both `CREATE USER …` and `DROP USER <user_id>` lines.
+pub(crate) fn replay_user_store_into(
+    user_store: &mut crate::user_store::UserStore,
+    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    use voltnuerongrid_store::SqlWalKind;
+    let stmts: Vec<String> = {
+        let guard = engine.lock().expect("wal_engine lock for replay_user_store");
+        if guard.persists_sql() && guard.sql_count(SqlWalKind::Ddl) > 0 {
+            guard.iter_sql(SqlWalKind::Ddl)
+        } else {
+            Vec::new()
+        }
+    };
+    let mut applied = 0usize;
+    for stmt in &stmts {
+        let up = stmt.trim_start().to_ascii_uppercase();
+        if up.starts_with("CREATE USER ") {
+            if let Some(account) = crate::user_store::user_from_wal(stmt.trim()) {
+                user_store.insert(account);
+                applied += 1;
+            }
+        } else if let Some(rest) = stmt.trim().strip_prefix("DROP USER ") {
+            let user_id = rest.trim();
+            if user_store.remove_by_id(user_id) {
+                applied += 1;
+            }
+        }
+    }
+    if applied > 0 {
+        eprintln!("[vng-wal] replayed {} user account operation(s) from WAL", applied);
+    }
+}
+
+
 pub(crate) fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
     let mut matrix = RbacPrivilegeMatrix::new();
 

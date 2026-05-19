@@ -59,6 +59,7 @@ pub(crate) mod audit_helpers;
 pub(crate) mod handlers;
 pub(crate) mod helpers;
 pub(crate) mod router;
+pub(crate) mod user_store;
 use auth::*;
 use config_init::*;
 use audit_helpers::*;
@@ -534,6 +535,12 @@ pub(crate) struct AppState {
     pub(crate) database_catalog: Arc<Mutex<voltnuerongrid_meta::DatabaseCatalog>>,
     /// Phase 0 — runtime config selected at boot. Read-only after startup.
     pub(crate) runtime_config: Arc<voltnuerongrid_config::RuntimeConfig>,
+    /// Gap #7: in-memory user account store (replayed from DDL WAL at boot).
+    pub(crate) user_store: Arc<Mutex<crate::user_store::UserStore>>,
+    /// Gap #7: active session store.
+    pub(crate) session_store: Arc<Mutex<crate::user_store::SessionStore>>,
+    /// Gap #7: HMAC-SHA256 session token signer.
+    pub(crate) session_signer: Arc<Mutex<crate::user_store::SessionSigner>>,
 }
 
 #[derive(Clone, Default)]
@@ -1401,6 +1408,7 @@ async fn main() {
     let wal_engine = Arc::new(Mutex::new(wal_engine_boxed));
     // Clone before the struct literal consumes `wal_engine` via the field assignment.
     let wal_engine_for_catalog = wal_engine.clone();
+    let wal_engine_for_users = wal_engine.clone();
 
     let state = AppState {
         node_id: node_id.clone(),
@@ -1480,6 +1488,19 @@ async fn main() {
         })),
         // Phase 0 — read-only runtime config selected at boot.
         runtime_config: Arc::new(runtime_config),
+        // Gap #7: user store, session store, session signer.
+        user_store: Arc::new(Mutex::new({
+            let mut us = crate::user_store::UserStore::new();
+            crate::helpers::boot::replay_user_store_into(&mut us, &wal_engine_for_users);
+            us
+        })),
+        session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
+        session_signer: Arc::new(Mutex::new({
+            let secret = std::env::var("VNG_SESSION_SECRET")
+                .or_else(|_| std::env::var("VNG_CLUSTER_TOKEN"))
+                .unwrap_or_else(|_| "vng-default-session-secret".to_string());
+            crate::user_store::SessionSigner::new(&secret, 86_400) // 24-hour TTL
+        })),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -1673,6 +1694,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     principal: &RuntimeAccessPrincipal,
     connection_id: &str,
     req: &SqlExecuteRequest,
+    db: &str,
 ) -> Option<Result<(StatusCode, Json<SqlExecuteResponse>), (StatusCode, Json<AuthErrorResponse>)>> {
     let raw = req.sql_batch.trim();
     let upper = raw.to_ascii_uppercase();
@@ -1710,12 +1732,13 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     // Determine next row id (highest existing rowid for this table + 1).
     // Lock acquisition uses match-on-Result so a poisoned mutex returns 503
     // instead of taking the whole service down (fixes pattern from .cursorrules).
+    let scan_prefix = crate::helpers::sql_parse::make_table_scan_prefix(db, &table_name);
     let existing_max: usize = match state.row_store.lock() {
         Ok(rs) => {
             let snap = rs.current_xid();
             rs.scan_at_snapshot(snap)
                 .iter()
-                .filter(|(k, _)| k.starts_with(&format!("{}:", table_name)))
+                .filter(|(k, _)| k.starts_with(&scan_prefix))
                 .filter_map(|(k, _)| k.splitn(2, ':').nth(1).and_then(|v| v.parse::<usize>().ok()))
                 .max()
                 .unwrap_or(0)
@@ -1733,7 +1756,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     let mut inserted = 0usize;
     for i in 1..=num_records {
         let row_id = existing_max + i;
-        let key = format!("{}:{}", table_name, row_id);
+        let key = crate::helpers::sql_parse::make_row_key(db, &table_name, &row_id.to_string());
         let mut row_data: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         row_data.insert("__table".to_string(), table_name.clone());
         for col_idx in 0..col_count {

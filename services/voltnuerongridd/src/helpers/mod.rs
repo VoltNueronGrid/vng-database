@@ -8,3 +8,4 @@ pub(crate) mod cluster;
 pub(crate) mod boot;
 pub(crate) mod native_protocol;
 pub(crate) mod raft_loop;
+pub(crate) mod information_schema;

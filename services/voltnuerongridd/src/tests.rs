@@ -94,6 +94,10 @@ fn state_with_key(key: Option<&str>) -> AppState {
         database_catalog: Arc::new(Mutex::new(voltnuerongrid_meta::DatabaseCatalog::new())),
         // Phase 0 — runtime config (test default).
         runtime_config: Arc::new(voltnuerongrid_config::RuntimeConfig::default()),
+        // Gap #7 — user store, session store, signer (test defaults: empty).
+        user_store: Arc::new(Mutex::new(crate::user_store::UserStore::new())),
+        session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
+        session_signer: Arc::new(Mutex::new(crate::user_store::SessionSigner::new("test-secret", 3600))),
     }
 }
 
@@ -6001,9 +6005,9 @@ fn s3_ws1_ast_parser_insert_round_trip() {
 // ── S2-WS2-05: COMMIT flush handles DELETE statements ───────────────────
 #[test]
 fn s2_ws2_commit_flush_handles_delete_statement() {
-    // extract_delete_key_from_sql returns the WHERE-clause value
+    // extract_delete_key_from_sql returns "table:where_value" (table-prefixed key)
     let key = extract_delete_key_from_sql("DELETE FROM orders WHERE id = 'o99'");
-    assert_eq!(key, Some("o99".to_string()));
+    assert_eq!(key, Some("orders:o99".to_string()));
     // Non-DELETE returns None
     assert!(extract_delete_key_from_sql("SELECT * FROM orders").is_none());
     // Missing WHERE returns None
