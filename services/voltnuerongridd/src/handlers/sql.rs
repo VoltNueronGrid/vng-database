@@ -472,6 +472,7 @@ pub(crate) async fn sql_transaction(
                             let before = rs.read_latest(&k).cloned();
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
+                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                         }
@@ -483,6 +484,7 @@ pub(crate) async fn sql_transaction(
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
+                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     } else if upper.starts_with("UPDATE") {
@@ -492,6 +494,7 @@ pub(crate) async fn sql_transaction(
                             let before = rs.read_latest(&k).cloned();
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
+                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
@@ -1264,6 +1267,7 @@ pub(crate) async fn sql_execute(
                             let before = rs.read_latest(&k).cloned();
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
+                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                         }
@@ -1274,6 +1278,7 @@ pub(crate) async fn sql_execute(
                             let before = rs.read_latest(&k).cloned();
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
+                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
@@ -1285,6 +1290,7 @@ pub(crate) async fn sql_execute(
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
+                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     }

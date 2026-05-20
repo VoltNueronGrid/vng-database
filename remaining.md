@@ -1,10 +1,26 @@
-# `remaining.md` — handoff for next session (v24)
+# `remaining.md` — handoff for next session (v25)
 
-**Last updated:** 2026-05-20 (session 23 — Critical & High gap sweep)
+**Last updated:** 2026-05-20 (session 24 — store_row() end-to-end wiring)
 **Branch:** `claude/friendly-hertz-3b69fb`
 **cargo test -p voltnuerongridd:** 765 passed, 0 failed ✓
 **cargo test -p voltnuerongrid-store:** 97 passed, 0 failed ✓
 **cargo test -p voltnuerongrid-driver-rust:** 54 passed, 7 failed (all 7 are pre-existing sandbox TCP bind failures — not regressions)
+
+---
+
+## TL;DR — what landed in session 24
+
+### ✅ Gap #1 (Row store → RocksDB persistence) — NOW FULLY END-TO-END
+
+**`services/voltnuerongridd/src/handlers/sql.rs`**
+- `sql_transaction` DML path: every `rs.insert()`/`rs.delete()` is now preceded by `wal.store_row()` for INSERT, UPDATE, and DELETE arms
+- `sql_execute` direct path: same wiring — all three DML arms persist to RocksDB CF_ROWS before applying to in-memory row store
+
+**`services/voltnuerongridd/src/helpers/raft_loop.rs`**
+- `apply_dml_command` now receives `&AppState` and calls `wal.store_row()` for each INSERT/UPDATE/DELETE applied by Raft followers
+- Raft followers now persist rows to RocksDB just like the leader — full cluster durability
+
+Row persistence is now truly end-to-end: every committed DML writes to CF_ROWS → survives crash → loaded back at boot via `load_persisted_rows_into()`.
 
 ---
 
@@ -120,7 +136,7 @@ See `gaps-may20-2.md` for the full list. Summary of what remains:
 
 ### Tier 1 (functional correctness, still open)
 
-1. **Row store RocksDB persistence — service-layer write-through missing**: `store_row()` API is implemented in the storage layer, but `handlers/sql.rs` DML paths do NOT yet call `wal_engine.store_row()` on every INSERT/UPDATE/DELETE. The `load_persisted_rows_into()` at boot will only see rows that were previously flushed via `store_row()`. **Until this is wired, row durability is not fully end-to-end.** Next step: after each `rs.insert()` or `rs.delete()` in `sql.rs`, call `state.wal_engine.lock()?.store_row(&db, &raw_k, xid, Some(&data))`.
+1. ✅ **Row store RocksDB persistence — COMPLETE**: `store_row()` is now called from all DML paths in `sql.rs` (both `sql_transaction` and `sql_execute` direct path) and from `raft_loop.rs::apply_dml_command`. Row durability is fully end-to-end.
 
 2. **Integration test for linearisable writes** — still missing.
 
@@ -168,7 +184,7 @@ See `gaps-may20-2.md` for the full list. Summary of what remains:
 @crates/voltnuerongrid-store/src/rocksdb_engine.rs
 ```
 
-**Most critical next step:** Wire `wal_engine.store_row()` calls from the DML paths in `sql.rs` so row persistence is truly end-to-end. After `rs.insert(xid, &k, d)` add `wal_engine.lock()?.store_row(&db, &raw_k, xid, Some(&d))`. After `rs.delete(xid, &k)` add `wal_engine.lock()?.store_row(&db, &raw_k, xid, None)`.
+**Most critical next step:** Add an integration test for linearisable writes (Tier 1 #2). Then tackle Tier 2 items: unused-import sweep (~31 warnings), `replace_all` unit test in `mvcc.rs`, `append_command_pending` unit test in `raft.rs`. After that: Parquet → DataFusion read path (Tier 2 #8).
 
 **Environment note:** `VNG_CLUSTER_TOKEN`, `VNG_RAFT_PEERS`, `VNG_RBAC_POLICY_PATH`,
 `VNG_NODE_ID`, `VNG_SESSION_SECRET`, `VNG_PARQUET_FLUSH_INTERVAL_SECS` are key env vars. All default safely for single-node dev.

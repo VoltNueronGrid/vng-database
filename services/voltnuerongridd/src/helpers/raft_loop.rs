@@ -344,7 +344,7 @@ fn apply_committed_entries(state: &AppState) {
         let mut rs = state.row_store.lock().expect("raft apply row_store lock");
         let xid = rs.begin_xid();
         for entry in &entries_to_apply {
-            apply_dml_command(&entry.command, &mut rs, xid);
+            apply_dml_command(&entry.command, &mut rs, xid, state);
         }
         rs.release_write_intents(xid);
     }
@@ -373,23 +373,27 @@ fn apply_dml_command(
     command: &str,
     rs: &mut voltnuerongrid_store::mvcc::PagedRowStore,
     xid: u64,
+    state: &AppState,
 ) {
     use crate::{extract_all_insert_rows, extract_update_row_from_sql, extract_delete_key_from_sql};
     let upper = command.trim_start().to_ascii_uppercase();
     if upper.starts_with("INSERT") {
         for (k, d, _) in extract_all_insert_rows(command) {
             let _ = rs.begin_write_intent(xid, &k);
+            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row("", &k, xid, Some(&d)); }
             rs.insert(xid, &k, d);
         }
     } else if upper.starts_with("UPDATE") {
         if let Some((k, d)) = extract_update_row_from_sql(command) {
             let _ = rs.begin_write_intent(xid, &k);
+            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row("", &k, xid, Some(&d)); }
             rs.insert(xid, &k, d);
         }
     } else if upper.starts_with("DELETE") {
         if let Some(k) = extract_delete_key_from_sql(command) {
             let _ = rs.begin_write_intent(xid, &k);
             rs.delete(xid, &k);
+            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row("", &k, xid, None); }
         }
     }
     // SELECT / DDL / unknown — no-op.
