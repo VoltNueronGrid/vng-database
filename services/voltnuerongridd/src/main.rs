@@ -545,6 +545,10 @@ pub(crate) struct AppState {
     /// before_data = Some(RowData) means the row existed before (restore on rollback).
     /// before_data = None means the row was fresh INSERT (delete on rollback).
     pub(crate) tx_undo_log: Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, Option<voltnuerongrid_store::mvcc::RowData>)>>>>,
+    /// Tier 3 #1: Per-database role grants.
+    /// Maps database_name → set of role names that have access.
+    /// Empty set means no grants (access denied for non-DBA users).
+    pub(crate) db_grants: Arc<Mutex<HashMap<String, HashSet<String>>>>,
 }
 
 #[derive(Clone, Default)]
@@ -1511,6 +1515,8 @@ async fn main() {
         db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         // Gap #3: per-connection undo log for ROLLBACK support.
         tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        // Tier 3 #1: per-database role grants (empty = no explicit grants yet).
+        db_grants: Arc::new(Mutex::new(HashMap::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -1862,7 +1868,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
 
 /// Heuristic value generator for the insert_rows demo.
 /// Pure function — no state, easy to unit-test.
-fn synthesize_demo_value(col_name: &str, table_name: &str, row_id: usize) -> String {
+pub(crate) fn synthesize_demo_value(col_name: &str, table_name: &str, row_id: usize) -> String {
     if col_name.ends_with("_id") || col_name == "id" {
         row_id.to_string()
     } else if col_name.contains("name") {

@@ -111,6 +111,8 @@ fn state_with_key(key: Option<&str>) -> AppState {
         db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         // Gap #3: per-connection undo log for ROLLBACK support.
         tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        // Tier 3 #1: per-database role grants (empty for tests).
+        db_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
     }
 }
 

@@ -108,6 +108,16 @@ impl SessionStore {
     pub(crate) fn remove_by_user(&mut self, user_id: &str) {
         self.sessions.retain(|_, v| v.user_id != user_id);
     }
+
+    /// Return all active (non-expired) session fingerprints for a given user.
+    pub(crate) fn sessions_for_user(&self, user_id: &str) -> Vec<String> {
+        let now = now_secs();
+        self.sessions
+            .iter()
+            .filter(|(_, v)| v.user_id == user_id && v.expires_at_secs >= now)
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
 }
 
 /// HMAC-SHA256 session token signer.

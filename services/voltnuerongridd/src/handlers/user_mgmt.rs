@@ -216,6 +216,53 @@ pub(crate) async fn admin_delete_user(
     ))
 }
 
+/// `DELETE /api/v1/admin/users/:id/sessions` — revoke all active sessions for a user. DBA-only.
+///
+/// Useful for forced sign-out after a password change or account compromise.
+pub(crate) async fn admin_revoke_user_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> Result<(StatusCode, axum::Json<serde_json::Value>), (StatusCode, axum::Json<AuthErrorResponse>)> {
+    let _principal = require_sql_runtime_principal(
+        &headers, &state, PrivilegeAction::Execute, "admin/users",
+    )?;
+
+    // Verify the user actually exists before revoking sessions.
+    {
+        let store = state.user_store.lock().expect("user_store lock");
+        if store.get_by_id(&user_id).is_none() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                axum::Json(AuthErrorResponse {
+                    status: "error",
+                    reason: format!("user '{user_id}' not found"),
+                    locale: "en".to_string(),
+                    localized_message: format!("User '{user_id}' not found"),
+                }),
+            ));
+        }
+    }
+
+    let sessions_revoked = {
+        let mut sessions = state.session_store.lock().expect("session_store lock");
+        let before = sessions
+            .sessions_for_user(&user_id)
+            .len();
+        sessions.remove_by_user(&user_id);
+        before
+    };
+
+    Ok((
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "status": "ok",
+            "user_id": user_id,
+            "sessions_revoked": sessions_revoked,
+        })),
+    ))
+}
+
 /// `POST /api/v1/auth/login` — authenticate username+password; return session token.
 pub(crate) async fn auth_login(
     State(state): State<AppState>,

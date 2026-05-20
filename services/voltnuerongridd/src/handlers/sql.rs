@@ -1258,6 +1258,8 @@ pub(crate) async fn sql_execute(
                 // ── Direct path (single-node leader / follower / non-Raft) ────────
                 let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
                 let xid = rs.begin_xid();
+                // Gap #7: Track per-table insert/delete deltas for incremental stats update.
+                let mut stats_inserts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
                 for stmt in &ddl_snapshot {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
@@ -1265,6 +1267,12 @@ pub(crate) async fn sql_execute(
                             let k = db_prefix_key(&db, &raw_k);
                             // Gap #3: record before-image for ROLLBACK support.
                             let before = rs.read_latest(&k).cloned();
+                            // Only increment if this is a fresh insert (not an overwrite).
+                            if before.is_none() {
+                                if let Some(colon) = k.rfind(':') {
+                                    *stats_inserts.entry(k[..colon].to_string()).or_insert(0) += 1;
+                                }
+                            }
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
@@ -1276,6 +1284,7 @@ pub(crate) async fn sql_execute(
                             let k = db_prefix_key(&db, &raw_k);
                             // Gap #3: record before-image for ROLLBACK support.
                             let before = rs.read_latest(&k).cloned();
+                            // UPDATE keeps the row count the same — no stat delta needed.
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
@@ -1287,6 +1296,12 @@ pub(crate) async fn sql_execute(
                             let k = db_prefix_key(&db, &raw_k);
                             // Gap #3: record before-image for ROLLBACK support.
                             let before = rs.read_latest(&k).cloned();
+                            // Only decrement if the row actually existed.
+                            if before.is_some() {
+                                if let Some(colon) = k.rfind(':') {
+                                    *stats_inserts.entry(k[..colon].to_string()).or_insert(0) -= 1;
+                                }
+                            }
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
@@ -1296,19 +1311,13 @@ pub(crate) async fn sql_execute(
                     }
                 }
                 rs.release_write_intents(xid);
-                // Gap #7: Update per-table row count statistics after DML commit.
-                {
-                    let xid_snap = rs.current_xid();
-                    let mut counts: std::collections::HashMap<String, u64> =
-                        std::collections::HashMap::new();
-                    for (k, _) in rs.scan_at_snapshot(xid_snap) {
-                        if let Some(colon) = k.rfind(':') {
-                            let table_key = k[..colon].to_string();
-                            *counts.entry(table_key).or_insert(0) += 1;
-                        }
-                    }
+                // Gap #7: Apply incremental stat deltas (O(tables_touched) instead of O(all_rows)).
+                if !stats_inserts.is_empty() {
                     if let Ok(mut stats) = state.table_stats.lock() {
-                        *stats = counts;
+                        for (table_key, delta) in &stats_inserts {
+                            let cur = stats.entry(table_key.clone()).or_insert(0);
+                            *cur = (*cur as i64 + delta).max(0) as u64;
+                        }
                     }
                 }
                 // Fire-and-forget: replicate to Raft log so followers catch up.
