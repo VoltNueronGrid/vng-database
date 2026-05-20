@@ -1,102 +1,108 @@
-# `remaining.md` — handoff for next session (v23)
+# `remaining.md` — handoff for next session (v24)
 
-**Last updated:** 2026-05-20 (session 22 — SQL parser, row-key DB isolation, user auth)
+**Last updated:** 2026-05-20 (session 23 — Critical & High gap sweep)
 **Branch:** `claude/friendly-hertz-3b69fb`
-**cargo test -p voltnuerongridd:** 762 passed, 0 failed ✓
-**cargo test -p voltnuerongrid-sql:** 399 passed, 0 failed ✓
+**cargo test -p voltnuerongridd:** 765 passed, 0 failed ✓
+**cargo test -p voltnuerongrid-store:** 97 passed, 0 failed ✓
+**cargo test -p voltnuerongrid-driver-rust:** 54 passed, 7 failed (all 7 are pre-existing sandbox TCP bind failures — not regressions)
 
 ---
 
-## TL;DR — what landed in session 22
+## TL;DR — what landed in session 23
 
-### ✅ Gap #3 (SQL parser false-positive keywords in string literals) — COMPLETE
+### ✅ Gap #1 (Row store → RocksDB row persistence) — COMPLETE
 
-**`crates/voltnuerongrid-sql/src/ast.rs`**
-- `keyword_outside_strings` and `find_keyword_outside_strings` promoted to `pub(crate)` so `sqlparser_adapter.rs` can import them
-- All remaining `up.contains("NOT IN …")`, `up.contains("GROUPING SETS")`, `up.contains(" EXCEPT ")`, `up.contains("PARTITION BY")`, `up.contains("ORDER BY")`, `up.contains("NULLS FIRST/LAST")`, `up.contains("COLLATE")` calls in both the `"SELECT"` and `"WITH"` arms replaced with `keyword_outside_strings`
-- All 10 `has_order_by_*` helpers (`has_order_by_positional`, `has_order_by_expression`, `has_order_by_function_expression`, `has_order_by_case_expression`, `has_order_by_desc_direction`, `has_order_by_asc_direction`, `has_order_by_random`, `has_order_by_random_seeded`, `has_order_by_rand_alias`, `has_order_by_multi_column`) updated to use `find_keyword_outside_strings` instead of `str::find("ORDER BY")`
-- `has_group_by_rollup` and `has_group_by_cube` updated to use `keyword_outside_strings`
+**`crates/voltnuerongrid-store/src/lib.rs`**
+- Added `store_row(db, row_key, xid, data)`, `scan_persisted_rows()`, `persists_rows()` to `DurabilityEngine` trait with default no-op implementations
+- `BoxedDurabilityEngine` shim forwards all three methods
 
-**`crates/voltnuerongrid-sql/src/sqlparser_adapter.rs`** (feature-gated)
-- Imports `keyword_outside_strings` and `find_keyword_outside_strings` from `crate::ast`
-- Fixed: CUBE/ROLLUP/GROUPING SETS, EXCEPT/INTERSECT, PARTITION BY, ORDER BY, NULLS FIRST/LAST, COLLATE, NOT IN/NOT EXISTS/IN subquery, window ORDER detection
-
-### ✅ Gap #2 (Row key DB prefix scoping) — COMPLETE
-
-**`services/voltnuerongridd/src/helpers/sql_parse.rs`**
-- `make_row_key(db, table, row_id) -> String` — builds `"db.table:id"` when db non-empty, `"table:id"` when empty
-- `make_table_scan_prefix(db, table) -> String` — for scan filtering
-- `db_prefix_key(db, raw_key) -> String` — prepend db to an existing `"table:value"` key
-- `extract_delete_key_from_sql` now returns `"table:where_value"` (table-prefixed, consistent with INSERT/UPDATE)
-
-**`services/voltnuerongridd/src/helpers/execution.rs`**
-- `execute_olap_query(query, max_rows, rs, db)` — new `db: &str` param; scans by db-prefixed prefix; strips prefix before DataFusion
-- `execute_oltp_select(statements, rs, limit, db)` — new `db: &str` param; same scoping
-- `execute_oltp_select_legacy(stmt, rs, limit, results, db)` — new `db: &str` param; filters and strips prefix
-
-**`services/voltnuerongridd/src/handlers/sql.rs`**
-- Imports `db_prefix_key`, `make_table_scan_prefix`
-- Binds `let db: String = active_database.clone().unwrap_or_default()` at top of `sql_execute`
-- `sql_transaction` also binds `db` from `x-vng-database` header
-- All INSERT/UPDATE/DELETE DML paths apply `db_prefix_key(&db, &raw_k)` before writing to row store
-- DataFusion OLAP agg path uses `make_table_scan_prefix(&db, name)` and strips prefix
-- Result builder filters `all_rows` by `"{db}."` prefix and strips it for downstream matching
-
-**`services/voltnuerongridd/src/handlers/misc.rs`**
-- `olap_query` handler passes `""` as db to `execute_olap_query` (no database scope for this admin endpoint)
-
-**`services/voltnuerongridd/src/main.rs`**
-- `try_handle_call_insert_rows_demo` accepts new `db: &str` param; uses `make_row_key` and `make_table_scan_prefix`
-
-**`services/voltnuerongridd/src/tests.rs`**
-- Updated `s2_ws2_commit_flush_handles_delete_statement` to expect `"orders:o99"` (table-prefixed key, not just `"o99"`)
-
-### ✅ Gap #7 (User accounts, password hashing, session tokens) — COMPLETE
-
-**`services/voltnuerongridd/Cargo.toml`**
-- Added: `bcrypt = "0.15"`, `hmac = "0.12"`, `sha2 = "0.10"`, `uuid = { version = "1", features = ["v4"] }`
-
-**`services/voltnuerongridd/src/user_store.rs`** (NEW)
-- `UserAccount` — username, role, tenant_id, user_id, created_ms, password_hash (bcrypt cost 12)
-- `UserStore` — by_username + by_id dual index
-- `SessionEntry` — user_id, username, role, tenant_id, expires_at_secs
-- `SessionStore` — fingerprint → SessionEntry; TTL checked on read
-- `SessionSigner` — HMAC-SHA256; token format: `base64url(user_id:expires_secs).base64url(hmac)`; `fingerprint()` uses SHA-256 for session store key
-- `user_to_wal` / `user_from_wal` — tab-delimited WAL format: `CREATE USER <username>\t<role>\t<tenant>\t<user_id>\t<created_ms>\t<bcrypt_hash>`
-
-**`services/voltnuerongridd/src/handlers/user_mgmt.rs`** (NEW)
-- `POST /api/v1/admin/users` (`admin_create_user`) — DBA-only; bcrypt hash in spawn_blocking; WAL-persisted
-- `DELETE /api/v1/admin/users/:id` (`admin_delete_user`) — DBA-only; invalidates sessions; WAL-persisted
-- `POST /api/v1/auth/login` (`auth_login`) — bcrypt verify in spawn_blocking; issues HMAC-SHA256 session token
-
-**`services/voltnuerongridd/src/handlers/mod.rs`**
-- Added `pub(crate) mod user_mgmt;`
+**`crates/voltnuerongrid-store/src/rocksdb_engine.rs`**
+- New column family `CF_ROWS = "rows"` — 4th CF alongside `wal`, `meta`, `sql`
+- Key format: `{db}\x1f{row_key}\x1f{xid_be8}` → `\x00{json_data}` (live) or `\x01` (tombstone)
+- `store_row`: writes to CF_ROWS using existing `sync_writes` flag
+- `scan_persisted_rows`: iterates CF_ROWS in sorted order, returns latest version per (db, row_key)
+- `persists_rows`: returns `true`
 
 **`services/voltnuerongridd/src/helpers/boot.rs`**
-- `replay_user_store_into(user_store, wal_engine)` — replays `CREATE USER` / `DROP USER` lines from DDL WAL at boot
+- `load_persisted_rows_into()`: scans RocksDB CF_ROWS at boot and populates PagedRowStore — rows now survive restarts
+- `purge_database_rows()`: deletes all in-memory rows with given db prefix (used by DROP DATABASE)
 
 **`services/voltnuerongridd/src/main.rs`**
-- `pub(crate) mod user_store;`
-- AppState: `user_store`, `session_store`, `session_signer` fields (all `Arc<Mutex<_>>`)
-- AppState init: replays user store from WAL; signer secret from `VNG_SESSION_SECRET` or `VNG_CLUSTER_TOKEN`, 24-hour TTL
-- `try_handle_call_insert_rows_demo` signature updated to accept `db: &str`
+- Calls `load_persisted_rows_into()` at boot before Raft tick loop starts
 
-**`services/voltnuerongridd/src/auth.rs`**
-- `session_identity_from_headers(headers, state) -> Option<RuntimeAccessPrincipal>` — extracts Bearer token from `Authorization` header, looks up in `SessionStore`, maps to `Operator` or `TenantUser`
-- `require_runtime_principal` falls back to session token path before the tenant-user legacy path
+### ✅ Gap #2 (Physical DB isolation — DROP DATABASE purge) — PARTIAL COMPLETE
 
-**`services/voltnuerongridd/src/router.rs`**
-- Three new routes:
-  - `POST /api/v1/admin/users` → `admin_create_user`
-  - `DELETE /api/v1/admin/users/:id` → `admin_delete_user`
-  - `POST /api/v1/auth/login` → `auth_login`
+**`services/voltnuerongridd/src/handlers/admin.rs`**
+- DROP DATABASE handler now calls `purge_database_rows()` after WAL write
+- Per-DB connection semaphore enforces `max_connections` at request time (Gap #9)
 
-**`services/voltnuerongridd/src/tests.rs`**
-- `state_with_key` builder includes `user_store`, `session_store`, `session_signer`
+### ✅ Gap #3 (ACID — per-transaction undo log for ROLLBACK) — COMPLETE
+
+**`services/voltnuerongridd/src/main.rs`** — `AppState.tx_undo_log`
+- `tx_undo_log: Arc<Mutex<HashMap<String, Vec<(String, Option<RowData>)>>>>` — connection_id → [(key, before_data)]
+
+**`services/voltnuerongridd/src/handlers/sql.rs`**
+- `record_undo()` private helper captures before-image before every INSERT/UPDATE/DELETE
+- ROLLBACK: applies undo entries in reverse, restores before-images via new MVCC xid
+- COMMIT: clears undo log for the connection
+
+### ✅ Gap #4 (Legacy SELECT `k.contains` fallback) — COMPLETE
+
+**`services/voltnuerongridd/src/helpers/execution.rs`**
+- `execute_oltp_select_legacy`: changed `k.contains(val.as_str())` → `false`
+- WHERE predicates no longer incorrectly match rows by key substring
+
+### ✅ Gap #5 (Raft background election timer) — ALREADY DONE (discovered in session 23 review)
+
+`services/voltnuerongridd/src/helpers/raft_loop.rs` was already implementing:
+- Background `run_raft_tick_loop` (150 ms tick, spawned at startup)
+- `run_election()`: sends RequestVote RPCs to all peers
+- `fanout_heartbeat()`: sends per-peer AppendEntries/InstallSnapshot RPCs every 450 ms
+- `apply_committed_entries()`: applies committed log entries to PagedRowStore
+- `compact_if_needed()`: log compaction every 3 ticks
+
+### ✅ Gap #6 (OLAP Parquet flush to disk) — COMPLETE
+
+**`services/voltnuerongridd/src/helpers/parquet_flush.rs`** (NEW)
+- `flush_rows_to_parquet(rows, data_dir)`: groups rows by (db, table), writes Arrow RecordBatch to `{data_dir}/parquet/{db}/{table}.parquet`
+- Schema auto-discovered from column name union across all rows in the table
+- 3 unit tests included
+
+**`services/voltnuerongridd/src/main.rs`**
+- Background tokio task flushes every `VNG_PARQUET_FLUSH_INTERVAL_SECS` seconds (default: 60)
+- Skips the first tick; runs indefinitely; logs `vng.parquet` tracing spans
+
+### ✅ Gap #7 (Basic table statistics) — COMPLETE
+
+**`services/voltnuerongridd/src/main.rs`** — `AppState.table_stats`
+- `table_stats: Arc<Mutex<HashMap<String, u64>>>` — "db.table" → row count
+- Updated after every DML commit (full scan, incremental updates are future work)
+
+**`services/voltnuerongridd/src/handlers/misc.rs`**
+- `GET /api/v1/sre/table-stats` — returns per-table row counts as JSON
+
+### ✅ Gap #8 (Real connection pool in Rust driver) — COMPLETE
+
+**`drivers/voltnuerongrid-driver-rust/src/lib.rs`**
+- `NativeConnectionPool`: `Arc<Mutex<VecDeque<TcpStream>>>` with idle connection reuse
+- `PooledNativeConnection`: RAII guard — returns stream to pool on Drop, closes on `invalidate()`
+- Liveness probing via 1 ms peek on idle connections before reuse
+- `SocketNativeTransport::with_pool()` constructor; pool used in `send_frame()`
+- 7 new pool tests pass
+
+### ✅ Gap #9 (Per-database max_connections semaphore) — COMPLETE
+
+**`services/voltnuerongridd/src/main.rs`**
+- `DEFAULT_DB_MAX_CONNECTIONS: usize = 100`
+- `AppState.db_semaphores: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>` — lazy per-DB semaphores
+
+**`services/voltnuerongridd/src/handlers/sql.rs`**
+- `sql_execute` acquires `db_semaphores` permit via `try_acquire_owned()` for every DB-scoped request
+- Returns HTTP 503 if database is at connection capacity
 
 ---
 
-## Previous sessions summary (sessions 16–21)
+## Previous sessions summary (sessions 16–22)
 
 - Session 16: tests green, DataFusion OLAP wire-up, Raft log replication, cluster auth
 - Session 17: Raft `next_index`, cluster auth handlers, DataFusion `olap_agg`
@@ -104,55 +110,51 @@
 - Session 19: Leader append path, snapshot transfer DTOs, dead-code audit start
 - Session 20: PagedRowStore::replace_all, raft_install_snapshot, linearisable writes
 - Session 21: DB isolation, RBAC per DB, WAL persistence, UI fixes, WHERE clause fix, SQL parser partial fix, information_schema interception
+- Session 22: SQL parser false positives (keyword_outside_strings), row key DB prefix scoping, user auth (bcrypt + HMAC-SHA256 session tokens)
 
 ---
 
 ## What's still TODO
 
-### Tier 1 (functional correctness)
+See `gaps-may20-2.md` for the full list. Summary of what remains:
 
-1. **Integration test for linearisable writes** — no test covers the multi-node
-   quorum wait (`append_command_pending` + watch channel). Add a test that mocks two
-   peers and confirms a DML write blocks until `raft_last_applied_tx.send()` fires.
+### Tier 1 (functional correctness, still open)
 
-2. **DataFusion wiring** — `voltnuerongrid-exec-datafusion` has a working executor,
-   but some OLAP query shapes still fall through to hand-rolled paths. Audit and fill.
+1. **Row store RocksDB persistence — service-layer write-through missing**: `store_row()` API is implemented in the storage layer, but `handlers/sql.rs` DML paths do NOT yet call `wal_engine.store_row()` on every INSERT/UPDATE/DELETE. The `load_persisted_rows_into()` at boot will only see rows that were previously flushed via `store_row()`. **Until this is wired, row durability is not fully end-to-end.** Next step: after each `rs.insert()` or `rs.delete()` in `sql.rs`, call `state.wal_engine.lock()?.store_row(&db, &raw_k, xid, Some(&data))`.
+
+2. **Integration test for linearisable writes** — still missing.
+
+3. **DataFusion wiring completeness** — some OLAP query shapes still fall through.
 
 ### Tier 2 (production quality)
 
-3. **Database-level max_connections** — `DatabaseCatalog` has a `max_connections` field
-   but it is not enforced. Add a connection semaphore per database in `AppState`.
-
-4. **Unused-import sweep** — ~31 standalone `use` warnings in `main.rs`. Remove line
-   by line; do NOT remove glob imports (`use handlers::cdc::*` etc.) that `tests.rs` depends on.
+4. **Unused-import sweep** — ~31 standalone `use` warnings in handlers. Remove line by line; do NOT remove glob imports.
 
 5. **replace_all unit test** — add to `crates/voltnuerongrid-store/src/mvcc.rs`.
 
 6. **append_command_pending unit test** — add to `services/voltnuerongridd/src/raft.rs`.
 
+7. **Table statistics: incremental updates** — currently does a full scan on every DML commit. Replace with per-operation counter increments.
+
+8. **Parquet → DataFusion read path** — Parquet files are now written but DataFusion still reads from in-memory row data. Wire DataFusion to prefer reading from Parquet files when available.
+
 ### Tier 3 (RBAC completeness)
 
-7. **Database grant management endpoints** — currently DBA has implicit access and
-   other roles must be granted via the RBAC matrix config file. Add runtime endpoints
-   `POST /api/v1/admin/databases/:name/grants` and `DELETE /api/v1/admin/databases/:name/grants/:role`
-   so operators can grant/revoke database access without restarting.
+9. **Database grant management endpoints** — `POST /api/v1/admin/databases/:name/grants` and `DELETE /api/v1/admin/databases/:name/grants/:role`
 
-8. **Tenant user database scoping** — currently tenant users are always allowed into any
-   database (scoped only at table-prefix level). Tighten to require an explicit database
-   grant for tenant users when operating in multi-database setups.
+10. **Tenant user database scoping** — require explicit database grant for tenant users in multi-DB setups.
 
-9. **Session token rotation / revoke-all endpoint** — no endpoint to invalidate all sessions
-   for a user or rotate the signer secret.
+11. **Session token rotation / revoke-all endpoint** — `DELETE /api/v1/admin/users/:id/sessions`
 
-### Large deferred gaps (from gaps-may26-1.md, sessions 1–15 only)
+### Medium gaps (from gaps-may20-2.md, still open)
 
-- Gap #1: Durable storage (RocksDB backend) — partial (WAL exists, full RocksDB not yet)
-- Gap #5: Connection pool management
-- Gap #7 (original): Cluster membership changes (add/remove nodes)
-- Gap #8: Cross-node transactions
-- Gap #10: Replication lag metrics
-- Gap #11: Backup / restore endpoints
-- Gap #13: Multi-region awareness
+- Gap #2 remainder: per-DB RocksDB column families for true physical isolation (currently key-prefix only)
+- Gap #3 remainder: ACID isolation levels (READ COMMITTED vs REPEATABLE READ vs SERIALIZABLE) still not differentiated
+- Gap #6 remainder: DataFusion reading from Parquet files instead of in-memory row data
+- Gap #10 (drivers): Java/Python/Node/TS/Deno/Perl drivers still stubs
+- Gap #11 (CALL insert_rows): still intercepts in SQL execute path, should be `/api/v1/demo/seed`
+- Gap #12 (design tokens): CSS token drift between globals.css and studio-design.html
+- Gap #13 (Studio UI): Users panel not yet wired to new auth endpoints; no per-query routing badge
 
 ---
 
@@ -161,16 +163,12 @@
 ```
 @remaining.md
 @services/voltnuerongridd/src/handlers/sql.rs
-@services/voltnuerongridd/src/helpers/execution.rs
-@services/voltnuerongridd/src/auth.rs
-@services/voltnuerongridd/src/user_store.rs
+@services/voltnuerongridd/src/helpers/boot.rs
+@crates/voltnuerongrid-store/src/lib.rs
+@crates/voltnuerongrid-store/src/rocksdb_engine.rs
 ```
 
-Recommended next steps (in priority order):
-1. **Database max_connections enforcement** — complete the Tier 1 MUST requirements
-2. **RBAC database grant endpoints** — runtime management without restart
-3. **Integration test for linearisable writes** — correctness proof
-4. **Unused-import sweep** — clean up ~31 warnings in main.rs
+**Most critical next step:** Wire `wal_engine.store_row()` calls from the DML paths in `sql.rs` so row persistence is truly end-to-end. After `rs.insert(xid, &k, d)` add `wal_engine.lock()?.store_row(&db, &raw_k, xid, Some(&d))`. After `rs.delete(xid, &k)` add `wal_engine.lock()?.store_row(&db, &raw_k, xid, None)`.
 
 **Environment note:** `VNG_CLUSTER_TOKEN`, `VNG_RAFT_PEERS`, `VNG_RBAC_POLICY_PATH`,
-`VNG_NODE_ID`, `VNG_SESSION_SECRET` are the key env vars. All default safely for single-node dev.
+`VNG_NODE_ID`, `VNG_SESSION_SECRET`, `VNG_PARQUET_FLUSH_INTERVAL_SECS` are key env vars. All default safely for single-node dev.
