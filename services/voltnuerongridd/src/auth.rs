@@ -357,8 +357,8 @@ pub(crate) fn locale_from_headers(headers: &HeaderMap) -> SupportedLocale {
 /// - Admin API key holders (`Operator` with `OperatorRole::Dba`) always have access.
 /// - Other operators need an explicit database-level grant in the RBAC matrix:
 ///   resource `database/<name>` or wildcard `database/*` with `Execute` action.
-/// - Tenant users always have access to any database (they are scoped by tenant namespace
-///   at the table level, not at the database level — this may be tightened in future).
+/// - Tenant users must be explicitly granted access via `db_grants` (role-level, per-database).
+///   If the database has no grants entry, or the user's role is not listed, access is denied.
 pub(crate) fn principal_has_database_access(
     principal: &crate::RuntimeAccessPrincipal,
     database: &str,
@@ -375,9 +375,14 @@ pub(crate) fn principal_has_database_access(
             state.rbac_privilege_matrix.allows(op.role.as_str(), &db_resource, "sql", PrivilegeAction::Execute)
                 || state.rbac_privilege_matrix.allows(op.role.as_str(), "database/*", "sql", PrivilegeAction::Execute)
         }
-        crate::RuntimeAccessPrincipal::TenantUser(_) => {
-            // Tenant users are not database-scoped at this layer (scoped by table prefix)
-            true
+        crate::RuntimeAccessPrincipal::TenantUser(user) => {
+            // Tenant users must be explicitly granted access to the database via db_grants.
+            // Deny on poisoned mutex rather than silently allowing access.
+            if let Ok(grants) = state.db_grants.lock() {
+                grants.get(database).map_or(false, |roles| roles.contains(&user.role))
+            } else {
+                false
+            }
         }
     }
 }
