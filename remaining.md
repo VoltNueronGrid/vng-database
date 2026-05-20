@@ -1,10 +1,62 @@
-# `remaining.md` — handoff for next session (v25)
+# `remaining.md` — handoff for next session (v26)
 
-**Last updated:** 2026-05-20 (session 24 — store_row() end-to-end wiring)
+**Last updated:** 2026-05-20 (session 25 — Tier 1+2 gap sweep)
 **Branch:** `claude/friendly-hertz-3b69fb`
-**cargo test -p voltnuerongridd:** 765 passed, 0 failed ✓
-**cargo test -p voltnuerongrid-store:** 97 passed, 0 failed ✓
+**cargo test -p voltnuerongridd:** 770 passed, 0 failed ✓
+**cargo test -p voltnuerongrid-store:** 100 passed, 0 failed ✓
+**cargo test -p voltnuerongrid-exec-datafusion (--features datafusion):** 48 passed, 0 failed ✓
 **cargo test -p voltnuerongrid-driver-rust:** 54 passed, 7 failed (all 7 are pre-existing sandbox TCP bind failures — not regressions)
+
+---
+
+## TL;DR — what landed in session 25
+
+### ✅ Unused-import sweep — COMPLETE
+
+**`services/voltnuerongridd/src/main.rs`**
+- Removed ~20 standalone unused imports: `BTreeMap`, `std::fs`, `Instant`, `SystemTime`, `UNIX_EPOCH`, `Semaphore`, `Path`, `Query`, `State`, axum routing items (`get`, `post`, `options`, `Router`), `base64::Engine`, and several crate-level types (`PrivilegeAction`, `ResourceGrant`, `AutonomousActionDecision`, `I18nCatalog`, `SupportedLocale`, `eval_legacy_numeric_aggregation`, `SUPPORTED_LEGACY_AGGREGATIONS`, `MutationOp`, `CatalogResult`, `parse_ddl_info`, `DurabilityConfig`, `McpRequest/McpServerCapabilities/process_request`, `PoolAcquireError`, `IngestionConnector`, `StreamDirection`, `ReplayCursorStore`)
+- Moved test-only symbols (`State`, `Query`, `Path`, `PrivilegeAction`, `AutonomousActionDecision`, `DurabilityConfig`, `MutationOp`, `SupportedLocale`, `IngestionConnector`) to a dedicated import block at the top of `tests.rs`
+
+**`crates/voltnuerongrid-exec-datafusion/src/datafusion.rs`**
+- Removed `AggregateCell` and `AggregateResult` (imported but not used in that file)
+
+**`services/voltnuerongridd/src/helpers/execution.rs`**
+- Removed inner `use crate::helpers::sql_parse::make_table_scan_prefix` at line 597 (redundant inner import inside a function that doesn't call it)
+
+### ✅ Tier 2 unit tests — COMPLETE
+
+**`crates/voltnuerongrid-store/src/mvcc.rs`** — 3 new tests for `replace_all`:
+- `replace_all_clears_existing_rows_and_inserts_new`: verifies old rows vanish, new rows appear
+- `replace_all_preserves_monotone_xid`: next_xid is strictly greater after replace_all
+- `replace_all_with_empty_set_clears_all_rows`: empty iterator wipes all rows
+
+**`services/voltnuerongridd/src/raft.rs`** — 3 new tests for `append_command_pending`:
+- `append_command_pending_single_node_commits_but_does_not_apply`: single-node commits immediately but last_applied stays at 0
+- `append_command_pending_multi_node_waits_for_quorum`: multi-node does not advance commit_index
+- `append_command_pending_indices_are_monotone`: successive calls get strictly higher indices
+
+### ✅ Tier 1 #2 (Linearisable write integration test) — COMPLETE
+
+**`services/voltnuerongridd/src/helpers/raft_loop.rs`**
+- Made `apply_committed_entries` `pub(crate)` so tests can call it directly
+
+**`services/voltnuerongridd/src/tests.rs`** — 2 integration tests:
+- `linearisable_write_apply_loop_applies_committed_entry_to_row_store`: appends pending command → apply loop fires → last_applied advances → watch channel notified
+- `linearisable_write_two_pending_commands_both_applied`: two pending commands, single apply call covers both
+
+### ✅ Tier 2 #8 (DataFusion → Parquet read path) — COMPLETE
+
+**`crates/voltnuerongrid-exec-datafusion/src/datafusion.rs`**
+- New `execute_select_prefer_parquet(sql, table_rows, max_rows, data_dir)`: for each table checks `{data_dir}/parquet/_default/{table}.parquet` first; registers as DataFusion `ListingTable` (native Parquet reader) if present; falls back to `MemTable` if absent
+- `execute_select_from_rows` now delegates to `execute_select_prefer_parquet("")` (backward compat)
+- 2 new tests: `prefer_parquet_with_empty_data_dir_uses_memtable` and `prefer_parquet_falls_back_to_memtable_when_file_absent`
+
+**`services/voltnuerongridd/src/helpers/execution.rs`**
+- `df_select_owned` now takes `data_dir: String` and passes it to `execute_select_prefer_parquet`
+- `execute_olap_query` now takes `data_dir: &str`
+
+**`services/voltnuerongridd/src/handlers/misc.rs`** and **`handlers/sql.rs`**
+- Both call sites updated to pass `state.runtime_config.storage.data_dir`
 
 ---
 
@@ -138,21 +190,21 @@ See `gaps-may20-2.md` for the full list. Summary of what remains:
 
 1. ✅ **Row store RocksDB persistence — COMPLETE**: `store_row()` is now called from all DML paths in `sql.rs` (both `sql_transaction` and `sql_execute` direct path) and from `raft_loop.rs::apply_dml_command`. Row durability is fully end-to-end.
 
-2. **Integration test for linearisable writes** — still missing.
+2. ✅ **Integration test for linearisable writes** — COMPLETE (session 25). Two tests in `tests.rs` exercise the full pending→apply→notify path.
 
 3. **DataFusion wiring completeness** — some OLAP query shapes still fall through.
 
 ### Tier 2 (production quality)
 
-4. **Unused-import sweep** — ~31 standalone `use` warnings in handlers. Remove line by line; do NOT remove glob imports.
+4. ✅ **Unused-import sweep** — COMPLETE (session 25). ~20 standalone imports removed from `main.rs`, `datafusion.rs`, `execution.rs`; test-only types moved to `tests.rs`.
 
-5. **replace_all unit test** — add to `crates/voltnuerongrid-store/src/mvcc.rs`.
+5. ✅ **replace_all unit test** — COMPLETE (session 25). 3 tests added to `crates/voltnuerongrid-store/src/mvcc.rs`.
 
-6. **append_command_pending unit test** — add to `services/voltnuerongridd/src/raft.rs`.
+6. ✅ **append_command_pending unit test** — COMPLETE (session 25). 3 tests added to `services/voltnuerongridd/src/raft.rs`.
 
 7. **Table statistics: incremental updates** — currently does a full scan on every DML commit. Replace with per-operation counter increments.
 
-8. **Parquet → DataFusion read path** — Parquet files are now written but DataFusion still reads from in-memory row data. Wire DataFusion to prefer reading from Parquet files when available.
+8. ✅ **Parquet → DataFusion read path** — COMPLETE (session 25). `execute_select_prefer_parquet` registered via DataFusion `ListingTable`; wired into `execute_olap_query` and `df_select_owned`; both OLAP call sites pass `data_dir`.
 
 ### Tier 3 (RBAC completeness)
 
@@ -184,7 +236,7 @@ See `gaps-may20-2.md` for the full list. Summary of what remains:
 @crates/voltnuerongrid-store/src/rocksdb_engine.rs
 ```
 
-**Most critical next step:** Add an integration test for linearisable writes (Tier 1 #2). Then tackle Tier 2 items: unused-import sweep (~31 warnings), `replace_all` unit test in `mvcc.rs`, `append_command_pending` unit test in `raft.rs`. After that: Parquet → DataFusion read path (Tier 2 #8).
+**Most critical next step:** Table statistics incremental updates (Tier 2 #7) — replace the full row-store scan after every DML commit with per-operation counter increments in `table_stats`. Then tackle Tier 3 RBAC items: DB grant management endpoints, tenant user DB scoping, session token rotation endpoint.
 
 **Environment note:** `VNG_CLUSTER_TOKEN`, `VNG_RAFT_PEERS`, `VNG_RBAC_POLICY_PATH`,
 `VNG_NODE_ID`, `VNG_SESSION_SECRET`, `VNG_PARQUET_FLUSH_INTERVAL_SECS` are key env vars. All default safely for single-node dev.
