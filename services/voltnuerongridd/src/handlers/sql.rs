@@ -1368,7 +1368,8 @@ pub(crate) async fn sql_execute(
     if !olap_statements.is_empty() {
         let query = olap_statements.join("; ");
         let rs = state.row_store.lock().expect("row_store lock olap_execute");
-        olap = Some(execute_olap_query(query, req.max_rows, &rs, &db));
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        olap = Some(execute_olap_query(query, req.max_rows, &rs, &db, &data_dir));
     }
 
     // REQ-12: Detect legacy aggregate functions in OLAP SELECT statements and
@@ -1499,7 +1500,7 @@ pub(crate) async fn sql_execute(
                 if table_rows.is_empty() {
                     table_rows.insert("rows".to_string(), all_rows);
                 }
-                match run_async_in_executor(df_select_owned(sql, table_rows, limit)) {
+                match run_async_in_executor(df_select_owned(sql, table_rows, limit, String::new())) {
                     Ok(SelectOutput::Aggregate(agg)) => {
                         let mut out: Vec<OlapVecAggResult> = agg.columns.iter()
                             .zip(agg.values.iter())

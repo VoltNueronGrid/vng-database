@@ -1,5 +1,12 @@
 use super::*;
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderValue;
+use std::fs;
+use voltnuerongrid_auth::PrivilegeAction;
+use voltnuerongrid_ai::AutonomousActionDecision;
+use voltnuerongrid_store::{DurabilityConfig, htap_sync::MutationOp};
+use voltnuerongrid_sql::SupportedLocale;
+use voltnuerongrid_ingest::IngestionConnector;
 
 fn operator_headers(admin_key: &str, operator_id: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
@@ -9032,6 +9039,108 @@ async fn s7_ws6_02_raft_heartbeat_denies_security_role() {
 
     assert_eq!(err.0, StatusCode::FORBIDDEN);
     assert_eq!(err.1.reason, "insufficient_privilege");
+}
+
+// ── Linearisable write integration (§5.3) ────────────────────────────────
+//
+// This tests the full flow:
+//   1. Leader appends a command via append_command_pending (last_applied stays).
+//   2. For a single-node cluster commit_index advances immediately (leader == quorum).
+//   3. apply_committed_entries() applies the entry to the row store and notifies
+//      the raft_last_applied_tx watch channel.
+//   4. The watch channel carries the new last_applied value (>= the returned idx).
+//
+// NOTE: a watch::Receiver is subscribed BEFORE the apply call so that
+// send() finds at least one receiver and reliably stores the value.
+#[test]
+fn linearisable_write_apply_loop_applies_committed_entry_to_row_store() {
+    use crate::helpers::raft_loop::apply_committed_entries;
+
+    let state = state_with_key(Some("test-key"));
+
+    // Subscribe a receiver so send() can succeed.
+    let mut rx = state.raft_last_applied_tx.subscribe();
+
+    // Promote the node to Leader with 0 peers (single-node cluster).
+    {
+        let mut node = state.raft_state.lock().unwrap();
+        node.become_candidate();
+        node.become_leader();
+    }
+
+    // Append a pending command — commit_index advances immediately (single-node),
+    // but last_applied does NOT advance.
+    let idx = {
+        let mut node = state.raft_state.lock().unwrap();
+        node.append_command_pending(
+            "INSERT INTO lin_test VALUES ('key1', '{\"v\":\"hello\"}')"
+                .to_string(),
+            0, // 0 peers → single-node quorum
+        )
+    };
+
+    // Verify pre-apply invariants.
+    {
+        let node = state.raft_state.lock().unwrap();
+        assert_eq!(node.commit_index, idx, "commit_index must equal idx before apply");
+        assert_eq!(node.last_applied, 0, "last_applied must not advance before apply loop");
+    }
+
+    // Run the apply loop (one call is sufficient — entries between last_applied+1
+    // and commit_index are applied and last_applied is advanced).
+    apply_committed_entries(&state);
+
+    // After apply: last_applied must equal commit_index == idx.
+    {
+        let node = state.raft_state.lock().unwrap();
+        assert_eq!(node.last_applied, idx,
+            "apply loop must advance last_applied to commit_index");
+    }
+
+    // The watch channel must have been notified with the new last_applied.
+    // rx.borrow() returns the current value held by the channel.
+    let applied_val = *rx.borrow();
+    assert!(applied_val >= idx,
+        "raft_last_applied_tx must carry last_applied>={idx}, got {applied_val}");
+}
+
+/// Verify that two successive pending commands are both applied and that
+/// last_applied advances to cover both entries in a single apply-loop call.
+#[test]
+fn linearisable_write_two_pending_commands_both_applied() {
+    use crate::helpers::raft_loop::apply_committed_entries;
+
+    let state = state_with_key(Some("test-key"));
+
+    // Subscribe before appending so send() sees at least one receiver.
+    let mut rx = state.raft_last_applied_tx.subscribe();
+
+    {
+        let mut node = state.raft_state.lock().unwrap();
+        node.become_candidate();
+        node.become_leader();
+    }
+
+    // Append two commands; both commit immediately on a single-node cluster.
+    {
+        let mut node = state.raft_state.lock().unwrap();
+        node.append_command_pending("INSERT INTO lin_test VALUES ('ka', '{\"seq\":\"1\"}')"
+            .to_string(), 0);
+        node.append_command_pending("INSERT INTO lin_test VALUES ('kb', '{\"seq\":\"2\"}')"
+            .to_string(), 0);
+    }
+
+    let commit_idx = state.raft_state.lock().unwrap().commit_index;
+    assert_eq!(commit_idx, 2, "two commands must yield commit_index == 2");
+
+    // Single apply call must handle both entries.
+    apply_committed_entries(&state);
+
+    let final_applied = state.raft_state.lock().unwrap().last_applied;
+    assert_eq!(final_applied, 2,
+        "apply loop must advance last_applied to 2 after applying two entries");
+    let watch_val = *rx.borrow();
+    assert_eq!(watch_val, 2, "watch channel must reflect last_applied == 2");
 }
 
 // ── S4-WS3-02: Columnar project endpoint ─────────────────────────────────

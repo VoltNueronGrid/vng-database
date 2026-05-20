@@ -1,48 +1,35 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
-use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Semaphore;
-use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::middleware::{Next, from_fn};
-use axum::http::Request;
-use axum::response::Response;
-use base64::Engine;
-use axum::routing::{get, post, options};
-use axum::{Json, Router};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use voltnuerongrid_auth::{
     ConfiguredKmsProviderAdapter, KmsKeyResolution,
-    PrivilegeAction, RbacPrivilegeMatrix, ResourceGrant, SecurityConfigContract,
+    RbacPrivilegeMatrix, SecurityConfigContract,
 };
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
-use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
+use voltnuerongrid_ai::AutonomousActionExecutionRecord;
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
-use voltnuerongrid_sql::{
-    eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind, SupportedLocale,
-};
-use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
+use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 use voltnuerongrid_store::htap_sync::{
-    InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
+    InMemoryReplicationTransport, ReplicaReplayState, RowStoreSyncOrigin,
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
-use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult, DdlCatalog};
+use voltnuerongrid_store::ddl_catalog::DdlCatalog;
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
-use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
-use voltnuerongrid_mcp::{McpRequest, McpServerCapabilities, process_request};
-use voltnuerongrid_driver_rust::{ConnectionPoolManager, PoolAcquireError};
+use voltnuerongrid_store::BoxedDurabilityEngine;
+use voltnuerongrid_driver_rust::ConnectionPoolManager;
 use voltnuerongrid_ingest::{
-    IngestionConnector, ManagedEventBusTransport, ManagedReplayCursorStore,
-    ReplayCursorStore, StreamDirection,
+    ManagedEventBusTransport, ManagedReplayCursorStore,
 };
 use voltnuerongrid_opt::DistributedCacheManager;
 use voltnuerongrid_plugins::PluginLifecycleManager;

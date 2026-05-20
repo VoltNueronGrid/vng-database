@@ -322,24 +322,37 @@ pub(crate) fn cleanup_wait_edges_for_resource(
 
 /// Owned-argument wrapper so the returned future is `'static` (required by
 /// `run_async_in_executor` when it needs to cross a thread boundary).
+///
+/// When `data_dir` is non-empty the query engine prefers on-disk Parquet files
+/// over the supplied in-memory `table_rows` for tables that already have a
+/// flushed Parquet snapshot (`{data_dir}/parquet/_default/{table}.parquet`).
 pub(crate) async fn df_select_owned(
     sql: String,
     table_rows: HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>>,
     max_rows: usize,
+    data_dir: String,
 ) -> Result<voltnuerongrid_exec_datafusion::SelectOutput, voltnuerongrid_exec_datafusion::ExecError> {
-    voltnuerongrid_exec_datafusion::datafusion::execute_select_from_rows(&sql, table_rows, max_rows).await
+    voltnuerongrid_exec_datafusion::datafusion::execute_select_prefer_parquet(
+        &sql, table_rows, max_rows, &data_dir,
+    ).await
 }
 
 /// Execute an OLAP SELECT query through the DataFusion engine.
 ///
 /// Extracts all referenced table names, builds per-table row snapshots, then
-/// drives `execute_select_from_rows`. Falls back to a stub count on errors so
-/// callers never see a hard failure from the OLAP path.
+/// drives the DataFusion executor.  When `data_dir` is non-empty the executor
+/// prefers on-disk Parquet snapshots over the in-memory rows — see
+/// [`execute_select_prefer_parquet`] for the fallback logic.  Pass `data_dir = ""`
+/// to always use in-memory rows (useful in tests / single-node dev).
+///
+/// Falls back to a stub count on errors so callers never see a hard failure
+/// from the OLAP path.
 pub(crate) fn execute_olap_query(
     query: String,
     max_rows: Option<usize>,
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     db: &str,
+    data_dir: &str,
 ) -> OlapQueryResponse {
     use voltnuerongrid_exec_datafusion::{collect_query_table_names, SelectOutput};
     use crate::helpers::sql_parse::make_table_scan_prefix;
@@ -377,6 +390,7 @@ pub(crate) fn execute_olap_query(
         query.clone(),
         table_rows,
         resolved_max_rows,
+        data_dir.to_string(),
     )) {
         Ok(SelectOutput::Rows(rows)) => rows.len(),
         Ok(SelectOutput::Aggregate(_)) => 1,
@@ -449,7 +463,7 @@ pub(crate) fn execute_oltp_select(
             }
 
             let df_result = run_async_in_executor(
-                df_select_owned(stmt_str.to_string(), table_rows, remaining)
+                df_select_owned(stmt_str.to_string(), table_rows, remaining, String::new())
             );
 
             match df_result {
@@ -594,7 +608,6 @@ pub(crate) fn execute_oltp_select_legacy(
     db: &str,
 ) {
     use voltnuerongrid_sql::{parse_one, Statement};
-    use crate::helpers::sql_parse::make_table_scan_prefix;
     let snapshot_xid = rs.current_xid();
     let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = rs
         .scan_at_snapshot(snapshot_xid)

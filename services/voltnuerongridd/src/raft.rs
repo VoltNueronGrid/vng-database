@@ -744,6 +744,58 @@ mod tests {
         assert_eq!(node.last_applied, 1, "caller already applied — last_applied advances");
     }
 
+    // ─── append_command_pending (linearisable write path) ────────────────────
+
+    /// Single-node leader: commit_index advances immediately (leader is quorum),
+    /// but last_applied stays behind so the apply loop handles the state-machine write.
+    #[test]
+    fn append_command_pending_single_node_commits_but_does_not_apply() {
+        let mut node = RaftNode::new("leader-1");
+        node.become_candidate();
+        node.become_leader();
+        let idx = node.append_command_pending("INSERT INTO t VALUES (99)".to_string(), 0);
+        assert_eq!(idx, 1);
+        assert_eq!(node.log.len(), 1);
+        assert_eq!(node.commit_index, 1,
+            "single-node: leader is quorum — commit_index must advance");
+        assert_eq!(node.last_applied, 0,
+            "last_applied must NOT advance — the apply loop is responsible");
+    }
+
+    /// Multi-node leader: commit_index stays at 0 until AppendEntries
+    /// acknowledgements from a quorum arrive; last_applied also stays at 0.
+    #[test]
+    fn append_command_pending_multi_node_waits_for_quorum() {
+        let mut node = RaftNode::new("leader-1");
+        node.become_candidate();
+        node.become_leader();
+        let idx = node.append_command_pending("INSERT INTO t VALUES (99)".to_string(), 2);
+        assert_eq!(idx, 1);
+        assert_eq!(node.log.len(), 1);
+        assert_eq!(node.commit_index, 0,
+            "multi-node: commit_index must NOT advance until quorum");
+        assert_eq!(node.last_applied, 0,
+            "multi-node: last_applied must also stay at 0");
+    }
+
+    /// Multiple pending entries are assigned monotonically increasing indices.
+    #[test]
+    fn append_command_pending_indices_are_monotone() {
+        let mut node = RaftNode::new("leader-1");
+        node.become_candidate();
+        node.become_leader();
+        let idx1 = node.append_command_pending("INSERT INTO t VALUES (1)".to_string(), 0);
+        let idx2 = node.append_command_pending("INSERT INTO t VALUES (2)".to_string(), 0);
+        let idx3 = node.append_command_pending("INSERT INTO t VALUES (3)".to_string(), 0);
+        assert_eq!(idx1, 1);
+        assert_eq!(idx2, 2);
+        assert_eq!(idx3, 3, "each pending command gets a strictly higher index");
+        assert_eq!(node.commit_index, 3,
+            "single-node: commit_index tracks the last pending index");
+        assert_eq!(node.last_applied, 0,
+            "apply loop has not run — last_applied stays at 0");
+    }
+
     #[test]
     fn install_snapshot_advances_state_and_clears_covered_log() {
         let mut node = RaftNode::new("follower-1");

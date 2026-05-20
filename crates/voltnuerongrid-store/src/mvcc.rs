@@ -535,4 +535,66 @@ mod tests {
         // For a key that was not modified, should return false.
         assert!(!store.was_modified_after("item:99", snapshot));
     }
+
+    // ─── replace_all (Raft snapshot install) ─────────────────────────────────
+
+    #[test]
+    fn replace_all_clears_existing_rows_and_inserts_new() {
+        let mut store = PagedRowStore::new(256);
+        // Seed with some initial rows.
+        let xid1 = store.begin_xid();
+        store.insert(xid1, "old:1", row(&[("v", "aaa")]));
+        store.insert(xid1, "old:2", row(&[("v", "bbb")]));
+        assert_eq!(store.visible_row_count(store.current_xid()), 2);
+
+        // Replace with a completely different set.
+        store.replace_all(vec![
+            ("new:1".to_string(), row(&[("v", "111")])),
+            ("new:2".to_string(), row(&[("v", "222")])),
+            ("new:3".to_string(), row(&[("v", "333")])),
+        ]);
+
+        // Old rows must be gone; new rows must be visible.
+        let snap = store.current_xid();
+        assert_eq!(store.visible_row_count(snap), 3,
+            "exactly the three new rows must be visible");
+        assert!(store.read_latest("old:1").is_none(), "old:1 must not survive replace_all");
+        assert!(store.read_latest("old:2").is_none(), "old:2 must not survive replace_all");
+        assert_eq!(
+            store.read_latest("new:1").and_then(|d| d.get("v").cloned()).as_deref(),
+            Some("111"),
+        );
+        assert_eq!(
+            store.read_latest("new:3").and_then(|d| d.get("v").cloned()).as_deref(),
+            Some("333"),
+        );
+    }
+
+    #[test]
+    fn replace_all_preserves_monotone_xid() {
+        let mut store = PagedRowStore::new(256);
+        let xid_before = {
+            let x = store.begin_xid();
+            store.insert(x, "a", row(&[("k", "v")]));
+            store.current_xid()
+        };
+        store.replace_all(vec![
+            ("b".to_string(), row(&[("k", "w")])),
+        ]);
+        let xid_after = store.current_xid();
+        assert!(xid_after > xid_before,
+            "next_xid must be strictly greater after replace_all (monotone)");
+    }
+
+    #[test]
+    fn replace_all_with_empty_set_clears_all_rows() {
+        let mut store = PagedRowStore::new(256);
+        let xid = store.begin_xid();
+        store.insert(xid, "r1", row(&[("v", "x")]));
+        store.insert(xid, "r2", row(&[("v", "y")]));
+        // Replace with empty — all rows disappear.
+        store.replace_all(std::iter::empty());
+        assert_eq!(store.visible_row_count(store.current_xid()), 0,
+            "replace_all with empty should clear all rows");
+    }
 }

@@ -319,7 +319,7 @@ async fn fanout_heartbeat(
 ///
 /// This function holds at most one lock at a time to avoid deadlocks with the
 /// handler paths that hold `row_store` lock while calling helpers.
-fn apply_committed_entries(state: &AppState) {
+pub(crate) fn apply_committed_entries(state: &AppState) {
     // Step 1: collect the entries we need to apply (brief lock on raft_state).
     let entries_to_apply: Vec<crate::RaftLogEntry> = {
         let node = state.raft_state.lock().expect("raft apply read lock");

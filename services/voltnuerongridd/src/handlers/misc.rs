@@ -500,7 +500,8 @@ pub(crate) async fn olap_query(
     Json(req): Json<OlapQueryRequest>,
 ) -> Json<OlapQueryResponse> {
     let rs = state.row_store.lock().expect("row_store lock olap_query");
-    Json(execute_olap_query(req.query, req.max_rows, &rs, ""))
+    let data_dir = state.runtime_config.storage.data_dir.clone();
+    Json(execute_olap_query(req.query, req.max_rows, &rs, "", &data_dir))
 }
 
 
