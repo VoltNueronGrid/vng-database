@@ -896,6 +896,7 @@ pub(crate) async fn admin_databases_list(
 ///
 /// Returns 201 on success, 409 on conflict (unless `if_not_exists` is true,
 /// in which case 200 with `already_existed=true`), 400 on invalid name.
+#[tracing::instrument(skip_all, name = "admin.databases.create")]
 pub(crate) async fn admin_databases_create(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1010,6 +1011,7 @@ pub(crate) async fn admin_databases_create(
 }
 
 /// `DELETE /api/v1/admin/databases/{name}` — drop a database.
+#[tracing::instrument(skip_all, name = "admin.databases.drop")]
 pub(crate) async fn admin_databases_drop(
     State(state): State<AppState>,
     headers: HeaderMap,

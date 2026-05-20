@@ -168,6 +168,37 @@ pub(crate) async fn admin_create_user(
     ))
 }
 
+/// `GET /api/v1/admin/users` — list all user accounts. DBA-only.
+pub(crate) async fn admin_list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
+    let _principal = require_sql_runtime_principal(
+        &headers, &state, PrivilegeAction::Execute, "admin/users",
+    )?;
+
+    let users: Vec<serde_json::Value> = {
+        let store = state.user_store.lock().expect("user_store lock");
+        store.all().map(|u| serde_json::json!({
+            "user_id": u.user_id,
+            "username": u.username,
+            "role": u.role,
+            "tenant_id": u.tenant_id,
+            "created_ms": u.created_ms,
+        })).collect()
+    };
+    let count = users.len();
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "users": users,
+            "count": count,
+        })),
+    ))
+}
+
 /// `DELETE /api/v1/admin/users/:id` — delete a user by user_id. DBA-only.
 pub(crate) async fn admin_delete_user(
     State(state): State<AppState>,
@@ -264,6 +295,7 @@ pub(crate) async fn admin_revoke_user_sessions(
 }
 
 /// `POST /api/v1/auth/login` — authenticate username+password; return session token.
+#[tracing::instrument(skip_all, name = "auth.login")]
 pub(crate) async fn auth_login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,

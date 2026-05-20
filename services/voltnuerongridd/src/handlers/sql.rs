@@ -281,6 +281,7 @@ pub(crate) struct AcidTransactionsResponse {
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
+#[tracing::instrument(skip_all, name = "sql.transaction")]
 pub(crate) async fn sql_transaction(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -788,6 +789,7 @@ pub(crate) async fn sql_route(
     Ok(Json(response.payload))
 }
 
+#[tracing::instrument(skip_all, name = "sql.execute")]
 pub(crate) async fn sql_execute(
     State(state): State<AppState>,
     headers: HeaderMap,
