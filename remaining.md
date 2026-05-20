@@ -1,11 +1,53 @@
-# `remaining.md` — handoff for next session (v26)
+# `remaining.md` — handoff for next session (v27)
 
-**Last updated:** 2026-05-20 (session 25 — Tier 1+2 gap sweep)
+**Last updated:** 2026-05-20 (session 26 — medium/low gap sweep)
 **Branch:** `claude/friendly-hertz-3b69fb`
 **cargo test -p voltnuerongridd:** 770 passed, 0 failed ✓
 **cargo test -p voltnuerongrid-store:** 100 passed, 0 failed ✓
 **cargo test -p voltnuerongrid-exec-datafusion (--features datafusion):** 48 passed, 0 failed ✓
 **cargo test -p voltnuerongrid-driver-rust:** 54 passed, 7 failed (all 7 are pre-existing sandbox TCP bind failures — not regressions)
+
+---
+
+## TL;DR — what landed in session 26
+
+### ✅ Gap #23 (session token rotation) — COMPLETE
+- `DELETE /api/v1/admin/users/:id/sessions` handler in `user_mgmt.rs`
+- `SessionStore::sessions_for_user()` helper added to `user_store.rs`
+- Wired in `router.rs`
+
+### ✅ Gap #24 (DB grant management endpoints) — COMPLETE
+- `POST /api/v1/admin/databases/:name/grants` — grant role access to DB
+- `DELETE /api/v1/admin/databases/:name/grants/:role` — revoke role access
+- `GET /api/v1/admin/databases/:name/grants` — list granted roles
+- `db_grants: Arc<Mutex<HashMap<String, HashSet<String>>>>` added to `AppState`
+- Persists GRANT/REVOKE to WAL; handlers in `admin.rs`
+
+### ✅ Gap #11 (CALL insert_rows migration) — COMPLETE
+- `POST /api/v1/demo/seed` dedicated REST endpoint in `misc.rs`
+- Accepts `{database, table, count}` JSON; synthesizes demo rows
+- `synthesize_demo_value` made `pub(crate)` in `main.rs`
+
+### ✅ Tier 2 #7 (table stats incremental updates) — COMPLETE
+- Replaced O(all_rows) full scan with O(touched_tables) delta tracking in `sql_execute` direct path
+- INSERT: increments only if row was new (before-image = None)
+- DELETE: decrements only if row existed (before-image = Some)
+- UPDATE: no delta (row count unchanged)
+
+### ✅ Gap #19 (OTEL tracing spans) — COMPLETE
+- `#[tracing::instrument(skip_all)]` on `sql_transaction`, `sql_execute`, `auth_login`,
+  `admin_databases_create`, `admin_databases_drop`
+- Named spans: `sql.transaction`, `sql.execute`, `auth.login`, `admin.databases.create`, `admin.databases.drop`
+
+### ✅ Gap #15 (Studio UI — UsersPanel wired to server) — COMPLETE
+- `GET /api/v1/admin/users` new list-users endpoint (`admin_list_users` in `user_mgmt.rs`)
+- `studio-client.ts`: added `AdminUserEntry`, `AdminUsersListResponse`, user CRUD types,
+  `LoginRequest/Response`, `DbGrantsResponse`, and all corresponding client methods
+- `UsersPanel.tsx`: replaced localStorage-only mock with live `listUsers()` API call;
+  falls back to localStorage cache when disconnected
+
+### ✅ Gap #20 (scratch files cleanup) — COMPLETE
+- `.gitignore`: added `*.tmp`, `*.bak`, `flamegraph.svg`, `perf.data` patterns
 
 ---
 
@@ -202,27 +244,25 @@ See `gaps-may20-2.md` for the full list. Summary of what remains:
 
 6. ✅ **append_command_pending unit test** — COMPLETE (session 25). 3 tests added to `services/voltnuerongridd/src/raft.rs`.
 
-7. **Table statistics: incremental updates** — currently does a full scan on every DML commit. Replace with per-operation counter increments.
+7. ✅ **Table statistics: incremental updates** — COMPLETE (session 26). O(touched_tables) delta tracking replaces O(all_rows) full scan.
 
 8. ✅ **Parquet → DataFusion read path** — COMPLETE (session 25). `execute_select_prefer_parquet` registered via DataFusion `ListingTable`; wired into `execute_olap_query` and `df_select_owned`; both OLAP call sites pass `data_dir`.
 
 ### Tier 3 (RBAC completeness)
 
-9. **Database grant management endpoints** — `POST /api/v1/admin/databases/:name/grants` and `DELETE /api/v1/admin/databases/:name/grants/:role`
+9. ✅ **Database grant management endpoints** — COMPLETE (session 26). `POST/GET /api/v1/admin/databases/:name/grants` and `DELETE /api/v1/admin/databases/:name/grants/:role`.
 
 10. **Tenant user database scoping** — require explicit database grant for tenant users in multi-DB setups.
 
-11. **Session token rotation / revoke-all endpoint** — `DELETE /api/v1/admin/users/:id/sessions`
+11. ✅ **Session token rotation / revoke-all endpoint** — COMPLETE (session 26). `DELETE /api/v1/admin/users/:id/sessions`.
 
 ### Medium gaps (from gaps-may20-2.md, still open)
 
 - Gap #2 remainder: per-DB RocksDB column families for true physical isolation (currently key-prefix only)
 - Gap #3 remainder: ACID isolation levels (READ COMMITTED vs REPEATABLE READ vs SERIALIZABLE) still not differentiated
-- Gap #6 remainder: DataFusion reading from Parquet files instead of in-memory row data
 - Gap #10 (drivers): Java/Python/Node/TS/Deno/Perl drivers still stubs
-- Gap #11 (CALL insert_rows): still intercepts in SQL execute path, should be `/api/v1/demo/seed`
-- Gap #12 (design tokens): CSS token drift between globals.css and studio-design.html
-- Gap #13 (Studio UI): Users panel not yet wired to new auth endpoints; no per-query routing badge
+- Gap #12 (design tokens): ✅ No drift found — globals.css and studio-design.html token values are in sync
+- Gap #13 (Studio UI): ✅ UsersPanel now wired to server (session 26); no per-query routing badge yet
 
 ---
 
@@ -236,7 +276,7 @@ See `gaps-may20-2.md` for the full list. Summary of what remains:
 @crates/voltnuerongrid-store/src/rocksdb_engine.rs
 ```
 
-**Most critical next step:** Table statistics incremental updates (Tier 2 #7) — replace the full row-store scan after every DML commit with per-operation counter increments in `table_stats`. Then tackle Tier 3 RBAC items: DB grant management endpoints, tenant user DB scoping, session token rotation endpoint.
+**Most critical next step:** Tenant user database scoping (Tier 3 #10) — enforce that tenant users must have an explicit DB grant to access a database. Then tackle the remaining functional gaps: DataFusion wiring completeness (Tier 1 #3), ACID isolation level differentiation (Gap #3 remainder), and per-query routing badge in Studio UI.
 
 **Environment note:** `VNG_CLUSTER_TOKEN`, `VNG_RAFT_PEERS`, `VNG_RBAC_POLICY_PATH`,
 `VNG_NODE_ID`, `VNG_SESSION_SECRET`, `VNG_PARQUET_FLUSH_INTERVAL_SECS` are key env vars. All default safely for single-node dev.
