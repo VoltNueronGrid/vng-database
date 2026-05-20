@@ -98,6 +98,12 @@ fn state_with_key(key: Option<&str>) -> AppState {
         user_store: Arc::new(Mutex::new(crate::user_store::UserStore::new())),
         session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
         session_signer: Arc::new(Mutex::new(crate::user_store::SessionSigner::new("test-secret", 3600))),
+        // Gap #6/#7: per-table row count statistics.
+        table_stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // Gap #9: per-database connection semaphores (lazily created on first request).
+        db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        // Gap #3: per-connection undo log for ROLLBACK support.
+        tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     }
 }
 

@@ -37,6 +37,7 @@
 
 #![cfg(feature = "rocksdb")]
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -57,6 +58,9 @@ const CF_META: &str = "meta";
 /// `[kind_byte (1)] [seq (8)]` so the per-kind range can be iterated
 /// efficiently with a 1-byte prefix bound.
 const CF_SQL: &str = "sql";
+/// Phase 2.2 — Row store persistence. Keys are
+/// `{db}\x1f{row_key}\x1f{xid_be8}` so rows are sorted by (db, row_key, xid).
+const CF_ROWS: &str = "rows";
 
 // Meta keys.
 const META_LATEST_SEQUENCE: &[u8]               = b"latest_sequence";
@@ -169,6 +173,7 @@ impl RocksDbDurabilityEngine {
             ColumnFamilyDescriptor::new(CF_WAL,  Options::default()),
             ColumnFamilyDescriptor::new(CF_META, Options::default()),
             ColumnFamilyDescriptor::new(CF_SQL,  Options::default()),
+            ColumnFamilyDescriptor::new(CF_ROWS, Options::default()),
         ];
         let db = DB::open_cf_descriptors(&db_opts, path.as_ref(), cfs)?;
 
@@ -495,6 +500,141 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
     }
 
     fn persists_sql(&self) -> bool {
+        true
+    }
+
+    // ── Phase 2.2: Row store persistence ─────────────────────────────────────
+
+    fn store_row(
+        &mut self,
+        db: &str,
+        row_key: &str,
+        xid: u64,
+        data: Option<&HashMap<String, String>>,
+    ) {
+        let cf_rows = match self.db.cf_handle(CF_ROWS) {
+            Some(cf) => cf,
+            None => {
+                tracing_or_eprintln(format!("store_row: {CF_ROWS} CF missing"));
+                return;
+            }
+        };
+
+        // Key: {db}\x1f{row_key}\x1f{xid_be8}
+        let sep = b'\x1f';
+        let xid_be = xid.to_be_bytes();
+        let mut key = Vec::with_capacity(db.len() + 1 + row_key.len() + 1 + 8);
+        key.extend_from_slice(db.as_bytes());
+        key.push(sep);
+        key.extend_from_slice(row_key.as_bytes());
+        key.push(sep);
+        key.extend_from_slice(&xid_be);
+
+        // Value: b"\x00" + JSON for live rows; b"\x01" for tombstones.
+        let value: Vec<u8> = match data {
+            Some(cols) => {
+                let json = serde_json::to_string(cols).unwrap_or_else(|_| "{}".to_string());
+                let mut v = Vec::with_capacity(1 + json.len());
+                v.push(0x00_u8);
+                v.extend_from_slice(json.as_bytes());
+                v
+            }
+            None => vec![0x01_u8],
+        };
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(&cf_rows, &key, &value);
+
+        let mut wo = WriteOptions::default();
+        wo.set_sync(self.sync_writes && self.config.wal_enabled);
+        if let Err(e) = self.db.write_opt(batch, &wo) {
+            tracing_or_eprintln(format!("store_row write failed: {e}"));
+        }
+    }
+
+    fn scan_persisted_rows(&self) -> Vec<(String, String, u64, HashMap<String, String>, bool)> {
+        let cf_rows = match self.db.cf_handle(CF_ROWS) {
+            Some(cf) => cf,
+            None => return Vec::new(),
+        };
+
+        // Collect the latest version per (db, row_key). Keys are sorted by
+        // (db, row_key, xid) ascending so later entries overwrite earlier ones.
+        let sep = b'\x1f';
+        let mut latest: HashMap<(String, String), (u64, Vec<u8>)> = HashMap::new();
+
+        for kv in self.db.iterator_cf(&cf_rows, rocksdb::IteratorMode::Start) {
+            let (k, v) = match kv {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing_or_eprintln(format!("scan_persisted_rows iterator error: {e}"));
+                    continue;
+                }
+            };
+
+            // Parse key: {db}\x1f{row_key}\x1f{xid_be8}
+            // The xid is the last 8 bytes; everything before the last \x1f is db\x1frow_key.
+            if k.len() < 10 {
+                continue; // malformed — need at least 2 seps + 8 bytes xid
+            }
+            let xid_start = k.len() - 8;
+            let prefix = &k[..xid_start];
+            // prefix must end with sep
+            if prefix.last() != Some(&sep) {
+                continue;
+            }
+            let prefix_no_sep = &prefix[..prefix.len() - 1];
+
+            // Find the first sep to split db from row_key.
+            let first_sep = match prefix_no_sep.iter().position(|&b| b == sep) {
+                Some(i) => i,
+                None => continue,
+            };
+            let db_bytes = &prefix_no_sep[..first_sep];
+            let row_key_bytes = &prefix_no_sep[first_sep + 1..];
+
+            let db = match std::str::from_utf8(db_bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => continue,
+            };
+            let row_key = match std::str::from_utf8(row_key_bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => continue,
+            };
+
+            let mut xid_arr = [0u8; 8];
+            xid_arr.copy_from_slice(&k[xid_start..]);
+            let xid = u64::from_be_bytes(xid_arr);
+
+            // Since keys are sorted by xid ascending, just overwrite — the
+            // last write per (db, row_key) is the latest version.
+            latest.insert((db, row_key), (xid, v.to_vec()));
+        }
+
+        // Decode each final entry.
+        let mut result = Vec::with_capacity(latest.len());
+        for ((db, row_key), (xid, value)) in latest {
+            if value.is_empty() {
+                continue;
+            }
+            let tag = value[0];
+            if tag == 0x01 {
+                // tombstone
+                result.push((db, row_key, xid, HashMap::new(), true));
+            } else if tag == 0x00 {
+                let json_bytes = &value[1..];
+                match serde_json::from_slice::<HashMap<String, String>>(json_bytes) {
+                    Ok(cols) => result.push((db, row_key, xid, cols, false)),
+                    Err(e) => {
+                        tracing_or_eprintln(format!("scan_persisted_rows json decode error: {e}"));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    fn persists_rows(&self) -> bool {
         true
     }
 }

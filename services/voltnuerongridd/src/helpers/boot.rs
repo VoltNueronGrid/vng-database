@@ -289,6 +289,68 @@ pub(crate) fn replay_user_store_into(
 }
 
 
+/// Load all rows persisted in the durability engine into the row store.
+/// Called at boot after DDL WAL replay, so schema is already loaded.
+/// This replaces the old DML SQL replay path when `wal_engine.persists_rows()` is true.
+pub(crate) fn load_persisted_rows_into(
+    row_store: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::mvcc::PagedRowStore>>,
+    wal_engine: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) -> usize {
+    let rows = {
+        let eng = wal_engine.lock().expect("wal_engine load_persisted_rows");
+        if !eng.persists_rows() {
+            return 0;
+        }
+        eng.scan_persisted_rows()
+    };
+    let count = rows.len();
+    if count == 0 {
+        return 0;
+    }
+    let mut rs = row_store.lock().expect("row_store load_persisted_rows");
+    let xid = rs.begin_xid(); // boot xid — gives all restored rows the same xid
+    for (db, row_key, _orig_xid, data, is_tombstone) in rows {
+        // Reconstruct the prefixed key that the service layer uses.
+        let prefixed = if db.is_empty() {
+            row_key.clone()
+        } else {
+            format!("{db}.{row_key}")
+        };
+        if is_tombstone {
+            rs.delete(xid, &prefixed);
+        } else {
+            rs.insert(xid, &prefixed, data);
+        }
+    }
+    eprintln!("[vng-boot] loaded {count} row(s) from persisted row store");
+    count
+}
+
+
+/// Remove all rows belonging to `db` from the in-memory row store and
+/// from the persisted row store (if the durability engine supports it).
+pub(crate) fn purge_database_rows(
+    db: &str,
+    row_store: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::mvcc::PagedRowStore>>,
+    _wal_engine: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    let prefix = format!("{db}.");
+    // In-memory purge: delete all rows whose key starts with the db prefix.
+    let mut rs = row_store.lock().expect("row_store purge_database lock");
+    let xid = rs.begin_xid();
+    let keys_to_purge: Vec<String> = rs
+        .export_rows_snapshot()
+        .into_iter()
+        .filter(|(k, _)| k.starts_with(&prefix))
+        .map(|(k, _)| k)
+        .collect();
+    for k in keys_to_purge {
+        rs.delete(xid, &k);
+    }
+    // TODO: add RocksDB CF_ROWS range delete for the db prefix (Phase 2 of this gap).
+}
+
+
 pub(crate) fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
     let mut matrix = RbacPrivilegeMatrix::new();
 

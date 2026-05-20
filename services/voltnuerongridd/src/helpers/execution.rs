@@ -579,13 +579,13 @@ where
 }
 
 
-/// Legacy substring-based executor. Kept as a fallback for queries the new
-/// executor doesn't support yet (JOIN / GROUP BY / subquery). To be deleted
-/// once the new executor covers those features.
+/// Legacy executor. Kept as a fallback for queries the new executor doesn't
+/// support yet (JOIN / GROUP BY / subquery). To be deleted once the new
+/// executor covers those features.
 ///
-/// **Known incorrect:** uses `row_key.contains(prefix_str)` which makes
-/// `WHERE id = 5` match rows 15, 25, 50, 51 etc. The new path is preferred
-/// whenever it can handle the query.
+/// WHERE filtering uses exact column-value match only; unknown columns never
+/// produce false-positive matches. The new path is preferred whenever it can
+/// handle the query.
 pub(crate) fn execute_oltp_select_legacy(
     stmt_str: &str,
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
@@ -639,13 +639,13 @@ pub(crate) fn execute_oltp_select_legacy(
         let remaining = sql_limit.saturating_sub(results.len());
         let batch: Vec<OltpRowResult> = all_rows
             .iter()
-            .filter(|(k, d)| match &where_filter {
+            .filter(|(_, d)| match &where_filter {
                 None => true,
                 Some((col, val)) => {
-                    // Try exact column-value match first; fall back to key substring.
+                    // Exact column-value match only; no key substring fallback.
                     d.get(col.as_str())
                         .map(|v| v.eq_ignore_ascii_case(val))
-                        .unwrap_or_else(|| k.contains(val.as_str()))
+                        .unwrap_or(false)
                 }
             })
             .take(remaining)

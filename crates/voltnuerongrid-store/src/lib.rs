@@ -286,6 +286,34 @@ pub trait DurabilityEngine: Send {
     fn persists_sql(&self) -> bool {
         false
     }
+
+    // ── Phase 2.2: Row store persistence ──────────────────────────────────────
+
+    /// Persist one row write to durable storage.
+    /// `db` = database name (empty = no-DB scope).
+    /// `row_key` = table-scoped key like "orders:row-123" WITHOUT db prefix.
+    /// `xid` = transaction ID of this write.
+    /// `data` = Some(columns) for a live row write, None for a delete tombstone.
+    fn store_row(
+        &mut self,
+        _db: &str,
+        _row_key: &str,
+        _xid: u64,
+        _data: Option<&HashMap<String, String>>,
+    ) {
+        // default: no-op (in-memory engine)
+    }
+
+    /// Return all persisted row versions as (db, row_key, xid, data, is_tombstone).
+    /// Returns only the latest version per (db, row_key). Empty vec if not supported.
+    fn scan_persisted_rows(&self) -> Vec<(String, String, u64, HashMap<String, String>, bool)> {
+        Vec::new()
+    }
+
+    /// Whether this engine persists rows (vs the default no-op impl).
+    fn persists_rows(&self) -> bool {
+        false
+    }
 }
 
 impl DurabilityEngine for InMemoryDurabilityEngine {
@@ -417,6 +445,17 @@ impl BoxedDurabilityEngine {
     }
     pub fn persists_sql(&self) -> bool {
         self.inner.persists_sql()
+    }
+
+    // Phase 2.2 — Row store persistence forwarding.
+    pub fn store_row(&mut self, db: &str, row_key: &str, xid: u64, data: Option<&HashMap<String, String>>) {
+        self.inner.store_row(db, row_key, xid, data);
+    }
+    pub fn scan_persisted_rows(&self) -> Vec<(String, String, u64, HashMap<String, String>, bool)> {
+        self.inner.scan_persisted_rows()
+    }
+    pub fn persists_rows(&self) -> bool {
+        self.inner.persists_rows()
     }
 }
 

@@ -90,6 +90,8 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/sre/driver/pool/failure", post(sre_driver_pool_failure))
         .route("/api/v1/sre/driver/pool/recover", post(sre_driver_pool_recover))
         .route("/api/v1/sre/driver/pool/stats", get(sre_driver_pool_stats))
+        // Gap #7: table statistics for query routing and monitoring.
+        .route("/api/v1/sre/table-stats", get(table_stats))
         .route(
             "/api/v1/security/plugins/provenance/register",
             post(security_plugins_provenance_register),

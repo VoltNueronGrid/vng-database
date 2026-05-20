@@ -174,6 +174,11 @@ pub(crate) use handlers::misc::{
 pub(crate) use auth::locale_from_headers;
 
 
+/// Default per-database connection concurrency limit (Gap #9).
+/// Overridden by the database's max_connections DDL attribute once that
+/// field is added to the catalog. sql.rs references this via `crate::`.
+pub(crate) const DEFAULT_DB_MAX_CONNECTIONS: usize = 100;
+
 pub(crate) static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub(crate) static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -541,6 +546,18 @@ pub(crate) struct AppState {
     pub(crate) session_store: Arc<Mutex<crate::user_store::SessionStore>>,
     /// Gap #7: HMAC-SHA256 session token signer.
     pub(crate) session_signer: Arc<Mutex<crate::user_store::SessionSigner>>,
+    /// Gap #6/#7: Basic per-table row count statistics, updated on DML commits.
+    /// Key: "db.table" (or just "table" for no-db scope). Value: approximate row count.
+    pub(crate) table_stats: Arc<Mutex<std::collections::HashMap<String, u64>>>,
+    /// Gap #9: Per-database connection semaphore. Capacity = database's
+    /// max_connections setting (or DEFAULT_DB_MAX_CONNECTIONS if unset).
+    /// Held for the duration of each SQL request.
+    pub(crate) db_semaphores: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>>,
+    /// Gap #3: Per-connection undo log for ROLLBACK support.
+    /// Maps connection_id → ordered list of (prefixed_row_key, before_data).
+    /// before_data = Some(RowData) means the row existed before (restore on rollback).
+    /// before_data = None means the row was fresh INSERT (delete on rollback).
+    pub(crate) tx_undo_log: Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, Option<voltnuerongrid_store::mvcc::RowData>)>>>>,
 }
 
 #[derive(Clone, Default)]
@@ -1501,10 +1518,55 @@ async fn main() {
                 .unwrap_or_else(|_| "vng-default-session-secret".to_string());
             crate::user_store::SessionSigner::new(&secret, 86_400) // 24-hour TTL
         })),
+        // Gap #6/#7: per-table row count statistics.
+        table_stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // Gap #9: per-database connection semaphores (lazily created on first request).
+        db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        // Gap #3: per-connection undo log for ROLLBACK support.
+        tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
+
+    // Load persisted rows from RocksDB into the in-memory row store.
+    helpers::boot::load_persisted_rows_into(&state.row_store, &state.wal_engine);
+
     tokio::spawn(run_raft_tick_loop(state.clone()));
+
+    // Gap #6: Background Parquet flush task — exports row data to disk for OLAP queries.
+    {
+        let flush_state = state.clone();
+        let flush_interval_secs = std::env::var("VNG_PARQUET_FLUSH_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60);
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                std::time::Duration::from_secs(flush_interval_secs)
+            );
+            interval.tick().await; // skip the first immediate tick
+            loop {
+                interval.tick().await;
+                let rows = {
+                    let rs = flush_state.row_store.lock().expect("row_store parquet flush");
+                    let xid = rs.current_xid();
+                    rs.scan_at_snapshot(xid)
+                        .into_iter()
+                        .map(|(k, d)| (k.to_string(), d.clone()))
+                        .collect::<Vec<_>>()
+                };
+                let flushed = helpers::parquet_flush::flush_rows_to_parquet(&rows, &data_dir);
+                if flushed > 0 {
+                    tracing::info!(
+                        target: "vng.parquet",
+                        tables = flushed,
+                        "parquet flush complete"
+                    );
+                }
+            }
+        });
+    }
 
     let app = build_router(state.clone());
     if native_listener_config.enabled {

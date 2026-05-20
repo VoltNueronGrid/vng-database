@@ -46,8 +46,10 @@ hmac = "0.12"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 
+arrow = { version = "53", default-features = false, features = ["ipc"] }
+parquet = { version = "53", default-features = false, features = ["arrow", "snap"] }
+
 [dev-dependencies]
 arrow-array = { version = "53", default-features = false }
 arrow-schema = { version = "53", default-features = false }
-parquet = { version = "53", default-features = false, features = ["arrow", "snap"] }
 rust_xlsxwriter = "0.79"

@@ -1536,6 +1536,20 @@ pub(crate) async fn search_fulltext(
 
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
 
+/// GET /api/v1/sre/table-stats — returns per-table row counts.
+/// Gap #7: basic table statistics for query routing and monitoring.
+pub(crate) async fn table_stats(
+    State(state): State<AppState>,
+) -> axum::Json<serde_json::Value> {
+    let stats = state.table_stats.lock().expect("table_stats read");
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "table_stats": stats.iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect::<std::collections::HashMap<String, u64>>()
+    }))
+}
+
 pub(crate) async fn mcp_capabilities() -> Json<McpServerCapabilities> {
     Json(McpServerCapabilities::default())
 }

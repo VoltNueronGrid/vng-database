@@ -1042,6 +1042,7 @@ pub(crate) async fn admin_databases_drop(
                     &format!("DROP DATABASE {}", record.name),
                 );
             }
+            crate::helpers::boot::purge_database_rows(&record.name, &state.row_store, &state.wal_engine);
             metrics::counter!(
                 "vng_database_lifecycle_total",
                 "operation" => "drop",

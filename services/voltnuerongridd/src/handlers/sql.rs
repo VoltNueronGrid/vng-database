@@ -3,6 +3,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use voltnuerongrid_audit::AuditEventKind;
 use voltnuerongrid_auth::PrivilegeAction;
@@ -24,6 +25,22 @@ use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix};
 use crate::{persist_sql_statement};
 use crate::auth::{require_sql_runtime_principal, locale_from_headers};
 use crate::audit_helpers::append_runtime_audit_event;
+
+// ─── Gap #3: undo log helper ─────────────────────────────────────────────────
+
+/// Record a before-image into the undo log for the given connection.
+/// `before` = current visible data at the key (None if the row did not exist).
+fn record_undo(
+    undo_log: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, Option<voltnuerongrid_store::mvcc::RowData>)>>>>,
+    conn_id: &str,
+    key: &str,
+    before: Option<voltnuerongrid_store::mvcc::RowData>,
+) {
+    let mut log = undo_log.lock().expect("tx_undo_log lock");
+    log.entry(conn_id.to_string())
+        .or_default()
+        .push((key.to_string(), before));
+}
 
 // ─── SQL DTOs ─────────────────────────────────────────────────────────────────
 
@@ -451,6 +468,9 @@ pub(crate) async fn sql_transaction(
                         // Each row is individually inserted and individually WAL-persisted.
                         for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
@@ -458,6 +478,9 @@ pub(crate) async fn sql_transaction(
                     } else if upper.starts_with("DELETE") {
                         if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
@@ -465,6 +488,9 @@ pub(crate) async fn sql_transaction(
                     } else if upper.starts_with("UPDATE") {
                         if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
@@ -527,6 +553,27 @@ pub(crate) async fn sql_transaction(
             }
         } else if has_rollback {
             acid.rollback(&tx_id, now_ms);
+        }
+        // Gap #3: on COMMIT clear undo log; on ROLLBACK apply it then clear.
+        if has_commit {
+            let mut log = state.tx_undo_log.lock().expect("tx_undo_log commit clear");
+            log.remove(&connection_id);
+        } else if has_rollback {
+            let undo_entries = {
+                let mut log = state.tx_undo_log.lock().expect("tx_undo_log rollback lock");
+                log.remove(&connection_id).unwrap_or_default()
+            };
+            if !undo_entries.is_empty() {
+                let mut rs = state.row_store.lock().expect("row_store rollback lock");
+                let undo_xid = rs.begin_xid();
+                for (key, before_data) in undo_entries.into_iter().rev() {
+                    match before_data {
+                        Some(data) => { rs.insert(undo_xid, &key, data); }
+                        None => { rs.delete(undo_xid, &key); }
+                    }
+                }
+                rs.release_write_intents(undo_xid);
+            }
         }
     }
     let (status, response) = execute_transaction_statements(req.statements);
@@ -779,6 +826,42 @@ pub(crate) async fn sql_execute(
     }
 
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/execute")?;
+
+    // Gap #9: acquire a per-database connection permit (enforces max_connections per database).
+    let _db_permit = if !db.is_empty() {
+        let sem = {
+            let mut semaphores = state.db_semaphores.lock().expect("db_semaphores lock");
+            semaphores
+                .entry(db.clone())
+                .or_insert_with(|| {
+                    // No max_connections field in DdlCatalog yet — use the default.
+                    Arc::new(tokio::sync::Semaphore::new(crate::DEFAULT_DB_MAX_CONNECTIONS))
+                })
+                .clone()
+        };
+        // Try to acquire without blocking; return 503 if at capacity.
+        match sem.try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                release_sql_data_plane_connection(&state, &connection_id);
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(crate::AuthErrorResponse {
+                        status: "error",
+                        reason: format!("database '{}' is at max_connections limit", db),
+                        locale: "en".to_string(),
+                        localized_message: format!(
+                            "Database '{}' has reached its maximum connection limit",
+                            db
+                        ),
+                    }),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
     let dispatcher = CommandDispatcher::new();
     let envelope = build_http_envelope(
         &headers,
@@ -1177,6 +1260,9 @@ pub(crate) async fn sql_execute(
                     if upper.starts_with("INSERT") {
                         for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
@@ -1184,6 +1270,9 @@ pub(crate) async fn sql_execute(
                     } else if upper.starts_with("UPDATE") {
                         if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
@@ -1191,6 +1280,9 @@ pub(crate) async fn sql_execute(
                     } else if upper.starts_with("DELETE") {
                         if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
@@ -1198,6 +1290,21 @@ pub(crate) async fn sql_execute(
                     }
                 }
                 rs.release_write_intents(xid);
+                // Gap #7: Update per-table row count statistics after DML commit.
+                {
+                    let xid_snap = rs.current_xid();
+                    let mut counts: std::collections::HashMap<String, u64> =
+                        std::collections::HashMap::new();
+                    for (k, _) in rs.scan_at_snapshot(xid_snap) {
+                        if let Some(colon) = k.rfind(':') {
+                            let table_key = k[..colon].to_string();
+                            *counts.entry(table_key).or_insert(0) += 1;
+                        }
+                    }
+                    if let Ok(mut stats) = state.table_stats.lock() {
+                        *stats = counts;
+                    }
+                }
                 // Fire-and-forget: replicate to Raft log so followers catch up.
                 // append_command pre-advances last_applied so the apply loop skips re-execution.
                 {
@@ -1213,6 +1320,43 @@ pub(crate) async fn sql_execute(
                 }
             }
         }
+    }
+
+    // Gap #3: ROLLBACK — apply undo log to restore before-images for this connection.
+    let has_rollback = ddl_snapshot.iter().any(|s| {
+        let u = s.trim_start().to_ascii_uppercase();
+        u == "ROLLBACK" || u.starts_with("ROLLBACK;") || u.starts_with("ROLLBACK ")
+    });
+    let has_commit = ddl_snapshot.iter().any(|s| {
+        let u = s.trim_start().to_ascii_uppercase();
+        u == "COMMIT" || u.starts_with("COMMIT;") || u.starts_with("COMMIT ")
+    });
+    if has_rollback {
+        let undo_entries = {
+            let mut log = state.tx_undo_log.lock().expect("tx_undo_log rollback lock");
+            log.remove(&connection_id).unwrap_or_default()
+        };
+        if !undo_entries.is_empty() {
+            let mut rs = state.row_store.lock().expect("row_store rollback lock");
+            let undo_xid = rs.begin_xid();
+            for (key, before_data) in undo_entries.into_iter().rev() {
+                match before_data {
+                    Some(data) => {
+                        // Row existed before — restore it.
+                        rs.insert(undo_xid, &key, data);
+                    }
+                    None => {
+                        // Row was inserted fresh — delete it on rollback.
+                        rs.delete(undo_xid, &key);
+                    }
+                }
+            }
+            rs.release_write_intents(undo_xid);
+        }
+    } else if has_commit {
+        // Gap #3: COMMIT — clear the undo log for this connection.
+        let mut log = state.tx_undo_log.lock().expect("tx_undo_log commit clear");
+        log.remove(&connection_id);
     }
 
     if !olap_statements.is_empty() {

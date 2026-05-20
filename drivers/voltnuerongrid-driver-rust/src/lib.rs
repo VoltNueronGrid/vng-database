@@ -5,6 +5,7 @@ pub const CRATE_NAME: &str = "voltnuerongrid-driver-rust";
 use std::collections::BTreeMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -624,11 +625,33 @@ pub trait NativeTransport {
     fn send_frame(&self, frame: &NativeFrame) -> DriverResult<NativeFrame>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct SocketNativeTransport {
     endpoint: String,
     connect_timeout_ms: u64,
+    /// Optional real TCP connection pool. When `Some`, `send_frame` reuses
+    /// pooled connections instead of opening a fresh one per request.
+    pool: Option<NativeConnectionPool>,
 }
+
+impl std::fmt::Debug for SocketNativeTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SocketNativeTransport")
+            .field("endpoint", &self.endpoint)
+            .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("has_pool", &self.pool.is_some())
+            .finish()
+    }
+}
+
+impl std::cmp::PartialEq for SocketNativeTransport {
+    fn eq(&self, other: &Self) -> bool {
+        self.endpoint == other.endpoint
+            && self.connect_timeout_ms == other.connect_timeout_ms
+    }
+}
+
+impl std::cmp::Eq for SocketNativeTransport {}
 
 impl SocketNativeTransport {
     pub fn new(endpoint: impl Into<String>, connect_timeout_ms: u64) -> DriverResult<Self> {
@@ -646,6 +669,34 @@ impl SocketNativeTransport {
         Ok(Self {
             endpoint,
             connect_timeout_ms,
+            pool: None,
+        })
+    }
+
+    /// Create a transport backed by a real TCP connection pool.
+    /// `max_idle` — max idle connections to keep; `max_size` — max total (idle + in-use).
+    pub fn with_pool(
+        endpoint: impl Into<String>,
+        connect_timeout_ms: u64,
+        max_idle: usize,
+        max_size: usize,
+    ) -> DriverResult<Self> {
+        let endpoint = endpoint.into();
+        if endpoint.trim().is_empty() {
+            return Err(DriverError::validation(
+                "native socket endpoint must not be empty",
+            ));
+        }
+        if connect_timeout_ms == 0 {
+            return Err(DriverError::validation(
+                "native socket connect_timeout_ms must be >= 1",
+            ));
+        }
+        let pool = NativeConnectionPool::new(endpoint.clone(), connect_timeout_ms, max_idle, max_size);
+        Ok(Self {
+            endpoint,
+            connect_timeout_ms,
+            pool: Some(pool),
         })
     }
 
@@ -655,6 +706,11 @@ impl SocketNativeTransport {
 
     pub fn connect_timeout_ms(&self) -> u64 {
         self.connect_timeout_ms
+    }
+
+    /// Returns a reference to the underlying pool, if one was configured.
+    pub fn pool(&self) -> Option<&NativeConnectionPool> {
+        self.pool.as_ref()
     }
 
     pub(crate) fn map_socket_error(context: &str, err: std::io::Error) -> DriverError {
@@ -705,6 +761,36 @@ impl NativeTransport for SocketNativeTransport {
     fn send_frame(&self, frame: &NativeFrame) -> DriverResult<NativeFrame> {
         let encoded = NativeFrameCodec::encode(frame)?;
 
+        if let Some(pool) = &self.pool {
+            // Use the real connection pool.
+            let timeout = Duration::from_millis(self.connect_timeout_ms);
+            let mut conn = pool.get()?;
+            let stream = conn.stream_mut();
+            stream
+                .set_read_timeout(Some(timeout))
+                .map_err(|err| Self::map_socket_error("failed to set read timeout", err))?;
+            stream
+                .set_write_timeout(Some(timeout))
+                .map_err(|err| Self::map_socket_error("failed to set write timeout", err))?;
+            match Self::write_framed(stream, &encoded) {
+                Err(e) => {
+                    conn.invalidate();
+                    return Err(e);
+                }
+                Ok(()) => {}
+            }
+            let response_bytes = match Self::read_framed(conn.stream_mut()) {
+                Err(e) => {
+                    conn.invalidate();
+                    return Err(e);
+                }
+                Ok(b) => b,
+            };
+            // conn drops here → returned to pool
+            return NativeFrameCodec::decode(&response_bytes);
+        }
+
+        // No pool: open a fresh connection each time (original behaviour).
         let mut resolved = self
             .endpoint
             .to_socket_addrs()
@@ -732,6 +818,192 @@ impl NativeTransport for SocketNativeTransport {
         Self::write_framed(&mut stream, &encoded)?;
         let response_bytes = Self::read_framed(&mut stream)?;
         NativeFrameCodec::decode(&response_bytes)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Real TCP connection pool for the native wire protocol
+// ---------------------------------------------------------------------------
+
+/// A real connection pool for the native wire protocol (TCP).
+/// Maintains a pool of idle `TcpStream` connections to `endpoint`.
+/// Thread-safe via `Arc<Mutex<...>>` — clone the pool to share across threads.
+#[derive(Clone)]
+pub struct NativeConnectionPool {
+    /// The endpoint to connect to (host:port).
+    endpoint: String,
+    /// Connection timeout in milliseconds.
+    connect_timeout_ms: u64,
+    /// Maximum number of idle connections to keep in the pool.
+    max_idle: usize,
+    /// Maximum total connections allowed (idle + in-use).
+    max_size: usize,
+    /// Idle connection pool (TCP streams ready to reuse).
+    pool: Arc<Mutex<std::collections::VecDeque<TcpStream>>>,
+    /// Count of connections currently checked out of the pool.
+    in_use: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl NativeConnectionPool {
+    /// Create a new pool for `endpoint`.
+    pub fn new(
+        endpoint: impl Into<String>,
+        connect_timeout_ms: u64,
+        max_idle: usize,
+        max_size: usize,
+    ) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            connect_timeout_ms,
+            max_idle,
+            max_size,
+            pool: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            in_use: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Get a connection from the pool or create a new one.
+    /// Returns `Err` if at `max_size` or if the connection attempt fails.
+    pub fn get(&self) -> DriverResult<PooledNativeConnection> {
+        // Try to reuse an idle connection.
+        {
+            let mut idle = self.pool.lock().expect("native pool lock");
+            while let Some(stream) = idle.pop_front() {
+                // Probe liveness: a 1 ms read timeout + peek().
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(1)));
+                let mut probe = [0u8; 1];
+                match stream.peek(&mut probe) {
+                    Err(ref e)
+                        if e.kind() == ErrorKind::WouldBlock
+                            || e.kind() == ErrorKind::TimedOut =>
+                    {
+                        // Still alive — restore unlimited timeout and return.
+                        let _ = stream.set_read_timeout(None);
+                        self.in_use
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        return Ok(PooledNativeConnection {
+                            stream: Some(stream),
+                            pool: self.pool.clone(),
+                            max_idle: self.max_idle,
+                            in_use: self.in_use.clone(),
+                            returned: false,
+                        });
+                    }
+                    Ok(n) if n > 0 => {
+                        // Unexpected data waiting — connection is still alive; use it.
+                        let _ = stream.set_read_timeout(None);
+                        self.in_use
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        return Ok(PooledNativeConnection {
+                            stream: Some(stream),
+                            pool: self.pool.clone(),
+                            max_idle: self.max_idle,
+                            in_use: self.in_use.clone(),
+                            returned: false,
+                        });
+                    }
+                    _ => {
+                        // EOF or error — peer closed; discard and try next.
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Check total capacity.
+        let current_in_use = self
+            .in_use
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if current_in_use >= self.max_size {
+            return Err(DriverError::transport(format!(
+                "connection pool at max capacity ({})",
+                self.max_size
+            )));
+        }
+
+        // Open a new connection.
+        let timeout = Duration::from_millis(self.connect_timeout_ms);
+        let mut addrs = self
+            .endpoint
+            .to_socket_addrs()
+            .map_err(|e| DriverError::transport(format!("pool resolve {}: {}", self.endpoint, e)))?;
+        let addr = addrs.next().ok_or_else(|| {
+            DriverError::transport(format!("pool: no address resolved for {}", self.endpoint))
+        })?;
+        let stream = TcpStream::connect_timeout(&addr, timeout)
+            .map_err(|e| DriverError::transport(format!("pool connect {}: {}", self.endpoint, e)))?;
+        stream.set_nodelay(true).ok();
+
+        self.in_use
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(PooledNativeConnection {
+            stream: Some(stream),
+            pool: self.pool.clone(),
+            max_idle: self.max_idle,
+            in_use: self.in_use.clone(),
+            returned: false,
+        })
+    }
+
+    /// Current number of idle connections in the pool.
+    pub fn idle_count(&self) -> usize {
+        self.pool.lock().expect("pool idle count").len()
+    }
+
+    /// Current number of connections checked out.
+    pub fn in_use_count(&self) -> usize {
+        self.in_use.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// A connection checked out of a [`NativeConnectionPool`].
+/// Automatically returned to the pool on `Drop` (unless invalidated).
+#[derive(Debug)]
+pub struct PooledNativeConnection {
+    stream: Option<TcpStream>,
+    pool: Arc<Mutex<std::collections::VecDeque<TcpStream>>>,
+    max_idle: usize,
+    in_use: Arc<std::sync::atomic::AtomicUsize>,
+    /// Set to `true` once we have decremented `in_use` and decided what to do
+    /// with the stream, to prevent double-accounting in `Drop`.
+    returned: bool,
+}
+
+impl Drop for PooledNativeConnection {
+    fn drop(&mut self) {
+        if self.returned {
+            return;
+        }
+        self.returned = true;
+        self.in_use
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(stream) = self.stream.take() {
+            let mut idle = self.pool.lock().expect("pool return lock");
+            if idle.len() < self.max_idle {
+                idle.push_back(stream);
+            }
+            // If the pool is full the TcpStream drops here, closing the connection.
+        }
+    }
+}
+
+impl PooledNativeConnection {
+    /// Get a mutable reference to the underlying `TcpStream`.
+    pub fn stream_mut(&mut self) -> &mut TcpStream {
+        self.stream
+            .as_mut()
+            .expect("PooledNativeConnection: stream already consumed")
+    }
+
+    /// Mark this connection as broken so it is NOT returned to the pool on drop.
+    /// The underlying `TcpStream` closes immediately.
+    pub fn invalidate(&mut self) {
+        if !self.returned {
+            self.returned = true;
+            self.in_use
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = self.stream.take(); // TcpStream closes here
+        }
     }
 }
 
@@ -2379,6 +2651,86 @@ request_timeout_ms: 2500
         let pruned = pool.prune_unhealthy(11u64);
         assert_eq!(pruned, 1);
         assert_eq!(pool.pool_stats(11u64).total_connections, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // NativeConnectionPool unit tests (no live network required)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn native_pool_reports_zero_idle_and_in_use_at_start() {
+        let pool = NativeConnectionPool::new("127.0.0.1:9999", 1000, 4, 8);
+        assert_eq!(pool.idle_count(), 0);
+        assert_eq!(pool.in_use_count(), 0);
+    }
+
+    #[test]
+    fn native_pool_get_fails_when_max_size_zero() {
+        // max_size = 0 → capacity check fires immediately (no connection attempt).
+        let pool = NativeConnectionPool::new("127.0.0.1:9999", 1000, 0, 0);
+        let err = pool.get().expect_err("should fail at capacity=0");
+        assert!(err.message.contains("max capacity"));
+    }
+
+    #[test]
+    fn native_pool_get_fails_on_unreachable_host() {
+        // Port 1 is never open; connect_timeout_ms=100 keeps the test fast.
+        let pool = NativeConnectionPool::new("127.0.0.1:1", 100, 4, 8);
+        let result = pool.get();
+        assert!(result.is_err(), "should fail to connect to unreachable port");
+    }
+
+    #[test]
+    fn pooled_native_connection_invalidate_decrements_in_use_once() {
+        use std::sync::atomic::Ordering;
+        let in_use = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+        let pool_deque: Arc<Mutex<std::collections::VecDeque<TcpStream>>> =
+            Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let mut conn = PooledNativeConnection {
+            stream: None, // no real stream needed for this accounting test
+            pool: pool_deque.clone(),
+            max_idle: 4,
+            in_use: in_use.clone(),
+            returned: false,
+        };
+        conn.invalidate();
+        assert_eq!(in_use.load(Ordering::Relaxed), 0, "invalidate should decrement once");
+        // Drop fires next — must NOT decrement again.
+        drop(conn);
+        assert_eq!(in_use.load(Ordering::Relaxed), 0, "drop after invalidate must not double-decrement");
+    }
+
+    #[test]
+    fn pooled_native_connection_drop_decrements_in_use_once() {
+        use std::sync::atomic::Ordering;
+        let in_use = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+        let pool_deque: Arc<Mutex<std::collections::VecDeque<TcpStream>>> =
+            Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let conn = PooledNativeConnection {
+            stream: None,
+            pool: pool_deque.clone(),
+            max_idle: 4,
+            in_use: in_use.clone(),
+            returned: false,
+        };
+        drop(conn);
+        assert_eq!(in_use.load(Ordering::Relaxed), 0, "drop should decrement in_use");
+    }
+
+    #[test]
+    fn socket_native_transport_new_has_no_pool() {
+        let transport = SocketNativeTransport::new("127.0.0.1:7542", 1000).expect("valid");
+        assert!(transport.pool().is_none());
+    }
+
+    #[test]
+    fn socket_native_transport_with_pool_has_pool() {
+        let transport =
+            SocketNativeTransport::with_pool("127.0.0.1:7542", 1000, 4, 8).expect("valid");
+        assert!(transport.pool().is_some());
+        let p = transport.pool().unwrap();
+        assert_eq!(p.idle_count(), 0);
+        assert_eq!(p.in_use_count(), 0);
     }
 
     #[test]
