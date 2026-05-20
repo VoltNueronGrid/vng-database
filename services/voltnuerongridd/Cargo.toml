@@ -32,9 +32,15 @@ voltnuerongrid-driver-rust = { path = "../../drivers/voltnuerongrid-driver-rust"
 tower-http = { version = "0.3", features = ["cors"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
-# Observability — Phase 0.4
+# Observability — Phase 0.4 / 0.5 (OTEL)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+# OpenTelemetry: activated when OTEL_EXPORTER_OTLP_ENDPOINT env var is set.
+# Uses HTTP+protobuf transport (no gRPC/tonic, lighter build) with reqwest+rustls.
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "http-proto", "reqwest-rustls"] }
+tracing-opentelemetry = "0.28"
 # Prometheus exposition without pulling the full `prometheus` crate (which is heavy).
 # `metrics` + `metrics-exporter-prometheus` give us a tiny, idiomatic API.
 metrics = "0.23"

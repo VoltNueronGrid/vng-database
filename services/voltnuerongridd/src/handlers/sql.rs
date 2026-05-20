@@ -334,9 +334,26 @@ pub(crate) async fn sql_transaction(
             .as_deref()
             .unwrap_or("read_committed")
             .to_string();
+        // C-3: For repeatable_read, capture the row-store snapshot Xid at BEGIN time
+        // so all reads in this transaction see a consistent view.  Must be captured
+        // *before* acquiring acid_transactions lock to avoid deadlock.
+        let begin_snapshot_xid: Option<u64> = if has_begin && iso_level == "repeatable_read" {
+            let rs = state.row_store.lock().expect("row_store begin_rr_snapshot");
+            Some(rs.current_xid())
+        } else {
+            None
+        };
+
         let mut acid = state.acid_transactions.lock().expect("acid_tx lock");
         if has_begin {
-            acid.begin(&tx_id, &state.node_id, &iso_level, now_ms);
+            acid.begin(&tx_id, &state.node_id, &iso_level, now_ms, begin_snapshot_xid);
+            // Register connection → tx mapping so sql_execute can look up the
+            // repeatable-read snapshot for standalone SELECT calls.
+            if iso_level == "repeatable_read" {
+                if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                    conn_map.insert(connection_id.clone(), tx_id.clone());
+                }
+            }
         }
         for stmt in &statements {
             let upper = stmt.to_ascii_uppercase();
@@ -453,6 +470,11 @@ pub(crate) async fn sql_transaction(
                 }
             }
             acid.commit(&tx_id, now_ms);
+            // C-3: Clear the connection→tx mapping on COMMIT so sql_execute no longer
+            // applies the repeatable-read snapshot to standalone SELECTs.
+            if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                conn_map.remove(&connection_id);
+            }
             // S2-WS2-05: flush committed DML (INSERT/UPDATE/DELETE) into PagedRowStore.
             // Write intents are registered before each write and released after the flush
             // so that concurrent transactions see the in-progress lock via begin_write_intent.
@@ -557,6 +579,10 @@ pub(crate) async fn sql_transaction(
             }
         } else if has_rollback {
             acid.rollback(&tx_id, now_ms);
+            // C-3: Clear the connection→tx mapping on ROLLBACK as well.
+            if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                conn_map.remove(&connection_id);
+            }
         }
         // Gap #3: on COMMIT clear undo log; on ROLLBACK apply it then clear.
         if has_commit {
@@ -1097,6 +1123,11 @@ pub(crate) async fn sql_execute(
             for stmt in &ddl_snapshot {
                 if let Some(info) = parse_ddl_info(stmt) {
                     match info.operation {
+                        "create" if info.object_kind == "index" => {
+                            // M-2: CREATE INDEX — deferred to after the catalog loop to avoid
+                            // holding the catalog lock while acquiring row_store + index_manager.
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
+                        }
                         "create" => {
                             let result = catalog.record_create(
                                 &info.object_kind,
@@ -1142,6 +1173,16 @@ pub(crate) async fn sql_execute(
                     }
                 }
             }
+            // M-2: Execute CREATE INDEX statements after releasing the catalog lock.
+            // This avoids holding ddl_catalog while acquiring row_store + index_manager.
+            drop(catalog);
+            for stmt in &ddl_snapshot {
+                let lower = stmt.trim().to_ascii_lowercase();
+                if lower.starts_with("create index ") || lower.starts_with("create unique index ") {
+                    handle_create_index_ddl(&state, stmt, &db);
+                }
+            }
+            catalog = state.ddl_catalog.lock().expect("ddl_catalog re-lock after create index");
             // If the entire batch is DDL-only and we got an AlreadyExists, return 409 now.
             // If there are DML statements too, we fall through so they still execute.
             let has_dml = ddl_snapshot.iter().any(|s| {
@@ -1378,9 +1419,27 @@ pub(crate) async fn sql_execute(
 
     if !olap_statements.is_empty() {
         let query = olap_statements.join("; ");
+        // C-3: look up any active repeatable-read snapshot for this connection.
+        let rr_snapshot_xid: Option<u64> = {
+            let conn_map = state.connection_tx_active.lock().ok();
+            conn_map.and_then(|m| m.get(&connection_id).and_then(|tx_id| {
+                state.acid_transactions.lock().ok()
+                    .and_then(|a| a.rr_read_snapshot_xid(tx_id))
+            }))
+        };
         let rs = state.row_store.lock().expect("row_store lock olap_execute");
         let data_dir = state.runtime_config.storage.data_dir.clone();
-        olap = Some(execute_olap_query(query, req.max_rows, &rs, &db, &data_dir));
+        // C-1: fetch rows from RocksDB as primary read source when the engine persists rows.
+        let rocksdb_rows_olap: Option<Vec<(String, std::collections::HashMap<String, String>)>> = {
+            let wal = state.wal_engine.lock().expect("wal_engine lock olap rocksdb_rows");
+            if wal.persists_rows() {
+                let xid = rr_snapshot_xid.unwrap_or_else(|| rs.current_xid());
+                Some(wal.scan_rows_for_db(&db, xid))
+            } else {
+                None
+            }
+        };
+        olap = Some(execute_olap_query(query, req.max_rows, &rs, &db, &data_dir, rr_snapshot_xid, rocksdb_rows_olap));
     }
 
     // REQ-12: Detect legacy aggregate functions in OLAP SELECT statements and
@@ -1467,9 +1526,27 @@ pub(crate) async fn sql_execute(
     // S4-WS3-02: OLTP physical executor dispatch
     let oltp_rows: Option<Vec<OltpRowResult>> =
         if planner_path.as_deref() == Some("oltp") && !olap_statements.is_empty() {
+            // C-3: use repeatable-read snapshot if this connection has one.
+            let rr_snapshot_xid: Option<u64> = {
+                let conn_map = state.connection_tx_active.lock().ok();
+                conn_map.and_then(|m| m.get(&connection_id).and_then(|tx_id| {
+                    state.acid_transactions.lock().ok()
+                        .and_then(|a| a.rr_read_snapshot_xid(tx_id))
+                }))
+            };
             let rs = state.row_store.lock().expect("row_store lock oltp select");
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
-            let rows = execute_oltp_select(&olap_statements, &rs, limit, &db);
+            // C-1: fetch rows from RocksDB as primary read source when available.
+            let rocksdb_rows_oltp: Option<Vec<(String, std::collections::HashMap<String, String>)>> = {
+                let wal = state.wal_engine.lock().expect("wal_engine lock oltp rocksdb_rows");
+                if wal.persists_rows() {
+                    let xid = rr_snapshot_xid.unwrap_or_else(|| rs.current_xid());
+                    Some(wal.scan_rows_for_db(&db, xid))
+                } else {
+                    None
+                }
+            };
+            let rows = execute_oltp_select(&olap_statements, &rs, limit, &db, rr_snapshot_xid, rocksdb_rows_oltp);
             if rows.is_empty() { None } else { Some(rows) }
         } else {
             None
@@ -1563,19 +1640,25 @@ pub(crate) async fn sql_execute(
             let rs = state.row_store.lock().expect("row_store lock select_result_builder");
             let snapshot_xid = rs.current_xid();
             let db_prefix_filter = if db.is_empty() { String::new() } else { format!("{db}.") };
-            let all_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
-                .scan_at_snapshot(snapshot_xid)
-                .into_iter()
-                // Filter to rows belonging to the active database, then strip the prefix
-                // so downstream table-name matching still works on plain keys.
-                .filter(|(k, _)| db_prefix_filter.is_empty() || k.starts_with(&db_prefix_filter))
-                .map(|(k, v)| {
-                    let stripped = if db_prefix_filter.is_empty() { k.to_string() } else {
-                        k.strip_prefix(&db_prefix_filter).unwrap_or(k).to_string()
-                    };
-                    (stripped, v.clone())
-                })
-                .collect();
+            // C-1: prefer RocksDB as primary read source when available.
+            let all_rows: Vec<(String, std::collections::HashMap<String, String>)> = {
+                let wal = state.wal_engine.lock().expect("wal_engine lock select_result_builder");
+                if wal.persists_rows() {
+                    // RocksDB rows are already db-scoped with no db prefix.
+                    wal.scan_rows_for_db(&db, snapshot_xid)
+                } else {
+                    rs.scan_at_snapshot(snapshot_xid)
+                        .into_iter()
+                        .filter(|(k, _)| db_prefix_filter.is_empty() || k.starts_with(&db_prefix_filter))
+                        .map(|(k, v)| {
+                            let stripped = if db_prefix_filter.is_empty() { k.to_string() } else {
+                                k.strip_prefix(&db_prefix_filter).unwrap_or(k).to_string()
+                            };
+                            (stripped, v.clone())
+                        })
+                        .collect()
+                }
+            };
             drop(rs);
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
             // final ordered column list and rows for this response
@@ -1773,4 +1856,121 @@ pub(crate) async fn sql_transactions_active(
         transactions: active.iter().map(|t| (*t).clone()).collect(),
     };
     Ok((StatusCode::OK, Json(resp)))
+}
+
+
+// ── M-2: CREATE INDEX helper ─────────────────────────────────────────────
+
+/// Parse `CREATE [UNIQUE] INDEX idx_name ON table_name (col1[, col2, ...])`.
+/// Returns `(index_name, table_name, columns, is_unique)`.
+fn parse_create_index_sql(sql: &str) -> Option<(String, String, Vec<String>, bool)> {
+    let lower = sql.trim().to_ascii_lowercase();
+    let (rest, is_unique) = if let Some(r) = lower.strip_prefix("create unique index ") {
+        (r, true)
+    } else if let Some(r) = lower.strip_prefix("create index ") {
+        (r, false)
+    } else {
+        return None;
+    };
+
+    // rest = "idx_name on table_name (col1, col2)"
+    // or    "if not exists idx_name on table_name (col1)"
+    let rest = rest
+        .strip_prefix("if not exists ")
+        .unwrap_or(rest);
+
+    let on_pos = rest.find(" on ")?;
+    let idx_name = rest[..on_pos].trim().to_string();
+    let after_on = rest[on_pos + 4..].trim();
+
+    // after_on = "table_name (col1, col2)"
+    let paren_pos = after_on.find('(')?;
+    let table_name = after_on[..paren_pos].trim().to_string();
+    let col_list = after_on[paren_pos + 1..].trim_end_matches(')').trim();
+
+    let columns: Vec<String> = col_list
+        .split(',')
+        .map(|c| c.trim().split_whitespace().next().unwrap_or("").to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+
+    if idx_name.is_empty() || table_name.is_empty() || columns.is_empty() {
+        return None;
+    }
+    Some((idx_name, table_name, columns, is_unique))
+}
+
+/// M-2: Execute a `CREATE [UNIQUE] INDEX` statement by registering the index in
+/// `IndexManager` and backfilling it from the current `PagedRowStore` snapshot.
+fn handle_create_index_ddl(state: &AppState, sql: &str, db: &str) {
+    let parsed = match parse_create_index_sql(sql) {
+        Some(p) => p,
+        None => {
+            tracing::warn!("CREATE INDEX: could not parse statement: {sql}");
+            return;
+        }
+    };
+    let (idx_name, table_name, columns, is_unique) = parsed;
+
+    // Register one BTree index per column (IndexDescriptor is single-column).
+    // For multi-column indexes, each column gets its own index entry named "idx_name_col".
+    let rs = state.row_store.lock().expect("row_store lock create_index backfill");
+    let snapshot_xid = rs.current_xid();
+    // Collect rows for this table from the row store.
+    let table_prefix = if db.is_empty() {
+        format!("{table_name}:")
+    } else {
+        format!("{db}.{table_name}:")
+    };
+    let rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = rs
+        .scan_at_snapshot(snapshot_xid)
+        .into_iter()
+        .filter(|(k, _)| k.starts_with(&table_prefix))
+        .map(|(k, v)| {
+            let raw_key = if db.is_empty() { k.to_string() } else {
+                k.strip_prefix(&format!("{db}.")).unwrap_or(k).to_string()
+            };
+            (raw_key, v.clone())
+        })
+        .collect();
+    drop(rs); // release row_store before acquiring index_manager
+
+    let mut mgr = state.index_manager.lock().expect("index_manager lock create_index");
+    for col in &columns {
+        let entry_name = if columns.len() == 1 {
+            idx_name.clone()
+        } else {
+            format!("{idx_name}_{col}")
+        };
+        let descriptor = voltnuerongrid_store::index::IndexDescriptor {
+            name: entry_name.clone(),
+            table: table_name.clone(),
+            column: col.clone(),
+            kind: voltnuerongrid_store::index::IndexKind::BTree,
+            unique: is_unique,
+        };
+        match mgr.create_index(descriptor) {
+            Ok(()) => {}
+            Err(voltnuerongrid_store::index::IndexError::IndexAlreadyExists(_)) => {
+                tracing::warn!("CREATE INDEX: index '{entry_name}' already exists — skipping");
+                continue;
+            }
+            Err(e) => {
+                tracing::error!("CREATE INDEX: failed to create index '{entry_name}': {e}");
+                continue;
+            }
+        }
+
+        // Backfill: insert existing rows into the new index.
+        if let Some(idx) = mgr.get_mut(&entry_name) {
+            for (row_key, data) in &rows {
+                if let Some(col_val) = data.get(col.as_str()) {
+                    if let Err(e) = idx.insert(col_val, row_key) {
+                        tracing::warn!("CREATE INDEX backfill: {e}");
+                    }
+                }
+            }
+        }
+        tracing::info!("CREATE INDEX: index '{entry_name}' on {table_name}({col}) created and backfilled with {} rows", rows.len());
+    }
 }

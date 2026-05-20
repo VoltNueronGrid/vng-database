@@ -84,6 +84,8 @@ impl HtapQueryRouter {
             | SqlStatementKind::CreateTrigger
             | SqlStatementKind::CreateEvent
             | SqlStatementKind::AlterTable
+            | SqlStatementKind::CreateIndex
+            | SqlStatementKind::DropIndex
             | SqlStatementKind::DropTable
             | SqlStatementKind::DropView
             | SqlStatementKind::DropFunction

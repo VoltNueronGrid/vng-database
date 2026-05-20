@@ -248,9 +248,30 @@ pub(crate) struct AcidTransactionRegistry {
 }
 
 impl AcidTransactionRegistry {
-    fn begin(&mut self, tx_id: &str, assigned_node_id: &str, isolation_level: &str, now_ms: u128) {
+    /// Open a new transaction.
+    ///
+    /// `begin_snapshot_xid` — for `repeatable_read` transactions, pass
+    /// `Some(rs.current_xid())` captured *before* calling this method.
+    /// This is stored as the read snapshot: all SELECTs in the transaction
+    /// will see row-store state as of this Xid, even after concurrent writes.
+    fn begin(
+        &mut self,
+        tx_id: &str,
+        assigned_node_id: &str,
+        isolation_level: &str,
+        now_ms: u128,
+        begin_snapshot_xid: Option<u64>,
+    ) {
         let read_snapshot_at_ms = if isolation_level == "repeatable_read" {
             Some(now_ms)
+        } else {
+            None
+        };
+        // For repeatable_read: snapshot Xid is captured at BEGIN time so reads
+        // are stable for the lifetime of the transaction.
+        // For other levels: stays None until set at COMMIT by set_row_store_snapshot().
+        let row_store_snapshot_xid = if isolation_level == "repeatable_read" {
+            begin_snapshot_xid
         } else {
             None
         };
@@ -268,9 +289,21 @@ impl AcidTransactionRegistry {
                 savepoints: Vec::new(),
                 read_snapshot_at_ms,
                 wal_log: Vec::new(),
-                row_store_snapshot_xid: None,
+                row_store_snapshot_xid,
             },
         );
+    }
+
+    /// C-3: Return the read snapshot Xid for a repeatable-read transaction.
+    /// Returns `None` for non-repeatable-read transactions (callers should
+    /// fall back to `rs.current_xid()` for read-committed semantics).
+    pub(crate) fn rr_read_snapshot_xid(&self, tx_id: &str) -> Option<u64> {
+        let entry = self.transactions.get(tx_id)?;
+        if entry.isolation_level == "repeatable_read" {
+            entry.row_store_snapshot_xid
+        } else {
+            None
+        }
     }
 
     /// S2-WS2-05: Record the `PagedRowStore::current_xid()` at the moment
@@ -549,6 +582,11 @@ pub(crate) struct AppState {
     /// Maps database_name → set of role names that have access.
     /// Empty set means no grants (access denied for non-DBA users).
     pub(crate) db_grants: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    /// C-3: Maps connection_id → tx_id for connections inside an active
+    /// repeatable-read transaction.  Set on BEGIN, cleared on COMMIT/ROLLBACK.
+    /// Used by sql_execute to find the correct read snapshot for standalone
+    /// SELECTs that are part of an ongoing repeatable-read transaction.
+    pub(crate) connection_tx_active: Arc<Mutex<HashMap<String, String>>>,
 }
 
 #[derive(Clone, Default)]
@@ -1517,6 +1555,7 @@ async fn main() {
         tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         // Tier 3 #1: per-database role grants (empty = no explicit grants yet).
         db_grants: Arc::new(Mutex::new(HashMap::new())),
+        connection_tx_active: Arc::new(Mutex::new(HashMap::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -1590,6 +1629,9 @@ async fn main() {
         .await
         .expect("bind listener");
     axum::serve(listener, app).await.expect("server failed");
+
+    // Flush any in-flight OTEL spans before the process exits.
+    observability::shutdown_otel();
 }
 
 pub(crate) async fn native_read_framed<S: AsyncRead + Unpin>(

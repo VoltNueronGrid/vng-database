@@ -33,6 +33,8 @@ pub enum SqlStatementKind {
     CreateTrigger,
     CreateEvent,
     AlterTable,
+    CreateIndex,
+    DropIndex,
     DropTable,
     DropView,
     DropFunction,
@@ -231,6 +233,9 @@ impl SqlAnalyzer {
             (Some("CREATE"), Some("TRIGGER"), _) => SqlStatementKind::CreateTrigger,
             (Some("CREATE"), Some("EVENT"), _) => SqlStatementKind::CreateEvent,
             (Some("ALTER"), Some("TABLE"), _) => SqlStatementKind::AlterTable,
+            (Some("CREATE"), Some("INDEX"), _) => SqlStatementKind::CreateIndex,
+            (Some("CREATE"), Some("UNIQUE"), _) => SqlStatementKind::CreateIndex,
+            (Some("DROP"), Some("INDEX"), _) => SqlStatementKind::DropIndex,
             (Some("DROP"), Some("TABLE"), _) => SqlStatementKind::DropTable,
             (Some("DROP"), Some("VIEW"), _) => SqlStatementKind::DropView,
             (Some("DROP"), Some("FUNCTION"), _) => SqlStatementKind::DropFunction,
@@ -277,6 +282,8 @@ impl SqlAnalyzer {
                     | SqlStatementKind::CreateTrigger
                     | SqlStatementKind::CreateEvent
                     | SqlStatementKind::AlterTable
+                    | SqlStatementKind::CreateIndex
+                    | SqlStatementKind::DropIndex
                     | SqlStatementKind::DropTable
                     | SqlStatementKind::DropView
                     | SqlStatementKind::DropFunction
@@ -292,6 +299,8 @@ impl SqlAnalyzer {
                     | SqlStatementKind::CreateTrigger
                     | SqlStatementKind::CreateEvent
                     | SqlStatementKind::AlterTable
+                    | SqlStatementKind::CreateIndex
+                    | SqlStatementKind::DropIndex
                     | SqlStatementKind::DropTable
                     | SqlStatementKind::DropView
                     | SqlStatementKind::DropFunction

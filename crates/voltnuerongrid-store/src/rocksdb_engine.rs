@@ -637,6 +637,92 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
     fn persists_rows(&self) -> bool {
         true
     }
+
+    fn scan_rows_for_db(&self, db: &str, snapshot_xid: u64) -> Vec<(String, HashMap<String, String>)> {
+        let cf_rows = match self.db.cf_handle(CF_ROWS) {
+            Some(cf) => cf,
+            None => return Vec::new(),
+        };
+
+        // Prefix: {db}\x1f — all rows for this db are stored with this prefix.
+        let sep = b'\x1f';
+        let mut db_prefix = Vec::with_capacity(db.len() + 1);
+        db_prefix.extend_from_slice(db.as_bytes());
+        db_prefix.push(sep);
+
+        // latest_visible[row_key] = (xid, value_bytes) — highest xid <= snapshot_xid.
+        let mut latest_visible: HashMap<String, (u64, Vec<u8>)> = HashMap::new();
+
+        for kv in self.db.iterator_cf(
+            &cf_rows,
+            rocksdb::IteratorMode::From(&db_prefix, rocksdb::Direction::Forward),
+        ) {
+            let (k, v) = match kv {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing_or_eprintln(format!("scan_rows_for_db iterator error: {e}"));
+                    continue;
+                }
+            };
+
+            // Stop once keys no longer start with this db prefix.
+            if !k.starts_with(&db_prefix) {
+                break;
+            }
+
+            // Key layout after db prefix: {row_key}\x1f{xid_be8}
+            // xid is the last 8 bytes; everything before the last sep is the row_key.
+            let rest = &k[db_prefix.len()..];
+            if rest.len() < 9 {
+                continue; // need at least 1 byte row_key + sep + 8 bytes xid
+            }
+            let xid_start = rest.len() - 8;
+            let row_key_with_sep = &rest[..xid_start];
+            if row_key_with_sep.last() != Some(&sep) {
+                continue;
+            }
+            let row_key_bytes = &row_key_with_sep[..row_key_with_sep.len() - 1];
+
+            let row_key = match std::str::from_utf8(row_key_bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => continue,
+            };
+
+            let mut xid_arr = [0u8; 8];
+            xid_arr.copy_from_slice(&rest[xid_start..]);
+            let xid = u64::from_be_bytes(xid_arr);
+
+            // MVCC visibility: only include versions written at or before the snapshot.
+            if xid > snapshot_xid {
+                continue;
+            }
+
+            // Keys are sorted ascending by xid, so later entries overwrite earlier ones.
+            latest_visible.insert(row_key, (xid, v.to_vec()));
+        }
+
+        // Decode non-tombstone entries.
+        let mut result = Vec::with_capacity(latest_visible.len());
+        for (row_key, (_xid, value)) in latest_visible {
+            if value.is_empty() {
+                continue;
+            }
+            match value[0] {
+                0x01 => {} // tombstone — row is deleted, skip
+                0x00 => {
+                    let json_bytes = &value[1..];
+                    match serde_json::from_slice::<HashMap<String, String>>(json_bytes) {
+                        Ok(cols) => result.push((row_key, cols)),
+                        Err(e) => {
+                            tracing_or_eprintln(format!("scan_rows_for_db json decode error: {e}"));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        result
+    }
 }
 
 // Inline tracing-or-stderr helper. The store crate doesn't depend on

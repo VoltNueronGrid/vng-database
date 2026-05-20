@@ -113,6 +113,8 @@ fn state_with_key(key: Option<&str>) -> AppState {
         tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         // Tier 3 #1: per-database role grants (empty for tests).
         db_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // C-3: connection → tx_id map for repeatable-read tracking (empty for tests).
+        connection_tx_active: Arc::new(Mutex::new(std::collections::HashMap::new())),
     }
 }
 
@@ -4304,7 +4306,7 @@ fn ws23_acid_serializable_conflict_returns_409() {
     let state = state_with_key(None);
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-concurrent", "node-1", "serializable", 1_000_u128);
+        acid.begin("tx-concurrent", "node-1", "serializable", 1_000_u128, None);
         acid.record_statement("tx-concurrent", Some("inventory".to_string()));
     }
     // Now attempt a second serializable transaction writing to the same table
@@ -5167,7 +5169,7 @@ fn ws23_acid_wal_accumulates_during_active_tx() {
 
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin(tx_id, "node-1", "read_committed", now_ms);
+        acid.begin(tx_id, "node-1", "read_committed", now_ms, None);
         acid.record_statement(tx_id, Some("orders".to_string()));
         acid.record_statement(tx_id, Some("inventory".to_string()));
         acid.record_statement(tx_id, Some("orders".to_string())); // same table again
@@ -5583,7 +5585,7 @@ fn ws23_acid_read_uncommitted_does_not_record_snapshot() {
     let now_ms = 2_000_000_u128;
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin(tx_id, "node-1", "read_uncommitted", now_ms);
+        acid.begin(tx_id, "node-1", "read_uncommitted", now_ms, None);
         let entry = acid.all_transactions().into_iter()
             .find(|t| t.transaction_id == tx_id)
             .expect("tx must exist in registry");
@@ -5603,7 +5605,7 @@ fn ws23_acid_serializable_uses_write_lock_not_snapshot() {
     let now_ms = 3_000_000_u128;
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin(tx_id, "node-1", "serializable", now_ms);
+        acid.begin(tx_id, "node-1", "serializable", now_ms, None);
         let entry = acid.all_transactions().into_iter()
             .find(|t| t.transaction_id == tx_id)
             .expect("tx must exist in registry");
@@ -6783,7 +6785,7 @@ async fn s2_ws2_05_isolation_stats_shows_active_transaction() {
     let state = state_with_key(Some("test-key"));
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-iso-1", "node-1", "serializable", 0u128);
+        acid.begin("tx-iso-1", "node-1", "serializable", 0u128, None);
     }
     let headers = operator_headers("test-key", "admin");
     let (status, Json(body)) = sql_transactions_isolation(State(state), headers).await.unwrap();
@@ -12841,7 +12843,7 @@ async fn admin_cluster_topology_reports_runtime_counts() {
     }
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-1", "node-1", "read_committed", now_unix_ms());
+        acid.begin("tx-1", "node-1", "read_committed", now_unix_ms(), None);
     }
     let (status, Json(body)) = admin_cluster_topology(State(state), admin_headers("secret")).await.unwrap();
     assert_eq!(status, StatusCode::OK);
@@ -12856,7 +12858,7 @@ async fn admin_transaction_control_can_rollback_and_release_locks() {
     let state = state_with_key(Some("secret"));
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-admin-1", "node-1", "serializable", now_unix_ms());
+        acid.begin("tx-admin-1", "node-1", "serializable", now_unix_ms(), None);
     }
     {
         let mut locks = state.pessimistic_locks.lock().unwrap();
@@ -12885,7 +12887,7 @@ async fn admin_lock_control_can_kill_deadlock_victim() {
     let state = state_with_key(Some("secret"));
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-dead", "node-1", "read_committed", now_unix_ms());
+        acid.begin("tx-dead", "node-1", "read_committed", now_unix_ms(), None);
     }
     {
         let mut locks = state.pessimistic_locks.lock().unwrap();
@@ -12937,7 +12939,7 @@ async fn admin_cluster_node_manage_removes_node_and_migrates_work() {
     }
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-node-2", "node-2", "read_committed", now_unix_ms());
+        acid.begin("tx-node-2", "node-2", "read_committed", now_unix_ms(), None);
     }
     let req = AdminClusterNodeManageRequest {
         action: "remove".to_string(),

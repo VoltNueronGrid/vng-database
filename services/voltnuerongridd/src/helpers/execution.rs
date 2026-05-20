@@ -353,6 +353,13 @@ pub(crate) fn execute_olap_query(
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     db: &str,
     data_dir: &str,
+    // C-3: Optional repeatable-read snapshot Xid.  When `Some`, reads return
+    // row-store state as of that Xid rather than the current head.
+    snapshot_xid: Option<u64>,
+    // C-1: When Some, these RocksDB-sourced rows are used as the primary read
+    // source instead of the in-memory PagedRowStore scan.  Keys are raw row_keys
+    // WITHOUT the db prefix (e.g. "orders:row-1").
+    rocksdb_rows: Option<Vec<(String, HashMap<String, String>)>>,
 ) -> OlapQueryResponse {
     use voltnuerongrid_exec_datafusion::{collect_query_table_names, SelectOutput};
     use crate::helpers::sql_parse::make_table_scan_prefix;
@@ -361,7 +368,19 @@ pub(crate) fn execute_olap_query(
     let resolved_max_rows = max_rows.unwrap_or(1_000).min(100_000);
 
     let table_names = collect_query_table_names(&query);
-    let all_rows = rs.export_rows_snapshot();
+    // C-1: prefer RocksDB rows when available (primary read path); fall back to
+    // in-memory PagedRowStore scan for dev/test environments without RocksDB.
+    let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = if let Some(rdb_rows) = rocksdb_rows {
+        // RocksDB rows have no db prefix — convert HashMap to RowData directly.
+        rdb_rows.into_iter().map(|(k, cols)| (k, cols)).collect()
+    } else {
+        // In-memory fallback: use repeatable-read snapshot or current head.
+        let effective_xid = snapshot_xid.unwrap_or_else(|| rs.current_xid());
+        rs.scan_at_snapshot(effective_xid)
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    };
     let mut table_rows: HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
         HashMap::new();
     for name in &table_names {
@@ -409,11 +428,16 @@ pub(crate) fn execute_olap_query(
 /// S4-WS3-02: physical OLTP executor — runs point SELECT queries against `PagedRowStore`.
 /// Extracts an optional key/prefix constraint from the WHERE clause and filters visible rows.
 /// `db` scopes the scan to rows stored under the given database prefix (empty = no scoping).
+/// `snapshot_xid`: when `Some`, enforces repeatable-read semantics by reading at that Xid.
+/// `rocksdb_rows`: C-1 — when `Some`, used as primary row source for DataFusion path instead
+/// of in-memory PagedRowStore scan.  Keys are raw row_keys WITHOUT the db prefix.
 pub(crate) fn execute_oltp_select(
     statements: &[String],
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     limit: usize,
     db: &str,
+    snapshot_xid: Option<u64>,
+    rocksdb_rows: Option<Vec<(String, HashMap<String, String>)>>,
 ) -> Vec<OltpRowResult> {
     use voltnuerongrid_exec_datafusion::{execute_select, SelectOutput, ExecError};
     use voltnuerongrid_sql::{parse_one, Statement};
@@ -442,8 +466,17 @@ pub(crate) fn execute_oltp_select(
             // Collect ALL table names: FROM + every JOIN (including A JOIN B JOIN C).
             let table_names = voltnuerongrid_exec_datafusion::collect_query_table_names(stmt_str);
 
-            // Take a snapshot once and filter per table by key prefix.
-            let all_rows = rs.export_rows_snapshot();
+            // C-1: prefer RocksDB rows when available; fall back to in-memory scan.
+            // Clone rocksdb_rows so we can use it across loop iterations.
+            let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = if let Some(ref rdb) = rocksdb_rows {
+                rdb.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            } else {
+                let eff_xid = snapshot_xid.unwrap_or_else(|| rs.current_xid());
+                rs.scan_at_snapshot(eff_xid)
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect()
+            };
             let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
                 std::collections::HashMap::new();
             for name in &table_names {
@@ -554,8 +587,8 @@ pub(crate) fn execute_oltp_select(
             }
         }
 
-        // Legacy substring fallback path.
-        execute_oltp_select_legacy(stmt_str, rs, limit, &mut results, db);
+        // Legacy substring fallback path — pass through snapshot and RocksDB rows if set.
+        execute_oltp_select_legacy(stmt_str, rs, limit, &mut results, db, snapshot_xid, rocksdb_rows.as_deref());
     }
     results
 }
@@ -606,29 +639,37 @@ pub(crate) fn execute_oltp_select_legacy(
     limit: usize,
     results: &mut Vec<OltpRowResult>,
     db: &str,
+    override_snapshot_xid: Option<u64>,
+    // C-1: When Some, used as primary row source; keys are raw row_keys WITHOUT db prefix.
+    rocksdb_rows: Option<&[(String, HashMap<String, String>)]>,
 ) {
     use voltnuerongrid_sql::{parse_one, Statement};
-    let snapshot_xid = rs.current_xid();
-    let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = rs
-        .scan_at_snapshot(snapshot_xid)
-        .into_iter()
-        // Only include rows that belong to this database scope.
-        .filter(|(k, _)| {
-            if db.is_empty() {
-                // No db scope — include all rows (backward compat).
-                true
-            } else {
-                k.starts_with(&format!("{db}."))
-            }
-        })
-        // Strip db prefix so the rest of the scan logic works on plain `"table:value"` keys.
-        .map(|(k, d)| {
-            let stripped = if db.is_empty() { k.to_string() } else {
-                k.strip_prefix(&format!("{db}.")).unwrap_or(&k).to_string()
-            };
-            (stripped, d.clone())
-        })
-        .collect();
+    // C-1: prefer RocksDB rows when available; fall back to in-memory scan.
+    let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = if let Some(rdb) = rocksdb_rows {
+        // RocksDB rows are already db-scoped and have no db prefix.
+        rdb.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    } else {
+        let snapshot_xid = override_snapshot_xid.unwrap_or_else(|| rs.current_xid());
+        rs.scan_at_snapshot(snapshot_xid)
+            .into_iter()
+            // Only include rows that belong to this database scope.
+            .filter(|(k, _)| {
+                if db.is_empty() {
+                    // No db scope — include all rows (backward compat).
+                    true
+                } else {
+                    k.starts_with(&format!("{db}."))
+                }
+            })
+            // Strip db prefix so the rest of the scan logic works on plain `"table:value"` keys.
+            .map(|(k, d)| {
+                let stripped = if db.is_empty() { k.to_string() } else {
+                    k.strip_prefix(&format!("{db}.")).unwrap_or(&k).to_string()
+                };
+                (stripped, d.clone())
+            })
+            .collect()
+    };
     if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
         let sql_limit: usize = sel
             .limit

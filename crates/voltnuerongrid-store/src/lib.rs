@@ -314,6 +314,14 @@ pub trait DurabilityEngine: Send {
     fn persists_rows(&self) -> bool {
         false
     }
+
+    /// Return live rows for `db` visible at the given MVCC `snapshot_xid`.
+    /// Returns the latest non-tombstone version per row_key where xid <= snapshot_xid.
+    /// The returned keys are raw row_keys WITHOUT the db prefix (e.g. `"orders:row-1"`).
+    /// Returns an empty vec for engines that don't persist rows (default impl).
+    fn scan_rows_for_db(&self, _db: &str, _snapshot_xid: u64) -> Vec<(String, HashMap<String, String>)> {
+        Vec::new()
+    }
 }
 
 impl DurabilityEngine for InMemoryDurabilityEngine {
@@ -456,6 +464,9 @@ impl BoxedDurabilityEngine {
     }
     pub fn persists_rows(&self) -> bool {
         self.inner.persists_rows()
+    }
+    pub fn scan_rows_for_db(&self, db: &str, snapshot_xid: u64) -> Vec<(String, HashMap<String, String>)> {
+        self.inner.scan_rows_for_db(db, snapshot_xid)
     }
 }
 
