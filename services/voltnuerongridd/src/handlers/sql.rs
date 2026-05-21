@@ -233,7 +233,7 @@ pub(crate) struct LegacyAggResult {
     pub(crate) source: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub(crate) struct SqlExecuteResponse {
     pub(crate) status: String,
     pub(crate) route_path: String,
@@ -1167,8 +1167,99 @@ pub(crate) async fn sql_execute(
     let decision = dispatcher.dispatch_sql_execute_route_decision(&envelope);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
 
-    // ── Demo CALL intercept (TODO: replace with real stored-procedure execution) ─
-    // Handle CALL insert_rows('<table>', <count>) ONLY in demo mode.
+    // ── L-2: CREATE PROCEDURE / DROP PROCEDURE / CALL dispatch ──────────────
+    // Route stored-procedure DDL and CALL statements through the
+    // `ProcedureRegistry` before the normal SQL execution path.
+    //
+    // Strategy:
+    //  - CREATE / DROP PROCEDURE → mutate registry, return early.
+    //  - CALL user-defined proc  → expand body, rebind `req` with expanded SQL.
+    //  - CALL built-in proc      → fall through to the demo shim below.
+    let req = {
+        use crate::helpers::stored_proc::ProcedureRegistry;
+        let sql_trim = req.sql_batch.trim().to_string();
+
+        if ProcedureRegistry::is_create_procedure(&sql_trim) {
+            let mut reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+            match reg.register_from_ddl(&sql_trim) {
+                Ok(name) => {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                        status: "ok".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: format!("procedure '{name}' registered"),
+                        ..Default::default()
+                    })));
+                }
+                Err(msg) => {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::BAD_REQUEST, Json(SqlExecuteResponse {
+                        status: "error".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: msg,
+                        ..Default::default()
+                    })));
+                }
+            }
+        } else if ProcedureRegistry::is_drop_procedure(&sql_trim) {
+            let name = sql_trim["DROP PROCEDURE ".len()..]
+                .trim()
+                .trim_end_matches(';')
+                .trim()
+                .to_ascii_lowercase();
+            let mut reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+            match reg.drop_procedure(&name) {
+                Ok(()) => {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                        status: "ok".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: format!("procedure '{name}' dropped"),
+                        ..Default::default()
+                    })));
+                }
+                Err(msg) => {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::BAD_REQUEST, Json(SqlExecuteResponse {
+                        status: "error".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: msg,
+                        ..Default::default()
+                    })));
+                }
+            }
+        } else if ProcedureRegistry::is_call(&sql_trim) {
+            let resolved = {
+                let reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+                reg.resolve_call(&sql_trim)
+            };
+            match resolved {
+                Err(msg) => {
+                    // Unknown procedure or arity mismatch.
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::BAD_REQUEST, Json(SqlExecuteResponse {
+                        status: "error".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: msg,
+                        ..Default::default()
+                    })));
+                }
+                Ok(Some(expanded_sql)) => {
+                    // User-defined procedure: rebind `req` with the expanded SQL
+                    // body so the rest of the handler executes it transparently.
+                    let mut r = req;
+                    r.sql_batch = expanded_sql;
+                    r
+                }
+                Ok(None) => req, // built-in — pass through unchanged
+            }
+        } else {
+            req // not a procedure statement — pass through unchanged
+        }
+    };
+
+    // ── Demo CALL intercept (built-in insert_rows shim) ───────────────────────
+    // Handles CALL insert_rows('<table>', <count>).
     // Gate behind VNG_DEMO_MODE=true to avoid shadowing user-defined stored procedures.
     if std::env::var("VNG_DEMO_MODE").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false) {
         if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req, &db) {

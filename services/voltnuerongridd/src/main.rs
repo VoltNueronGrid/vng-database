@@ -688,6 +688,11 @@ pub(crate) struct AppState {
     /// is the hook point for future selectivity-driven routing decisions in
     /// `HtapQueryRouter` (see `crates/voltnuerongrid-exec`).
     pub(crate) stats_registry: Arc<Mutex<voltnuerongrid_exec::StatsRegistry>>,
+    /// L-2: Stored-procedure registry.
+    /// Maps lower-case procedure name → registered `StoredProcedure`.
+    /// Pre-populated with built-ins at boot; extended at runtime via
+    /// `CREATE [OR REPLACE] PROCEDURE … AS $$ … $$` DDL.
+    pub(crate) proc_registry: Arc<Mutex<helpers::stored_proc::ProcedureRegistry>>,
 }
 
 #[derive(Clone, Default)]
@@ -1687,6 +1692,12 @@ async fn main() {
         connection_tx_active: Arc::new(Mutex::new(HashMap::new())),
         // H-1: table statistics registry (cost-based optimizer foundation).
         stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
+        // L-2: stored-procedure registry — pre-populated with built-ins.
+        proc_registry: {
+            let mut reg = helpers::stored_proc::ProcedureRegistry::new();
+            reg.register_builtins();
+            Arc::new(Mutex::new(reg))
+        },
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -1776,7 +1787,9 @@ async fn main() {
 
     tokio::spawn(run_raft_tick_loop(state.clone()));
 
-    // Gap #6: Background Parquet flush task — exports row data to disk for OLAP queries.
+    // Gap #6 + L-5: Background Parquet flush task — exports row data to disk for OLAP queries.
+    // L-5: Run one immediate flush at startup so OLAP queries have Parquet files from the
+    // first request instead of waiting up to `flush_interval_secs` (default 60 s).
     {
         let flush_state = state.clone();
         let flush_interval_secs = std::env::var("VNG_PARQUET_FLUSH_INTERVAL_SECS")
@@ -1784,11 +1797,32 @@ async fn main() {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(60);
         let data_dir = state.runtime_config.storage.data_dir.clone();
+
+        // L-5: immediate startup flush — populates Parquet before the first OLAP query.
+        if !data_dir.is_empty() {
+            let startup_rows = {
+                let rs = state.row_store.lock().expect("row_store parquet startup flush");
+                let xid = rs.current_xid();
+                rs.scan_at_snapshot(xid)
+                    .into_iter()
+                    .map(|(k, d)| (k.to_string(), d.clone()))
+                    .collect::<Vec<_>>()
+            };
+            let flushed = helpers::parquet_flush::flush_rows_to_parquet(&startup_rows, &data_dir);
+            if flushed > 0 {
+                tracing::info!(
+                    target: "vng.parquet",
+                    tables = flushed,
+                    "parquet startup flush complete (L-5)"
+                );
+            }
+        }
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(
                 std::time::Duration::from_secs(flush_interval_secs)
             );
-            interval.tick().await; // skip the first immediate tick
+            interval.tick().await; // skip the first immediate tick (startup flush already ran)
             loop {
                 interval.tick().await;
                 let rows = {

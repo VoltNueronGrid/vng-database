@@ -168,7 +168,7 @@ pub(crate) struct AppState {
 
 ```
 @CLAUDE.md
-@remaining.md
+@docs/archive/remaining.md
 @services/voltnuerongridd/src/handlers/sql.rs
 @services/voltnuerongridd/src/helpers/raft_loop.rs
 @services/voltnuerongridd/src/raft.rs

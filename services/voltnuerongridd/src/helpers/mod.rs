@@ -10,3 +10,4 @@ pub(crate) mod native_protocol;
 pub(crate) mod raft_loop;
 pub(crate) mod information_schema;
 pub(crate) mod parquet_flush;
+pub(crate) mod stored_proc;
