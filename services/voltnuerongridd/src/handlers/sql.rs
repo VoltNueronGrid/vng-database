@@ -1143,14 +1143,33 @@ pub(crate) async fn sql_execute(
     }
 
     // ── Statement dispatch ───────────────────────────────────────────────────
+    // M-8 Rule 6: Snapshot the DDL catalog once so we can resolve view definitions
+    // without holding the lock across the entire dispatch loop.
+    let view_catalog_snapshot: Vec<(String, String)> = {
+        match state.ddl_catalog.lock() {
+            Ok(cat) => cat.active_entries()
+                .into_iter()
+                .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
+                .map(|e| (e.object_name.to_ascii_lowercase(), e.original_statement.clone()))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    };
+
     let mut transaction_statements = Vec::new();
     let mut olap_statements = Vec::new();
     for statement in parsed {
         let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
         if analysis.kind == SqlStatementKind::Select {
-            olap_statements.push(statement.raw);
+            // M-8 Rule 6: If the SELECT targets a registered view, expand it to the
+            // view's underlying query body before passing to the executor.
+            let expanded = expand_select_view(&statement.raw, &view_catalog_snapshot);
+            olap_statements.push(expanded);
         } else {
-            transaction_statements.push(statement.raw);
+            // M-8 Rule 6: For DML (INSERT/UPDATE/DELETE) targeting a simple updatable
+            // view, rewrite the statement to target the base table instead.
+            let rewritten = rewrite_dml_for_view(&statement.raw, &view_catalog_snapshot);
+            transaction_statements.push(rewritten);
         }
     }
 
@@ -2402,4 +2421,58 @@ fn handle_revoke_sql(state: &AppState, sql: &str) {
             roles.remove(&role);
         }
     }
+}
+
+// ─── M-8 Rule 6: View expansion ─────────────────────────────────────────────
+
+/// Expand a SELECT statement that targets a registered view.
+///
+/// `view_catalog` is a snapshot of `(view_name_lower, original_ddl)` pairs.
+/// If the FROM table matches a view name, the view body is inlined:
+///   `SELECT * FROM my_view WHERE ...`
+///   → `SELECT * FROM (SELECT col1, col2 FROM base_table) AS my_view WHERE ...`
+///
+/// Falls back to the original SQL unchanged if no matching view is found.
+fn expand_select_view(sql: &str, view_catalog: &[(String, String)]) -> String {
+    use crate::helpers::sql_parse::{extract_view_select_body, expand_view_in_select};
+    let lower = sql.to_ascii_lowercase();
+    for (view_name, ddl) in view_catalog {
+        let pattern = format!(" from {}", view_name);
+        if lower.contains(&pattern) {
+            if let Some(body) = extract_view_select_body(ddl) {
+                return expand_view_in_select(sql, view_name, &body);
+            }
+        }
+    }
+    sql.to_string()
+}
+
+/// Rewrite a DML statement (INSERT/UPDATE/DELETE) that targets a simple updatable view.
+///
+/// Only simple single-table views (no JOIN, no GROUP BY, no aggregates) are updatable.
+/// The rewrite replaces the view name with the base table name so the DML applies to
+/// the actual underlying rows.
+fn rewrite_dml_for_view(sql: &str, view_catalog: &[(String, String)]) -> String {
+    use crate::helpers::sql_parse::extract_updatable_view_base_table;
+    let lower = sql.to_ascii_lowercase();
+    let first_word = lower.split_whitespace().next().unwrap_or("");
+    // Only rewrite DML statements.
+    if !matches!(first_word, "insert" | "update" | "delete") {
+        return sql.to_string();
+    }
+    for (view_name, ddl) in view_catalog {
+        // Check if the DML references the view name (as a word boundary).
+        if !lower.contains(view_name.as_str()) {
+            continue;
+        }
+        if let Some(base_table) = extract_updatable_view_base_table(ddl) {
+            // Replace the view name with the base table name (case-insensitive, whole-word).
+            // Simple approach: replace the first occurrence of view_name with base_table.
+            if let Some(pos) = lower.find(view_name.as_str()) {
+                let end = pos + view_name.len();
+                return format!("{}{}{}", &sql[..pos], base_table, &sql[end..]);
+            }
+        }
+    }
+    sql.to_string()
 }

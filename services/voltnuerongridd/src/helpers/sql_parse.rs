@@ -495,6 +495,78 @@ pub(crate) fn db_prefix_key(db: &str, raw_key: &str) -> String {
     }
 }
 
+// ─── M-8 Rule 6: View expansion helpers ────────────────────────────────────
+
+/// Extract the body (AS SELECT ...) from a CREATE VIEW DDL statement.
+///
+/// `original_statement` is the full `CREATE [OR REPLACE] VIEW name AS <body>` string
+/// stored in the DDL catalog. Returns the SELECT body (everything after the first `AS`
+/// token that follows the view name).
+pub(crate) fn extract_view_select_body(original_statement: &str) -> Option<String> {
+    let upper = original_statement.to_ascii_uppercase();
+    // Find " AS " that marks the body start (skip CREATE / VIEW / name tokens).
+    // Search from after "VIEW <name>" — the first " AS " occurrence.
+    let as_pos = upper.find(" AS ")?;
+    let body = original_statement[as_pos + 4..].trim().to_string();
+    if body.is_empty() {
+        return None;
+    }
+    Some(body)
+}
+
+/// Extract the single base-table name from a simple updatable view definition.
+///
+/// A view is updatable iff its body is `SELECT [cols] FROM <table>` with no
+/// JOIN, GROUP BY, HAVING, DISTINCT, aggregate functions, or subqueries.
+/// Returns `Some(table_name)` for simple views, `None` for complex ones.
+pub(crate) fn extract_updatable_view_base_table(original_statement: &str) -> Option<String> {
+    let body = extract_view_select_body(original_statement)?.to_ascii_uppercase();
+    // Reject complex views.
+    for keyword in ["JOIN", "GROUP BY", "HAVING", "DISTINCT", "SUBQUERY", "UNION", "INTERSECT", "EXCEPT"] {
+        if body.contains(keyword) {
+            return None;
+        }
+    }
+    // Aggregate function check: COUNT(, SUM(, AVG(, MIN(, MAX(
+    for agg in ["COUNT(", "SUM(", "AVG(", "MIN(", "MAX("] {
+        if body.contains(agg) {
+            return None;
+        }
+    }
+    // Extract FROM <table>: the token immediately after FROM (before WHERE/LIMIT/ORDER).
+    let from_pos = body.find(" FROM ")?;
+    let after_from = body[from_pos + 6..].trim();
+    let end = after_from.find(|c: char| c.is_whitespace()).unwrap_or(after_from.len());
+    let table_upper = after_from[..end].trim().to_string();
+    if table_upper.is_empty() {
+        return None;
+    }
+    // Return in lower-case to match catalog convention.
+    Some(table_upper.to_ascii_lowercase())
+}
+
+/// Rewrite a SELECT SQL statement so that references to `view_name` in the FROM
+/// clause are replaced with an inline expansion: `(view_body) AS view_name`.
+///
+/// Example:
+///   `SELECT * FROM order_summary WHERE region = 'us'`
+///   → `SELECT * FROM (SELECT order_id, total FROM orders) AS order_summary WHERE region = 'us'`
+pub(crate) fn expand_view_in_select(sql: &str, view_name: &str, view_body: &str) -> String {
+    let lower = sql.to_ascii_lowercase();
+    let view_lower = view_name.to_ascii_lowercase();
+    // Find "from <view_name>" in the statement (case-insensitive).
+    // Simple token replace: match `from <name>` optionally followed by whitespace/WHERE/etc.
+    let pattern = format!(" from {}", view_lower);
+    if let Some(pos) = lower.find(&pattern) {
+        let after_from_name = pos + pattern.len();
+        // Skip any trailing alias or punctuation that belongs to the view reference.
+        let replacement = format!(" FROM ({}) AS {}", view_body, view_lower);
+        format!("{}{}{}", &sql[..pos], replacement, &sql[after_from_name..])
+    } else {
+        sql.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,5 +620,53 @@ mod tests {
         assert_eq!(set_col, "salary");
         assert_eq!(where_col, "department");
         assert_eq!(where_val, "engineering");
+    }
+
+    // ─── View expansion helpers (M-8 Rule 6) ─────────────────────────────────
+
+    #[test]
+    fn extract_view_select_body_simple() {
+        let ddl = "CREATE VIEW order_summary AS SELECT order_id, total FROM orders";
+        let body = extract_view_select_body(ddl);
+        assert!(body.is_some());
+        assert_eq!(body.unwrap(), "SELECT order_id, total FROM orders");
+    }
+
+    #[test]
+    fn extract_view_select_body_or_replace() {
+        let ddl = "CREATE OR REPLACE VIEW v AS SELECT * FROM t WHERE x > 0";
+        let body = extract_view_select_body(ddl);
+        assert!(body.is_some());
+        assert_eq!(body.unwrap(), "SELECT * FROM t WHERE x > 0");
+    }
+
+    #[test]
+    fn extract_updatable_view_base_table_simple() {
+        let ddl = "CREATE VIEW active_users AS SELECT id, name FROM users WHERE active = 1";
+        let table = extract_updatable_view_base_table(ddl);
+        assert_eq!(table.as_deref(), Some("users"));
+    }
+
+    #[test]
+    fn extract_updatable_view_base_table_rejects_join() {
+        let ddl = "CREATE VIEW joined AS SELECT a.id FROM a JOIN b ON a.id = b.id";
+        let table = extract_updatable_view_base_table(ddl);
+        assert!(table.is_none(), "JOIN views are not updatable");
+    }
+
+    #[test]
+    fn extract_updatable_view_base_table_rejects_aggregate() {
+        let ddl = "CREATE VIEW counts AS SELECT COUNT(*) FROM orders GROUP BY status";
+        let table = extract_updatable_view_base_table(ddl);
+        assert!(table.is_none(), "aggregate views are not updatable");
+    }
+
+    #[test]
+    fn expand_view_in_select_basic() {
+        let sql = "SELECT * FROM order_summary WHERE region = 'us'";
+        let body = "SELECT order_id, total FROM orders";
+        let result = expand_view_in_select(sql, "order_summary", body);
+        assert!(result.contains("FROM (SELECT order_id, total FROM orders) AS order_summary"));
+        assert!(result.contains("WHERE region = 'us'"));
     }
 }
