@@ -1621,6 +1621,16 @@ async fn main() {
         acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
         row_store: Arc::new(Mutex::new({
             let mut rs = PagedRowStore::default();
+            // C-1: configure write-back cache cap when RocksDB is primary so
+            // PagedRowStore doesn't grow unbounded in RAM.  Set via env var
+            // VNG_ROW_STORE_MAX_ROWS (0 = unlimited, the default).
+            let row_cap: usize = std::env::var("VNG_ROW_STORE_MAX_ROWS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            if row_cap > 0 {
+                rs.set_max_rows_cap(row_cap);
+            }
             replay_dml_into(&mut rs, &wal_engine);
             rs
         })),

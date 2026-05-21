@@ -137,6 +137,14 @@ pub struct PagedRowStore {
     /// holds an uncommitted write intent for that key.  Used to detect
     /// write-write conflicts before a COMMIT is applied.
     write_intents: HashMap<String, Xid>,
+    /// C-1: Maximum number of row-version records (across all pages) before FIFO
+    /// page eviction kicks in.  `0` means unlimited (the default).
+    ///
+    /// In production with RocksDB as the primary engine, evicted rows are still
+    /// durably stored in their per-DB column family and can be re-read via
+    /// `DurabilityEngine::scan_rows_for_db`.  In-memory-only deployments should
+    /// keep this at 0 (unlimited) to avoid data loss.
+    max_rows_cap: usize,
 }
 
 impl Default for PagedRowStore {
@@ -156,6 +164,29 @@ impl PagedRowStore {
             next_page_id: 1,
             next_xid: 1,
             write_intents: HashMap::new(),
+            max_rows_cap: 0,
+        }
+    }
+
+    /// Set an upper bound on the total number of row versions kept in RAM.
+    ///
+    /// When `cap > 0` and `total_row_count() > cap` after an insert, the
+    /// **oldest** page is dropped (FIFO eviction) until the count is under cap
+    /// or only one page remains.
+    ///
+    /// Call this once after construction, before any writes.
+    pub fn set_max_rows_cap(&mut self, cap: usize) {
+        self.max_rows_cap = cap;
+    }
+
+    /// Evict the oldest page(s) until `total_row_count() <= max_rows_cap` or
+    /// only one page remains.  No-op when `max_rows_cap == 0`.
+    fn maybe_evict(&mut self) {
+        if self.max_rows_cap == 0 {
+            return;
+        }
+        while self.total_row_count() > self.max_rows_cap && self.pages.len() > 1 {
+            self.pages.remove(0);
         }
     }
 
@@ -190,6 +221,7 @@ impl PagedRowStore {
         for page in self.pages.iter_mut() {
             if let Some(row) = page.find_row_mut(key) {
                 row.push_version(xid, false, data);
+                // Version updates don't grow total_row_count — no eviction needed.
                 return;
             }
         }
@@ -198,6 +230,8 @@ impl PagedRowStore {
         let mut row = MvccRow::new(key);
         row.push_version(xid, false, data);
         self.pages.last_mut().unwrap().rows.push(row);
+        // C-1: evict oldest page(s) if the write-back cache is over the cap.
+        self.maybe_evict();
     }
 
     /// Delete `key` within transaction `xid`.  Appends a tombstone version.
@@ -556,5 +590,63 @@ mod tests {
         assert!(!keys.iter().any(|k| *k == "old-key-1"), "old-key-1 must not appear after replace_all");
         assert!(!keys.iter().any(|k| *k == "old-key-2"), "old-key-2 must not appear after replace_all");
         assert!(keys.iter().any(|k| *k == "new-key-1"), "new-key-1 must appear after replace_all");
+    }
+
+    // ─── C-1: bounded write-back cache (max_rows_cap) ────────────────────────
+
+    /// set_max_rows_cap with a page-size of 2 rows:
+    ///   insert 3 distinct keys → the first page (2 rows) is evicted, leaving 1.
+    #[test]
+    fn c1_eviction_drops_oldest_page_when_over_cap() {
+        // page_size=2 means each page holds exactly 2 rows before a new page is allocated.
+        let mut store = PagedRowStore::new(2);
+        store.set_max_rows_cap(2); // cap at 2 rows total
+
+        let xid = store.begin_xid();
+        store.insert(xid, "row:1", row(&[("v", "a")]));
+        store.insert(xid, "row:2", row(&[("v", "b")]));
+        // Both rows fit — page 0 is full.  No eviction yet.
+        assert_eq!(store.total_row_count(), 2);
+
+        // Inserting a 3rd distinct key overflows to a new page, triggering eviction.
+        let xid2 = store.begin_xid();
+        store.insert(xid2, "row:3", row(&[("v", "c")]));
+        // Page 0 (rows 1 & 2) should have been evicted; only row:3 remains.
+        assert_eq!(store.total_row_count(), 1, "oldest page should have been evicted");
+        // row:3 is still readable.
+        assert!(store.read_latest("row:3").is_some(), "row:3 must survive eviction");
+    }
+
+    /// Version updates on an existing key do NOT bump total_row_count, so
+    /// they should never trigger eviction regardless of the cap.
+    #[test]
+    fn c1_version_update_does_not_trigger_eviction() {
+        let mut store = PagedRowStore::new(2);
+        store.set_max_rows_cap(2);
+
+        let xid = store.begin_xid();
+        store.insert(xid, "user:1", row(&[("name", "Alice")]));
+        store.insert(xid, "user:2", row(&[("name", "Bob")]));
+        // 2 rows exactly at cap.
+
+        // Update user:1 — same key, appends a new version but count stays 2.
+        let xid2 = store.begin_xid();
+        store.insert(xid2, "user:1", row(&[("name", "Alicia")]));
+
+        assert_eq!(store.total_row_count(), 2, "version update must not increase row count");
+        let latest = store.read_latest("user:1").unwrap();
+        assert_eq!(latest["name"], "Alicia", "latest version should be visible");
+    }
+
+    /// With cap=0 (unlimited), any number of rows may be inserted without eviction.
+    #[test]
+    fn c1_no_cap_allows_unlimited_rows() {
+        let mut store = PagedRowStore::new(2);
+        // cap defaults to 0 (unlimited)
+        let xid = store.begin_xid();
+        for i in 0..20usize {
+            store.insert(xid, &format!("row:{i}"), row(&[("v", "x")]));
+        }
+        assert_eq!(store.total_row_count(), 20, "no eviction when cap=0");
     }
 }
