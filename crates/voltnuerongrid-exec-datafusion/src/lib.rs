@@ -92,6 +92,9 @@ pub enum ExecError {
     /// Column referenced in projection / WHERE / ORDER BY does not exist on the row.
     /// Surfaced as `null` per SQL semantics; only returned when strict mode is requested.
     UnknownColumn(String),
+    /// M-4: The DataFusion execution was cancelled because the caller's
+    /// `statement_timeout_ms` deadline elapsed while the query was running.
+    Timeout,
 }
 
 impl std::fmt::Display for ExecError {
@@ -101,6 +104,7 @@ impl std::fmt::Display for ExecError {
             Self::BadPredicate(s) => write!(f, "bad predicate: {s}"),
             Self::NotASelect => f.write_str("statement is not a SELECT"),
             Self::UnknownColumn(c) => write!(f, "unknown column: {c}"),
+            Self::Timeout => f.write_str("statement timeout: DataFusion execution cancelled"),
         }
     }
 }

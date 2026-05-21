@@ -327,6 +327,21 @@ pub trait DurabilityEngine: Send {
         Vec::new()
     }
 
+    /// M-2: Point-read the latest committed version of a single row from
+    /// durable storage.  Returns `Some(columns)` for a live row, `None` for
+    /// a tombstone or a missing key.  The `row_key` is WITHOUT the db prefix
+    /// (e.g. `"orders:row-1"`).
+    ///
+    /// The default implementation returns `None` (engines that don't support
+    /// point reads fall back gracefully; callers try in-memory first).
+    fn get_row(
+        &self,
+        _db: &str,
+        _row_key: &str,
+    ) -> Option<HashMap<String, String>> {
+        None
+    }
+
     /// Drop the per-DB column family (C-2: per-DB CF isolation).
     /// Called by DROP DATABASE to physically remove all on-disk rows for `db`.
     /// No-op for engines that don't support per-DB CFs (default impl).
@@ -480,6 +495,12 @@ impl BoxedDurabilityEngine {
         snapshot_xid: u64,
     ) -> Vec<(String, HashMap<String, String>)> {
         self.inner.scan_rows_for_db(db, snapshot_xid)
+    }
+
+    /// M-2: Point-read the latest committed row from durable storage.
+    /// Returns None for engines that don't persist rows or for missing keys.
+    pub fn get_row(&self, db: &str, row_key: &str) -> Option<HashMap<String, String>> {
+        self.inner.get_row(db, row_key)
     }
 
     /// Drop the per-DB column family (C-2). No-op for in-memory engine.

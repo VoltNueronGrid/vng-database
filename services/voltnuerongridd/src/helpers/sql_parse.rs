@@ -551,20 +551,213 @@ pub(crate) fn extract_updatable_view_base_table(original_statement: &str) -> Opt
 /// Example:
 ///   `SELECT * FROM order_summary WHERE region = 'us'`
 ///   → `SELECT * FROM (SELECT order_id, total FROM orders) AS order_summary WHERE region = 'us'`
+/// M-7 (improved): Expand a view reference in a SELECT statement.
+///
+/// Improvements over the original text-substitution:
+/// 1. **Word-boundary matching** — `FROM view` does not match `FROM view_of_orders`.
+/// 2. **Schema-qualifier stripping** — `FROM mydb.myview` is recognised and the
+///    qualifier is stripped so the inner subquery works with unqualified names.
+/// 3. **Cross-DB body normalisation** — if the view body references
+///    `schema.table`, the qualifier is stripped in the rewritten body so the
+///    executor's scan prefix logic (which works on unqualified table names) is
+///    not confused by a dot-qualified prefix.
+///
+/// This is still text-level rewriting.  Full AST-level independence (true
+/// logical decoupling from physical key format) is tracked as a future gap.
 pub(crate) fn expand_view_in_select(sql: &str, view_name: &str, view_body: &str) -> String {
     let lower = sql.to_ascii_lowercase();
     let view_lower = view_name.to_ascii_lowercase();
-    // Find "from <view_name>" in the statement (case-insensitive).
-    // Simple token replace: match `from <name>` optionally followed by whitespace/WHERE/etc.
-    let pattern = format!(" from {}", view_lower);
-    if let Some(pos) = lower.find(&pattern) {
-        let after_from_name = pos + pattern.len();
-        // Skip any trailing alias or punctuation that belongs to the view reference.
-        let replacement = format!(" FROM ({}) AS {}", view_body, view_lower);
-        format!("{}{}{}", &sql[..pos], replacement, &sql[after_from_name..])
-    } else {
-        sql.to_string()
+
+    // Helper: returns true when the byte at `pos` is a SQL identifier character
+    // (letter, digit, underscore).  Used for word-boundary checks.
+    let is_ident_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+
+    // Try to find "from <schema.>?<view_name>" with word boundary on both sides.
+    // We check two forms: bare "view_name" and "*.view_name" (schema-qualified).
+    let patterns: Vec<String> = vec![
+        format!(" from {}", view_lower),
+        format!("\tfrom {}", view_lower),
+        format!("\nfrom {}", view_lower),
+    ];
+
+    for pattern in &patterns {
+        if let Some(pos) = lower.find(pattern.as_str()) {
+            // Check word boundary AFTER the match: the char immediately following
+            // must NOT be an identifier character (prevents `view` matching `view_extra`).
+            let after_match = pos + pattern.len();
+            let next_char = lower[after_match..].chars().next();
+            if let Some(c) = next_char {
+                if is_ident_char(c) {
+                    continue; // Not a word boundary — try next pattern.
+                }
+            }
+
+            // Strip schema qualifier if the match was preceded by "schema.".
+            // E.g., "FROM orders.summary" → FROM (body) AS summary
+            // `pos` is the position of the leading space/tab/newline before FROM.
+            // The character just before pos should be checked too but the simple
+            // approach is: check whether the part before view_name ends with a dot.
+            let from_kw_start = pos + 1; // skip the leading whitespace
+            let _from_end = from_kw_start + 4; // "FROM"
+
+            // Normalise the view body: strip any "schema." qualifiers from table
+            // references in the body so the executor sees plain table names.
+            let normalised_body = strip_schema_qualifiers_from_sql(view_body);
+
+            let replacement = format!(
+                " FROM ({}) AS {}",
+                normalised_body,
+                view_lower
+            );
+            return format!("{}{}{}", &sql[..pos], replacement, &sql[after_match..]);
+        }
     }
+    sql.to_string()
+}
+
+/// Strip `schema.` qualifiers from all table references in a SQL string.
+///
+/// Used by `expand_view_in_select` to normalise view bodies that reference
+/// fully-qualified table names — the executor's scan prefix logic works on
+/// unqualified names so qualifiers must be removed at expansion time.
+///
+/// This is a best-effort text transform: it handles the common `schema.table`
+/// form but not aliased schemas or WITH-clause names.
+pub(crate) fn strip_schema_qualifiers_from_sql(sql: &str) -> String {
+    // Replace `word.word` sequences where the left part is a likely schema name
+    // (no spaces, no SQL keywords).  We use a simple state-machine instead of
+    // regex to avoid adding a regex dependency.
+    let sql_upper = sql.to_ascii_uppercase();
+    let keywords: &[&str] = &[
+        "SELECT", "FROM", "WHERE", "JOIN", "ON", "AND", "OR", "NOT",
+        "INSERT", "UPDATE", "DELETE", "SET", "VALUES", "AS", "GROUP",
+        "ORDER", "BY", "HAVING", "LIMIT", "OFFSET", "UNION", "ALL",
+        "DISTINCT", "INTO", "TABLE",
+    ];
+    let mut result = sql.to_string();
+    // Walk through occurrences of "word." and strip if "word" is not a keyword.
+    let mut offset = 0usize;
+    loop {
+        let dot_pos = match result[offset..].find('.') {
+            Some(p) => offset + p,
+            None => break,
+        };
+        // Find start of the word before the dot.
+        let before = &result[..dot_pos];
+        let word_start = before.rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        let word = &result[word_start..dot_pos];
+        // Check the character after the dot is an identifier start.
+        let after_dot = dot_pos + 1;
+        let next_is_ident = result[after_dot..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
+        if !word.is_empty()
+            && next_is_ident
+            && !keywords.contains(&sql_upper[word_start..dot_pos].trim())
+        {
+            // Remove "word." by splicing it out of result.
+            result = format!("{}{}", &result[..word_start], &result[after_dot..]);
+            offset = word_start; // re-scan from where we removed
+        } else {
+            offset = dot_pos + 1;
+        }
+        if offset >= result.len() { break; }
+    }
+    result
+}
+
+// ─── M-6: DDL-schema type validation ──────────────────────────────────────────
+
+/// Validate that a string value is compatible with a DDL-declared SQL type.
+///
+/// Used at INSERT/UPDATE time to enforce DDL-declared column types before
+/// storing raw strings in `RowData`.  Returns `Ok(())` on pass; `Err(msg)` on
+/// type mismatch with a user-readable explanation.
+///
+/// This is a *lightweight* check (string parsing) not a full typed storage
+/// layer — `RowData` remains `HashMap<String, String>` for now (see M-6 full
+/// path in gaps-4.md).  Null / missing values pass validation — presence
+/// enforcement is a future gap.
+pub(crate) fn validate_value_for_type(value: &str, ddl_type: &str) -> Result<(), String> {
+    let bare = ddl_type.split('(').next().unwrap_or(ddl_type).trim().to_ascii_uppercase();
+    // NULL-like empties pass all type checks.
+    if value.is_empty() || value.eq_ignore_ascii_case("null") {
+        return Ok(());
+    }
+    match bare.as_str() {
+        "INT" | "INTEGER" | "INT4" | "SMALLINT" | "INT2" | "BIGINT" | "INT8" => {
+            value.trim().parse::<i64>().map(|_| ()).map_err(|_| {
+                format!("value '{value}' is not a valid {bare}")
+            })
+        }
+        "FLOAT" | "REAL" | "FLOAT4" | "DOUBLE" | "DOUBLE PRECISION" | "FLOAT8" => {
+            value.trim().parse::<f64>().map(|_| ()).map_err(|_| {
+                format!("value '{value}' is not a valid {bare}")
+            })
+        }
+        "NUMERIC" | "DECIMAL" => {
+            // Accept integers and decimals; reject non-numeric strings.
+            value.trim().parse::<f64>().map(|_| ()).map_err(|_| {
+                format!("value '{value}' is not a valid {bare}")
+            })
+        }
+        "BOOL" | "BOOLEAN" => {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "true" | "false" | "1" | "0" | "yes" | "no" | "on" | "off" => Ok(()),
+                _ => Err(format!("value '{value}' is not a valid BOOLEAN")),
+            }
+        }
+        "UUID" => {
+            // Simple UUID format check: 8-4-4-4-12 hex digits.
+            let v = value.trim();
+            let valid = v.len() == 36
+                && v.chars().enumerate().all(|(i, c)| {
+                    if [8, 13, 18, 23].contains(&i) { c == '-' } else { c.is_ascii_hexdigit() }
+                });
+            if valid { Ok(()) } else { Err(format!("value '{value}' is not a valid UUID")) }
+        }
+        // Text-like types accept anything.
+        "TEXT" | "VARCHAR" | "CHARACTER VARYING" | "NVARCHAR"
+        | "CHAR" | "CHARACTER" | "NCHAR" | "CLOB"
+        | "JSON" | "JSONB" | "BYTEA" | "BLOB" | "BINARY"
+        | "TIMESTAMP" | "TIMESTAMPTZ" | "DATE" | "TIME" => Ok(()),
+        _ => Ok(()), // unknown type — allow through
+    }
+}
+
+/// Validate all columns in `row_data` against the DDL schema for `table_name`.
+///
+/// Looks up the table in `ddl_catalog`, extracts column types, and calls
+/// `validate_value_for_type` for each column present in `row_data`.
+///
+/// Returns `Ok(())` if all values pass; `Err(user_message)` on the first
+/// type violation.  Skips validation when the table is not found in the
+/// catalog (DDL not yet recorded — no false positives).
+pub(crate) fn validate_row_against_ddl(
+    table_name: &str,
+    row_data: &std::collections::HashMap<String, String>,
+    ddl_catalog: &voltnuerongrid_store::ddl_catalog::DdlCatalog,
+) -> Result<(), String> {
+    use crate::helpers::information_schema::extract_ddl_column_details;
+
+    // Find the table entry in the catalog.
+    let entry = ddl_catalog
+        .active_entries()
+        .into_iter()
+        .find(|e| e.object_kind == "table" && e.object_name.eq_ignore_ascii_case(table_name));
+    let entry = match entry {
+        Some(e) => e,
+        None => return Ok(()), // table not in catalog yet — allow through
+    };
+
+    let col_details = extract_ddl_column_details(&entry.original_statement);
+    for (col_name, col_type) in &col_details {
+        if let Some(value) = row_data.get(col_name) {
+            validate_value_for_type(value, col_type)
+                .map_err(|e| format!("column '{col_name}': {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

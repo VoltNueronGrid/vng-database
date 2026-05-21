@@ -9,6 +9,7 @@
 //! - `information_schema.schemata`
 //! - `information_schema.tables`
 //! - `information_schema.columns`
+//! - `information_schema.settings` / `information_schema.parameters` (M-9)
 //! - `pg_catalog.pg_namespace`
 //! - `pg_catalog.pg_class`
 //! - `pg_catalog.pg_attribute`
@@ -33,6 +34,9 @@ pub(crate) enum VirtualTable {
     IsColumns,
     IsTables,
     IsSchemata,
+    /// M-9: `information_schema.settings` / `information_schema.parameters`
+    /// — exposes runtime server configuration as SQL-queryable rows.
+    IsSettings,
     PgAttribute,
     PgClass,
     PgNamespace,
@@ -58,6 +62,9 @@ pub(crate) fn detect_virtual_table(sql_batch: &str) -> VirtualTable {
     }
     if lower.contains("information_schema.schemata") {
         return VirtualTable::IsSchemata;
+    }
+    if lower.contains("information_schema.settings") || lower.contains("information_schema.parameters") {
+        return VirtualTable::IsSettings;
     }
     if lower.contains("pg_catalog.pg_attribute") {
         return VirtualTable::PgAttribute;
@@ -423,6 +430,76 @@ fn synth_pg_type() -> (Vec<Value>, Vec<Value>) {
     (columns, rows)
 }
 
+/// M-9: Synthesize `information_schema.settings` — one row per runtime config
+/// parameter, keyed by parameter name.  Columns mirror the PostgreSQL
+/// `pg_settings` view: `name`, `setting`, `unit`, `category`, `short_desc`.
+fn synth_is_settings(state: &crate::AppState) -> (Vec<Value>, Vec<Value>) {
+    let columns = col_schema(&["name", "setting", "unit", "category", "short_desc"]);
+    let cfg = &state.runtime_config;
+
+    let storage_engine_str = match cfg.storage.engine {
+        voltnuerongrid_config::StorageEngine::Rocksdb => "rocksdb",
+        voltnuerongrid_config::StorageEngine::Vng => "vng",
+    };
+    let sql_engine_str = match cfg.sql.engine {
+        voltnuerongrid_config::SqlEngine::Datafusion => "datafusion",
+        voltnuerongrid_config::SqlEngine::Vng => "vng",
+    };
+
+    let rows = vec![
+        json!({
+            "name": "storage_engine",
+            "setting": storage_engine_str,
+            "unit": null,
+            "category": "Storage",
+            "short_desc": "Durable storage substrate (rocksdb | vng)",
+        }),
+        json!({
+            "name": "data_dir",
+            "setting": cfg.storage.data_dir,
+            "unit": null,
+            "category": "Storage",
+            "short_desc": "Filesystem path for the storage engine data directory",
+        }),
+        json!({
+            "name": "wal_fsync_on_commit",
+            "setting": if cfg.storage.wal_fsync_on_commit { "on" } else { "off" },
+            "unit": null,
+            "category": "Storage",
+            "short_desc": "Whether to fsync the WAL on every commit",
+        }),
+        json!({
+            "name": "max_background_jobs",
+            "setting": cfg.storage.max_background_jobs.to_string(),
+            "unit": null,
+            "category": "Storage",
+            "short_desc": "Number of background flush/compaction threads (RocksDB)",
+        }),
+        json!({
+            "name": "sql_engine",
+            "setting": sql_engine_str,
+            "unit": null,
+            "category": "SQL",
+            "short_desc": "SQL parser and execution engine (datafusion | vng)",
+        }),
+        json!({
+            "name": "htap_olap_threshold_rows",
+            "setting": cfg.sql.htap_olap_threshold_rows.to_string(),
+            "unit": "rows",
+            "category": "SQL",
+            "short_desc": "Row count above which queries are routed to the OLAP path",
+        }),
+        json!({
+            "name": "max_result_rows",
+            "setting": cfg.sql.max_result_rows.to_string(),
+            "unit": "rows",
+            "category": "SQL",
+            "short_desc": "Maximum rows a single SELECT may return",
+        }),
+    ];
+    (columns, rows)
+}
+
 // ─── Public entry point ───────────────────────────────────────────────────────
 
 /// Synthesize `(columns, rows)` for the detected virtual catalog table.
@@ -441,6 +518,7 @@ pub(crate) fn synthesize_virtual_catalog_response(
     match detect_virtual_table(sql_batch) {
         VirtualTable::IsSchemata => synth_is_schemata(&entries),
         VirtualTable::IsTables => synth_is_tables(&entries),
+        VirtualTable::IsSettings => synth_is_settings(state),
         VirtualTable::IsColumns => synth_is_columns(&entries),
         VirtualTable::PgNamespace => synth_pg_namespace(&entries),
         VirtualTable::PgClassNamespaceJoin => synth_pg_class_namespace_join(&entries),
@@ -563,6 +641,32 @@ mod tests {
             "CREATE TABLE orders (id INT, name TEXT, PRIMARY KEY (id))"
         );
         assert_eq!(details.len(), 2);
+    }
+
+    // M-9: information_schema.settings detection
+    #[test]
+    fn detect_virtual_table_settings() {
+        assert_eq!(
+            detect_virtual_table("SELECT * FROM information_schema.settings"),
+            VirtualTable::IsSettings
+        );
+    }
+
+    #[test]
+    fn detect_virtual_table_parameters_alias() {
+        assert_eq!(
+            detect_virtual_table("SELECT name, setting FROM information_schema.parameters"),
+            VirtualTable::IsSettings
+        );
+    }
+
+    #[test]
+    fn detect_virtual_table_settings_not_confused_with_schemata() {
+        // "settings" substring is distinct — must not match schemata
+        assert_eq!(
+            detect_virtual_table("SELECT * FROM information_schema.schemata"),
+            VirtualTable::IsSchemata
+        );
     }
 
     #[test]

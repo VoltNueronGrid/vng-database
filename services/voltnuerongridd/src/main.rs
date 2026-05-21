@@ -1716,6 +1716,45 @@ async fn main() {
         // conflict detection should also consult RocksDB.  Track as a future gap.
     }
 
+    // M-3: Restore committed serializable write-sets from the previous process run.
+    // Without this, cross-restart serializable isolation is only correct within a
+    // single process lifetime — a transaction committed just before a crash would
+    // not conflict-check correctly with transactions starting after the restart.
+    {
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        let sets = helpers::raft_loop::load_committed_write_sets(&data_dir);
+        if !sets.is_empty() {
+            let mut acid = state.acid_transactions.lock().expect("acid restore lock");
+            let restored = sets.len();
+            for ws in sets {
+                acid.transactions.insert(
+                    ws.tx_id.clone(),
+                    AcidTxEntry {
+                        transaction_id: ws.tx_id,
+                        assigned_node_id: "restored".to_string(),
+                        state: AcidTxState::Committed,
+                        isolation_level: "serializable".to_string(),
+                        started_at_unix_ms: ws.committed_at_ms,
+                        completed_at_unix_ms: Some(ws.committed_at_ms),
+                        statement_count: 0,
+                        affected_tables: Vec::new(),
+                        savepoints: Vec::new(),
+                        read_snapshot_at_ms: None,
+                        wal_log: Vec::new(),
+                        row_store_snapshot_xid: None,
+                        written_row_keys: ws.written_keys.into_iter().collect(),
+                        read_row_keys: ws.read_keys.into_iter().collect(),
+                    },
+                );
+            }
+            tracing::info!(
+                target: "vng.acid",
+                count = restored,
+                "serializable write-sets restored from disk for cross-restart SSI"
+            );
+        }
+    }
+
     // H-2: Restore durable Raft state (current_term, voted_for, log entries)
     // from the previous process run.  This prevents a restarted node from
     // double-voting in an old term or losing committed log entries.
