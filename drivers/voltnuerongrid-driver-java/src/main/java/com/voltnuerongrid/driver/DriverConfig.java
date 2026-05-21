@@ -101,6 +101,11 @@ public final class DriverConfig {
         }
     }
 
+    /** Returns the per-request timeout in milliseconds (default 30000). */
+    public int requestTimeoutMs() {
+        return requestTimeoutMs;
+    }
+
     @Override
     public String toString() {
         return "DriverConfig{baseUrl='" + baseUrl + "', sessionId='" + sessionId + "', mode='" + mode + "'}";
