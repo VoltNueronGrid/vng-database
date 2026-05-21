@@ -523,7 +523,7 @@ pub(crate) async fn sql_transaction(
                 }
                 keys
             };
-            // M-7: Row-level serializable conflict detection.
+            // M-7: Row-level serializable conflict detection (write-write).
             // Conflict only when a committed serializable peer wrote the exact
             // same row key(s) — no false positives from non-overlapping writes.
             if let Some(conflict_key) = acid.check_serializable_conflict_row_level(&tx_id, &commit_write_keys) {
@@ -540,6 +540,34 @@ pub(crate) async fn sql_transaction(
                         localized_message: localized.message.to_string(),
                     }),
                 ));
+            }
+            // M-7 (SSI): Read-write anti-dependency check (phantom detection).
+            // Detects two dangerous structures:
+            //   (1) current TX read a key that a committed concurrent TX wrote (phantom read)
+            //   (2) current TX writes a key that a committed concurrent TX read (write-read)
+            // Either indicates a serialization anomaly that SSI must prevent.
+            {
+                let current_read_keys = acid.transactions
+                    .get(&tx_id)
+                    .map(|e| e.read_row_keys.clone())
+                    .unwrap_or_default();
+                if let Some(conflict_key) = acid.check_serializable_rw_conflict(
+                    &tx_id, &commit_write_keys, &current_read_keys,
+                ) {
+                    acid.rollback(&tx_id, now_ms);
+                    drop(acid);
+                    let locale = locale_from_headers(&headers);
+                    let localized = I18nCatalog::message(locale, "unauthorized");
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(AuthErrorResponse {
+                            status: "error",
+                            reason: format!("serializable_phantom_conflict:{conflict_key}"),
+                            locale: locale.as_str().to_string(),
+                            localized_message: localized.message.to_string(),
+                        }),
+                    ));
+                }
             }
             // S2-WS2-05: write-write conflict detection using row-store snapshot xid.
             {
@@ -2086,6 +2114,22 @@ pub(crate) async fn sql_execute(
             let rows = execute_oltp_select(&olap_statements, &rs, limit, &db, rr_snapshot_xid, rocksdb_rows_oltp, idx_mgr.as_deref());
             // M-6: check deadline after OLTP select to avoid returning timed-out results.
             check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
+            // M-7 (SSI): Record the row keys returned by this SELECT into the
+            // active serializable transaction's read-set so phantom detection
+            // at COMMIT time can check read-write anti-dependencies.
+            if !rows.is_empty() {
+                let active_tx_id: Option<String> = state.connection_tx_active
+                    .lock().ok()
+                    .and_then(|m| m.get(&connection_id).cloned());
+                if let Some(tx_id) = active_tx_id {
+                    if let Ok(mut acid) = state.acid_transactions.lock() {
+                        let read_keys: Vec<String> = rows.iter()
+                            .map(|r| db_prefix_key(&db, &r.key))
+                            .collect();
+                        acid.record_read_row_keys(&tx_id, read_keys);
+                    }
+                }
+            }
             if rows.is_empty() { None } else { Some(rows) }
         } else {
             None

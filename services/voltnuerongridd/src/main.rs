@@ -243,6 +243,12 @@ pub(crate) struct AcidTxEntry {
     /// time so that conflict detection can compare individual keys rather than
     /// coarse-grained table prefixes.
     pub(crate) written_row_keys: std::collections::HashSet<String>,
+    /// M-7 (SSI): Read-set for serializable phantom detection.
+    /// Records the row keys returned by SELECT statements executed within this
+    /// serializable transaction.  At COMMIT, these are compared against the
+    /// `written_row_keys` of any committed concurrent serializable transaction
+    /// to detect read-write anti-dependencies (phantom reads).
+    pub(crate) read_row_keys: std::collections::HashSet<String>,
 }
 
 #[derive(Default)]
@@ -294,6 +300,7 @@ impl AcidTransactionRegistry {
                 wal_log: Vec::new(),
                 row_store_snapshot_xid,
                 written_row_keys: std::collections::HashSet::new(),
+                read_row_keys: std::collections::HashSet::new(),
             },
         );
     }
@@ -409,6 +416,65 @@ impl AcidTransactionRegistry {
                 entry.written_row_keys.insert(k);
             }
         }
+    }
+
+    /// M-7 (SSI): Record the row keys read by a SELECT inside transaction `tx_id`.
+    ///
+    /// Only has effect when the transaction is active and uses `serializable`
+    /// isolation — for other levels the read-set is ignored and not stored.
+    pub(crate) fn record_read_row_keys(&mut self, tx_id: &str, keys: impl IntoIterator<Item = String>) {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            if entry.isolation_level == "serializable" && entry.state == AcidTxState::Active {
+                for k in keys {
+                    entry.read_row_keys.insert(k);
+                }
+            }
+        }
+    }
+
+    /// M-7 (SSI): Detect read-write anti-dependencies for serializable phantom prevention.
+    ///
+    /// Two directions are checked:
+    ///
+    /// 1. **Phantom read** (`current.read_keys ∩ peer.written_keys ≠ ∅`):
+    ///    The current transaction read a row that a concurrent committed
+    ///    serializable transaction has since written — the read is now stale.
+    ///
+    /// 2. **Write-read anti-dependency** (`current.written_keys ∩ peer.read_keys ≠ ∅`):
+    ///    A concurrent committed serializable transaction read a row that the
+    ///    current transaction is about to overwrite — the peer's reads are stale.
+    ///
+    /// Returns `Some(conflicting_key)` on the first detected conflict.
+    pub(crate) fn check_serializable_rw_conflict(
+        &self,
+        current_tx_id: &str,
+        current_written_keys: &std::collections::HashSet<String>,
+        current_read_keys: &std::collections::HashSet<String>,
+    ) -> Option<String> {
+        for (other_tx_id, other_entry) in &self.transactions {
+            if other_tx_id == current_tx_id {
+                continue;
+            }
+            if other_entry.isolation_level != "serializable" {
+                continue;
+            }
+            if other_entry.state != AcidTxState::Committed {
+                continue;
+            }
+            // Direction 1: phantom read — we read what they wrote.
+            for k in current_read_keys {
+                if other_entry.written_row_keys.contains(k) {
+                    return Some(k.clone());
+                }
+            }
+            // Direction 2: write-read — they read what we wrote.
+            for k in current_written_keys {
+                if other_entry.read_row_keys.contains(k) {
+                    return Some(k.clone());
+                }
+            }
+        }
+        None
     }
 
     /// M-7: Row-level serializable conflict detection.

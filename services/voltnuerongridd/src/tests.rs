@@ -13136,6 +13136,121 @@ fn m6_statement_timeout_already_elapsed_returns_408() {
     }
 }
 
+// ─── M-7 SSI: read-set tracking + phantom detection ─────────────────────────
+
+/// record_read_row_keys only inserts into serializable active transactions.
+#[test]
+fn m7_ssi_record_read_keys_only_for_serializable_active() {
+    let mut reg = AcidTransactionRegistry::default();
+    // Serializable active — should record
+    reg.begin("tx-ser", "n1", "serializable", 1_000, None);
+    reg.record_read_row_keys("tx-ser", ["orders:1", "orders:2"].into_iter().map(|s| s.to_string()));
+    let entry = reg.transactions.get("tx-ser").unwrap();
+    assert!(entry.read_row_keys.contains("orders:1"));
+    assert!(entry.read_row_keys.contains("orders:2"));
+
+    // repeatable_read active — should NOT record
+    reg.begin("tx-rr", "n1", "repeatable_read", 1_000, None);
+    reg.record_read_row_keys("tx-rr", ["orders:1"].into_iter().map(|s| s.to_string()));
+    let entry_rr = reg.transactions.get("tx-rr").unwrap();
+    assert!(entry_rr.read_row_keys.is_empty(), "rr tx should not collect read keys");
+}
+
+/// Phantom read: current tx read a key that a committed peer serializable tx wrote.
+#[test]
+fn m7_ssi_detects_phantom_read_conflict() {
+    let mut reg = AcidTransactionRegistry::default();
+
+    // Peer committed serializable tx that wrote "inventory:5"
+    reg.begin("tx-peer", "n1", "serializable", 1_000, None);
+    reg.record_written_row_keys("tx-peer", std::iter::once("inventory:5".to_string()));
+    reg.commit("tx-peer", 2_000);
+
+    // Current tx read "inventory:5" — phantom!
+    let current_read: std::collections::HashSet<String> =
+        ["inventory:5".to_string()].into_iter().collect();
+    let current_write: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let conflict = reg.check_serializable_rw_conflict("tx-current", &current_write, &current_read);
+    assert_eq!(conflict.as_deref(), Some("inventory:5"),
+        "should detect phantom read on inventory:5");
+}
+
+/// Write-read anti-dependency: current tx is writing a key that a committed peer serializable tx already read.
+#[test]
+fn m7_ssi_detects_write_read_antidependency() {
+    let mut reg = AcidTransactionRegistry::default();
+
+    // Peer committed serializable tx that READ "orders:7"
+    reg.begin("tx-peer", "n1", "serializable", 1_000, None);
+    reg.record_read_row_keys("tx-peer", ["orders:7".to_string()].into_iter());
+    reg.commit("tx-peer", 2_000);
+
+    // Current tx is writing "orders:7" — anti-dependency!
+    let current_write: std::collections::HashSet<String> =
+        ["orders:7".to_string()].into_iter().collect();
+    let current_read: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let conflict = reg.check_serializable_rw_conflict("tx-current", &current_write, &current_read);
+    assert_eq!(conflict.as_deref(), Some("orders:7"),
+        "should detect write-read anti-dependency on orders:7");
+}
+
+/// No conflict when the overlapping peer is not committed (still active).
+#[test]
+fn m7_ssi_no_conflict_against_active_peer() {
+    let mut reg = AcidTransactionRegistry::default();
+
+    // Peer ACTIVE (not committed) serializable tx that wrote "products:3"
+    reg.begin("tx-peer", "n1", "serializable", 1_000, None);
+    reg.record_written_row_keys("tx-peer", std::iter::once("products:3".to_string()));
+    // NOT committed
+
+    let current_read: std::collections::HashSet<String> =
+        ["products:3".to_string()].into_iter().collect();
+    let current_write: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let conflict = reg.check_serializable_rw_conflict("tx-current", &current_write, &current_read);
+    assert!(conflict.is_none(), "active peer should not trigger SSI phantom conflict");
+}
+
+/// No conflict when the peer is non-serializable (e.g. repeatable_read).
+#[test]
+fn m7_ssi_no_conflict_against_non_serializable_peer() {
+    let mut reg = AcidTransactionRegistry::default();
+
+    // Peer committed repeatable_read tx that wrote "users:99"
+    reg.begin("tx-peer", "n1", "repeatable_read", 1_000, None);
+    reg.record_written_row_keys("tx-peer", std::iter::once("users:99".to_string()));
+    reg.commit("tx-peer", 2_000);
+
+    let current_read: std::collections::HashSet<String> =
+        ["users:99".to_string()].into_iter().collect();
+    let current_write: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let conflict = reg.check_serializable_rw_conflict("tx-current", &current_write, &current_read);
+    assert!(conflict.is_none(), "rr committed peer should not trigger SSI phantom conflict");
+}
+
+/// No conflict when disjoint keys — read and write sets don't intersect any peer.
+#[test]
+fn m7_ssi_no_conflict_on_disjoint_keys() {
+    let mut reg = AcidTransactionRegistry::default();
+
+    reg.begin("tx-peer", "n1", "serializable", 1_000, None);
+    reg.record_written_row_keys("tx-peer", std::iter::once("table:1".to_string()));
+    reg.record_read_row_keys("tx-peer", ["table:2".to_string()].into_iter());
+    reg.commit("tx-peer", 2_000);
+
+    let current_read: std::collections::HashSet<String> =
+        ["table:99".to_string()].into_iter().collect();
+    let current_write: std::collections::HashSet<String> =
+        ["table:88".to_string()].into_iter().collect();
+
+    let conflict = reg.check_serializable_rw_conflict("tx-current", &current_write, &current_read);
+    assert!(conflict.is_none(), "disjoint keys must not produce a false conflict");
+}
+
 #[tokio::test]
 #[ignore = "requires network access (TcpListener::bind)"]
 async fn e2e_http_roundtrip_sql_execute() {
