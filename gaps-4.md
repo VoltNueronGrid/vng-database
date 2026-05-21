@@ -1,13 +1,41 @@
-# Gap Analysis — VoltNueronGrid Remaining Gaps (post-session 31)
+# Gap Analysis — VoltNueronGrid Remaining Gaps (post-session 32)
 
-**Prepared:** 2026-05-21 (session 31 close)
-**Branch:** `claude/friendly-hertz-3b69fb` → merged to `main`
-**Commit:** session 31 close
-**Based on:** `gaps-may26-1.md` + `gaps-may20-2.md` + `gaps-3.md` cross-referenced against actual code
-**Test baseline:** 801 passed (voltnuerongridd), 0 failed, 1 ignored
+**Prepared:** 2026-05-21 (session 32 close)
+**Branch:** `claude/friendly-hertz-3b69fb`
+**Commit:** `e6f6c3d` (session 32 — all 9 medium gaps closed)
+**Based on:** `gaps-4.md` (post-session 31) + session 32 implementation
+**Test baseline:** 807 passed (voltnuerongridd), 0 failed, 1 ignored
 
 This document records all remaining gaps after the full audit pass in session 31.
 ✅ items below were closed in session 31 and are noted for history only.
+
+---
+
+## What closed in session 32
+
+All 9 medium gaps closed in session 32. Commit `e6f6c3d`.
+
+| Gap ID | Description | Evidence |
+|---|---|---|
+| M-1 | Raft apply strips db scope | `raft_loop.rs` — `apply_dml_command` parses `__vng_db:<name>\n` prefix; `sql.rs` — both append-command call sites now encode the db name |
+| M-2 | PagedRowStore read-miss RocksDB fallback | `lib.rs` — `DurabilityEngine::get_row` trait method + `BoxedDurabilityEngine::get_row`; `rocksdb_engine.rs` — point-read impl via per-DB CF prefix scan; `sql.rs` — `read_latest_with_rocksdb_fallback` helper applied to all before-image reads |
+| M-3 | Write-set persistence across restarts | `raft_loop.rs` — `persist_committed_write_sets` / `load_committed_write_sets` writing `acid_write_sets.json`; `sql.rs` — persist on commit; `main.rs` — restore on boot |
+| M-4 | Preemptive statement timeout watchdog | `lib.rs` — `ExecError::Timeout` variant; `sql.rs` — `tokio::time::timeout` wraps both DataFusion call sites |
+| M-5 | `sql_transaction` bulk UPDATE | `sql.rs` — full bulk-scan UPDATE logic (matching `sql_execute`) added to `sql_transaction` UPDATE branch |
+| M-6 | Column type validation at INSERT | `sql_parse.rs` — `validate_value_for_type` + `validate_row_against_ddl`; `sql.rs` — validate on each INSERT row in `sql_execute` |
+| M-7 | View expansion improvements | `sql_parse.rs` — word-boundary matching, schema-qualifier stripping, `strip_schema_qualifiers_from_sql` helper |
+| M-8 | Leader reads (linearisable SELECT) | `sql.rs` — `VNG_REQUIRE_LEADER_READS` guard before SELECT path; non-leaders return 503 in multi-node clusters |
+| M-9 | `information_schema.settings` virtual table | `information_schema.rs` — `IsSettings` variant, `detect_virtual_table` detection, `synth_is_settings` synthesizer exposing all 7 runtime config fields |
+
+**6 new unit tests added** (in `helpers/raft_loop.rs`):
+- `vng_db_prefix_parse_with_db`
+- `vng_db_prefix_parse_empty_db`
+- `vng_db_prefix_parse_no_prefix`
+
+**3 new unit tests added** (in `helpers/information_schema.rs`):
+- `detect_virtual_table_settings`
+- `detect_virtual_table_parameters_alias`
+- `detect_virtual_table_settings_not_confused_with_schemata`
 
 ---
 
@@ -54,7 +82,13 @@ H-1 and H-2 closed in session 31. No high-severity gaps remain.
 
 ---
 
-## 🟡 Medium — 9 remaining
+## 🟡 Medium — 0 remaining
+
+All 9 medium gaps closed in session 32.
+
+---
+
+## 🟡 Medium — 9 closed (was remaining after session 31)
 
 ---
 
@@ -323,5 +357,6 @@ the sandbox restriction, consistent with the E2E HTTP roundtrip test in the serv
 
 ---
 
-*Total remaining gaps: 0 critical, 0 high, 9 medium, 8 low — 17 total.*
+*Total remaining gaps: 0 critical, 0 high, 0 medium, 8 low — 8 total.*
 *Session 31 closed: H-1 (prev_log_term fix), H-2 (Raft log persistence across restarts).*
+*Session 32 closed: M-1 through M-9 (all 9 medium gaps).*
