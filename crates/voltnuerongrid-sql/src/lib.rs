@@ -40,9 +40,10 @@ pub enum SqlStatementKind {
     CreateRole,
     CreateIndex,
     Grant,
+    Revoke,
+    DropRole,
     Call,
     AlterTable,
-    CreateIndex,
     DropIndex,
     DropTable,
     DropView,
@@ -56,11 +57,6 @@ pub enum SqlStatementKind {
     Savepoint,
     ReleaseSavepoint,
     RollbackToSavepoint,
-    // M-2: privilege / role management
-    Grant,
-    Revoke,
-    CreateRole,
-    DropRole,
     Unknown,
 }
 
