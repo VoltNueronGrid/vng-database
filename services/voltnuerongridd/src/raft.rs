@@ -200,9 +200,15 @@ pub struct RaftNode {
 
 impl RaftNode {
     /// Create a new node in Follower state at term 0.
+    ///
+    /// `election_timeout_ticks` is randomised in [10, 20) using a simple hash
+    /// of `node_id` so that nodes in the same cluster have different timeouts,
+    /// reducing the probability of split votes (§5.2).
     pub fn new(node_id: impl Into<String>) -> Self {
+        let id: String = node_id.into();
+        let timeout = election_timeout_for(&id);
         RaftNode {
-            node_id: node_id.into(),
+            node_id: id,
             current_term: 0,
             voted_for: None,
             role: RaftRole::Follower,
@@ -210,7 +216,9 @@ impl RaftNode {
             commit_index: 0,
             last_applied: 0,
             ticks_since_heartbeat: 0,
-            election_timeout_ticks: 10,
+            election_timeout_ticks: timeout,
+            snapshot_index: 0,
+            snapshot_term: 0,
             fencing_token: 0,
             next_index: HashMap::new(),
             match_index: HashMap::new(),
@@ -456,9 +464,14 @@ impl RaftNode {
         // Consistency check: does our log contain an entry at prev_log_index
         // with the expected prev_log_term?
         if req.prev_log_index > 0 {
-            let ok = self.log.get((req.prev_log_index - 1) as usize)
-                .map(|e| e.term == req.prev_log_term)
-                .unwrap_or(false);
+            // If prev_log_index is within the snapshot, use snapshot_term for match.
+            let ok = if req.prev_log_index == self.snapshot_index {
+                req.prev_log_term == self.snapshot_term
+            } else {
+                self.log_entry_at(req.prev_log_index)
+                    .map(|e| e.term == req.prev_log_term)
+                    .unwrap_or(false)
+            };
             if !ok {
                 return RaftAppendResponse {
                     term: self.current_term,
@@ -469,12 +482,16 @@ impl RaftNode {
         }
 
         // Append new entries, truncating any conflicting tail.
-        for (offset, entry) in req.entries.iter().enumerate() {
-            let idx = req.prev_log_index as usize + offset;
-            if idx < self.log.len() {
-                if self.log[idx].term != entry.term {
-                    // Conflict — truncate and append.
-                    self.log.truncate(idx);
+        // Physical index = logical_index - snapshot_index - 1.
+        for entry in req.entries.iter() {
+            let phys = if entry.index <= self.snapshot_index {
+                continue; // already compacted; skip
+            } else {
+                (entry.index - self.snapshot_index - 1) as usize
+            };
+            if phys < self.log.len() {
+                if self.log[phys].term != entry.term {
+                    self.log.truncate(phys);
                     self.log.push(entry.clone());
                 }
                 // else: existing entry matches; skip.
@@ -533,15 +550,167 @@ impl RaftNode {
     }
 
     // -----------------------------------------------------------------------
+    // Leader log append (§5.3)
+    // -----------------------------------------------------------------------
+
+    /// Append a new command to the leader's log and mark it as already applied
+    /// locally (the caller has written it directly to the state machine).
+    ///
+    /// Returns the log index assigned to the new entry.
+    ///
+    /// `total_peers` is the number of Raft peers (excluding self).  When
+    /// `total_peers == 0` (single-node cluster) the entry is immediately
+    /// committed, since the leader alone forms a quorum.
+    ///
+    /// Should only be called when `role == Leader`.
+    pub fn append_command(&mut self, command: String, total_peers: usize) -> u64 {
+        let new_index = self.last_log_position().0 + 1;
+        self.log.push(RaftLogEntry {
+            index: new_index,
+            term: self.current_term,
+            command,
+        });
+        // The caller applied the command to the state machine directly; skip re-apply.
+        if new_index > self.last_applied {
+            self.last_applied = new_index;
+        }
+        // Single-node cluster: leader is the quorum, commit immediately.
+        if total_peers == 0 && new_index > self.commit_index {
+            self.commit_index = new_index;
+        }
+        new_index
+    }
+
+    /// Append a new command to the leader's log for the **linearisable write
+    /// path** — without pre-advancing `last_applied`.
+    ///
+    /// The apply loop will write the command to the state machine once the
+    /// entry reaches quorum commit, and then advance `last_applied`.  The
+    /// calling handler waits for `last_applied >= returned_index` before
+    /// acknowledging the client.
+    ///
+    /// On single-node clusters, advances `commit_index` immediately (leader
+    /// is quorum), so the apply loop fires on the very next tick.
+    ///
+    /// Should only be called when `role == Leader`.
+    pub fn append_command_pending(&mut self, command: String, total_peers: usize) -> u64 {
+        let new_index = self.last_log_position().0 + 1;
+        self.log.push(RaftLogEntry {
+            index: new_index,
+            term: self.current_term,
+            command,
+        });
+        // Single-node cluster: leader is quorum; commit immediately so the
+        // apply loop can fire without waiting for a heartbeat round.
+        if total_peers == 0 && new_index > self.commit_index {
+            self.commit_index = new_index;
+        }
+        new_index
+    }
+
+    // -----------------------------------------------------------------------
+    // InstallSnapshot RPC handler (§7)
+    // -----------------------------------------------------------------------
+
+    /// Handle an incoming InstallSnapshot RPC from the leader.
+    ///
+    /// Replaces the local log and snapshot metadata with the leader's snapshot.
+    /// The caller is responsible for replacing the row-store contents with the
+    /// snapshot data in `req.rows`.
+    pub fn handle_install_snapshot(&mut self, req: &RaftInstallSnapshotRequest) -> RaftInstallSnapshotResponse {
+        if req.term < self.current_term {
+            return RaftInstallSnapshotResponse { term: self.current_term, success: false };
+        }
+        self.become_follower(req.term);
+        self.ticks_since_heartbeat = 0;
+        // Accept the snapshot only if it advances our state.
+        if req.snapshot_index <= self.snapshot_index {
+            return RaftInstallSnapshotResponse { term: self.current_term, success: true };
+        }
+        // Discard any log entries covered by the snapshot.
+        self.log.retain(|e| e.index > req.snapshot_index);
+        self.snapshot_index = req.snapshot_index;
+        self.snapshot_term = req.snapshot_term;
+        // Advance commit and apply pointers so the apply loop skips the snapshot.
+        if req.snapshot_index > self.commit_index {
+            self.commit_index = req.snapshot_index;
+        }
+        if req.snapshot_index > self.last_applied {
+            self.last_applied = req.snapshot_index;
+        }
+        RaftInstallSnapshotResponse { term: self.current_term, success: true }
+    }
+
+    // -----------------------------------------------------------------------
+    // Log compaction (§7)
+    // -----------------------------------------------------------------------
+
+    /// Discard all log entries with `index <= up_to_index`.
+    ///
+    /// Records the last-trimmed entry's term in `snapshot_term` so the
+    /// consistency check in `handle_append_entries` still works correctly
+    /// after the trim.  The caller is responsible for persisting the
+    /// associated state-machine snapshot before calling this.
+    ///
+    /// No-op if `up_to_index <= snapshot_index` or the log is already empty.
+    pub fn compact_log(&mut self, up_to_index: u64) {
+        if up_to_index <= self.snapshot_index {
+            return;
+        }
+        // Find the term of the last entry we're about to trim.
+        if let Some(last_kept_term) = self.log_entry_at(up_to_index).map(|e| e.term) {
+            self.snapshot_term = last_kept_term;
+        } else if up_to_index >= self.last_log_position().0 {
+            // up_to_index covers the entire log.
+            self.snapshot_term = self.last_log_position().1;
+            self.log.clear();
+            self.snapshot_index = up_to_index;
+            return;
+        }
+        self.log.retain(|e| e.index > up_to_index);
+        self.snapshot_index = up_to_index;
+    }
+
+    // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+
+    /// Look up a log entry by logical index, accounting for the snapshot offset.
+    fn log_entry_at(&self, index: u64) -> Option<&RaftLogEntry> {
+        if index == 0 || index <= self.snapshot_index {
+            return None;
+        }
+        let offset = (index - self.snapshot_index - 1) as usize;
+        self.log.get(offset)
+    }
 
     fn last_log_position(&self) -> (u64, u64) {
         match self.log.last() {
             Some(e) => (e.index, e.term),
+            // Log is empty but we may have a non-empty snapshot.
+            None if self.snapshot_index > 0 => (self.snapshot_index, self.snapshot_term),
             None => (0, 0),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Derive a per-node election timeout in the range [10, 20) ticks by hashing
+/// the node_id string.  No external crate needed — just FNV-1a fold-fold.
+///
+/// Different nodes get different timeouts, reducing split-vote probability
+/// in even-sized clusters (§5.2 of the Raft paper).
+pub(crate) fn election_timeout_for(node_id: &str) -> u64 {
+    // FNV-1a 64-bit hash over the UTF-8 bytes of node_id.
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+    let hash = node_id.bytes().fold(FNV_OFFSET, |acc, b| {
+        acc.wrapping_mul(FNV_PRIME) ^ (b as u64)
+    });
+    10 + (hash % 10)
 }
 
 // ---------------------------------------------------------------------------
@@ -636,18 +805,20 @@ mod tests {
     #[test]
     fn tick_below_timeout_does_not_trigger_election() {
         let mut node = RaftNode::new("node-1");
-        assert_eq!(node.election_timeout_ticks, 10);
-        for _ in 0..9 {
+        let timeout = node.election_timeout_ticks;
+        assert!((10..20).contains(&timeout));
+        for _ in 0..timeout - 1 {
             node.tick();
         }
         assert_eq!(node.role, RaftRole::Follower);
-        assert_eq!(node.ticks_since_heartbeat, 9);
+        assert_eq!(node.ticks_since_heartbeat, timeout - 1);
     }
 
     #[test]
     fn tick_at_timeout_converts_follower_to_candidate() {
         let mut node = RaftNode::new("node-1");
-        for _ in 0..10 {
+        let timeout = node.election_timeout_ticks;
+        for _ in 0..timeout {
             node.tick();
         }
         assert_eq!(node.role, RaftRole::Candidate);
@@ -676,7 +847,9 @@ mod tests {
     fn status_snapshot_includes_tick_fields() {
         let node = RaftNode::new("node-x");
         let snap = node.status();
-        assert_eq!(snap.election_timeout_ticks, 10);
+        // election_timeout_ticks is randomised per node_id; just check range [10, 20).
+        assert!((10..20).contains(&snap.election_timeout_ticks),
+            "expected timeout in [10,20) but got {}", snap.election_timeout_ticks);
         assert_eq!(snap.ticks_since_heartbeat, 0);
     }
 

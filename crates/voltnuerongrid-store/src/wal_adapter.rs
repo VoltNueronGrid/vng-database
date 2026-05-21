@@ -151,17 +151,15 @@ fn unescape_field(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_wal_path() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
             "vng-wal-adapter-test-{}-{}.log",
             std::process::id(),
-            nanos
+            id
         ))
     }
 

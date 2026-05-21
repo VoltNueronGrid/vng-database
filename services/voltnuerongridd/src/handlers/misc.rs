@@ -499,8 +499,18 @@ pub(crate) async fn olap_query(
     State(state): State<AppState>,
     Json(req): Json<OlapQueryRequest>,
 ) -> Json<OlapQueryResponse> {
-    let rs = state.row_store.lock().expect("row_store lock olap_query");
-    Json(execute_olap_query(req.query, req.max_rows, &rs))
+    let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+    let data_dir = state.runtime_config.storage.data_dir.clone();
+    // C-1: fetch rows from RocksDB when available (db = "" = no db scope).
+    let rocksdb_rows: Option<Vec<(String, std::collections::HashMap<String, String>)>> = {
+        let wal = state.wal_engine.lock().unwrap_or_else(|e| e.into_inner());
+        if wal.persists_rows() {
+            Some(wal.scan_rows_for_db("", rs.current_xid()))
+        } else {
+            None
+        }
+    };
+    Json(execute_olap_query(req.query, req.max_rows, &rs, "", &data_dir, None, rocksdb_rows))
 }
 
 
@@ -1536,6 +1546,20 @@ pub(crate) async fn search_fulltext(
 
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
 
+/// GET /api/v1/sre/table-stats — returns per-table row counts.
+/// Gap #7: basic table statistics for query routing and monitoring.
+pub(crate) async fn table_stats(
+    State(state): State<AppState>,
+) -> axum::Json<serde_json::Value> {
+    let stats = state.table_stats.lock().expect("table_stats read");
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "table_stats": stats.iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect::<std::collections::HashMap<String, u64>>()
+    }))
+}
+
 pub(crate) async fn mcp_capabilities() -> Json<McpServerCapabilities> {
     Json(McpServerCapabilities::default())
 }
@@ -1546,5 +1570,125 @@ pub(crate) async fn mcp_invoke(
 ) -> Json<voltnuerongrid_mcp::McpResponse> {
     let capabilities = McpServerCapabilities::default();
     Json(process_request(req, &capabilities).await)
+}
+
+// ─── Gap #11: Demo seed endpoint ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct DemoSeedRequest {
+    /// Target database (defaults to "_default" if omitted).
+    #[serde(default)]
+    pub(crate) database: Option<String>,
+    /// Target table name.
+    pub(crate) table: String,
+    /// Number of demo rows to generate and insert.
+    pub(crate) count: usize,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DemoSeedResponse {
+    pub(crate) status: &'static str,
+    pub(crate) database: String,
+    pub(crate) table: String,
+    pub(crate) inserted: usize,
+    pub(crate) elapsed_ms: u64,
+}
+
+/// `POST /api/v1/demo/seed` — insert synthesised demo rows into a table.
+///
+/// Replaces the `CALL insert_rows('<table>', <count>)` SQL interception that
+/// was previously handled inside `sql_execute`. This endpoint is safer because
+/// it is a declared REST surface (not a SQL injection shim) and can be
+/// independently rate-limited.
+pub(crate) async fn demo_seed(
+    State(state): State<AppState>,
+    Json(req): Json<DemoSeedRequest>,
+) -> Result<(StatusCode, Json<DemoSeedResponse>), (StatusCode, Json<serde_json::Value>)> {
+    let db = req.database.as_deref().unwrap_or("_default").to_ascii_lowercase();
+    let table_name = req.table.trim().to_ascii_lowercase();
+
+    if table_name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "status": "error", "reason": "table name is required" })),
+        ));
+    }
+
+    let start_ms = now_unix_ms_u64();
+
+    // Determine next row id (highest existing row id + 1).
+    let scan_prefix = crate::helpers::sql_parse::make_table_scan_prefix(&db, &table_name);
+    let existing_max: usize = match state.row_store.lock() {
+        Ok(rs) => {
+            let snap = rs.current_xid();
+            rs.scan_at_snapshot(snap)
+                .iter()
+                .filter(|(k, _)| k.starts_with(&scan_prefix))
+                .filter_map(|(k, _)| k.splitn(2, ':').nth(1).and_then(|v| v.parse::<usize>().ok()))
+                .max()
+                .unwrap_or(0)
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "status": "error", "reason": "row_store mutex poisoned" })),
+            ));
+        }
+    };
+
+    let ddl_cols = match state.ddl_catalog.lock() {
+        Ok(catalog) => catalog
+            .get(&table_name)
+            .map(|e| crate::helpers::sql_parse::extract_column_names_from_ddl(&e.original_statement))
+            .unwrap_or_default(),
+        Err(_) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "status": "error", "reason": "ddl_catalog mutex poisoned" })),
+            ));
+        }
+    };
+    let col_count = if ddl_cols.is_empty() { 3 } else { ddl_cols.len() };
+
+    let mut inserted = 0usize;
+    for i in 1..=req.count {
+        let row_id = existing_max + i;
+        let key = crate::helpers::sql_parse::make_row_key(&db, &table_name, &row_id.to_string());
+        let mut row_data: HashMap<String, String> = HashMap::new();
+        row_data.insert("__table".to_string(), table_name.clone());
+        for col_idx in 0..col_count {
+            let col_name = ddl_cols.get(col_idx).cloned().unwrap_or_else(|| format!("col_{col_idx}"));
+            let val = crate::synthesize_demo_value(&col_name, &table_name, row_id);
+            row_data.insert(col_name, val);
+        }
+        // M-8 Rule 12: demo seed rows must go through MVCC *and* RocksDB persistence
+        // so they are durable across restarts (previously only in-memory PagedRowStore).
+        match state.row_store.lock() {
+            Ok(mut rs) => {
+                let xid = rs.begin_xid();
+                rs.insert(xid, &key, row_data.clone());
+                // Persist to RocksDB CF so rows survive a SIGKILL.
+                if let Ok(mut wal) = state.wal_engine.lock() {
+                    let raw_key = key.trim_start_matches(&format!("{db}.")).to_string();
+                    wal.store_row(&db, &raw_key, xid, Some(&row_data));
+                }
+                inserted += 1;
+            }
+            Err(_) => break,
+        }
+    }
+
+    let elapsed_ms = now_unix_ms_u64().saturating_sub(start_ms);
+
+    Ok((
+        StatusCode::OK,
+        Json(DemoSeedResponse {
+            status: "ok",
+            database: db,
+            table: table_name,
+            inserted,
+            elapsed_ms,
+        }),
+    ))
 }
 

@@ -31,6 +31,28 @@ public final class DriverRequest {
         this.bodyJson = bodyJson;
     }
 
+    /** Returns the HTTP method (e.g. {@code "GET"} or {@code "POST"}). */
+    public String method() {
+        return method;
+    }
+
+    /** Returns the full URL including base and path. */
+    public String url() {
+        return url;
+    }
+
+    /** Returns the HTTP headers as an unmodifiable map. */
+    public Map<String, String> headers() {
+        return headers;
+    }
+
+    /**
+     * Returns the JSON-encoded request body, or {@code null} for requests without a body.
+     */
+    public String body() {
+        return bodyJson;
+    }
+
     @Override
     public String toString() {
         return "DriverRequest{method='" + method + "', url='" + url + "', bodyJson=" +

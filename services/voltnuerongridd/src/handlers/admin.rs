@@ -896,6 +896,7 @@ pub(crate) async fn admin_databases_list(
 ///
 /// Returns 201 on success, 409 on conflict (unless `if_not_exists` is true,
 /// in which case 200 with `already_existed=true`), 400 on invalid name.
+#[tracing::instrument(skip_all, name = "admin.databases.create")]
 pub(crate) async fn admin_databases_create(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -932,6 +933,13 @@ pub(crate) async fn admin_databases_create(
                 owner = ?record.owner,
                 "database created"
             );
+            // Persist to WAL so the database catalog survives restarts
+            if let Ok(mut wal) = state.wal_engine.lock() {
+                let _ = wal.append_sql(
+                    voltnuerongrid_store::SqlWalKind::Ddl,
+                    &format!("CREATE DATABASE {}", record.name),
+                );
+            }
             metrics::counter!(
                 "vng_database_lifecycle_total",
                 "operation" => "create",
@@ -1003,6 +1011,7 @@ pub(crate) async fn admin_databases_create(
 }
 
 /// `DELETE /api/v1/admin/databases/{name}` — drop a database.
+#[tracing::instrument(skip_all, name = "admin.databases.drop")]
 pub(crate) async fn admin_databases_drop(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1028,6 +1037,14 @@ pub(crate) async fn admin_databases_drop(
         Ok(Some(db)) => {
             let record = AdminDatabaseRecord::from(&db);
             tracing::info!(target: "vng.database", name = %record.name, "database dropped");
+            // Persist DROP to WAL so the catalog stays consistent across restarts
+            if let Ok(mut wal) = state.wal_engine.lock() {
+                let _ = wal.append_sql(
+                    voltnuerongrid_store::SqlWalKind::Ddl,
+                    &format!("DROP DATABASE {}", record.name),
+                );
+            }
+            crate::helpers::boot::purge_database_rows(&record.name, &state.row_store, &state.wal_engine);
             metrics::counter!(
                 "vng_database_lifecycle_total",
                 "operation" => "drop",
@@ -1232,6 +1249,165 @@ pub(crate) async fn admin_runtime_config(
 ) -> Result<(StatusCode, Json<voltnuerongrid_config::RuntimeConfig>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
     Ok((StatusCode::OK, Json((*state.runtime_config).clone())))
+}
+
+// ─── Database grant DTOs ──────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct AdminDbGrantRequest {
+    /// Role name to grant access to this database (e.g. "operator", "tenant_user").
+    pub(crate) role: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct AdminDbGrantsResponse {
+    pub(crate) status: &'static str,
+    pub(crate) database: String,
+    /// All roles that currently have an explicit grant on this database.
+    pub(crate) granted_roles: Vec<String>,
+}
+
+/// `POST /api/v1/admin/databases/:name/grants` — grant a role access to a database.
+///
+/// Idempotent: granting an already-granted role is a no-op (returns 200).
+pub(crate) async fn admin_db_grant_add(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(req): Json<AdminDbGrantRequest>,
+) -> Result<(StatusCode, Json<AdminDbGrantsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+
+    // Verify the database exists.
+    {
+        let catalog = state.database_catalog.lock().map_err(|_| (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: "database_catalog mutex poisoned".to_string(),
+                locale: "en".to_string(),
+                localized_message: "Database catalog temporarily unavailable".to_string(),
+            }),
+        ))?;
+        if !catalog.exists(&name) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: format!("database {:?} not found", name),
+                    locale: "en".to_string(),
+                    localized_message: format!("Database {:?} not found", name),
+                }),
+            ));
+        }
+    }
+
+    let role = req.role.trim().to_ascii_lowercase();
+    if role.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: "role must not be empty".to_string(),
+                locale: "en".to_string(),
+                localized_message: "Role name is required".to_string(),
+            }),
+        ));
+    }
+
+    let granted_roles = {
+        let mut grants = state.db_grants.lock().expect("db_grants lock");
+        grants.entry(name.clone()).or_default().insert(role);
+        let mut roles: Vec<String> = grants.get(&name).unwrap().iter().cloned().collect();
+        roles.sort();
+        roles
+    };
+
+    // Persist to WAL so the grant survives restarts.
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        let _ = wal.append_sql(
+            voltnuerongrid_store::SqlWalKind::Ddl,
+            &format!("GRANT ALL ON DATABASE {} TO {}", name, granted_roles.join(",")),
+        );
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(AdminDbGrantsResponse {
+            status: "ok",
+            database: name,
+            granted_roles,
+        }),
+    ))
+}
+
+/// `DELETE /api/v1/admin/databases/:name/grants/:role` — revoke a role's access to a database.
+pub(crate) async fn admin_db_grant_revoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((name, role)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<AdminDbGrantsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+
+    let role = role.trim().to_ascii_lowercase();
+
+    let granted_roles = {
+        let mut grants = state.db_grants.lock().expect("db_grants lock");
+        if let Some(set) = grants.get_mut(&name) {
+            set.remove(&role);
+        }
+        let mut roles: Vec<String> = grants
+            .get(&name)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        roles.sort();
+        roles
+    };
+
+    // Persist revoke to WAL.
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        let _ = wal.append_sql(
+            voltnuerongrid_store::SqlWalKind::Ddl,
+            &format!("REVOKE ALL ON DATABASE {} FROM {}", name, role),
+        );
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(AdminDbGrantsResponse {
+            status: "ok",
+            database: name,
+            granted_roles,
+        }),
+    ))
+}
+
+/// `GET /api/v1/admin/databases/:name/grants` — list all role grants for a database.
+pub(crate) async fn admin_db_grants_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<(StatusCode, Json<AdminDbGrantsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_admin_api_key(&headers, &state)?;
+
+    let granted_roles = {
+        let grants = state.db_grants.lock().expect("db_grants lock");
+        let mut roles: Vec<String> = grants
+            .get(&name)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        roles.sort();
+        roles
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(AdminDbGrantsResponse {
+            status: "ok",
+            database: name,
+            granted_roles,
+        }),
+    ))
 }
 
 pub(crate) async fn admin_server_status(

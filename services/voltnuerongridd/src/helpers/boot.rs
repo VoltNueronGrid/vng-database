@@ -118,6 +118,48 @@ pub(crate) fn build_durability_engine(
 // The engine-first path is the reason for the SqlWalKind extension to the
 // trait. Once all deployments have migrated, the legacy path can be removed.
 
+/// Replay `CREATE DATABASE` / `DROP DATABASE` statements from the DDL WAL into
+/// the `DatabaseCatalog`.  Must be called before `replay_ddl_into` so that
+/// the database name registry is populated before DDL objects are catalogued.
+pub(crate) fn replay_database_catalog_into(
+    db_catalog: &mut voltnuerongrid_meta::DatabaseCatalog,
+    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    use voltnuerongrid_store::SqlWalKind;
+
+    let stmts: Vec<String> = {
+        let guard = engine.lock().expect("wal_engine lock for replay_db_catalog");
+        if guard.persists_sql() && guard.sql_count(SqlWalKind::Ddl) > 0 {
+            guard.iter_sql(SqlWalKind::Ddl)
+        } else {
+            Vec::new()
+        }
+    };
+
+    let now_ms = now_unix_ms() as u128;
+    let mut applied = 0usize;
+    for sql in &stmts {
+        let up = sql.trim().to_ascii_uppercase();
+        if let Some(rest) = up.strip_prefix("CREATE DATABASE ") {
+            let db_name = rest.trim().to_ascii_lowercase();
+            if !db_name.is_empty() {
+                let _ = db_catalog.create(&db_name, now_ms, None, None);
+                applied += 1;
+            }
+        } else if let Some(rest) = up.strip_prefix("DROP DATABASE ") {
+            let db_name = rest.trim().to_ascii_lowercase();
+            if !db_name.is_empty() {
+                let _ = db_catalog.drop_database(&db_name, true);
+                applied += 1;
+            }
+        }
+    }
+    if applied > 0 {
+        eprintln!("[vng-wal] replayed {} CREATE/DROP DATABASE statement(s) from WAL", applied);
+    }
+}
+
+
 /// Replay DDL into a freshly-created catalog from the durability engine.
 pub(crate) fn replay_ddl_into(
     catalog: &mut DdlCatalog,
@@ -207,6 +249,108 @@ pub(crate) fn apply_dml_to_rowstore(rs: &mut PagedRowStore, xid: voltnuerongrid_
         if let Some((k, d)) = extract_update_row_from_sql(sql) {
             rs.insert(xid, &k, d);
         }
+    }
+}
+
+
+/// Replay user accounts from the DDL WAL into `user_store` at boot time.
+/// Handles both `CREATE USER …` and `DROP USER <user_id>` lines.
+pub(crate) fn replay_user_store_into(
+    user_store: &mut crate::user_store::UserStore,
+    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    use voltnuerongrid_store::SqlWalKind;
+    let stmts: Vec<String> = {
+        let guard = engine.lock().expect("wal_engine lock for replay_user_store");
+        if guard.persists_sql() && guard.sql_count(SqlWalKind::Ddl) > 0 {
+            guard.iter_sql(SqlWalKind::Ddl)
+        } else {
+            Vec::new()
+        }
+    };
+    let mut applied = 0usize;
+    for stmt in &stmts {
+        let up = stmt.trim_start().to_ascii_uppercase();
+        if up.starts_with("CREATE USER ") {
+            if let Some(account) = crate::user_store::user_from_wal(stmt.trim()) {
+                user_store.insert(account);
+                applied += 1;
+            }
+        } else if let Some(rest) = stmt.trim().strip_prefix("DROP USER ") {
+            let user_id = rest.trim();
+            if user_store.remove_by_id(user_id) {
+                applied += 1;
+            }
+        }
+    }
+    if applied > 0 {
+        eprintln!("[vng-wal] replayed {} user account operation(s) from WAL", applied);
+    }
+}
+
+
+/// Load all rows persisted in the durability engine into the row store.
+/// Called at boot after DDL WAL replay, so schema is already loaded.
+/// This replaces the old DML SQL replay path when `wal_engine.persists_rows()` is true.
+pub(crate) fn load_persisted_rows_into(
+    row_store: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::mvcc::PagedRowStore>>,
+    wal_engine: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) -> usize {
+    let rows = {
+        let eng = wal_engine.lock().expect("wal_engine load_persisted_rows");
+        if !eng.persists_rows() {
+            return 0;
+        }
+        eng.scan_persisted_rows()
+    };
+    let count = rows.len();
+    if count == 0 {
+        return 0;
+    }
+    let mut rs = row_store.lock().expect("row_store load_persisted_rows");
+    let xid = rs.begin_xid(); // boot xid — gives all restored rows the same xid
+    for (db, row_key, _orig_xid, data, is_tombstone) in rows {
+        // Reconstruct the prefixed key that the service layer uses.
+        let prefixed = if db.is_empty() {
+            row_key.clone()
+        } else {
+            format!("{db}.{row_key}")
+        };
+        if is_tombstone {
+            rs.delete(xid, &prefixed);
+        } else {
+            rs.insert(xid, &prefixed, data);
+        }
+    }
+    eprintln!("[vng-boot] loaded {count} row(s) from persisted row store");
+    count
+}
+
+
+/// Remove all rows belonging to `db` from the in-memory row store and
+/// from the persisted row store (if the durability engine supports it).
+pub(crate) fn purge_database_rows(
+    db: &str,
+    row_store: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::mvcc::PagedRowStore>>,
+    wal_engine: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    let prefix = format!("{db}.");
+    // In-memory purge: delete all rows whose key starts with the db prefix.
+    let mut rs = row_store.lock().expect("row_store purge_database lock");
+    let xid = rs.begin_xid();
+    let keys_to_purge: Vec<String> = rs
+        .export_rows_snapshot()
+        .into_iter()
+        .filter(|(k, _)| k.starts_with(&prefix))
+        .map(|(k, _)| k)
+        .collect();
+    for k in keys_to_purge {
+        rs.delete(xid, &k);
+    }
+    // C-2: Drop the per-DB RocksDB column family atomically so all on-disk
+    // rows for this database are removed without a full scan/delete loop.
+    if let Ok(mut wal) = wal_engine.lock() {
+        wal.drop_db_column_family(db);
     }
 }
 

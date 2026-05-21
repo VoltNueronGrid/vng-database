@@ -1,7 +1,7 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use voltnuerongrid_auth::PrivilegeAction;
 use voltnuerongrid_sql::ast::Statement;
@@ -239,9 +239,18 @@ pub(crate) async fn catalog_table_columns(
     ))
 }
 
+/// Query params for `GET /api/v1/admin/schema/tree`.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct SchemaTreeQuery {
+    /// Optional database name to scope the response.
+    /// When absent, all databases are returned (admin overview).
+    pub(crate) database: Option<String>,
+}
+
 pub(crate) async fn admin_schema_tree(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(q): Query<SchemaTreeQuery>,
 ) -> Result<(StatusCode, Json<AdminSchemaTreeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
 
@@ -253,8 +262,22 @@ pub(crate) async fn admin_schema_tree(
         .unwrap_or_default()
         .as_millis();
 
+    // Prefer x-vng-database header, fall back to ?database= query param.
+    let db_filter: Option<String> = headers
+        .get("x-vng-database")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .or_else(|| q.database.as_ref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()));
+
     let mut db_map: BTreeMap<String, BTreeMap<String, Vec<&DdlCatalogEntry>>> = BTreeMap::new();
     for entry in catalog.active_entries() {
+        // Scope to a single database when requested
+        if let Some(ref db) = db_filter {
+            if !entry.database_name.to_lowercase().eq(db) {
+                continue;
+            }
+        }
         db_map
             .entry(entry.database_name.clone())
             .or_default()

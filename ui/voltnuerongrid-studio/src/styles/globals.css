@@ -1095,6 +1095,25 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+/* M-6: Server config key/value table inside settings panel */
+.settings-dl {
+  display: grid; grid-template-columns: auto 1fr;
+  gap: 4px 12px; margin: 0; padding: 0; font-size: 12px;
+}
+.settings-dl dt {
+  color: var(--text-3); font-weight: 500;
+  padding: 3px 0;
+}
+.settings-dl dd {
+  color: var(--text-1); margin: 0;
+  padding: 3px 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.settings-dl code {
+  font-size: 11px; background: var(--bg-3);
+  padding: 1px 4px; border-radius: 3px;
+}
+
 [data-theme="light"] .settings-panel {
   box-shadow: 0 24px 60px #00000022, 0 0 0 1px #00000006;
 }

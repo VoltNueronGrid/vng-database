@@ -1,5 +1,9 @@
 package com.voltnuerongrid.driver;
 
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +28,10 @@ import java.util.stream.Collectors;
  */
 public final class VoltNueronGridDriver {
 
+    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
+
     private final DriverConfig config;
 
     /**
@@ -37,6 +45,41 @@ public final class VoltNueronGridDriver {
         }
         config.validateOrThrow();
         this.config = config;
+    }
+
+    // -------------------------------------------------------------------------
+    // HTTP execution
+    // -------------------------------------------------------------------------
+
+    /**
+     * Executes a {@link DriverRequest} using Java's built-in {@link HttpClient}.
+     *
+     * @param req the request to execute
+     * @return a {@link DriverResponse} with status code and body
+     * @throws DriverError with kind {@link DriverError.Kind#TIMEOUT} on request timeout
+     * @throws DriverError with kind {@link DriverError.Kind#TRANSPORT} on network failure
+     */
+    public DriverResponse execute(DriverRequest req) {
+        try {
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(req.url()))
+                    .timeout(Duration.ofMillis(config.requestTimeoutMs()));
+            req.headers().forEach(builder::header);
+
+            HttpRequest.BodyPublisher body = req.body() != null
+                    ? HttpRequest.BodyPublishers.ofString(req.body())
+                    : HttpRequest.BodyPublishers.noBody();
+            builder.method(req.method(), body);
+
+            HttpResponse<String> resp = HTTP_CLIENT.send(
+                    builder.build(),
+                    HttpResponse.BodyHandlers.ofString());
+            return new DriverResponse(resp.statusCode(), resp.body());
+        } catch (java.net.http.HttpTimeoutException e) {
+            throw DriverError.timeout(req.url());
+        } catch (Exception e) {
+            throw DriverError.transport(e.getMessage());
+        }
     }
 
     // -------------------------------------------------------------------------

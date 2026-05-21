@@ -129,12 +129,18 @@ impl DdlCatalog {
     }
 
     /// Record an ALTER against an existing active object.
+    ///
+    /// M-2: Applies the schema change to `original_statement` so that
+    /// `extract_column_names_from_ddl()` always returns the current column list.
+    /// Supports:
+    /// - `ALTER TABLE t ADD [COLUMN] col type` → appends column to DDL
+    /// - `ALTER TABLE t DROP [COLUMN] col`     → removes column from DDL
     pub fn record_alter(
         &mut self,
         db: &str,
         schema: &str,
         name: &str,
-        _statement: &str,
+        statement: &str,
         now_ms: u128,
     ) -> CatalogResult {
         let key = qualified_key(db, schema, name);
@@ -142,6 +148,17 @@ impl DdlCatalog {
             None => CatalogResult::NotFound,
             Some(e) if e.dropped => CatalogResult::AlreadyDropped,
             Some(e) => {
+                // Apply schema change to original_statement (M-2).
+                let lower = statement.trim().to_ascii_lowercase();
+                if lower.contains(" add ") {
+                    if let Some((_tbl, col_name, col_def)) = parse_alter_add_column(statement) {
+                        e.original_statement = apply_add_column_to_ddl(&e.original_statement, &col_name, &col_def);
+                    }
+                } else if lower.contains(" drop ") {
+                    if let Some((_tbl, col_name)) = parse_alter_drop_column(statement) {
+                        e.original_statement = remove_column_from_ddl(&e.original_statement, &col_name);
+                    }
+                }
                 e.last_altered_at_unix_ms = Some(now_ms);
                 e.alteration_count += 1;
                 CatalogResult::AlterApplied
@@ -272,6 +289,13 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
         }
         ["create", "or", "replace", "view", name, ..] => info!("create", "view", name, true),
         ["create", "or", "replace", "table", name, ..] => info!("create", "table", name, true),
+        // CREATE INDEX idx_name ON table_name (col)
+        ["create", "index", name, ..] => info!("create", "index", name, false),
+        // CREATE UNIQUE INDEX idx_name ON table_name (col)
+        ["create", "unique", "index", name, ..] => info!("create", "index", name, false),
+        ["drop", "index", "if", "exists", name, ..] | ["drop", "index", name, ..] => {
+            info!("drop", "index", name, false)
+        }
         ["drop", "table", "if", "exists", name, ..] | ["drop", "table", name, ..] => {
             info!("drop", "table", name, false)
         }
@@ -290,6 +314,115 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
         ["alter", "table", name, ..] => info!("alter", "table", name, false),
         _ => None,
     }
+}
+
+// ── ALTER TABLE DDL helpers ───────────────────────────────────────────────
+
+/// Parse an `ALTER TABLE t ADD COLUMN col TYPE [constraints]` or
+/// `ALTER TABLE t ADD col TYPE` statement and return `(table_name, col_name, col_def)`.
+/// Returns `None` for unsupported forms.
+pub fn parse_alter_add_column(sql: &str) -> Option<(String, String, String)> {
+    let lower = sql.trim().to_ascii_lowercase();
+    // Normalize: "alter table T add column C type" or "alter table T add C type"
+    let rest = lower.strip_prefix("alter table ")?;
+    // rest = "t add column c type ..." or "t add c type ..."
+    let (table_part, after_table) = {
+        let mut it = rest.splitn(2, " add ");
+        let t = it.next()?.trim().to_string();
+        let after = it.next()?.trim().to_string();
+        (t, after)
+    };
+    // after_table = "column c type ..." or "c type ..."
+    let col_rest = after_table
+        .strip_prefix("column ")
+        .unwrap_or(&after_table);
+    // col_rest = "c type [default ...]"
+    let mut parts = col_rest.splitn(2, ' ');
+    let col_name = parts.next()?.trim().to_string();
+    let col_def = parts.next().unwrap_or("text").trim().to_string();
+    if col_name.is_empty() {
+        return None;
+    }
+    // Also extract from original casing for the definition.
+    let original_lower = sql.trim().to_ascii_lowercase();
+    let col_def_original = {
+        // Find the column name in the original SQL (case-insensitive).
+        let pos = original_lower.find(&col_name)?;
+        sql[pos + col_name.len()..].trim().to_string()
+    };
+    Some((table_part, col_name, if col_def_original.is_empty() { col_def } else { col_def_original }))
+}
+
+/// Parse an `ALTER TABLE t DROP COLUMN col` or `ALTER TABLE t DROP col` statement.
+/// Returns `(table_name, col_name)`.
+pub fn parse_alter_drop_column(sql: &str) -> Option<(String, String)> {
+    let lower = sql.trim().to_ascii_lowercase();
+    let rest = lower.strip_prefix("alter table ")?;
+    let (table_part, after_table) = {
+        let mut it = rest.splitn(2, " drop ");
+        let t = it.next()?.trim().to_string();
+        let after = it.next()?.trim().to_string();
+        (t, after)
+    };
+    let col_name = after_table
+        .strip_prefix("column ")
+        .unwrap_or(&after_table)
+        .trim()
+        .trim_end_matches(';')
+        .to_string();
+    if col_name.is_empty() {
+        return None;
+    }
+    Some((table_part, col_name))
+}
+
+/// Apply an ADD COLUMN alter to an existing CREATE TABLE DDL string.
+/// Inserts `col_name col_def` before the closing `)`.
+pub fn apply_add_column_to_ddl(original_ddl: &str, col_name: &str, col_def: &str) -> String {
+    // Find the last `)` to insert before.
+    let close = original_ddl.rfind(')');
+    match close {
+        None => {
+            // Degenerate — just append.
+            format!("{original_ddl}, {col_name} {col_def}")
+        }
+        Some(pos) => {
+            let before = original_ddl[..pos].trim_end_matches([' ', '\t', '\n', '\r', ',']);
+            let after = &original_ddl[pos..];
+            format!("{before}, {col_name} {col_def}{after}")
+        }
+    }
+}
+
+/// Apply a DROP COLUMN alter to an existing CREATE TABLE DDL string.
+/// Removes the column definition from the column list.  Column matching is
+/// case-insensitive.  If the column is not found, the original DDL is returned unchanged.
+pub fn remove_column_from_ddl(original_ddl: &str, col_name: &str) -> String {
+    // Find the `(` that opens the column list.
+    let open = match original_ddl.find('(') {
+        Some(i) => i,
+        None => return original_ddl.to_string(),
+    };
+    let close = match original_ddl.rfind(')') {
+        Some(i) => i,
+        None => return original_ddl.to_string(),
+    };
+    let prefix = &original_ddl[..=open]; // "CREATE TABLE foo ("
+    let suffix = &original_ddl[close..]; // ")"
+    let col_list = &original_ddl[open + 1..close];
+
+    // Split by comma, filter out the target column.
+    let col_lower = col_name.to_ascii_lowercase();
+    let remaining: Vec<&str> = col_list
+        .split(',')
+        .filter(|def| {
+            let trimmed = def.trim().to_ascii_lowercase();
+            // Match if the first word of this column def equals col_name.
+            let first_word = trimmed.split_whitespace().next().unwrap_or("");
+            first_word != col_lower.as_str()
+        })
+        .collect();
+    format!("{}{}{}", prefix, remaining.join(","), suffix)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

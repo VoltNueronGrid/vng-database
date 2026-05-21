@@ -93,6 +93,8 @@ impl HtapQueryRouter {
             | SqlStatementKind::CreateTrigger
             | SqlStatementKind::CreateEvent
             | SqlStatementKind::AlterTable
+            | SqlStatementKind::CreateIndex
+            | SqlStatementKind::DropIndex
             | SqlStatementKind::DropTable
             | SqlStatementKind::DropView
             | SqlStatementKind::DropFunction
@@ -100,6 +102,13 @@ impl HtapQueryRouter {
             | SqlStatementKind::DropEvent => RouteDecision {
                 path: QueryPath::Hybrid,
                 reason: "catalog-changing statement affects both planes".to_string(),
+            },
+            SqlStatementKind::Grant
+            | SqlStatementKind::Revoke
+            | SqlStatementKind::CreateRole
+            | SqlStatementKind::DropRole => RouteDecision {
+                path: QueryPath::Hybrid,
+                reason: "privilege-changing statement affects both planes".to_string(),
             },
             SqlStatementKind::Unknown => RouteDecision {
                 path: QueryPath::Unknown,
@@ -149,6 +158,78 @@ impl HtapQueryRouter {
             statements: routed,
             reason: reason.to_string(),
         }
+    }
+}
+
+// ─── H-1: Basic table statistics for the query optimizer ─────────────────────
+
+/// Basic table statistics collected from the row store.
+/// Updated after each DML commit via `StatsRegistry::update_table`.
+#[derive(Debug, Clone, Default)]
+pub struct TableStats {
+    /// Approximate row count.
+    pub row_count: usize,
+    /// Approximate distinct values per column (for selectivity estimation).
+    pub distinct_values: std::collections::HashMap<String, usize>,
+}
+
+/// Lightweight statistics registry — updated after each DML commit.
+///
+/// `StatsRegistry` is the hook point for future cost-based routing in
+/// `HtapQueryRouter::route_statement`. Currently routing is based purely on
+/// AST flags; once table sizes are large enough to justify it, the planner can
+/// consult `StatsRegistry::selectivity_eq` to weight index vs. full-scan paths.
+#[derive(Debug, Default)]
+pub struct StatsRegistry {
+    tables: std::collections::HashMap<String, TableStats>,
+}
+
+impl StatsRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record updated statistics for a table.
+    ///
+    /// `table` should be in `"db.table"` form when a database context is
+    /// present, or just `"table"` for the no-db (legacy) scope.
+    pub fn update_table(
+        &mut self,
+        table: &str,
+        row_count: usize,
+        distinct: std::collections::HashMap<String, usize>,
+    ) {
+        self.tables.insert(
+            table.to_string(),
+            TableStats {
+                row_count,
+                distinct_values: distinct,
+            },
+        );
+    }
+
+    /// Return the statistics for `table`, or `None` if not yet collected.
+    pub fn get(&self, table: &str) -> Option<&TableStats> {
+        self.tables.get(table)
+    }
+
+    /// Estimate the selectivity of a point predicate `col = <val>` on `table`.
+    ///
+    /// Returns a value in `(0.0, 1.0]`:
+    /// - `1.0`  — table is empty (every row matches vacuously / no pruning possible).
+    /// - `1/n`  — `n` distinct values for `col` (uniform distribution assumed).
+    /// - `0.1`  — statistics are unavailable for `table` (10% default).
+    pub fn selectivity_eq(&self, table: &str, col: &str) -> f64 {
+        if let Some(stats) = self.tables.get(table) {
+            if stats.row_count == 0 {
+                return 1.0;
+            }
+            let distinct = stats.distinct_values.get(col).copied().unwrap_or(1);
+            return (1.0 / distinct.max(1) as f64).min(1.0);
+        }
+        // Unknown table — assume 10% selectivity so the planner errs on the
+        // side of optimism rather than refusing to prune at all.
+        0.1
     }
 }
 

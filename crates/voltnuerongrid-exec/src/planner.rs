@@ -450,6 +450,21 @@ pub enum LogicalPlan {
     ColumnAlias {
         input: Box<LogicalPlan>,
     },
+    /// H-1: Index-accelerated lookup.  Produced by `QueryPlanner::plan_with_indexes` when
+    /// the WHERE clause is a single equality predicate on an indexed column.
+    /// Cost is significantly lower than a full `Scan`.
+    IndexScan {
+        /// Table being scanned.
+        table: String,
+        /// The indexed column referenced in the equality predicate.
+        indexed_column: String,
+        /// The literal value being looked up.
+        lookup_value: String,
+        /// Name of the index that will be used.
+        index_name: String,
+        /// Inner plan that is replaced by the index lookup.
+        input: Box<LogicalPlan>,
+    },
 }
 
 impl LogicalPlan {
@@ -679,6 +694,28 @@ impl LogicalPlan {
     }
 }
 
+// ─── Helper: single-equality predicate parser ─────────────────────────────────
+
+/// Parse a WHERE predicate that is exactly `col = 'value'` or `col = value`.
+/// Returns `(column_name, literal_value)` if the predicate is a single equality,
+/// or `None` for compound predicates (AND/OR) or non-equality forms.
+fn parse_single_equality(pred: &str) -> Option<(String, String)> {
+    let upper = pred.to_ascii_uppercase();
+    // Reject compound predicates.
+    if upper.contains(" AND ") || upper.contains(" OR ") {
+        return None;
+    }
+    let eq_pos = pred.find('=')?;
+    let lhs = pred[..eq_pos].trim().to_ascii_lowercase();
+    let rhs = pred[eq_pos + 1..].trim();
+    // Strip surrounding quotes.
+    let val = rhs.trim_matches('\'').trim_matches('"').to_string();
+    if lhs.is_empty() || val.is_empty() {
+        return None;
+    }
+    Some((lhs, val))
+}
+
 // ─── Cost estimate ─────────────────────────────────────────────────────────────
 
 /// A simple cost estimate produced by [`QueryPlanner::estimate_cost`].
@@ -716,6 +753,56 @@ impl QueryPlanner {
         }
     }
 
+    /// H-1: Index-aware planner variant.
+    ///
+    /// Converts an AST `Statement` into a `LogicalPlan`, then promotes a `Filter`
+    /// node to `IndexScan` when the following conditions are met:
+    ///
+    /// 1. The statement is a SELECT.
+    /// 2. The WHERE clause is a **single equality predicate** (`col = 'value'`).
+    /// 3. An index on `(table, col)` exists in `available_indexes`.
+    ///
+    /// In all other cases the result is identical to `QueryPlanner::plan`.
+    ///
+    /// `available_indexes` is a slice of `(table_name, column_name, index_name)` tuples
+    /// that callers populate from `IndexManager::list_indexes()`.
+    pub fn plan_with_indexes(
+        stmt: &Statement,
+        available_indexes: &[(String, String, String)], // (table, column, index_name)
+    ) -> LogicalPlan {
+        let base = Self::plan(stmt);
+        // Only promote SELECT plans that resolve to Filter(Scan).
+        if let Statement::Select(sel) = stmt {
+            let table = match &sel.table {
+                Some(t) => t.clone(),
+                None => return base,
+            };
+            // Single equality predicate required.
+            if let Some(pred) = &sel.where_clause {
+                if let Some((col, val)) = parse_single_equality(pred) {
+                    // Check if an index exists for this (table, col).
+                    if let Some(idx_name) = available_indexes.iter().find_map(|(t, c, n)| {
+                        if t.eq_ignore_ascii_case(&table) && c.eq_ignore_ascii_case(&col) {
+                            Some(n.clone())
+                        } else {
+                            None
+                        }
+                    }) {
+                        // Wrap the inner plan in IndexScan.
+                        return LogicalPlan::IndexScan {
+                            table: table.clone(),
+                            indexed_column: col.clone(),
+                            lookup_value: val.clone(),
+                            index_name: idx_name,
+                            input: Box::new(base),
+                        };
+                    }
+                }
+            }
+        }
+        base
+    }
+
     /// Estimate the cost of executing a [`LogicalPlan`].
     pub fn estimate_cost(plan: &LogicalPlan) -> CostEstimate {
         match plan {
@@ -731,6 +818,14 @@ impl QueryPlanner {
                     recommended_path: path,
                 }
             }
+            // H-1: Index scan is dramatically cheaper than a full scan.
+            // Unique-index lookups return at most 1 row (cost ≈ 0.05);
+            // non-unique indexes assume 1% selectivity (cost ≈ 0.2).
+            LogicalPlan::IndexScan { .. } => CostEstimate {
+                estimated_rows: 1,
+                relative_cost: 0.05,
+                recommended_path: QueryPath::Oltp,
+            },
             LogicalPlan::Filter { input, .. } => {
                 let inner = Self::estimate_cost(input);
                 CostEstimate {
@@ -4414,5 +4509,73 @@ mod paging_strategy_tests {
         assert!(hints.use_index.is_none());
         assert!(hints.max_rows.is_none());
         assert!(!hints.explain_only);
+    }
+
+    // ─── H-1: Index-aware planner tests ──────────────────────────────────────
+
+    #[test]
+    fn plan_with_indexes_produces_index_scan_for_equality_predicate() {
+        let sql = "SELECT * FROM users WHERE email = 'alice@example.com'";
+        let stmt = voltnuerongrid_sql::parse_one(sql).expect("parse");
+        let indexes = vec![
+            ("users".to_string(), "email".to_string(), "idx_users_email".to_string()),
+        ];
+        let plan = QueryPlanner::plan_with_indexes(&stmt, &indexes);
+        assert!(
+            matches!(&plan, LogicalPlan::IndexScan { indexed_column, .. } if indexed_column == "email"),
+            "expected IndexScan on 'email', got: {:?}", plan
+        );
+    }
+
+    #[test]
+    fn plan_with_indexes_falls_back_to_scan_when_no_index_matches() {
+        let sql = "SELECT * FROM users WHERE age = '30'";
+        let stmt = voltnuerongrid_sql::parse_one(sql).expect("parse");
+        let indexes = vec![
+            ("users".to_string(), "email".to_string(), "idx_users_email".to_string()),
+        ];
+        let plan = QueryPlanner::plan_with_indexes(&stmt, &indexes);
+        // No index on 'age' — must NOT produce IndexScan.
+        assert!(
+            !matches!(&plan, LogicalPlan::IndexScan { .. }),
+            "unexpected IndexScan for unindexed column; got: {:?}", plan
+        );
+    }
+
+    #[test]
+    fn plan_with_indexes_falls_back_for_compound_predicate() {
+        let sql = "SELECT * FROM users WHERE email = 'a@b.com' AND active = '1'";
+        let stmt = voltnuerongrid_sql::parse_one(sql).expect("parse");
+        let indexes = vec![
+            ("users".to_string(), "email".to_string(), "idx_users_email".to_string()),
+        ];
+        let plan = QueryPlanner::plan_with_indexes(&stmt, &indexes);
+        // Compound predicates are not index-accelerated by the planner.
+        assert!(
+            !matches!(&plan, LogicalPlan::IndexScan { .. }),
+            "compound predicates must not produce IndexScan; got: {:?}", plan
+        );
+    }
+
+    #[test]
+    fn index_scan_cost_is_lower_than_filtered_scan() {
+        let sql = "SELECT * FROM users WHERE email = 'x@y.com'";
+        let stmt = voltnuerongrid_sql::parse_one(sql).expect("parse");
+        let indexes = vec![
+            ("users".to_string(), "email".to_string(), "idx_users_email".to_string()),
+        ];
+        let index_plan = QueryPlanner::plan_with_indexes(&stmt, &indexes);
+        let base_plan = QueryPlanner::plan(&stmt);
+
+        let index_cost = QueryPlanner::estimate_cost(&index_plan);
+        let base_cost = QueryPlanner::estimate_cost(&base_plan);
+
+        assert!(
+            index_cost.relative_cost < base_cost.relative_cost,
+            "index scan cost ({}) must be < filtered scan cost ({})",
+            index_cost.relative_cost,
+            base_cost.relative_cost
+        );
+        assert_eq!(index_cost.recommended_path, crate::QueryPath::Oltp);
     }
 }

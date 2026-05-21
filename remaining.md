@@ -8,7 +8,7 @@
 
 ---
 
-## TL;DR — what landed this session
+## TL;DR — what landed in session 26
 
 ### ✅ DML proxy forwards `VNG_CLUSTER_TOKEN` (handlers/sql.rs)
 

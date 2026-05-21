@@ -42,6 +42,8 @@ pub enum SqlStatementKind {
     Grant,
     Call,
     AlterTable,
+    CreateIndex,
+    DropIndex,
     DropTable,
     DropView,
     DropFunction,
@@ -54,6 +56,11 @@ pub enum SqlStatementKind {
     Savepoint,
     ReleaseSavepoint,
     RollbackToSavepoint,
+    // M-2: privilege / role management
+    Grant,
+    Revoke,
+    CreateRole,
+    DropRole,
     Unknown,
 }
 
@@ -251,6 +258,9 @@ impl SqlAnalyzer {
             (Some("CREATE"), Some("TRIGGER"), _) => SqlStatementKind::CreateTrigger,
             (Some("CREATE"), Some("EVENT"), _) => SqlStatementKind::CreateEvent,
             (Some("ALTER"), Some("TABLE"), _) => SqlStatementKind::AlterTable,
+            (Some("CREATE"), Some("INDEX"), _) => SqlStatementKind::CreateIndex,
+            (Some("CREATE"), Some("UNIQUE"), _) => SqlStatementKind::CreateIndex,
+            (Some("DROP"), Some("INDEX"), _) => SqlStatementKind::DropIndex,
             (Some("DROP"), Some("TABLE"), _) => SqlStatementKind::DropTable,
             (Some("DROP"), Some("VIEW"), _) => SqlStatementKind::DropView,
             (Some("DROP"), Some("FUNCTION"), _) => SqlStatementKind::DropFunction,
@@ -263,6 +273,11 @@ impl SqlAnalyzer {
             (Some("ROLLBACK"), _, _) => SqlStatementKind::Rollback,
             (Some("SAVEPOINT"), _, _) => SqlStatementKind::Savepoint,
             (Some("RELEASE"), Some("SAVEPOINT"), _) => SqlStatementKind::ReleaseSavepoint,
+            // M-2: privilege / role management
+            (Some("GRANT"), _, _) => SqlStatementKind::Grant,
+            (Some("REVOKE"), _, _) => SqlStatementKind::Revoke,
+            (Some("CREATE"), Some("ROLE"), _) => SqlStatementKind::CreateRole,
+            (Some("DROP"), Some("ROLE"), _) => SqlStatementKind::DropRole,
             _ => SqlStatementKind::Unknown,
         }
     }
@@ -425,11 +440,17 @@ impl SqlAnalyzer {
                     | SqlStatementKind::Grant
                     | SqlStatementKind::Call
                     | SqlStatementKind::AlterTable
+                    | SqlStatementKind::CreateIndex
+                    | SqlStatementKind::DropIndex
                     | SqlStatementKind::DropTable
                     | SqlStatementKind::DropView
                     | SqlStatementKind::DropFunction
                     | SqlStatementKind::DropTrigger
                     | SqlStatementKind::DropEvent
+                    | SqlStatementKind::Grant
+                    | SqlStatementKind::Revoke
+                    | SqlStatementKind::CreateRole
+                    | SqlStatementKind::DropRole
             ),
             touches_catalog: matches!(
                 kind,
@@ -442,11 +463,17 @@ impl SqlAnalyzer {
                     | SqlStatementKind::CreateDatabase
                     | SqlStatementKind::CreateSchema
                     | SqlStatementKind::AlterTable
+                    | SqlStatementKind::CreateIndex
+                    | SqlStatementKind::DropIndex
                     | SqlStatementKind::DropTable
                     | SqlStatementKind::DropView
                     | SqlStatementKind::DropFunction
                     | SqlStatementKind::DropTrigger
                     | SqlStatementKind::DropEvent
+                    | SqlStatementKind::Grant
+                    | SqlStatementKind::Revoke
+                    | SqlStatementKind::CreateRole
+                    | SqlStatementKind::DropRole
             ),
             kind,
         }

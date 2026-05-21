@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
-use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,11 +17,11 @@ use voltnuerongrid_auth::{
     PrivilegeAction, RbacPrivilegeMatrix, SecurityConfigContract,
 };
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
-use voltnuerongrid_ai::{AutonomousActionDecision, AutonomousActionExecutionRecord};
+use voltnuerongrid_ai::AutonomousActionExecutionRecord;
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind, SupportedLocale};
 use voltnuerongrid_store::htap_sync::{
-    InMemoryReplicationTransport, MutationOp, ReplicaReplayState, RowStoreSyncOrigin,
+    InMemoryReplicationTransport, ReplicaReplayState, RowStoreSyncOrigin,
 };
 use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::ddl_catalog::DdlCatalog;
@@ -48,6 +47,7 @@ pub(crate) mod audit_helpers;
 pub(crate) mod handlers;
 pub(crate) mod helpers;
 pub(crate) mod router;
+pub(crate) mod user_store;
 use auth::*;
 use config_init::*;
 use audit_helpers::*;
@@ -117,7 +117,7 @@ pub(crate) use helpers::dr_hook::{
 // boot
 pub(crate) use helpers::boot::{
     persist_sql_statement, build_durability_engine,
-    replay_ddl_into, replay_dml_into,
+    replay_ddl_into, replay_dml_into, replay_database_catalog_into,
 };
 // ─── Re-export auth helpers so handler/helper modules can use `crate::fn` ────
 // ─── Re-export audit helpers ──────────────────────────────────────────────────
@@ -158,6 +158,11 @@ pub(crate) use handlers::misc::{
 // ─── Re-export auth helpers ────────────────────────────────────────────────────
 pub(crate) use auth::locale_from_headers;
 
+
+/// Default per-database connection concurrency limit (Gap #9).
+/// Overridden by the database's max_connections DDL attribute once that
+/// field is added to the catalog. sql.rs references this via `crate::`.
+pub(crate) const DEFAULT_DB_MAX_CONNECTIONS: usize = 100;
 
 pub(crate) static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -233,6 +238,11 @@ pub(crate) struct AcidTxEntry {
     /// greater than this value was written by a concurrent transaction —
     /// triggering a write-write conflict (HTTP 409).
     row_store_snapshot_xid: Option<u64>,
+    /// M-7: Row-level OCC for serializable isolation — the set of raw row keys
+    /// written (INSERT/UPDATE/DELETE) by this transaction.  Populated at COMMIT
+    /// time so that conflict detection can compare individual keys rather than
+    /// coarse-grained table prefixes.
+    pub(crate) written_row_keys: std::collections::HashSet<String>,
 }
 
 #[derive(Default)]
@@ -241,9 +251,30 @@ pub(crate) struct AcidTransactionRegistry {
 }
 
 impl AcidTransactionRegistry {
-    fn begin(&mut self, tx_id: &str, assigned_node_id: &str, isolation_level: &str, now_ms: u128) {
+    /// Open a new transaction.
+    ///
+    /// `begin_snapshot_xid` — for `repeatable_read` transactions, pass
+    /// `Some(rs.current_xid())` captured *before* calling this method.
+    /// This is stored as the read snapshot: all SELECTs in the transaction
+    /// will see row-store state as of this Xid, even after concurrent writes.
+    fn begin(
+        &mut self,
+        tx_id: &str,
+        assigned_node_id: &str,
+        isolation_level: &str,
+        now_ms: u128,
+        begin_snapshot_xid: Option<u64>,
+    ) {
         let read_snapshot_at_ms = if isolation_level == "repeatable_read" {
             Some(now_ms)
+        } else {
+            None
+        };
+        // For repeatable_read: snapshot Xid is captured at BEGIN time so reads
+        // are stable for the lifetime of the transaction.
+        // For other levels: stays None until set at COMMIT by set_row_store_snapshot().
+        let row_store_snapshot_xid = if isolation_level == "repeatable_read" {
+            begin_snapshot_xid
         } else {
             None
         };
@@ -261,9 +292,22 @@ impl AcidTransactionRegistry {
                 savepoints: Vec::new(),
                 read_snapshot_at_ms,
                 wal_log: Vec::new(),
-                row_store_snapshot_xid: None,
+                row_store_snapshot_xid,
+                written_row_keys: std::collections::HashSet::new(),
             },
         );
+    }
+
+    /// C-3: Return the read snapshot Xid for a repeatable-read transaction.
+    /// Returns `None` for non-repeatable-read transactions (callers should
+    /// fall back to `rs.current_xid()` for read-committed semantics).
+    pub(crate) fn rr_read_snapshot_xid(&self, tx_id: &str) -> Option<u64> {
+        let entry = self.transactions.get(tx_id)?;
+        if entry.isolation_level == "repeatable_read" {
+            entry.row_store_snapshot_xid
+        } else {
+            None
+        }
     }
 
     /// S2-WS2-05: Record the `PagedRowStore::current_xid()` at the moment
@@ -356,30 +400,49 @@ impl AcidTransactionRegistry {
         }
     }
 
-    /// REQ-23: For serializable isolation, check whether any other Active serializable
-    /// transaction has already written to the same table(s) as `tx_id`.
-    /// Returns the conflicting table name if a conflict is found, otherwise None.
-    fn check_serializable_conflict(&self, tx_id: &str) -> Option<String> {
-        let entry = self.transactions.get(tx_id)?;
-        if entry.isolation_level != "serializable" {
+    /// M-7: Record the raw row keys written by `tx_id` at COMMIT time.
+    /// Called from the sql_transaction COMMIT path with keys collected during
+    /// the DML flush loop.
+    pub(crate) fn record_written_row_keys(&mut self, tx_id: &str, keys: impl IntoIterator<Item = String>) {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            for k in keys {
+                entry.written_row_keys.insert(k);
+            }
+        }
+    }
+
+    /// M-7: Row-level serializable conflict detection.
+    ///
+    /// Returns the first conflicting key if `current_written_keys` overlaps with
+    /// the `written_row_keys` of any *committed* serializable transaction other
+    /// than `current_tx_id`.  Comparing only committed transactions means we
+    /// catch write-write anti-dependencies (a committed peer wrote the same row
+    /// we are about to commit) without false-positives from concurrent-but-
+    /// non-overlapping transactions that happened to touch the same table.
+    pub(crate) fn check_serializable_conflict_row_level(
+        &self,
+        current_tx_id: &str,
+        current_written_keys: &std::collections::HashSet<String>,
+    ) -> Option<String> {
+        if current_written_keys.is_empty() {
             return None;
         }
-        if entry.affected_tables.is_empty() {
-            return None;
-        }
-        for (other_id, other) in &self.transactions {
-            if other_id == tx_id {
+        for (other_tx_id, other_entry) in &self.transactions {
+            if other_tx_id == current_tx_id {
                 continue;
             }
-            if other.state != AcidTxState::Active {
+            if other_entry.isolation_level != "serializable" {
                 continue;
             }
-            if other.isolation_level != "serializable" {
+            // Only compare against committed peers — still-active transactions
+            // have not yet landed their writes, so comparing with them would be
+            // premature and cause false conflicts.
+            if other_entry.state != AcidTxState::Committed {
                 continue;
             }
-            for table in &entry.affected_tables {
-                if other.affected_tables.contains(table) {
-                    return Some(table.clone());
+            for k in current_written_keys {
+                if other_entry.written_row_keys.contains(k) {
+                    return Some(k.clone());
                 }
             }
         }
@@ -527,6 +590,38 @@ pub(crate) struct AppState {
     pub(crate) database_catalog: Arc<Mutex<voltnuerongrid_meta::DatabaseCatalog>>,
     /// Phase 0 — runtime config selected at boot. Read-only after startup.
     pub(crate) runtime_config: Arc<voltnuerongrid_config::RuntimeConfig>,
+    /// Gap #7: in-memory user account store (replayed from DDL WAL at boot).
+    pub(crate) user_store: Arc<Mutex<crate::user_store::UserStore>>,
+    /// Gap #7: active session store.
+    pub(crate) session_store: Arc<Mutex<crate::user_store::SessionStore>>,
+    /// Gap #7: HMAC-SHA256 session token signer.
+    pub(crate) session_signer: Arc<Mutex<crate::user_store::SessionSigner>>,
+    /// Gap #6/#7: Basic per-table row count statistics, updated on DML commits.
+    /// Key: "db.table" (or just "table" for no-db scope). Value: approximate row count.
+    pub(crate) table_stats: Arc<Mutex<std::collections::HashMap<String, u64>>>,
+    /// Gap #9: Per-database connection semaphore. Capacity = database's
+    /// max_connections setting (or DEFAULT_DB_MAX_CONNECTIONS if unset).
+    /// Held for the duration of each SQL request.
+    pub(crate) db_semaphores: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>>,
+    /// Gap #3: Per-connection undo log for ROLLBACK support.
+    /// Maps connection_id → ordered list of (prefixed_row_key, before_data).
+    /// before_data = Some(RowData) means the row existed before (restore on rollback).
+    /// before_data = None means the row was fresh INSERT (delete on rollback).
+    pub(crate) tx_undo_log: Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, Option<voltnuerongrid_store::mvcc::RowData>)>>>>,
+    /// Tier 3 #1: Per-database role grants.
+    /// Maps database_name → set of role names that have access.
+    /// Empty set means no grants (access denied for non-DBA users).
+    pub(crate) db_grants: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    /// C-3: Maps connection_id → tx_id for connections inside an active
+    /// repeatable-read transaction.  Set on BEGIN, cleared on COMMIT/ROLLBACK.
+    /// Used by sql_execute to find the correct read snapshot for standalone
+    /// SELECTs that are part of an ongoing repeatable-read transaction.
+    pub(crate) connection_tx_active: Arc<Mutex<HashMap<String, String>>>,
+    /// H-1: Table statistics registry for the cost-based query optimizer.
+    /// Updated asynchronously after each DML commit.  The `StatsRegistry`
+    /// is the hook point for future selectivity-driven routing decisions in
+    /// `HtapQueryRouter` (see `crates/voltnuerongrid-exec`).
+    pub(crate) stats_registry: Arc<Mutex<voltnuerongrid_exec::StatsRegistry>>,
 }
 
 #[derive(Clone, Default)]
@@ -1404,6 +1499,9 @@ async fn main() {
         "engine" => wal_engine_boxed.engine_kind().to_string(),
     ).increment(1);
     let wal_engine = Arc::new(Mutex::new(wal_engine_boxed));
+    // Clone before the struct literal consumes `wal_engine` via the field assignment.
+    let wal_engine_for_catalog = wal_engine.clone();
+    let wal_engine_for_users = wal_engine.clone();
 
     let (raft_last_applied_tx, _raft_last_applied_rx) = tokio::sync::watch::channel(0u64);
     let raft_last_applied_tx = Arc::new(raft_last_applied_tx);
@@ -1479,16 +1577,105 @@ async fn main() {
         connector_registry: Arc::new(Mutex::new(Vec::new())),
         tde_override: Arc::new(Mutex::new(None)),
         cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
-        // Phase 1.3 — first-class DatabaseCatalog. Empty at boot; populated
-        // via CREATE DATABASE. Future Phase 2 work will restore this from
-        // RocksDB instead of starting empty.
-        database_catalog: Arc::new(Mutex::new(voltnuerongrid_meta::DatabaseCatalog::new())),
+        // Phase 1.3 — first-class DatabaseCatalog. Restored from WAL at boot
+        // by replaying CREATE DATABASE / DROP DATABASE statements recorded when
+        // each database was created.
+        database_catalog: Arc::new(Mutex::new({
+            let mut db_cat = voltnuerongrid_meta::DatabaseCatalog::new();
+            replay_database_catalog_into(&mut db_cat, &wal_engine_for_catalog);
+            db_cat
+        })),
         // Phase 0 — read-only runtime config selected at boot.
         runtime_config: Arc::new(runtime_config),
+        // Gap #7: user store, session store, session signer.
+        user_store: Arc::new(Mutex::new({
+            let mut us = crate::user_store::UserStore::new();
+            crate::helpers::boot::replay_user_store_into(&mut us, &wal_engine_for_users);
+            us
+        })),
+        session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
+        session_signer: Arc::new(Mutex::new({
+            let secret = std::env::var("VNG_SESSION_SECRET")
+                .or_else(|_| std::env::var("VNG_CLUSTER_TOKEN"))
+                .unwrap_or_else(|_| "vng-default-session-secret".to_string());
+            crate::user_store::SessionSigner::new(&secret, 86_400) // 24-hour TTL
+        })),
+        // Gap #6/#7: per-table row count statistics.
+        table_stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // Gap #9: per-database connection semaphores (lazily created on first request).
+        db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        // Gap #3: per-connection undo log for ROLLBACK support.
+        tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        // Tier 3 #1: per-database role grants (empty = no explicit grants yet).
+        db_grants: Arc::new(Mutex::new(HashMap::new())),
+        connection_tx_active: Arc::new(Mutex::new(HashMap::new())),
+        // H-1: table statistics registry (cost-based optimizer foundation).
+        stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
+
+    // C-1: Skip boot-time row replay into PagedRowStore when RocksDB is the
+    // durability engine — rows live in RocksDB directly and execute functions
+    // read from it via scan_rows_for_db / scan_persisted_rows.  Loading them
+    // into PagedRowStore would waste RAM and cause stale reads after restarts.
+    //
+    // When the in-memory engine is active (persists_rows() == false) we still
+    // replay DML WAL SQL text files into PagedRowStore so the session behaves
+    // identically to previous releases.
+    {
+        let persists_rows = state.wal_engine
+            .lock()
+            .expect("wal_engine lock for boot persists_rows check")
+            .persists_rows();
+        if !persists_rows {
+            // In-memory engine only: replay rows from DML WAL text files.
+            helpers::boot::load_persisted_rows_into(&state.row_store, &state.wal_engine);
+        }
+        // When persists_rows() == true (RocksDB), rows live in RocksDB directly.
+        // execute functions read from RocksDB via scan_rows_for_db — no replay needed.
+        // TODO(C-1): MVCC conflict detection (serializable isolation) reads from
+        // PagedRowStore::scan_at_snapshot, so after boot it only sees rows written
+        // in the current session.  For full correctness with RocksDB-primary reads,
+        // conflict detection should also consult RocksDB.  Track as a future gap.
+    }
+
     tokio::spawn(run_raft_tick_loop(state.clone()));
+
+    // Gap #6: Background Parquet flush task — exports row data to disk for OLAP queries.
+    {
+        let flush_state = state.clone();
+        let flush_interval_secs = std::env::var("VNG_PARQUET_FLUSH_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60);
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                std::time::Duration::from_secs(flush_interval_secs)
+            );
+            interval.tick().await; // skip the first immediate tick
+            loop {
+                interval.tick().await;
+                let rows = {
+                    let rs = flush_state.row_store.lock().expect("row_store parquet flush");
+                    let xid = rs.current_xid();
+                    rs.scan_at_snapshot(xid)
+                        .into_iter()
+                        .map(|(k, d)| (k.to_string(), d.clone()))
+                        .collect::<Vec<_>>()
+                };
+                let flushed = helpers::parquet_flush::flush_rows_to_parquet(&rows, &data_dir);
+                if flushed > 0 {
+                    tracing::info!(
+                        target: "vng.parquet",
+                        tables = flushed,
+                        "parquet flush complete"
+                    );
+                }
+            }
+        });
+    }
 
     let app = build_router(state.clone());
     if native_listener_config.enabled {
@@ -1519,6 +1706,9 @@ async fn main() {
         .await
         .expect("bind listener");
     axum::serve(listener, app).await.expect("server failed");
+
+    // Flush any in-flight OTEL spans before the process exits.
+    observability::shutdown_otel();
 }
 
 pub(crate) async fn native_read_framed<S: AsyncRead + Unpin>(
@@ -1678,6 +1868,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     principal: &RuntimeAccessPrincipal,
     connection_id: &str,
     req: &SqlExecuteRequest,
+    db: &str,
 ) -> Option<Result<(StatusCode, Json<SqlExecuteResponse>), (StatusCode, Json<AuthErrorResponse>)>> {
     let raw = req.sql_batch.trim();
     let upper = raw.to_ascii_uppercase();
@@ -1715,12 +1906,13 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     // Determine next row id (highest existing rowid for this table + 1).
     // Lock acquisition uses match-on-Result so a poisoned mutex returns 503
     // instead of taking the whole service down (fixes pattern from .cursorrules).
+    let scan_prefix = crate::helpers::sql_parse::make_table_scan_prefix(db, &table_name);
     let existing_max: usize = match state.row_store.lock() {
         Ok(rs) => {
             let snap = rs.current_xid();
             rs.scan_at_snapshot(snap)
                 .iter()
-                .filter(|(k, _)| k.starts_with(&format!("{}:", table_name)))
+                .filter(|(k, _)| k.starts_with(&scan_prefix))
                 .filter_map(|(k, _)| k.splitn(2, ':').nth(1).and_then(|v| v.parse::<usize>().ok()))
                 .max()
                 .unwrap_or(0)
@@ -1738,7 +1930,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     let mut inserted = 0usize;
     for i in 1..=num_records {
         let row_id = existing_max + i;
-        let key = format!("{}:{}", table_name, row_id);
+        let key = crate::helpers::sql_parse::make_row_key(db, &table_name, &row_id.to_string());
         let mut row_data: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         row_data.insert("__table".to_string(), table_name.clone());
         for col_idx in 0..col_count {
@@ -1795,7 +1987,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
 
 /// Heuristic value generator for the insert_rows demo.
 /// Pure function — no state, easy to unit-test.
-fn synthesize_demo_value(col_name: &str, table_name: &str, row_id: usize) -> String {
+pub(crate) fn synthesize_demo_value(col_name: &str, table_name: &str, row_id: usize) -> String {
     if col_name.ends_with("_id") || col_name == "id" {
         row_id.to_string()
     } else if col_name.contains("name") {

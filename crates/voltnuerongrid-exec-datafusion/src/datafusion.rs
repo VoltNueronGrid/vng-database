@@ -42,7 +42,7 @@ use datafusion::prelude::*;
 
 use voltnuerongrid_store::mvcc::{PagedRowStore, RowData};
 
-use crate::{AggregateCell, AggregateResult, ExecError, ResultRow, SelectOutput};
+use crate::{ExecError, ResultRow, SelectOutput};
 
 /// Internal column name that carries the original PagedRowStore row key.
 /// Stripped from query results before returning.
@@ -71,20 +71,81 @@ pub async fn execute_select_single(
 ///
 /// Use this when you have a single unified store (as in the service) and need
 /// to pass rows already filtered by table prefix for each table in the query.
-/// Each entry in `table_rows` is registered as a separate MemTable.
+/// Each entry in `table_rows` is registered as a separate MemTable so
+/// JOINs work correctly.  To prefer on-disk Parquet files when available use
+/// [`execute_select_prefer_parquet`] instead.
 pub async fn execute_select_from_rows(
     sql: &str,
     table_rows: HashMap<String, Vec<(String, RowData)>>,
     max_rows: usize,
 ) -> Result<SelectOutput, ExecError> {
+    execute_select_prefer_parquet(sql, table_rows, max_rows, "").await
+}
+
+/// Run `sql` against pre-filtered rows, **preferring on-disk Parquet files**
+/// over the in-memory row snapshots when they are available.
+///
+/// For each table in `table_rows` the function checks for a Parquet file at
+/// `{data_dir}/parquet/_default/{table}.parquet`.  When the file is present it
+/// is registered as a DataFusion listing table (native Parquet reader); when it
+/// is absent the in-memory rows are registered as a [`MemTable`] instead.
+///
+/// Pass `data_dir = ""` to skip the Parquet lookup entirely (equivalent to
+/// [`execute_select_from_rows`]).
+pub async fn execute_select_prefer_parquet(
+    sql: &str,
+    table_rows: HashMap<String, Vec<(String, RowData)>>,
+    max_rows: usize,
+    data_dir: &str,
+) -> Result<SelectOutput, ExecError> {
+    use datafusion::datasource::listing::{
+        ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+    };
+    use datafusion::datasource::file_format::parquet::ParquetFormat;
+
     let ctx = SessionContext::new();
 
     for (name, rows) in table_rows {
-        let (schema, batch) = rows_to_batch(&name, rows)?;
-        let provider = MemTable::try_new(schema, vec![vec![batch]])
-            .map_err(|e| ExecError::Unsupported(format!("MemTable({name}): {e}")))?;
-        ctx.register_table(name.as_str(), Arc::new(provider))
-            .map_err(|e| ExecError::Unsupported(format!("register_table({name}): {e}")))?;
+        // Attempt Parquet registration when data_dir is set.
+        let parquet_registered = if !data_dir.is_empty() {
+            let parquet_path = std::path::PathBuf::from(data_dir)
+                .join("parquet")
+                .join("_default")
+                .join(format!("{name}.parquet"));
+
+            if parquet_path.exists() {
+                // Use a file:// URL understood by DataFusion's listing tables.
+                let url_str = format!("file://{}", parquet_path.display());
+                let registered = async {
+                    let url = ListingTableUrl::parse(&url_str)?;
+                    let fmt = Arc::new(ParquetFormat::default());
+                    let opts = ListingOptions::new(fmt).with_file_extension(".parquet");
+                    let cfg = ListingTableConfig::new(url)
+                        .with_listing_options(opts)
+                        .infer_schema(&ctx.state())
+                        .await?;
+                    let provider = ListingTable::try_new(cfg)?;
+                    ctx.register_table(name.as_str(), Arc::new(provider))?;
+                    Ok::<bool, datafusion::error::DataFusionError>(true)
+                }
+                .await
+                .unwrap_or(false);
+                registered
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // Fall back to MemTable when no Parquet file was successfully registered.
+        if !parquet_registered {
+            let (schema, batch) = rows_to_batch(&name, rows)?;
+            let provider = MemTable::try_new(schema, vec![vec![batch]])
+                .map_err(|e| ExecError::Unsupported(format!("MemTable({name}): {e}")))?;
+            ctx.register_table(name.as_str(), Arc::new(provider))
+                .map_err(|e| ExecError::Unsupported(format!("register_table({name}): {e}")))?;
+        }
     }
 
     let df = ctx
@@ -554,5 +615,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out, SelectOutput::Rows(Vec::new()));
+    }
+
+    // ── Parquet fallback / prefer-parquet path ────────────────────────────────
+
+    /// When `data_dir` is empty, `execute_select_prefer_parquet` must behave
+    /// exactly like `execute_select_from_rows` — no filesystem access at all.
+    #[tokio::test]
+    async fn prefer_parquet_with_empty_data_dir_uses_memtable() {
+        let mut table_rows = HashMap::new();
+        table_rows.insert(
+            "t".to_string(),
+            vec![
+                ("k1".to_string(), {
+                    let mut m = RowData::new();
+                    m.insert("id".to_string(), "10".to_string());
+                    m
+                }),
+                ("k2".to_string(), {
+                    let mut m = RowData::new();
+                    m.insert("id".to_string(), "20".to_string());
+                    m
+                }),
+            ],
+        );
+        let out = execute_select_prefer_parquet(
+            "SELECT id FROM t ORDER BY id",
+            table_rows,
+            100,
+            "", // empty data_dir → pure MemTable path
+        )
+        .await
+        .unwrap();
+        let rows = match out { SelectOutput::Rows(r) => r, o => panic!("{o:?}") };
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].data.get("id").map(String::as_str), Some("10"));
+        assert_eq!(rows[1].data.get("id").map(String::as_str), Some("20"));
+    }
+
+    /// When `data_dir` points to a directory with NO Parquet file for the table,
+    /// the function must still fall through to the MemTable and return in-memory rows.
+    #[tokio::test]
+    async fn prefer_parquet_falls_back_to_memtable_when_file_absent() {
+        let tmp = std::env::temp_dir().join("vng_test_parquet_absent");
+        // Ensure the directory exists but there is no .parquet file inside.
+        std::fs::create_dir_all(tmp.join("parquet/_default")).unwrap();
+
+        let mut table_rows = HashMap::new();
+        table_rows.insert(
+            "absent_table".to_string(),
+            vec![("k1".to_string(), {
+                let mut m = RowData::new();
+                m.insert("v".to_string(), "hello".to_string());
+                m
+            })],
+        );
+        let out = execute_select_prefer_parquet(
+            "SELECT v FROM absent_table",
+            table_rows,
+            100,
+            tmp.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        let rows = match out { SelectOutput::Rows(r) => r, o => panic!("{o:?}") };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].data.get("v").map(String::as_str), Some("hello"));
     }
 }

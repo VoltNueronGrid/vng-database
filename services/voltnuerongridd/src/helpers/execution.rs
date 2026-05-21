@@ -1,5 +1,6 @@
 //! OLAP/OLTP execution helpers, transaction executor, pessimistic locking.
 use std::collections::{HashMap, HashSet};
+use voltnuerongrid_store::index::IndexManager;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use axum::http::StatusCode;
@@ -322,39 +323,81 @@ pub(crate) fn cleanup_wait_edges_for_resource(
 
 /// Owned-argument wrapper so the returned future is `'static` (required by
 /// `run_async_in_executor` when it needs to cross a thread boundary).
+///
+/// When `data_dir` is non-empty the query engine prefers on-disk Parquet files
+/// over the supplied in-memory `table_rows` for tables that already have a
+/// flushed Parquet snapshot (`{data_dir}/parquet/_default/{table}.parquet`).
 pub(crate) async fn df_select_owned(
     sql: String,
     table_rows: HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>>,
     max_rows: usize,
+    data_dir: String,
 ) -> Result<voltnuerongrid_exec_datafusion::SelectOutput, voltnuerongrid_exec_datafusion::ExecError> {
-    voltnuerongrid_exec_datafusion::datafusion::execute_select_from_rows(&sql, table_rows, max_rows).await
+    voltnuerongrid_exec_datafusion::datafusion::execute_select_prefer_parquet(
+        &sql, table_rows, max_rows, &data_dir,
+    ).await
 }
 
 /// Execute an OLAP SELECT query through the DataFusion engine.
 ///
 /// Extracts all referenced table names, builds per-table row snapshots, then
-/// drives `execute_select_from_rows`. Falls back to a stub count on errors so
-/// callers never see a hard failure from the OLAP path.
+/// drives the DataFusion executor.  When `data_dir` is non-empty the executor
+/// prefers on-disk Parquet snapshots over the in-memory rows — see
+/// [`execute_select_prefer_parquet`] for the fallback logic.  Pass `data_dir = ""`
+/// to always use in-memory rows (useful in tests / single-node dev).
+///
+/// Falls back to a stub count on errors so callers never see a hard failure
+/// from the OLAP path.
 pub(crate) fn execute_olap_query(
     query: String,
     max_rows: Option<usize>,
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
+    db: &str,
+    data_dir: &str,
+    // C-3: Optional repeatable-read snapshot Xid.  When `Some`, reads return
+    // row-store state as of that Xid rather than the current head.
+    snapshot_xid: Option<u64>,
+    // C-1: When Some, these RocksDB-sourced rows are used as the primary read
+    // source instead of the in-memory PagedRowStore scan.  Keys are raw row_keys
+    // WITHOUT the db prefix (e.g. "orders:row-1").
+    rocksdb_rows: Option<Vec<(String, HashMap<String, String>)>>,
 ) -> OlapQueryResponse {
     use voltnuerongrid_exec_datafusion::{collect_query_table_names, SelectOutput};
+    use crate::helpers::sql_parse::make_table_scan_prefix;
 
     let started = Instant::now();
     let resolved_max_rows = max_rows.unwrap_or(1_000).min(100_000);
 
     let table_names = collect_query_table_names(&query);
-    let all_rows = rs.export_rows_snapshot();
+    // C-1: prefer RocksDB rows when available (primary read path); fall back to
+    // in-memory PagedRowStore scan for dev/test environments without RocksDB.
+    let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = if let Some(rdb_rows) = rocksdb_rows {
+        // RocksDB rows have no db prefix — convert HashMap to RowData directly.
+        rdb_rows.into_iter().map(|(k, cols)| (k, cols)).collect()
+    } else {
+        // In-memory fallback: use repeatable-read snapshot or current head.
+        let effective_xid = snapshot_xid.unwrap_or_else(|| rs.current_xid());
+        rs.scan_at_snapshot(effective_xid)
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    };
     let mut table_rows: HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
         HashMap::new();
     for name in &table_names {
-        let prefix = format!("{name}:");
+        let prefix = make_table_scan_prefix(db, name);
+        let unqualified = name.as_str();
         let filtered: Vec<_> = all_rows
             .iter()
-            .filter(|(k, _)| *k == name.as_str() || k.starts_with(&prefix))
-            .cloned()
+            .filter(|(k, _)| *k == unqualified || k.starts_with(&prefix))
+            // Strip the db prefix from the key before passing to DataFusion so
+            // table resolution inside the executor still matches the plain table name.
+            .map(|(k, v)| {
+                let stripped = if db.is_empty() { k.clone() } else {
+                    k.strip_prefix(&format!("{db}.")).unwrap_or(k).to_string()
+                };
+                (stripped, v.clone())
+            })
             .collect();
         table_rows.insert(name.clone(), filtered);
     }
@@ -367,6 +410,7 @@ pub(crate) fn execute_olap_query(
         query.clone(),
         table_rows,
         resolved_max_rows,
+        data_dir.to_string(),
     )) {
         Ok(SelectOutput::Rows(rows)) => rows.len(),
         Ok(SelectOutput::Aggregate(_)) => 1,
@@ -384,13 +428,22 @@ pub(crate) fn execute_olap_query(
 
 /// S4-WS3-02: physical OLTP executor — runs point SELECT queries against `PagedRowStore`.
 /// Extracts an optional key/prefix constraint from the WHERE clause and filters visible rows.
+/// `db` scopes the scan to rows stored under the given database prefix (empty = no scoping).
+/// `snapshot_xid`: when `Some`, enforces repeatable-read semantics by reading at that Xid.
+/// `rocksdb_rows`: C-1 — when `Some`, used as primary row source for DataFusion path instead
+/// of in-memory PagedRowStore scan.  Keys are raw row_keys WITHOUT the db prefix.
 pub(crate) fn execute_oltp_select(
     statements: &[String],
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     limit: usize,
+    db: &str,
+    snapshot_xid: Option<u64>,
+    rocksdb_rows: Option<Vec<(String, HashMap<String, String>)>>,
+    index_manager: Option<&IndexManager>,
 ) -> Vec<OltpRowResult> {
     use voltnuerongrid_exec_datafusion::{execute_select, SelectOutput, ExecError};
     use voltnuerongrid_sql::{parse_one, Statement};
+    use crate::helpers::sql_parse::make_table_scan_prefix;
 
     let mut results: Vec<OltpRowResult> = Vec::new();
     for stmt_str in statements {
@@ -415,22 +468,37 @@ pub(crate) fn execute_oltp_select(
             // Collect ALL table names: FROM + every JOIN (including A JOIN B JOIN C).
             let table_names = voltnuerongrid_exec_datafusion::collect_query_table_names(stmt_str);
 
-            // Take a snapshot once and filter per table by key prefix.
-            let all_rows = rs.export_rows_snapshot();
+            // C-1: prefer RocksDB rows when available; fall back to in-memory scan.
+            // Clone rocksdb_rows so we can use it across loop iterations.
+            let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = if let Some(ref rdb) = rocksdb_rows {
+                rdb.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            } else {
+                let eff_xid = snapshot_xid.unwrap_or_else(|| rs.current_xid());
+                rs.scan_at_snapshot(eff_xid)
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect()
+            };
             let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
                 std::collections::HashMap::new();
             for name in &table_names {
-                let prefix = format!("{name}:");
+                let prefix = make_table_scan_prefix(db, name);
                 let filtered: Vec<_> = all_rows
                     .iter()
                     .filter(|(k, _)| k == name || k.starts_with(&prefix))
-                    .cloned()
+                    // Strip db prefix so DataFusion table resolution works on plain name.
+                    .map(|(k, v)| {
+                        let stripped = if db.is_empty() { k.clone() } else {
+                            k.strip_prefix(&format!("{db}.")).unwrap_or(k).to_string()
+                        };
+                        (stripped, v.clone())
+                    })
                     .collect();
                 table_rows.insert(name.clone(), filtered);
             }
 
             let df_result = run_async_in_executor(
-                df_select_owned(stmt_str.to_string(), table_rows, remaining)
+                df_select_owned(stmt_str.to_string(), table_rows, remaining, String::new())
             );
 
             match df_result {
@@ -478,6 +546,17 @@ pub(crate) fn execute_oltp_select(
             }
         }
 
+        // C-1: Phase 1.7 reads from PagedRowStore directly.  When RocksDB is the
+        // primary durability engine (rocksdb_rows.is_some()), PagedRowStore may be
+        // empty after restart because we skip boot-time replay.  Skip Phase 1.7 in
+        // that case and fall through to the legacy path which already correctly
+        // uses rocksdb_rows as its row source (see execute_oltp_select_legacy).
+        if rocksdb_rows.is_some() {
+            // RocksDB is primary — go directly to legacy which uses rocksdb_rows.
+            execute_oltp_select_legacy(stmt_str, rs, limit, &mut results, db, snapshot_xid, rocksdb_rows.as_deref(), index_manager);
+            continue;
+        }
+
         // Phase 1.7 — try the correct AST-driven executor first.
         // It returns Unsupported for features it can't handle yet
         // (JOIN, GROUP BY, subquery), in which case we fall back to the
@@ -521,8 +600,8 @@ pub(crate) fn execute_oltp_select(
             }
         }
 
-        // Legacy substring fallback path.
-        execute_oltp_select_legacy(stmt_str, rs, limit, &mut results);
+        // Legacy substring fallback path — pass through snapshot and RocksDB rows if set.
+        execute_oltp_select_legacy(stmt_str, rs, limit, &mut results, db, snapshot_xid, rocksdb_rows.as_deref(), index_manager);
     }
     results
 }
@@ -560,47 +639,174 @@ where
 }
 
 
-/// Legacy substring-based executor. Kept as a fallback for queries the new
-/// executor doesn't support yet (JOIN / GROUP BY / subquery). To be deleted
-/// once the new executor covers those features.
+/// Legacy executor. Kept as a fallback for queries the new executor doesn't
+/// support yet (JOIN / GROUP BY / subquery). To be deleted once the new
+/// executor covers those features.
 ///
-/// **Known incorrect:** uses `row_key.contains(prefix_str)` which makes
-/// `WHERE id = 5` match rows 15, 25, 50, 51 etc. The new path is preferred
-/// whenever it can handle the query.
+/// WHERE filtering uses exact column-value match only; unknown columns never
+/// produce false-positive matches. The new path is preferred whenever it can
+/// handle the query.
 pub(crate) fn execute_oltp_select_legacy(
     stmt_str: &str,
     rs: &voltnuerongrid_store::mvcc::PagedRowStore,
     limit: usize,
     results: &mut Vec<OltpRowResult>,
+    db: &str,
+    override_snapshot_xid: Option<u64>,
+    // C-1: When Some, used as primary row source; keys are raw row_keys WITHOUT db prefix.
+    rocksdb_rows: Option<&[(String, HashMap<String, String>)]>,
+    // H-2: When Some, consulted for index-accelerated lookups on WHERE col = 'val'.
+    index_manager: Option<&IndexManager>,
 ) {
     use voltnuerongrid_sql::{parse_one, Statement};
-    let snapshot_xid = rs.current_xid();
-    let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = rs
-        .scan_at_snapshot(snapshot_xid)
-        .into_iter()
-        .map(|(k, d)| (k.to_string(), d.clone()))
-        .collect();
+    // C-1: When rocksdb_rows is Some (RocksDB engine), all_rows comes from RocksDB
+    // and PagedRowStore is the write-buffer only. When rocksdb_rows is None (in-memory
+    // engine), all_rows comes from PagedRowStore as before.
+    let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = if let Some(rdb) = rocksdb_rows {
+        // RocksDB rows are already db-scoped and have no db prefix.
+        rdb.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    } else {
+        let snapshot_xid = override_snapshot_xid.unwrap_or_else(|| rs.current_xid());
+        rs.scan_at_snapshot(snapshot_xid)
+            .into_iter()
+            // Only include rows that belong to this database scope.
+            .filter(|(k, _)| {
+                if db.is_empty() {
+                    // No db scope — include all rows (backward compat).
+                    true
+                } else {
+                    k.starts_with(&format!("{db}."))
+                }
+            })
+            // Strip db prefix so the rest of the scan logic works on plain `"table:value"` keys.
+            .map(|(k, d)| {
+                let stripped = if db.is_empty() { k.to_string() } else {
+                    k.strip_prefix(&format!("{db}.")).unwrap_or(&k).to_string()
+                };
+                (stripped, d.clone())
+            })
+            .collect()
+    };
     if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
         let sql_limit: usize = sel
             .limit
             .map(|l| l as usize)
             .unwrap_or(limit)
             .min(limit);
-        let prefix: Option<String> = sel.where_clause.as_deref().and_then(|w| {
-            let eq = w.find('=')?;
-            let rhs = w[eq + 1..].trim();
-            let val = rhs.trim_matches('\'').trim_matches('"').trim();
-            if val.is_empty() { None } else { Some(val.to_string()) }
-        });
-        let prefix_str = prefix.as_deref().unwrap_or("");
+
+        // M-5: Parse all AND-separated predicates from the WHERE clause.
+        // Split on " AND " (case-insensitive) and parse each piece as `col = 'val'`.
+        let where_filters: Vec<(String, String)> = sel.where_clause.as_deref()
+            .map(|w| {
+                // Split on AND (case-insensitive) by uppercasing the text first.
+                let upper = w.to_ascii_uppercase();
+                let parts: Vec<&str> = {
+                    let mut result = Vec::new();
+                    let mut last = 0usize;
+                    let and_token = " AND ";
+                    let mut search = upper.as_str();
+                    let mut offset = 0usize;
+                    while let Some(pos) = search.find(and_token) {
+                        result.push(&w[last..last + pos]);
+                        last += pos + and_token.len();
+                        offset += pos + and_token.len();
+                        search = &upper[offset..];
+                    }
+                    result.push(&w[last..]);
+                    result
+                };
+                parts.into_iter().filter_map(|piece| {
+                    let eq = piece.find('=')?;
+                    let lhs = piece[..eq].trim().to_ascii_lowercase();
+                    let rhs = piece[eq + 1..].trim();
+                    let val = rhs.trim_matches('\'').trim_matches('"').trim();
+                    if lhs.is_empty() || val.is_empty() {
+                        None
+                    } else {
+                        Some((lhs, val.to_string()))
+                    }
+                }).collect()
+            })
+            .unwrap_or_default();
+
+        // Determine the table name from the parsed AST (for index lookup).
+        let table_name_str: Option<String> = sel.table.clone();
+
+        // Determine whether this is SELECT * or a specific column list.
+        let select_star = sel.columns.is_empty()
+            || sel.columns.iter().any(|c| c == "*");
+
         let remaining = sql_limit.saturating_sub(results.len());
+
+        // H-2: Index-accelerated single-equality-predicate path.
+        if let (Some(mgr), Some(table_name)) = (index_manager, table_name_str.as_deref()) {
+            if where_filters.len() == 1 {
+                let (ref col, ref val) = where_filters[0];
+                let matching_desc = mgr.list_indexes().into_iter().find(|d| {
+                    d.table == table_name && &d.column == col
+                });
+                if let Some(desc) = matching_desc {
+                    if let Some(idx) = mgr.get(&desc.name) {
+                        let row_keys: std::collections::HashSet<&str> =
+                            idx.lookup(val).into_iter().collect();
+                        let batch: Vec<OltpRowResult> = all_rows
+                            .iter()
+                            .filter(|(k, _)| row_keys.contains(k.as_str()))
+                            .take(remaining)
+                            .map(|(k, d)| OltpRowResult { key: k.clone(), data: d.clone() })
+                            .collect();
+                        // M-5: apply column projection.
+                        let projected = apply_projection(batch, &sel.columns, select_star);
+                        results.extend(projected);
+                        return; // skip the full scan below
+                    }
+                }
+            }
+        }
+
+        // Full scan with multi-predicate AND filter.
         let batch: Vec<OltpRowResult> = all_rows
             .iter()
-            .filter(|(k, _)| prefix_str.is_empty() || k.contains(prefix_str))
+            .filter(|(_, d)| {
+                if where_filters.is_empty() {
+                    true
+                } else {
+                    where_filters.iter().all(|(col, val)| {
+                        d.get(col.as_str())
+                            .map(|v| v.eq_ignore_ascii_case(val))
+                            .unwrap_or(false)
+                    })
+                }
+            })
             .take(remaining)
             .map(|(k, d)| OltpRowResult { key: k.clone(), data: d.clone() })
             .collect();
-        results.extend(batch);
+
+        // M-5: apply column projection.
+        let projected = apply_projection(batch, &sel.columns, select_star);
+        results.extend(projected);
     }
+}
+
+/// M-5: Apply column projection to a batch of rows.
+/// When `select_star` is true, returns rows unchanged.
+/// Otherwise filters each row's data to only the requested columns.
+fn apply_projection(
+    batch: Vec<OltpRowResult>,
+    columns: &[String],
+    select_star: bool,
+) -> Vec<OltpRowResult> {
+    if select_star {
+        return batch;
+    }
+    batch.into_iter().map(|r| {
+        let projected_data: HashMap<String, String> = columns.iter()
+            .filter_map(|col| {
+                if col == "*" { return None; }
+                r.data.get(col.as_str()).map(|v| (col.clone(), v.clone()))
+            })
+            .collect();
+        OltpRowResult { key: r.key, data: projected_data }
+    }).collect()
 }
 

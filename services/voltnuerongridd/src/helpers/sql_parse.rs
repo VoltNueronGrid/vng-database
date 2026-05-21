@@ -41,6 +41,13 @@ pub(crate) fn build_http_envelope<TPayload>(
 }
 
 
+/// Extract the storage key for a DELETE statement.
+///
+/// Returns `"table:where_value"` — the same format used by INSERT row keys —
+/// so that callers can prefix with a database name via [`db_prefix_key`] when
+/// operating in multi-database mode.
+///
+/// Returns `None` for non-DELETE statements or statements without a WHERE clause.
 pub(crate) fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
     use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
     let tokens = semantic_tokens(sql);
@@ -48,14 +55,39 @@ pub(crate) fn extract_delete_key_from_sql(sql: &str) -> Option<String> {
     if !upper.starts_with("DELETE") {
         return None;
     }
+    // Extract table name from `DELETE FROM <table>`
+    let mut table_name: Option<String> = None;
+    let mut past_from = false;
+    for tok in &tokens {
+        match tok {
+            Token::Keyword(k) if k.eq_ignore_ascii_case("FROM") => past_from = true,
+            Token::Identifier(t) | Token::Keyword(t) if past_from && table_name.is_none() => {
+                // Strip schema qualifier if present (public.customers → customers)
+                let unqualified = t.rsplit('.').next().unwrap_or(t.as_str());
+                table_name = Some(unqualified.to_ascii_lowercase());
+            }
+            _ => {}
+        }
+    }
+    // Extract WHERE clause value
     let mut after_where = false;
     let mut past_eq = false;
     for tok in &tokens {
         match tok {
             Token::Keyword(k) if k.eq_ignore_ascii_case("WHERE") => after_where = true,
             Token::Symbol(s) if s == "=" && after_where => past_eq = true,
-            Token::StringLiteral(s) if past_eq => return Some(s.clone()),
-            Token::Number(n) if past_eq => return Some(n.clone()),
+            Token::StringLiteral(s) if past_eq => {
+                return Some(match table_name {
+                    Some(t) => format!("{t}:{s}"),
+                    None => s.clone(),
+                });
+            }
+            Token::Number(n) if past_eq => {
+                return Some(match table_name {
+                    Some(t) => format!("{t}:{n}"),
+                    None => n.clone(),
+                });
+            }
             _ => {}
         }
     }
@@ -101,6 +133,138 @@ pub(crate) fn extract_update_row_from_sql(
         data.insert(col.clone(), val.clone());
     }
     Some((row_key, data))
+}
+
+
+/// Extract bulk-update target for `UPDATE table SET col='val' WHERE pred_col='pred_val'`.
+///
+/// Returns `Some((table_name, set_col, set_val, where_col, where_val))` when the WHERE
+/// clause filters on a non-key column (i.e. the WHERE value is NOT the primary key).
+/// Returns `None` when the statement cannot be parsed or the WHERE clause filters by the
+/// primary key (in which case single-row `extract_update_row_from_sql` is sufficient).
+///
+/// This enables Rule 7 (set-at-a-time UPDATE): callers scan all rows of `table_name`,
+/// apply `set_col = set_val` to every row where `row[where_col] == where_val`.
+pub(crate) fn extract_bulk_update_target(
+    sql: &str,
+) -> Option<(String, String, String, String, String)> {
+    use voltnuerongrid_sql::ast::{parse_one, Statement};
+    use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
+
+    let stmt = parse_one(sql).ok()?;
+    let Statement::Update(upd) = stmt else {
+        return None;
+    };
+    if upd.assignments.is_empty() {
+        return None;
+    }
+
+    let (set_col, set_val) = upd.assignments.first()?.clone();
+    let table = upd.table.to_ascii_lowercase();
+
+    // Parse WHERE clause: look for `where_col = 'where_val'`
+    let tokens = semantic_tokens(sql);
+    let mut after_where = false;
+    let mut where_col: Option<String> = None;
+    let mut past_eq = false;
+    let mut where_val: Option<String> = None;
+
+    for tok in &tokens {
+        match tok {
+            Token::Keyword(k) if k.eq_ignore_ascii_case("WHERE") => after_where = true,
+            Token::Identifier(id) if after_where && where_col.is_none() => {
+                where_col = Some(id.to_ascii_lowercase());
+            }
+            Token::Symbol(s) if s == "=" && after_where && where_col.is_some() && !past_eq => {
+                past_eq = true;
+            }
+            Token::StringLiteral(s) if past_eq && where_val.is_none() => {
+                where_val = Some(s.clone());
+            }
+            Token::Number(n) if past_eq && where_val.is_none() => {
+                where_val = Some(n.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let where_col = where_col?;
+    let where_val = where_val?;
+
+    // If the WHERE column looks like a primary-key column (e.g. "id") and the WHERE
+    // value matches the key pattern used in extract_update_row_from_sql, skip — the
+    // single-row path is already handling it. We detect this by checking if the
+    // WHERE column could be the primary-key col that generated the existing row_key.
+    // Simple heuristic: if where_col == "id", the single-key path already handled it.
+    // We return Some here regardless — callers use the where_col to decide whether to
+    // do a full table scan.
+    Some((table, set_col, set_val, where_col, where_val))
+}
+
+
+/// Extract bulk-delete target for `DELETE FROM table WHERE pred_col = 'val'`.
+///
+/// Returns `Some((table_name, where_col, where_val))` when the WHERE clause filters on a
+/// non-key column (full table scan required).  Returns `None` when the WHERE column is
+/// "id" (primary-key DELETE — single-row `extract_delete_key_from_sql` is sufficient) or
+/// when the statement cannot be parsed.
+///
+/// This enables Codd Rule 7 (set-at-a-time DELETE): callers scan all rows of `table_name`
+/// and delete every row where `row[where_col] == where_val`.
+pub(crate) fn extract_bulk_delete_target(sql: &str) -> Option<(String, String, String)> {
+    use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
+
+    let upper = sql.trim_start().to_ascii_uppercase();
+    if !upper.starts_with("DELETE") {
+        return None;
+    }
+
+    let tokens = semantic_tokens(sql);
+
+    // Parse: DELETE FROM <table> WHERE <col> = <val>
+    let mut past_from = false;
+    let mut table: Option<String> = None;
+    let mut after_where = false;
+    let mut where_col: Option<String> = None;
+    let mut past_eq = false;
+    let mut where_val: Option<String> = None;
+
+    for tok in &tokens {
+        match tok {
+            Token::Keyword(k) if k.eq_ignore_ascii_case("FROM") && !past_from => {
+                past_from = true;
+            }
+            Token::Identifier(t) | Token::Keyword(t) if past_from && table.is_none() => {
+                let unqualified = t.rsplit('.').next().unwrap_or(t.as_str());
+                table = Some(unqualified.to_ascii_lowercase());
+            }
+            Token::Keyword(k) if k.eq_ignore_ascii_case("WHERE") => after_where = true,
+            Token::Identifier(id) if after_where && where_col.is_none() => {
+                where_col = Some(id.to_ascii_lowercase());
+            }
+            Token::Symbol(s) if s == "=" && after_where && where_col.is_some() && !past_eq => {
+                past_eq = true;
+            }
+            Token::StringLiteral(s) if past_eq && where_val.is_none() => {
+                where_val = Some(s.clone());
+            }
+            Token::Number(n) if past_eq && where_val.is_none() => {
+                where_val = Some(n.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let table = table?;
+    let where_col = where_col?;
+    let where_val = where_val?;
+
+    // If WHERE is on "id", single-row delete already handled it — skip the scan path.
+    if where_col.eq_ignore_ascii_case("id") {
+        return None;
+    }
+
+    Some((table, where_col, where_val))
 }
 
 

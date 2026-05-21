@@ -3,12 +3,16 @@ import { StudioApiClient } from "@/api/studio-client";
 import { useConnectionStore } from "@/store/connection";
 import { useQueryStore } from "@/store/query";
 import { useSchema } from "@/hooks/useSchema";
+import { useSettingsStore } from "@/store/settings";
 
 export function useQuery(tabId: string) {
   const getActive = useConnectionStore((s) => s.getActive);
   const getActiveKey = useConnectionStore((s) => s.getActiveKey);
   const { setResult, setExecuting } = useQueryStore();
   const { refresh } = useSchema();
+  // M-6: read per-connection defaults from settings
+  const defaultIsolationLevel = useSettingsStore((s) => s.defaultIsolationLevel);
+  const statementTimeoutMs = useSettingsStore((s) => s.statementTimeoutMs);
 
   const execute = useCallback(
     async (sql: string) => {
@@ -29,6 +33,9 @@ export function useQuery(tabId: string) {
       try {
         const res = await client.executeSql({
           sql_batch: sql,
+          // M-6: include per-connection defaults from Studio settings
+          isolation_level: defaultIsolationLevel !== "read_committed" ? defaultIsolationLevel : undefined,
+          statement_timeout_ms: statementTimeoutMs > 0 ? statementTimeoutMs : undefined,
         });
 
         // ── Build columns + rows ──────────────────────────────────────────
@@ -64,7 +71,23 @@ export function useQuery(tabId: string) {
             .filter((r, idx, arr) => arr.findIndex((x) => x.key === r.key) === idx)
             .map((r) => {
               const out: Record<string, unknown> = {};
-              for (const c of colList) out[c] = r.data[c] ?? null;
+              for (const c of colList) {
+                const raw = r.data[c];
+                // M-8 Rule 1: coerce string storage values to typed scalars client-side.
+                if (raw == null || raw === "" || raw === "null") {
+                  out[c] = null;
+                } else if (raw === "true") {
+                  out[c] = true;
+                } else if (raw === "false") {
+                  out[c] = false;
+                } else if (/^-?\d+$/.test(raw)) {
+                  out[c] = parseInt(raw, 10);
+                } else if (/^-?\d+\.?\d*([eE][+-]?\d+)?$/.test(raw)) {
+                  out[c] = parseFloat(raw);
+                } else {
+                  out[c] = raw;
+                }
+              }
               return out;
             });
         }
@@ -104,7 +127,7 @@ export function useQuery(tabId: string) {
         setExecuting(tabId, false);
       }
     },
-    [tabId, getActive, getActiveKey, setResult, setExecuting]
+    [tabId, getActive, getActiveKey, setResult, setExecuting, defaultIsolationLevel, statementTimeoutMs]
   );
 
   return { execute };

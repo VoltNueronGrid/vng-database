@@ -644,14 +644,25 @@ pub(crate) async fn ingest_csv(
     let mut conn = CsvConnector::new(&req.connector_id, &req.connector_id);
     let count = conn.load_csv(&req.csv_data);
     let records = conn.read_batch(usize::MAX);
-    {
+    // Build row data vec so we can reuse it for WAL persistence after releasing rs lock.
+    let row_entries: Vec<(String, HashMap<String, String>)> = records.iter().map(|record| {
+        let mut data = std::collections::HashMap::new();
+        data.insert("payload".to_string(), record.payload.clone());
+        data.insert("source".to_string(), format!("csv:{}", req.connector_id));
+        (record.key.clone(), data)
+    }).collect();
+    let batch_xid = {
         let mut rs = state.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
-        for record in &records {
-            let mut data = std::collections::HashMap::new();
-            data.insert("payload".to_string(), record.payload.clone());
-            data.insert("source".to_string(), format!("csv:{}", req.connector_id));
-            rs.insert(xid, &record.key, data);
+        for (key, data) in &row_entries {
+            rs.insert(xid, key, data.clone());
+        }
+        xid
+    };
+    // M-8 Rule 12: persist ingest rows to RocksDB so they survive restarts.
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        for (key, data) in &row_entries {
+            wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
@@ -713,14 +724,24 @@ pub(crate) async fn ingest_json(
     let mut conn = JsonConnector::new(&req.connector_id, &req.connector_id, &req.key_field);
     let count = conn.load_ndjson(&req.ndjson_data);
     let records = conn.read_batch(usize::MAX);
-    {
+    let row_entries: Vec<(String, HashMap<String, String>)> = records.iter().map(|record| {
+        let mut data = std::collections::HashMap::new();
+        data.insert("payload".to_string(), record.payload.clone());
+        data.insert("source".to_string(), format!("json:{}", req.connector_id));
+        (record.key.clone(), data)
+    }).collect();
+    let batch_xid = {
         let mut rs = state.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
-        for record in &records {
-            let mut data = std::collections::HashMap::new();
-            data.insert("payload".to_string(), record.payload.clone());
-            data.insert("source".to_string(), format!("json:{}", req.connector_id));
-            rs.insert(xid, &record.key, data);
+        for (key, data) in &row_entries {
+            rs.insert(xid, key, data.clone());
+        }
+        xid
+    };
+    // M-8 Rule 12: persist ingest rows to RocksDB so they survive restarts.
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        for (key, data) in &row_entries {
+            wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
@@ -788,14 +809,24 @@ pub(crate) async fn ingest_parquet(
         .load_parquet_bytes(&raw)
         .map_err(|_| bad_request_error(&headers, "parquet_parse_failed"))?;
     let records = conn.read_batch(usize::MAX);
-    {
+    let row_entries: Vec<(String, HashMap<String, String>)> = records.iter().map(|record| {
+        let mut data = std::collections::HashMap::new();
+        data.insert("payload".to_string(), record.payload.clone());
+        data.insert("source".to_string(), format!("parquet:{}", req.connector_id));
+        (record.key.clone(), data)
+    }).collect();
+    let batch_xid = {
         let mut rs = state.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
-        for record in &records {
-            let mut data = std::collections::HashMap::new();
-            data.insert("payload".to_string(), record.payload.clone());
-            data.insert("source".to_string(), format!("parquet:{}", req.connector_id));
-            rs.insert(xid, &record.key, data);
+        for (key, data) in &row_entries {
+            rs.insert(xid, key, data.clone());
+        }
+        xid
+    };
+    // M-8 Rule 12: persist ingest rows to RocksDB so they survive restarts.
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        for (key, data) in &row_entries {
+            wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
@@ -862,14 +893,24 @@ pub(crate) async fn ingest_excel(
         .load_xlsx_bytes(&raw)
         .map_err(|_| bad_request_error(&headers, "excel_parse_failed"))?;
     let records = conn.read_batch(usize::MAX);
-    {
+    let row_entries: Vec<(String, HashMap<String, String>)> = records.iter().map(|record| {
+        let mut data = std::collections::HashMap::new();
+        data.insert("payload".to_string(), record.payload.clone());
+        data.insert("source".to_string(), format!("excel:{}", req.connector_id));
+        (record.key.clone(), data)
+    }).collect();
+    let batch_xid = {
         let mut rs = state.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
-        for record in &records {
-            let mut data = std::collections::HashMap::new();
-            data.insert("payload".to_string(), record.payload.clone());
-            data.insert("source".to_string(), format!("excel:{}", req.connector_id));
-            rs.insert(xid, &record.key, data);
+        for (key, data) in &row_entries {
+            rs.insert(xid, key, data.clone());
+        }
+        xid
+    };
+    // M-8 Rule 12: persist ingest rows to RocksDB so they survive restarts.
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        for (key, data) in &row_entries {
+            wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);

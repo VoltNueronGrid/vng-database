@@ -15,6 +15,10 @@ export interface StudioConnection {
 export interface SqlExecuteRequest {
   sql_batch: string; // single SQL string — server deserialises as String
   max_rows?: number;
+  /** M-6: ACID isolation level for transactions in this batch. */
+  isolation_level?: string;
+  /** M-6: Client-side statement timeout hint (milliseconds, 0 = no limit). */
+  statement_timeout_ms?: number;
 }
 
 export type RoutePath = "oltp" | "olap" | "hybrid" | "unknown";
@@ -246,6 +250,58 @@ export interface SqlConfig {
   max_result_rows: number;
 }
 
+// ─── User management ─────────────────────────────────────────────────────────
+
+export interface AdminUserEntry {
+  user_id: string;
+  username: string;
+  role: string;
+  tenant_id?: string;
+  created_ms: number;
+}
+
+export interface AdminUsersListResponse {
+  status: string;
+  users: AdminUserEntry[];
+  count: number;
+}
+
+export interface CreateUserRequest {
+  username: string;
+  password: string;
+  role?: string;
+  tenant_id?: string;
+}
+
+export interface CreateUserResponse {
+  status: string;
+  user_id: string;
+  username: string;
+  role: string;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  status: string;
+  token: string;
+  user_id: string;
+  username: string;
+  role: string;
+  expires_at_secs: number;
+}
+
+// ─── DB Grant management ──────────────────────────────────────────────────────
+
+export interface DbGrantsResponse {
+  status: string;
+  database: string;
+  granted_roles: string[];
+}
+
 export interface RuntimeConfigResponse {
   storage: StorageConfig;
   sql: SqlConfig;
@@ -313,6 +369,53 @@ export class StudioApiClient {
 
   async getClusterTopology(): Promise<ClusterTopologyResponse> {
     return this.get<ClusterTopologyResponse>("/api/v1/admin/cluster/topology");
+  }
+
+  // ── User management ────────────────────────────────────────────────────────
+
+  async listUsers(): Promise<AdminUsersListResponse> {
+    return this.get<AdminUsersListResponse>("/api/v1/admin/users");
+  }
+
+  async createUser(req: CreateUserRequest): Promise<CreateUserResponse> {
+    return this.post<CreateUserResponse>("/api/v1/admin/users", req);
+  }
+
+  async deleteUser(userId: string): Promise<{ status: string; user_id: string }> {
+    return this.del<{ status: string; user_id: string }>(
+      `/api/v1/admin/users/${encodeURIComponent(userId)}`,
+    );
+  }
+
+  async revokeUserSessions(userId: string): Promise<{ status: string; sessions_revoked: number }> {
+    return this.del<{ status: string; sessions_revoked: number }>(
+      `/api/v1/admin/users/${encodeURIComponent(userId)}/sessions`,
+    );
+  }
+
+  async login(req: LoginRequest): Promise<LoginResponse> {
+    return this.post<LoginResponse>("/api/v1/auth/login", req);
+  }
+
+  // ── DB grant management ────────────────────────────────────────────────────
+
+  async listDbGrants(dbName: string): Promise<DbGrantsResponse> {
+    return this.get<DbGrantsResponse>(
+      `/api/v1/admin/databases/${encodeURIComponent(dbName)}/grants`,
+    );
+  }
+
+  async addDbGrant(dbName: string, role: string): Promise<DbGrantsResponse> {
+    return this.post<DbGrantsResponse>(
+      `/api/v1/admin/databases/${encodeURIComponent(dbName)}/grants`,
+      { role },
+    );
+  }
+
+  async revokeDbGrant(dbName: string, role: string): Promise<DbGrantsResponse> {
+    return this.del<DbGrantsResponse>(
+      `/api/v1/admin/databases/${encodeURIComponent(dbName)}/grants/${encodeURIComponent(role)}`,
+    );
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 use super::*;
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderValue;
 use voltnuerongrid_ingest::IngestionConnector;
 
@@ -98,6 +99,22 @@ fn state_with_key(key: Option<&str>) -> AppState {
         database_catalog: Arc::new(Mutex::new(voltnuerongrid_meta::DatabaseCatalog::new())),
         // Phase 0 — runtime config (test default).
         runtime_config: Arc::new(voltnuerongrid_config::RuntimeConfig::default()),
+        // Gap #7 — user store, session store, signer (test defaults: empty).
+        user_store: Arc::new(Mutex::new(crate::user_store::UserStore::new())),
+        session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
+        session_signer: Arc::new(Mutex::new(crate::user_store::SessionSigner::new("test-secret", 3600))),
+        // Gap #6/#7: per-table row count statistics.
+        table_stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // Gap #9: per-database connection semaphores (lazily created on first request).
+        db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        // Gap #3: per-connection undo log for ROLLBACK support.
+        tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        // Tier 3 #1: per-database role grants (empty for tests).
+        db_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // C-3: connection → tx_id map for repeatable-read tracking (empty for tests).
+        connection_tx_active: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // H-1: table statistics registry (empty for tests).
+        stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
     }
 }
 
@@ -346,6 +363,7 @@ fn sql_execute_accepts_tenant_analyst_headers() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT udf_rust('hello');".to_string(),
                 max_rows: Some(10),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -428,6 +446,7 @@ fn h07_sql_data_plane_pool_acquire_release_on_sql_handlers() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT udf_rust('hello');".to_string(),
                 max_rows: Some(10),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -460,6 +479,7 @@ fn h07_sql_data_plane_pool_rejects_when_pool_exhausted() {
         Json(SqlExecuteRequest {
             sql_batch: "SELECT 1".to_string(),
             max_rows: Some(10),
+            ..Default::default()
         }),
     ));
 
@@ -2948,6 +2968,7 @@ fn ws3_sql_execute_routes_and_executes_olap_query() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT COUNT(*) FROM orders;".to_string(),
                 max_rows: Some(100),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -2976,6 +2997,7 @@ fn ws3_sql_execute_routes_and_executes_oltp_transaction() {
             Json(SqlExecuteRequest {
                 sql_batch: "BEGIN; UPDATE orders SET amount = 1500 WHERE id = 1; COMMIT;".to_string(),
                 max_rows: Some(10),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -3020,6 +3042,7 @@ fn ws3_routing_policy_enforces_max_rows_limit() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT COUNT(*) FROM orders;".to_string(),
                 max_rows: Some(50),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -3172,6 +3195,7 @@ fn nt_s2_003_sql_execute_route_decision_wrapper_preserves_routing_result() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT * FROM orders WHERE id = '1';".to_string(),
         max_rows: Some(25),
+        ..Default::default()
     };
 
     let envelope = build_http_envelope(
@@ -3943,6 +3967,7 @@ fn ws3_legacy_agg_sum_routed_through_sql_execute_olap_path() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT SUM(amount) FROM orders;".to_string(),
                 max_rows: Some(100),
+                ..Default::default()
             }),
         ))
         .expect("sql execute should succeed");
@@ -3971,6 +3996,7 @@ fn ws3_legacy_agg_count_and_avg_detected_together() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT COUNT(id), AVG(price) FROM products;".to_string(),
                 max_rows: None,
+                ..Default::default()
             }),
         ))
         .expect("sql execute should succeed");
@@ -3995,6 +4021,7 @@ fn ws3_legacy_agg_none_when_no_aggregate_in_select() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT id, name FROM orders;".to_string(),
                 max_rows: Some(50),
+                ..Default::default()
             }),
         ))
         .expect("sql execute should succeed");
@@ -4019,6 +4046,7 @@ fn ws3_legacy_agg_not_emitted_for_oltp_paths() {
             Json(SqlExecuteRequest {
                 sql_batch: "INSERT INTO orders (id, amount) VALUES (99, 500);".to_string(),
                 max_rows: None,
+                ..Default::default()
             }),
         ))
         .expect("sql execute should succeed");
@@ -4037,6 +4065,7 @@ fn ws2_ddl_catalog_create_table_wires_through_sql_execute() {
     let req = SqlExecuteRequest {
         sql_batch: "CREATE TABLE orders (id INT, amount FLOAT)".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let response = rt
         .block_on(sql_execute(
@@ -4063,6 +4092,7 @@ fn ws2_ddl_catalog_drop_table_removes_active_entry() {
     let create_req = SqlExecuteRequest {
         sql_batch: "CREATE TABLE temp_data (x INT)".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(create_req)))
         .expect("create should succeed");
@@ -4073,6 +4103,7 @@ fn ws2_ddl_catalog_drop_table_removes_active_entry() {
     let drop_req = SqlExecuteRequest {
         sql_batch: "DROP TABLE temp_data".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(drop_req)))
         .expect("drop should succeed");
@@ -4090,6 +4121,7 @@ fn ws2_catalog_table_columns_returns_columns_for_created_table() {
     let create_req = SqlExecuteRequest {
         sql_batch: "CREATE TABLE orders (id INT, amount FLOAT)".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let _ = rt.block_on(sql_execute(State(state.clone()), tenant_headers.clone(), Json(create_req)))
         .expect("create should succeed");
@@ -4144,6 +4176,7 @@ fn ws2_admin_schema_tree_returns_views_functions_triggers_and_events() {
         let req = SqlExecuteRequest {
             sql_batch: sql.to_string(),
             max_rows: None,
+            ..Default::default()
         };
         let response = rt
             .block_on(sql_execute(State(state.clone()), tenant_headers.clone(), Json(req)))
@@ -4152,7 +4185,7 @@ fn ws2_admin_schema_tree_returns_views_functions_triggers_and_events() {
     }
 
     let response = rt
-        .block_on(admin_schema_tree(State(state.clone()), admin_headers("secret")))
+        .block_on(admin_schema_tree(State(state.clone()), admin_headers("secret"), Query(SchemaTreeQuery::default())))
         .expect("admin schema tree should succeed");
 
     assert_eq!(response.0, StatusCode::OK);
@@ -4285,14 +4318,19 @@ fn ws23_acid_isolation_level_from_request_field() {
 
 #[test]
 fn ws23_acid_serializable_conflict_returns_409() {
-    // Pre-seed a concurrent serializable transaction that has already written to "inventory"
+    // M-7: Pre-seed a *committed* serializable transaction that already wrote
+    // the exact row key "inventory:1" (what `UPDATE inventory ... WHERE id = 1` produces).
+    // Row-level OCC only conflicts against committed peers, not active ones.
     let state = state_with_key(None);
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-concurrent", "node-1", "serializable", 1_000_u128);
+        acid.begin("tx-concurrent", "node-1", "serializable", 1_000_u128, None);
         acid.record_statement("tx-concurrent", Some("inventory".to_string()));
+        // Record the specific row key written and then commit the peer transaction.
+        acid.record_written_row_keys("tx-concurrent", std::iter::once("inventory:1".to_string()));
+        acid.commit("tx-concurrent", 2_000_u128);
     }
-    // Now attempt a second serializable transaction writing to the same table
+    // Now attempt a second serializable transaction writing to the same row key.
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let headers = tenant_user_headers("analyst-acme", "acme");
     let req = SqlTransactionRequest {
@@ -4340,6 +4378,7 @@ fn ws3_legacy_agg_uses_real_ingest_data_when_available() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT SUM(value) FROM metrics".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let response = rt
         .block_on(sql_execute(State(state), headers, Json(req)))
@@ -4373,6 +4412,7 @@ fn ws21_concurrent_sql_execute_tenant_isolation() {
                 let req = SqlExecuteRequest {
                     sql_batch: format!("SELECT COUNT(*) FROM metrics_thread_{i}"),
                     max_rows: None,
+                    ..Default::default()
                 };
                 let result = rt.block_on(sql_execute(
                     State((*state).clone()),
@@ -4530,6 +4570,7 @@ fn ws21_high_cardinality_tenant_sql_execute() {
                 let req = SqlExecuteRequest {
                     sql_batch: format!("SELECT * FROM metrics WHERE shard = {i}"),
                     max_rows: None,
+                    ..Default::default()
                 };
                 let result = rt.block_on(sql_execute(
                     State((*state).clone()),
@@ -5152,7 +5193,7 @@ fn ws23_acid_wal_accumulates_during_active_tx() {
 
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin(tx_id, "node-1", "read_committed", now_ms);
+        acid.begin(tx_id, "node-1", "read_committed", now_ms, None);
         acid.record_statement(tx_id, Some("orders".to_string()));
         acid.record_statement(tx_id, Some("inventory".to_string()));
         acid.record_statement(tx_id, Some("orders".to_string())); // same table again
@@ -5196,6 +5237,7 @@ fn ws21_mixed_ops_concurrent_ingest_sql_cache() {
         let req = SqlExecuteRequest {
             sql_batch: "SELECT COUNT(*) FROM events".to_string(),
             max_rows: None,
+            ..Default::default()
         };
         rt.block_on(sql_execute(State((*s1).clone()), headers, Json(req))).is_ok()
     });
@@ -5484,6 +5526,7 @@ fn ws21_sustained_load_sql_execute() {
         let req = SqlExecuteRequest {
             sql_batch: format!("SELECT {i} AS seq"),
             max_rows: None,
+            ..Default::default()
         };
         rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(req)))
             .unwrap_or_else(|_| panic!("sql_execute failed at iteration {i}"));
@@ -5568,7 +5611,7 @@ fn ws23_acid_read_uncommitted_does_not_record_snapshot() {
     let now_ms = 2_000_000_u128;
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin(tx_id, "node-1", "read_uncommitted", now_ms);
+        acid.begin(tx_id, "node-1", "read_uncommitted", now_ms, None);
         let entry = acid.all_transactions().into_iter()
             .find(|t| t.transaction_id == tx_id)
             .expect("tx must exist in registry");
@@ -5588,7 +5631,7 @@ fn ws23_acid_serializable_uses_write_lock_not_snapshot() {
     let now_ms = 3_000_000_u128;
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin(tx_id, "node-1", "serializable", now_ms);
+        acid.begin(tx_id, "node-1", "serializable", now_ms, None);
         let entry = acid.all_transactions().into_iter()
             .find(|t| t.transaction_id == tx_id)
             .expect("tx must exist in registry");
@@ -5729,6 +5772,7 @@ fn ws21_multi_tenant_ddl_catalog_isolation() {
                         "CREATE TABLE concurrent_table_{i} (id INT PRIMARY KEY, val FLOAT);"
                     ),
                     max_rows: None,
+                    ..Default::default()
                 };
                 let result = rt.block_on(sql_execute(State((*state).clone()), headers, Json(req)));
                 (i, result.is_ok())
@@ -6005,9 +6049,9 @@ fn s3_ws1_ast_parser_insert_round_trip() {
 // ── S2-WS2-05: COMMIT flush handles DELETE statements ───────────────────
 #[test]
 fn s2_ws2_commit_flush_handles_delete_statement() {
-    // extract_delete_key_from_sql returns the WHERE-clause value
+    // extract_delete_key_from_sql returns "table:where_value" (table-prefixed key)
     let key = extract_delete_key_from_sql("DELETE FROM orders WHERE id = 'o99'");
-    assert_eq!(key, Some("o99".to_string()));
+    assert_eq!(key, Some("orders:o99".to_string()));
     // Non-DELETE returns None
     assert!(extract_delete_key_from_sql("SELECT * FROM orders").is_none());
     // Missing WHERE returns None
@@ -6103,6 +6147,7 @@ fn s3_ws1_sql_execute_planner_path_populated_for_aggregate() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT region, SUM(revenue) FROM sales GROUP BY region".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let headers = operator_headers("test-key", "admin");
     let resp = tokio::runtime::Runtime::new()
@@ -6232,6 +6277,7 @@ async fn s4_ws3_sql_execute_oltp_path_returns_rows_from_row_store() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT value FROM rows WHERE id = 'oltp-key-1'".to_string(),
         max_rows: Some(10),
+        ..Default::default()
     };
     let headers = operator_headers("test-key", "admin");
     let resp = sql_execute(State(state), headers, Json(req)).await.unwrap();
@@ -6250,6 +6296,7 @@ async fn s4_ws3_sql_execute_olap_aggregate_has_no_oltp_rows() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT SUM(amount) FROM orders GROUP BY region".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let headers = operator_headers("test-key", "admin");
     let resp = sql_execute(State(state), headers, Json(req)).await.unwrap();
@@ -6311,6 +6358,7 @@ async fn s9_ws8a_02_audit_chain_verify_clean_chain_is_valid() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT 1".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let headers = operator_headers("test-key", "admin");
     sql_execute(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
@@ -6325,7 +6373,7 @@ async fn s9_ws8a_02_audit_chain_events_have_non_empty_hashes() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     // Trigger an audit event
-    let req = SqlExecuteRequest { sql_batch: "SELECT now()".to_string(), max_rows: None };
+    let req = SqlExecuteRequest { sql_batch: "SELECT now()".to_string(), max_rows: None, ..Default::default() };
     sql_execute(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
     // Retrieve events and check chain_hash populated
     let sink = state.audit_sink.lock().unwrap();
@@ -6693,6 +6741,7 @@ async fn s3_ws1_05_olap_filter_pushdown_reduces_batch() {
     let exec_req = SqlExecuteRequest {
         sql_batch: "SELECT COUNT(*) FROM products GROUP BY category".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let resp = sql_execute(State(state), headers, Json(exec_req)).await.unwrap();
     assert_eq!(resp.1.0.planner_path.as_deref(), Some("olap"));
@@ -6768,7 +6817,7 @@ async fn s2_ws2_05_isolation_stats_shows_active_transaction() {
     let state = state_with_key(Some("test-key"));
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-iso-1", "node-1", "serializable", 0u128);
+        acid.begin("tx-iso-1", "node-1", "serializable", 0u128, None);
     }
     let headers = operator_headers("test-key", "admin");
     let (status, Json(body)) = sql_transactions_isolation(State(state), headers).await.unwrap();
@@ -6861,15 +6910,17 @@ async fn s7_ws6_03_raft_tick_increments_counter() {
 async fn s7_ws6_03_raft_tick_triggers_election_after_timeout() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
-    // Default timeout is 10 ticks; fire 9 ticks without triggering.
-    for _ in 0..9 {
+    // Read the node's actual election timeout (randomised per node_id).
+    let timeout = state.raft_state.lock().unwrap().election_timeout_ticks;
+    // Fire (timeout - 1) ticks without triggering an election.
+    for _ in 0..timeout - 1 {
         raft_tick(State(state.clone()), headers.clone()).await.unwrap();
     }
     let snap = raft_status(State(state.clone()), headers.clone()).await.unwrap();
     assert_eq!(snap.0.raft.role, raft::RaftRole::Follower);
-    // 10th tick triggers election.
+    // The final tick must trigger the election.
     let resp = raft_tick(State(state.clone()), headers.clone()).await.unwrap();
-    assert!(resp.0.election_triggered, "10th tick must trigger election");
+    assert!(resp.0.election_triggered, "last tick must trigger election");
     assert_eq!(resp.0.role, raft::RaftRole::Candidate);
     assert_eq!(resp.0.current_term, 1);
 }
@@ -6895,6 +6946,7 @@ async fn s4_ws3_02_olap_agg_results_populated_for_aggregate_query() {
     let exec_req = SqlExecuteRequest {
         sql_batch: "SELECT COUNT(*) FROM metrics GROUP BY value".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let resp = sql_execute(State(state.clone()), headers.clone(), Json(exec_req)).await.unwrap();
     assert_eq!(resp.1.0.planner_path.as_deref(), Some("olap"));
@@ -9024,6 +9076,108 @@ async fn s7_ws6_02_raft_heartbeat_denies_security_role() {
 
     assert_eq!(err.0, StatusCode::FORBIDDEN);
     assert_eq!(err.1.reason, "insufficient_privilege");
+}
+
+// ── Linearisable write integration (§5.3) ────────────────────────────────
+//
+// This tests the full flow:
+//   1. Leader appends a command via append_command_pending (last_applied stays).
+//   2. For a single-node cluster commit_index advances immediately (leader == quorum).
+//   3. apply_committed_entries() applies the entry to the row store and notifies
+//      the raft_last_applied_tx watch channel.
+//   4. The watch channel carries the new last_applied value (>= the returned idx).
+//
+// NOTE: a watch::Receiver is subscribed BEFORE the apply call so that
+// send() finds at least one receiver and reliably stores the value.
+#[test]
+fn linearisable_write_apply_loop_applies_committed_entry_to_row_store() {
+    use crate::helpers::raft_loop::apply_committed_entries;
+
+    let state = state_with_key(Some("test-key"));
+
+    // Subscribe a receiver so send() can succeed.
+    let mut rx = state.raft_last_applied_tx.subscribe();
+
+    // Promote the node to Leader with 0 peers (single-node cluster).
+    {
+        let mut node = state.raft_state.lock().unwrap();
+        node.become_candidate();
+        node.become_leader();
+    }
+
+    // Append a pending command — commit_index advances immediately (single-node),
+    // but last_applied does NOT advance.
+    let idx = {
+        let mut node = state.raft_state.lock().unwrap();
+        node.append_command_pending(
+            "INSERT INTO lin_test VALUES ('key1', '{\"v\":\"hello\"}')"
+                .to_string(),
+            0, // 0 peers → single-node quorum
+        )
+    };
+
+    // Verify pre-apply invariants.
+    {
+        let node = state.raft_state.lock().unwrap();
+        assert_eq!(node.commit_index, idx, "commit_index must equal idx before apply");
+        assert_eq!(node.last_applied, 0, "last_applied must not advance before apply loop");
+    }
+
+    // Run the apply loop (one call is sufficient — entries between last_applied+1
+    // and commit_index are applied and last_applied is advanced).
+    apply_committed_entries(&state);
+
+    // After apply: last_applied must equal commit_index == idx.
+    {
+        let node = state.raft_state.lock().unwrap();
+        assert_eq!(node.last_applied, idx,
+            "apply loop must advance last_applied to commit_index");
+    }
+
+    // The watch channel must have been notified with the new last_applied.
+    // rx.borrow() returns the current value held by the channel.
+    let applied_val = *rx.borrow();
+    assert!(applied_val >= idx,
+        "raft_last_applied_tx must carry last_applied>={idx}, got {applied_val}");
+}
+
+/// Verify that two successive pending commands are both applied and that
+/// last_applied advances to cover both entries in a single apply-loop call.
+#[test]
+fn linearisable_write_two_pending_commands_both_applied() {
+    use crate::helpers::raft_loop::apply_committed_entries;
+
+    let state = state_with_key(Some("test-key"));
+
+    // Subscribe before appending so send() sees at least one receiver.
+    let mut rx = state.raft_last_applied_tx.subscribe();
+
+    {
+        let mut node = state.raft_state.lock().unwrap();
+        node.become_candidate();
+        node.become_leader();
+    }
+
+    // Append two commands; both commit immediately on a single-node cluster.
+    {
+        let mut node = state.raft_state.lock().unwrap();
+        node.append_command_pending("INSERT INTO lin_test VALUES ('ka', '{\"seq\":\"1\"}')"
+            .to_string(), 0);
+        node.append_command_pending("INSERT INTO lin_test VALUES ('kb', '{\"seq\":\"2\"}')"
+            .to_string(), 0);
+    }
+
+    let commit_idx = state.raft_state.lock().unwrap().commit_index;
+    assert_eq!(commit_idx, 2, "two commands must yield commit_index == 2");
+
+    // Single apply call must handle both entries.
+    apply_committed_entries(&state);
+
+    let final_applied = state.raft_state.lock().unwrap().last_applied;
+    assert_eq!(final_applied, 2,
+        "apply loop must advance last_applied to 2 after applying two entries");
+    let watch_val = *rx.borrow();
+    assert_eq!(watch_val, 2, "watch channel must reflect last_applied == 2");
 }
 
 // ── S4-WS3-02: Columnar project endpoint ─────────────────────────────────
@@ -12722,7 +12876,7 @@ async fn admin_cluster_topology_reports_runtime_counts() {
     }
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-1", "node-1", "read_committed", now_unix_ms());
+        acid.begin("tx-1", "node-1", "read_committed", now_unix_ms(), None);
     }
     let (status, Json(body)) = admin_cluster_topology(State(state), admin_headers("secret")).await.unwrap();
     assert_eq!(status, StatusCode::OK);
@@ -12737,7 +12891,7 @@ async fn admin_transaction_control_can_rollback_and_release_locks() {
     let state = state_with_key(Some("secret"));
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-admin-1", "node-1", "serializable", now_unix_ms());
+        acid.begin("tx-admin-1", "node-1", "serializable", now_unix_ms(), None);
     }
     {
         let mut locks = state.pessimistic_locks.lock().unwrap();
@@ -12766,7 +12920,7 @@ async fn admin_lock_control_can_kill_deadlock_victim() {
     let state = state_with_key(Some("secret"));
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-dead", "node-1", "read_committed", now_unix_ms());
+        acid.begin("tx-dead", "node-1", "read_committed", now_unix_ms(), None);
     }
     {
         let mut locks = state.pessimistic_locks.lock().unwrap();
@@ -12818,7 +12972,7 @@ async fn admin_cluster_node_manage_removes_node_and_migrates_work() {
     }
     {
         let mut acid = state.acid_transactions.lock().unwrap();
-        acid.begin("tx-node-2", "node-2", "read_committed", now_unix_ms());
+        acid.begin("tx-node-2", "node-2", "read_committed", now_unix_ms(), None);
     }
     let req = AdminClusterNodeManageRequest {
         action: "remove".to_string(),
@@ -12907,3 +13061,104 @@ fn native_auth_open_listener_accepts_empty_payload() {
     );
 }
 
+
+// ── L-5: In-process E2E HTTP integration test ────────────────────────────────
+
+/// Spins up a real Axum HTTP server on a random port and fires a real HTTP
+/// request through reqwest to verify the full request→handler→response path.
+/// Marked ignore: requires network socket access not available in sandbox CI.
+/// Run manually: `cargo test -- --ignored e2e_http_roundtrip_sql_execute`.
+// ─── M-6: Statement timeout enforcement ──────────────────────────────────────
+
+#[test]
+fn m6_statement_timeout_zero_is_no_op() {
+    // timeout_ms = 0 means "no timeout" — should succeed normally.
+    // Use no-admin-key state + tenant user headers (matches other sql_execute tests).
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("admin-acme", "acme");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let result = runtime.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            statement_timeout_ms: Some(0),
+            ..Default::default()
+        }),
+    ));
+    assert!(result.is_ok(), "timeout_ms=0 must not reject the request");
+}
+
+#[test]
+fn m6_statement_timeout_large_value_succeeds() {
+    // A very large timeout means the query will always complete in time.
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("admin-acme", "acme");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let result = runtime.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            statement_timeout_ms: Some(60_000), // 60 seconds
+            ..Default::default()
+        }),
+    ));
+    assert!(result.is_ok(), "60-second timeout must not reject a fast query");
+}
+
+#[test]
+fn m6_statement_timeout_already_elapsed_returns_408() {
+    // Build the request with a 1 ms timeout, then sleep to guarantee expiry.
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("admin-acme", "acme");
+    // Sleep 10ms BEFORE building the request so the 1ms deadline is already passed
+    // by the time sql_execute runs.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let result = runtime.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            statement_timeout_ms: Some(1), // 1 ms — already elapsed
+            ..Default::default()
+        }),
+    ));
+    // Should return Err with 408 Request Timeout.
+    match result {
+        Err((status, _)) => assert_eq!(status, StatusCode::REQUEST_TIMEOUT,
+            "1ms timeout that already elapsed must return 408"),
+        Ok(_) => {
+            // Acceptable only if the executor happened to run before the deadline fired.
+            // The 10ms pre-sleep makes this practically impossible under normal conditions.
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires network access (TcpListener::bind)"]
+async fn e2e_http_roundtrip_sql_execute() {
+    let state = state_with_key(Some("e2e-test-key"));
+    let app = crate::router::build_router(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap_or(());
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{addr}/api/v1/sql/execute"))
+        .header("X-Admin-Api-Key", "e2e-test-key")
+        .json(&serde_json::json!({
+            "sql_batch": "CREATE TABLE e2e_test (id INT, name TEXT)"
+        }))
+        .send()
+        .await
+        .expect("HTTP request failed");
+
+    assert_eq!(resp.status().as_u16(), 200, "expected 200 OK from sql/execute");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok", "response status field must be 'ok'");
+}

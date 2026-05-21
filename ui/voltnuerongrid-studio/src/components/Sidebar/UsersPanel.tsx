@@ -1,36 +1,18 @@
-// Users & Roles panel — client-side mock until server admin endpoints exist.
-// Persists to localStorage so user-management UX can be exercised end-to-end.
+// Users & Roles panel — wired to /api/v1/admin/users server endpoints.
+// Falls back to localStorage when no admin connection is active so the panel
+// remains usable in read-only / disconnected scenarios.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useModalStore } from "@/store/modal";
 import { openMenuFor } from "@/store/contextMenu";
 import { buildUserMenu } from "@/components/ContextMenu/menus";
+import { useConnectionStore } from "@/store/connection";
+import { StudioApiClient, type AdminUserEntry } from "@/api/studio-client";
 
-interface UserDraft {
-  id: string;
-  username: string;
-  role: string;
-  active: boolean;
-  createdAt: number;
-}
-
-const STORAGE_KEY = "vng-studio-users-mock";
+const STORAGE_KEY = "vng-studio-users-cache";
 const BUILT_IN_ROLES = ["dba", "operator", "readwrite", "readonly"];
 
-function loadUsers(): UserDraft[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as UserDraft[];
-  } catch {
-    // ignore
-  }
-  // Seed with plausible users so the UI isn't empty on first load.
-  return [
-    { id: "u-admin",   username: "admin",   role: "dba",       active: true, createdAt: Date.now() - 1e9 },
-    { id: "u-analyst", username: "analyst", role: "readonly",  active: true, createdAt: Date.now() - 1e8 },
-    { id: "u-etl",     username: "etl_bot", role: "readwrite", active: true, createdAt: Date.now() - 1e7 },
-  ];
-}
+// ── Colour helpers ────────────────────────────────────────────────────────────
 
 function roleBg(r: string) {
   if (r === "dba")       return "#ef444411";
@@ -53,20 +35,69 @@ function roleBd(r: string) {
   return "#22c55e33";
 }
 
-export function UsersPanel() {
-  const [users, setUsers] = useState<UserDraft[]>(() => loadUsers());
-  const openModal = useModalStore((s) => s.open);
+// ── Component ─────────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
-    } catch {
-      // ignore
+export function UsersPanel() {
+  const [users, setUsers] = useState<AdminUserEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const openModal = useModalStore((s) => s.open);
+  const activeConn = useConnectionStore((s) => s.getActive());
+  const activeKey = useConnectionStore((s) => s.getActiveKey());
+
+  const loadUsers = useCallback(async () => {
+    // ── Try server first ──────────────────────────────────────────────────
+    if (activeConn) {
+      setLoading(true);
+      setError(null);
+      try {
+        const client = new StudioApiClient({
+          baseUrl: activeConn.baseUrl,
+          adminApiKey: activeKey,
+          operatorId: activeConn.operatorId,
+        });
+        const res = await client.listUsers();
+        setUsers(res.users);
+        // Cache for offline display.
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(res.users));
+        } catch { /* ignore quota errors */ }
+        return;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load users");
+      } finally {
+        setLoading(false);
+      }
     }
-  }, [users]);
+
+    // ── Fall back to localStorage cache ────────────────────────────────────
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        setUsers(JSON.parse(raw) as AdminUserEntry[]);
+        return;
+      }
+    } catch { /* ignore */ }
+
+    // ── Seed with built-in admin placeholder ──────────────────────────────
+    setUsers([
+      {
+        user_id: "u-admin",
+        username: "admin",
+        role: "dba",
+        created_ms: Date.now() - 1_000_000_000,
+      },
+    ]);
+  }, [activeConn, activeKey]);
+
+  // Reload whenever the active connection changes.
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
 
   return (
     <div>
+      {/* ── Section: Users ───────────────────────────────────────────── */}
       <div className="conn-section-header">
         <span className="label-xs">Users</span>
         <button
@@ -78,14 +109,32 @@ export function UsersPanel() {
         </button>
       </div>
 
-      {users.map((u) => (
+      {loading && (
+        <div style={{ padding: "8px 12px", fontSize: 10.5, color: "var(--text-3)" }}>
+          Loading…
+        </div>
+      )}
+
+      {error && !loading && (
+        <div style={{ padding: "6px 12px", fontSize: 10.5, color: "var(--red)", lineHeight: 1.4 }}>
+          {error}
+          <button
+            style={{ marginLeft: 8, fontSize: 10, cursor: "pointer", color: "var(--text-2)" }}
+            onClick={() => void loadUsers()}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loading && users.map((u) => (
         <div
-          key={u.id}
+          key={u.user_id}
           className="conn-item"
           onContextMenu={openMenuFor(() => buildUserMenu(u.username))}
-          title={`Created ${new Date(u.createdAt).toLocaleDateString()}`}
+          title={`${u.user_id} — created ${new Date(u.created_ms).toLocaleDateString()}`}
         >
-          <span className={`conn-dot ${u.active ? "ok" : "none"}`} />
+          <span className="conn-dot ok" />
           <span className="conn-item-name">{u.username}</span>
           <span
             className="conn-type-badge"
@@ -100,6 +149,7 @@ export function UsersPanel() {
         </div>
       ))}
 
+      {/* ── Section: Roles ───────────────────────────────────────────── */}
       <div className="conn-section-header" style={{ marginTop: 14 }}>
         <span className="label-xs">Roles</span>
         <button
@@ -121,16 +171,18 @@ export function UsersPanel() {
         </div>
       ))}
 
-      <div
-        style={{
-          padding: "12px",
-          fontSize: 10.5,
-          color: "var(--text-3)",
-          lineHeight: 1.5,
-        }}
-      >
-        Right-click a user to manage. User management is local-only until server admin endpoints are wired.
-      </div>
+      {!activeConn && (
+        <div
+          style={{
+            padding: "12px",
+            fontSize: 10.5,
+            color: "var(--text-3)",
+            lineHeight: 1.5,
+          }}
+        >
+          Connect with an admin key to manage server-side users.
+        </div>
+      )}
     </div>
   );
 }

@@ -20,9 +20,107 @@ use crate::{execute_oltp_select, df_select_owned, run_async_in_executor};
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
+use crate::helpers::sql_parse::{extract_bulk_update_target, extract_bulk_delete_target};
+use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix};
 use crate::{persist_sql_statement};
 use crate::auth::{require_sql_runtime_principal, locale_from_headers};
 use crate::audit_helpers::append_runtime_audit_event;
+
+// ─── M-3: graceful 503 helper ───────────────────────────────────────────────
+/// Build a 503 AuthErrorResponse for mutex-poisoned internal state.
+/// Handler hot-paths use this instead of `.expect()` so a poisoned mutex
+/// returns 503 to the caller rather than crashing the process.
+#[inline]
+fn lock_poisoned_err(what: &str) -> (StatusCode, Json<AuthErrorResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(AuthErrorResponse {
+            status: "error",
+            reason: format!("{what} mutex poisoned"),
+            locale: "en".to_string(),
+            localized_message: "Service temporarily unavailable".to_string(),
+        }),
+    )
+}
+
+/// M-6: Statement timeout error — returned when a deadline set by `statement_timeout_ms`
+/// has elapsed before (or immediately after) query execution completes.
+fn statement_timeout_err() -> (StatusCode, Json<AuthErrorResponse>) {
+    (
+        StatusCode::REQUEST_TIMEOUT,
+        Json(AuthErrorResponse {
+            status: "error",
+            reason: "statement_timeout".to_string(),
+            locale: "en".to_string(),
+            localized_message: "Statement exceeded the configured timeout".to_string(),
+        }),
+    )
+}
+
+/// Return `Err(statement_timeout_err())` if `deadline` is `Some` and has already elapsed.
+/// No-op when `deadline` is `None` (timeout not configured).
+#[inline]
+fn check_deadline(deadline: Option<std::time::Instant>) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
+    if let Some(dl) = deadline {
+        if std::time::Instant::now() >= dl {
+            return Err(statement_timeout_err());
+        }
+    }
+    Ok(())
+}
+
+// ─── M-8 Rule 1: typed value inference ───────────────────────────────────────
+
+/// Coerce a string storage value to the most specific JSON scalar type.
+///
+/// Priority: null → boolean → integer → float → string (Codd Rule 1 partial).
+/// This prevents every column from appearing as "text" in client result sets
+/// when the underlying value is a number or boolean.
+#[inline]
+fn infer_json_value(s: &str) -> serde_json::Value {
+    if s.is_empty() || s.eq_ignore_ascii_case("null") {
+        return serde_json::Value::Null;
+    }
+    if s.eq_ignore_ascii_case("true") { return serde_json::Value::Bool(true); }
+    if s.eq_ignore_ascii_case("false") { return serde_json::Value::Bool(false); }
+    if let Ok(i) = s.parse::<i64>() { return serde_json::Value::Number(i.into()); }
+    if let Ok(f) = s.parse::<f64>() {
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            return serde_json::Value::Number(n);
+        }
+    }
+    serde_json::Value::String(s.to_string())
+}
+
+/// Return the PostgreSQL-style type name for a JSON value produced by `infer_json_value`.
+#[inline]
+fn json_value_pg_type(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null    => "text",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(n) => {
+            if n.is_f64() { "double precision" } else { "integer" }
+        }
+        serde_json::Value::String(_) => "text",
+        _ => "text",
+    }
+}
+
+// ─── Gap #3: undo log helper ─────────────────────────────────────────────────
+
+/// Record a before-image into the undo log for the given connection.
+/// `before` = current visible data at the key (None if the row did not exist).
+fn record_undo(
+    undo_log: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, Option<voltnuerongrid_store::mvcc::RowData>)>>>>,
+    conn_id: &str,
+    key: &str,
+    before: Option<voltnuerongrid_store::mvcc::RowData>,
+) {
+    let mut log = undo_log.lock().expect("tx_undo_log lock");
+    log.entry(conn_id.to_string())
+        .or_default()
+        .push((key.to_string(), before));
+}
 
 // ─── SQL DTOs ─────────────────────────────────────────────────────────────────
 
@@ -82,10 +180,17 @@ pub(crate) struct SqlRouteResponse {
     pub(crate) batch_relative_cost: f64,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 pub(crate) struct SqlExecuteRequest {
     pub(crate) sql_batch: String,
     pub(crate) max_rows: Option<usize>,
+    /// M-6: Optional default isolation level for inline transactions started within
+    /// this execute batch.  Honoured when BEGIN is part of the sql_batch.
+    /// Values: "read_committed" (default), "repeatable_read", "serializable".
+    pub(crate) isolation_level: Option<String>,
+    /// M-6: Optional client-side statement timeout hint (milliseconds).  The server
+    /// records this in the audit log; enforcement is left to a future watchdog task.
+    pub(crate) statement_timeout_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -267,6 +372,7 @@ pub(crate) struct AcidTransactionsResponse {
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
+#[tracing::instrument(skip_all, name = "sql.transaction")]
 pub(crate) async fn sql_transaction(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -289,6 +395,13 @@ pub(crate) async fn sql_transaction(
     let statements = tx_context.payload.statements;
     let requested_isolation_level = tx_context.payload.isolation_level;
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/transaction")?;
+    // Gap #2: database scope for this transaction (prefix all row keys).
+    let db: String = headers
+        .get("x-vng-database")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
     // REQ-23: ACID transaction state machine tracking
     {
         let now_ms = now_unix_ms();
@@ -312,9 +425,32 @@ pub(crate) async fn sql_transaction(
             .as_deref()
             .unwrap_or("read_committed")
             .to_string();
-        let mut acid = state.acid_transactions.lock().expect("acid_tx lock");
+        // C-3: For repeatable_read, capture the row-store snapshot Xid at BEGIN time
+        // so all reads in this transaction see a consistent view.  Must be captured
+        // *before* acquiring acid_transactions lock to avoid deadlock.
+        let begin_snapshot_xid: Option<u64> = if has_begin && iso_level == "repeatable_read" {
+            let rs = match state.row_store.lock() {
+                Ok(g) => g,
+                Err(_) => return Err(lock_poisoned_err("row_store")),
+            };
+            Some(rs.current_xid())
+        } else {
+            None
+        };
+
+        let mut acid = match state.acid_transactions.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned_err("acid_transactions")),
+        };
         if has_begin {
-            acid.begin(&tx_id, &state.node_id, &iso_level, now_ms);
+            acid.begin(&tx_id, &state.node_id, &iso_level, now_ms, begin_snapshot_xid);
+            // Register connection → tx mapping so sql_execute can look up the
+            // repeatable-read snapshot for standalone SELECT calls.
+            if iso_level == "repeatable_read" {
+                if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                    conn_map.insert(connection_id.clone(), tx_id.clone());
+                }
+            }
         }
         for stmt in &statements {
             let upper = stmt.to_ascii_uppercase();
@@ -364,8 +500,33 @@ pub(crate) async fn sql_transaction(
             acid.record_statement(&tx_id, affected);
         }
         if has_commit {
-            // REQ-23: abort with 409 if a serializable write conflict is detected
-            if let Some(conflict_table) = acid.check_serializable_conflict(&tx_id) {
+            // M-7: Collect the set of row keys this transaction intends to write.
+            // Used for both (a) write-write conflict detection (S2-WS2-05) and
+            // (b) row-level serializable OCC conflict detection.
+            let commit_write_keys: std::collections::HashSet<String> = {
+                let mut keys = std::collections::HashSet::new();
+                for stmt in &statements {
+                    let upper = stmt.trim_start().to_ascii_uppercase();
+                    if upper.starts_with("INSERT") {
+                        for (raw_k, _, _) in extract_all_insert_rows(stmt) {
+                            keys.insert(db_prefix_key(&db, &raw_k));
+                        }
+                    } else if upper.starts_with("UPDATE") {
+                        if let Some((raw_k, _)) = extract_update_row_from_sql(stmt) {
+                            keys.insert(db_prefix_key(&db, &raw_k));
+                        }
+                    } else if upper.starts_with("DELETE") {
+                        if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                            keys.insert(db_prefix_key(&db, &raw_k));
+                        }
+                    }
+                }
+                keys
+            };
+            // M-7: Row-level serializable conflict detection.
+            // Conflict only when a committed serializable peer wrote the exact
+            // same row key(s) — no false positives from non-overlapping writes.
+            if let Some(conflict_key) = acid.check_serializable_conflict_row_level(&tx_id, &commit_write_keys) {
                 acid.rollback(&tx_id, now_ms);
                 drop(acid);
                 let locale = locale_from_headers(&headers);
@@ -374,37 +535,22 @@ pub(crate) async fn sql_transaction(
                     StatusCode::CONFLICT,
                     Json(AuthErrorResponse {
                         status: "error",
-                        reason: format!("serializable_write_conflict:{conflict_table}"),
+                        reason: format!("serializable_write_conflict:{conflict_key}"),
                         locale: locale.as_str().to_string(),
                         localized_message: localized.message.to_string(),
                     }),
                 ));
             }
             // S2-WS2-05: write-write conflict detection using row-store snapshot xid.
-            // Collect keys about to be written and check for concurrent modifications.
             {
-                let mut write_keys: Vec<String> = Vec::new();
-                for stmt in &statements {
-                    let upper = stmt.trim_start().to_ascii_uppercase();
-                    if upper.starts_with("INSERT") {
-                        if let Some((k, _)) = extract_insert_row_from_sql(stmt) {
-                            write_keys.push(k);
-                        }
-                    } else if upper.starts_with("UPDATE") {
-                        if let Some((k, _)) = extract_update_row_from_sql(stmt) {
-                            write_keys.push(k);
-                        }
-                    } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
-                            write_keys.push(k);
-                        }
-                    }
-                }
-                if !write_keys.is_empty() {
-                    let rs = state.row_store.lock().expect("row_store lock conflict check");
+                if !commit_write_keys.is_empty() {
+                    let rs = match state.row_store.lock() {
+                        Ok(g) => g,
+                        Err(_) => return Err(lock_poisoned_err("row_store")),
+                    };
                     let snapshot_xid = acid.row_store_snapshot_xid(&tx_id)
                         .unwrap_or(0);
-                    for key in &write_keys {
+                    for key in &commit_write_keys {
                         if rs.was_modified_after(key, snapshot_xid) {
                             drop(rs);
                             acid.rollback(&tx_id, now_ms);
@@ -430,12 +576,23 @@ pub(crate) async fn sql_transaction(
                     }
                 }
             }
+            // M-7: Record the committed write keys into the acid entry so that
+            // future serializable transactions can detect row-level conflicts.
+            acid.record_written_row_keys(&tx_id, commit_write_keys.into_iter());
             acid.commit(&tx_id, now_ms);
+            // C-3: Clear the connection→tx mapping on COMMIT so sql_execute no longer
+            // applies the repeatable-read snapshot to standalone SELECTs.
+            if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                conn_map.remove(&connection_id);
+            }
             // S2-WS2-05: flush committed DML (INSERT/UPDATE/DELETE) into PagedRowStore.
             // Write intents are registered before each write and released after the flush
             // so that concurrent transactions see the in-progress lock via begin_write_intent.
             {
-                let mut rs = state.row_store.lock().expect("row_store lock");
+                let mut rs = match state.row_store.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("row_store")),
+                };
                 // Record snapshot xid before allocating the write xid
                 let snapshot_xid = rs.current_xid();
                 acid.set_row_store_snapshot(&tx_id, snapshot_xid);
@@ -445,20 +602,35 @@ pub(crate) async fn sql_transaction(
                     if upper.starts_with("INSERT") {
                         // Use extract_all_insert_rows to handle multi-row INSERT correctly.
                         // Each row is individually inserted and individually WAL-persisted.
-                        for (k, d, single_sql) in extract_all_insert_rows(stmt) {
+                        for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
+                            if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                         }
                     } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                        if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
+                            if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, None); }
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     } else if upper.starts_with("UPDATE") {
-                        if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                        if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
+                            if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
@@ -466,21 +638,23 @@ pub(crate) async fn sql_transaction(
                 }
                 // S2-WS2-02: record committed DML mutations in the WAL engine for
                 // durability and recovery replay.
-                {
-                    let mut wal = state.wal_engine.lock().expect("wal_engine lock");
+                if let Ok(mut wal) = state.wal_engine.lock() {
                     for stmt in &req.statements {
                         let upper = stmt.trim_start().to_ascii_uppercase();
                         if upper.starts_with("INSERT") {
-                            if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
+                            if let Some((raw_k, d)) = extract_insert_row_from_sql(stmt) {
+                                let k = db_prefix_key(&db, &raw_k);
                                 let val = serde_json::to_string(&d).unwrap_or_default();
                                 wal.append_mutation(&k, &val);
                             }
                         } else if upper.starts_with("DELETE") {
-                            if let Some(k) = extract_delete_key_from_sql(stmt) {
+                            if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                                let k = db_prefix_key(&db, &raw_k);
                                 wal.append_mutation(&k, "__deleted__");
                             }
                         } else if upper.starts_with("UPDATE") {
-                            if let Some((k, d)) = extract_update_row_from_sql(stmt) {
+                            if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
+                                let k = db_prefix_key(&db, &raw_k);
                                 let val = serde_json::to_string(&d).unwrap_or_default();
                                 wal.append_mutation(&k, &val);
                             }
@@ -494,19 +668,25 @@ pub(crate) async fn sql_transaction(
             // S4-WS3-04: publish each committed DML mutation to RowStoreSyncOrigin for HTAP consumers.
             {
                 use voltnuerongrid_store::htap_sync::MutationOp;
-                let mut origin = state.sync_origin.lock().expect("sync_origin lock");
+                let mut origin = match state.sync_origin.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("sync_origin")),
+                };
                 for stmt in &req.statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
-                        if let Some((k, _d)) = extract_insert_row_from_sql(stmt) {
+                        if let Some((raw_k, _d)) = extract_insert_row_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             origin.append("row_store", &k, stmt, MutationOp::Insert);
                         }
                     } else if upper.starts_with("DELETE") {
-                        if let Some(k) = extract_delete_key_from_sql(stmt) {
+                        if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             origin.append("row_store", &k, stmt, MutationOp::Delete);
                         }
                     } else if upper.starts_with("UPDATE") {
-                        if let Some((k, _d)) = extract_update_row_from_sql(stmt) {
+                        if let Some((raw_k, _d)) = extract_update_row_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
                             origin.append("row_store", &k, stmt, MutationOp::Update);
                         }
                     }
@@ -514,6 +694,35 @@ pub(crate) async fn sql_transaction(
             }
         } else if has_rollback {
             acid.rollback(&tx_id, now_ms);
+            // C-3: Clear the connection→tx mapping on ROLLBACK as well.
+            if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                conn_map.remove(&connection_id);
+            }
+        }
+        // Gap #3: on COMMIT clear undo log; on ROLLBACK apply it then clear.
+        if has_commit {
+            if let Ok(mut log) = state.tx_undo_log.lock() { log.remove(&connection_id); }
+        } else if has_rollback {
+            let undo_entries = {
+                match state.tx_undo_log.lock() {
+                    Ok(mut log) => log.remove(&connection_id).unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                }
+            };
+            if !undo_entries.is_empty() {
+                let mut rs = match state.row_store.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("row_store")),
+                };
+                let undo_xid = rs.begin_xid();
+                for (key, before_data) in undo_entries.into_iter().rev() {
+                    match before_data {
+                        Some(data) => { rs.insert(undo_xid, &key, data); }
+                        None => { rs.delete(undo_xid, &key); }
+                    }
+                }
+                rs.release_write_intents(undo_xid);
+            }
         }
     }
     let (status, response) = execute_transaction_statements(req.statements);
@@ -725,6 +934,7 @@ pub(crate) async fn sql_route(
     Ok(Json(response.payload))
 }
 
+#[tracing::instrument(skip_all, name = "sql.execute")]
 pub(crate) async fn sql_execute(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -736,7 +946,85 @@ pub(crate) async fn sql_execute(
         PrivilegeAction::Execute,
         "sql/execute",
     )?;
+
+    // Extract x-vng-database header for database-scoped query execution.
+    // When present, all DDL/DML/SELECT operations are scoped to this database.
+    let active_database: Option<String> = headers
+        .get("x-vng-database")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+
+    // Gap #2: db scope string — used to prefix all row keys for true DB isolation.
+    // Empty when no database header is present (backward compat, single-DB deployments).
+    let db: String = active_database.clone().unwrap_or_default();
+
+    // RBAC database-level access check: if a database is specified and the
+    // principal is not a DBA, verify they have an explicit database-level grant.
+    if let Some(ref db) = active_database {
+        if !crate::auth::principal_has_database_access(&principal, db, &state) {
+            return Err((
+                axum::http::StatusCode::FORBIDDEN,
+                axum::Json(crate::AuthErrorResponse {
+                    status: "error",
+                    reason: format!("access denied to database '{db}'"),
+                    locale: "en".to_string(),
+                    localized_message: format!("You do not have access to database '{db}'"),
+                }),
+            ));
+        }
+    }
+
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/execute")?;
+
+    // Gap #9: acquire a per-database connection permit (enforces max_connections per database).
+    let _db_permit = if !db.is_empty() {
+        let sem = {
+            let mut semaphores = match state.db_semaphores.lock() {
+                Ok(g) => g,
+                Err(_) => return Err(lock_poisoned_err("db_semaphores")),
+            };
+            semaphores
+                .entry(db.clone())
+                .or_insert_with(|| {
+                    // No max_connections field in DdlCatalog yet — use the default.
+                    Arc::new(tokio::sync::Semaphore::new(crate::DEFAULT_DB_MAX_CONNECTIONS))
+                })
+                .clone()
+        };
+        // Try to acquire without blocking; return 503 if at capacity.
+        match sem.try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                release_sql_data_plane_connection(&state, &connection_id);
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(crate::AuthErrorResponse {
+                        status: "error",
+                        reason: format!("database '{}' is at max_connections limit", db),
+                        locale: "en".to_string(),
+                        localized_message: format!(
+                            "Database '{}' has reached its maximum connection limit",
+                            db
+                        ),
+                    }),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    // M-6: Statement timeout enforcement.
+    // If the client specified statement_timeout_ms, record a deadline. The timeout
+    // is checked before and after each major execution phase. Because the core
+    // executor is synchronous (no preemption point), this is deadline-based rather
+    // than pre-emptive — it prevents returning results that took longer than the
+    // budget and returns a 408 to the client.
+    let statement_deadline: Option<std::time::Instant> = req.statement_timeout_ms
+        .filter(|&ms| ms > 0)
+        .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+
     let dispatcher = CommandDispatcher::new();
     let envelope = build_http_envelope(
         &headers,
@@ -748,15 +1036,53 @@ pub(crate) async fn sql_execute(
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
 
     // ── Demo CALL intercept (TODO: replace with real stored-procedure execution) ─
-    // Handle CALL insert_rows('<table>', <count>) for the studio demo button.
-    // This is NOT a real stored-procedure runtime — it is a fixed-name shortcut
-    // that synthesises rows with heuristic values. Once CREATE PROCEDURE / UDF
-    // execution lands, remove this and route through the real catalog.
-    // Tracked as gap §4.3 in gaps-may26-1.md.
-    if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req) {
-        return early;
+    // Handle CALL insert_rows('<table>', <count>) ONLY in demo mode.
+    // Gate behind VNG_DEMO_MODE=true to avoid shadowing user-defined stored procedures.
+    if std::env::var("VNG_DEMO_MODE").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false) {
+        if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req, &db) {
+            return early;
+        }
     }
 
+    // Virtual catalog interception: information_schema.* and pg_catalog.*
+    // Must come before OLAP/OLTP routing so DBeaver, TablePlus, psql and
+    // SQLAlchemy get synthesized metadata rows without touching the row store.
+    if crate::helpers::information_schema::is_virtual_catalog_query(&req.sql_batch) {
+        let (cols, rows) = crate::helpers::information_schema::synthesize_virtual_catalog_response(
+            &req.sql_batch, &state,
+        );
+        append_runtime_audit_event(
+            &state,
+            AuditEventKind::Sql,
+            &principal,
+            "virtual_catalog_query",
+            "ok",
+            serde_json::json!({ "route_scope": "sql/execute", "batch_snippet": &req.sql_batch.chars().take(64).collect::<String>() }),
+        );
+        release_sql_data_plane_connection(&state, &connection_id);
+        return Ok((
+            StatusCode::OK,
+            Json(SqlExecuteResponse {
+                status: "ok",
+                route_path: "virtual_catalog".to_string(),
+                reason: "information_schema_intercept".to_string(),
+                transaction: None,
+                olap: None,
+                rejected_statement_count: 0,
+                udf_results: None,
+                udf_guardrail_status: Some("passed".to_string()),
+                udf_function_catalog: vec![],
+                udf_guard_policies: vec![],
+                udf_execution_plan: vec![],
+                legacy_agg_results: None,
+                planner_path: Some("virtual_catalog".to_string()),
+                oltp_rows: None,
+                olap_agg_results: None,
+                columns: if cols.is_empty() { None } else { Some(cols) },
+                rows: if rows.is_empty() { None } else { Some(rows) },
+            }),
+        ));
+    }
 
     let udf_function_catalog = udf_function_catalog_contract();
     let udf_guard_policies = udf_guard_policy_contract();
@@ -856,14 +1182,33 @@ pub(crate) async fn sql_execute(
     }
 
     // ── Statement dispatch ───────────────────────────────────────────────────
+    // M-8 Rule 6: Snapshot the DDL catalog once so we can resolve view definitions
+    // without holding the lock across the entire dispatch loop.
+    let view_catalog_snapshot: Vec<(String, String)> = {
+        match state.ddl_catalog.lock() {
+            Ok(cat) => cat.active_entries()
+                .into_iter()
+                .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
+                .map(|e| (e.object_name.to_ascii_lowercase(), e.original_statement.clone()))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    };
+
     let mut transaction_statements = Vec::new();
     let mut olap_statements = Vec::new();
     for statement in parsed {
         let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
         if analysis.kind == SqlStatementKind::Select {
-            olap_statements.push(statement.raw);
+            // M-8 Rule 6: If the SELECT targets a registered view, expand it to the
+            // view's underlying query body before passing to the executor.
+            let expanded = expand_select_view(&statement.raw, &view_catalog_snapshot);
+            olap_statements.push(expanded);
         } else {
-            transaction_statements.push(statement.raw);
+            // M-8 Rule 6: For DML (INSERT/UPDATE/DELETE) targeting a simple updatable
+            // view, rewrite the statement to target the base table instead.
+            let rewritten = rewrite_dml_for_view(&statement.raw, &view_catalog_snapshot);
+            transaction_statements.push(rewritten);
         }
     }
 
@@ -873,6 +1218,9 @@ pub(crate) async fn sql_execute(
     // Hoisted so the DML WAL/row_store commit block below can access it
     // regardless of whether touches_catalog is true or false.
     let mut ddl_snapshot: Vec<String> = Vec::new();
+
+    // M-6: pre-execution deadline check — reject immediately if deadline already passed.
+    check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
 
     if !transaction_statements.is_empty() {
         // REQ-02: snapshot statements for DDL catalog update after ownership transfer
@@ -923,11 +1271,19 @@ pub(crate) async fn sql_execute(
         // REQ-02: update DDL catalog when DDL statements touched the catalog
         if transaction.as_ref().map(|r| r.touches_catalog).unwrap_or(false) {
             let now_ms = now_unix_ms();
-            let mut catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+            let mut catalog = match state.ddl_catalog.lock() {
+                Ok(g) => g,
+                Err(_) => return Err(lock_poisoned_err("ddl_catalog")),
+            };
             let mut ddl_warning: Option<String> = None;
             for stmt in &ddl_snapshot {
                 if let Some(info) = parse_ddl_info(stmt) {
                     match info.operation {
+                        "create" if info.object_kind == "index" => {
+                            // M-2: CREATE INDEX — deferred to after the catalog loop to avoid
+                            // holding the catalog lock while acquiring row_store + index_manager.
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
+                        }
                         "create" => {
                             let result = catalog.record_create(
                                 &info.object_kind,
@@ -973,6 +1329,44 @@ pub(crate) async fn sql_execute(
                     }
                 }
             }
+            // M-2: Execute CREATE INDEX statements after releasing the catalog lock.
+            // This avoids holding ddl_catalog while acquiring row_store + index_manager.
+            drop(catalog);
+            for stmt in &ddl_snapshot {
+                let lower = stmt.trim().to_ascii_lowercase();
+                if lower.starts_with("create index ") || lower.starts_with("create unique index ") {
+                    handle_create_index_ddl(&state, stmt, &db);
+                }
+            }
+            catalog = match state.ddl_catalog.lock() {
+                Ok(g) => g,
+                Err(_) => return Err(lock_poisoned_err("ddl_catalog")),
+            };
+            // M-2: Handle GRANT / REVOKE / CREATE ROLE / DROP ROLE statements.
+            // These run after the catalog loop so we don't hold ddl_catalog while
+            // touching db_grants. CREATE ROLE / DROP ROLE are persisted to WAL only;
+            // the in-memory RBAC config is managed via the admin API on restart.
+            for stmt in &ddl_snapshot {
+                let kind = SqlAnalyzer::classify_statement(stmt);
+                match kind {
+                    SqlStatementKind::Grant => {
+                        handle_grant_sql(&state, stmt);
+                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
+                    }
+                    SqlStatementKind::Revoke => {
+                        handle_revoke_sql(&state, stmt);
+                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
+                    }
+                    SqlStatementKind::CreateRole | SqlStatementKind::DropRole => {
+                        // Persist to WAL; in-memory role management requires admin API restart.
+                        tracing::info!(
+                            "role management statement persisted to WAL (restart admin API to apply): {stmt}"
+                        );
+                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
+                    }
+                    _ => {}
+                }
+            }
             // If the entire batch is DDL-only and we got an AlreadyExists, return 409 now.
             // If there are DML statements too, we fall through so they still execute.
             let has_dml = ddl_snapshot.iter().any(|s| {
@@ -1016,8 +1410,14 @@ pub(crate) async fn sql_execute(
         }
     }
     // Execute DML (INSERT/UPDATE/DELETE) against the row store for ALL committed
-    // non-SELECT transactions — pure DML, mixed DDL+DML, etc. Each row is individually
-    // written and appended to the DML WAL so data survives a server restart.
+    // non-SELECT transactions — pure DML, mixed DDL+DML, etc.
+    //
+    // Two paths depending on Raft role:
+    //   • Multi-node leader  → linearisable: append to Raft log first, wait for
+    //     apply-loop quorum confirmation, then ACK client (§5.3).
+    //   • Single-node leader / follower / non-Raft → direct: write to row_store
+    //     immediately, then fire-and-forget append to Raft log so followers can
+    //     replicate on the next heartbeat tick.
     if transaction.as_ref().map(|r| r.statements_executed > 0).unwrap_or(false) {
         let has_dml = ddl_snapshot.iter().any(|s| {
             let u = s.trim_start().to_ascii_uppercase();
@@ -1099,17 +1499,296 @@ pub(crate) async fn sql_execute(
                         rs.insert(xid, &k, d);
                         persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                     }
-                } else if upper.starts_with("UPDATE") {
-                    if let Some((k, d)) = extract_update_row_from_sql(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.insert(xid, &k, d);
+                }
+                // 2. Persist to WAL for local durability (before waiting for quorum).
+                for stmt in &ddl_snapshot {
+                    let upper = stmt.trim_start().to_ascii_uppercase();
+                    if upper.starts_with("INSERT") {
+                        for (_, _, single_sql) in extract_all_insert_rows(stmt) {
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
+                        }
+                    } else if upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
                         persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                     }
-                } else if upper.starts_with("DELETE") {
-                    if let Some(k) = extract_delete_key_from_sql(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.delete(xid, &k);
-                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                }
+                // 3. Wait for the apply loop to commit and apply (up to 2 s).
+                if max_pending_index > 0 {
+                    let mut rx = state.raft_last_applied_tx.subscribe();
+                    let wait_ok = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        rx.wait_for(|&applied| applied >= max_pending_index),
+                    ).await.is_ok();
+                    if !wait_ok {
+                        release_sql_data_plane_connection(&state, &connection_id);
+                        return Ok((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(SqlExecuteResponse {
+                                status: "error",
+                                route_path: route_path_name(decision.payload.path).to_string(),
+                                reason: "raft_quorum_timeout".to_string(),
+                                transaction, olap: None,
+                                rejected_statement_count,
+                                udf_results: None, udf_guardrail_status: None,
+                                udf_function_catalog, udf_guard_policies, udf_execution_plan,
+                                legacy_agg_results: None, planner_path: None,
+                                oltp_rows: None, olap_agg_results: None,
+                                columns: None, rows: None,
+                            }),
+                        ));
+                    }
+                }
+            } else {
+                // ── Direct path (single-node leader / follower / non-Raft) ────────
+                let mut rs = match state.row_store.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("row_store")),
+                };
+                let xid = rs.begin_xid();
+
+                // M-6: If the batch contains a BEGIN and the client requested a non-default
+                // isolation level, register the implicit transaction in acid_transactions so
+                // that RR snapshot and serializable conflict detection apply to DML in this batch.
+                let implicit_tx_id: Option<String> = {
+                    let req_iso = req.isolation_level.as_deref().unwrap_or("read_committed");
+                    let has_begin = ddl_snapshot.iter().any(|s| {
+                        matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Begin)
+                    });
+                    if has_begin && req_iso != "read_committed" {
+                        let tx_id = format!("implicit-tx-{}-{}", connection_id, now_unix_ms());
+                        let begin_snapshot_xid = if req_iso == "repeatable_read" {
+                            Some(rs.current_xid())
+                        } else {
+                            None
+                        };
+                        if let Ok(mut acid) = state.acid_transactions.lock() {
+                            acid.begin(&tx_id, &state.node_id, req_iso, now_unix_ms(), begin_snapshot_xid);
+                        }
+                        if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                            conn_map.insert(connection_id.clone(), tx_id.clone());
+                        }
+                        Some(tx_id)
+                    } else {
+                        None
+                    }
+                };
+
+                // Gap #7: Track per-table insert/delete deltas for incremental stats update.
+                let mut stats_inserts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+                for stmt in &ddl_snapshot {
+                    let upper = stmt.trim_start().to_ascii_uppercase();
+                    if upper.starts_with("INSERT") {
+                        for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            // Only increment if this is a fresh insert (not an overwrite).
+                            if before.is_none() {
+                                if let Some(colon) = k.rfind(':') {
+                                    *stats_inserts.entry(k[..colon].to_string()).or_insert(0) += 1;
+                                }
+                            }
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                            let _ = rs.begin_write_intent(xid, &k);
+                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
+                            rs.insert(xid, &k, d);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
+                        }
+                    } else if upper.starts_with("UPDATE") {
+                        if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
+                            // Rule 7 (Codd) — set-at-a-time UPDATE: when no primary-key
+                            // WHERE constraint was parsed (raw_k == table name), fall back
+                            // to a full table scan filtered by the WHERE predicate.
+                            let table_name = d.get("__table").map(|t| t.clone()).unwrap_or_default();
+                            let is_scan_update = raw_k == table_name
+                                && extract_bulk_update_target(stmt)
+                                    .map(|(_, _, _, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
+                                    .unwrap_or(false);
+
+                            if is_scan_update {
+                                if let Some((tbl, set_col, set_val, where_col, where_val)) =
+                                    extract_bulk_update_target(stmt)
+                                {
+                                    let snapshot_xid = rs.current_xid();
+                                    let table_prefix = format!("{tbl}:");
+                                    let db_prefix_str = if db.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("{db}.")
+                                    };
+                                    let matching_keys: Vec<(String, std::collections::HashMap<String, String>)> = rs
+                                        .scan_at_snapshot(snapshot_xid)
+                                        .into_iter()
+                                        .filter(|(k, row_data)| {
+                                            let k_str: &str = k;
+                                            let local_k = if db_prefix_str.is_empty() {
+                                                k_str.to_string()
+                                            } else {
+                                                k_str.strip_prefix(&db_prefix_str).unwrap_or(k_str).to_string()
+                                            };
+                                            local_k.starts_with(&table_prefix)
+                                                && row_data.get(&where_col).map(|v| v == &where_val).unwrap_or(false)
+                                        })
+                                        .map(|(k, row_data)| (k.to_string(), row_data.clone()))
+                                        .collect();
+
+                                    for (matched_k, existing) in matching_keys {
+                                        let before = rs.read_latest(&matched_k).cloned();
+                                        let mut updated = existing;
+                                        updated.insert(set_col.clone(), set_val.clone());
+                                        record_undo(&state.tx_undo_log, &connection_id, &matched_k, before);
+                                        let _ = rs.begin_write_intent(xid, &matched_k);
+                                        let raw_k_stripped = if db_prefix_str.is_empty() {
+                                            matched_k.clone()
+                                        } else {
+                                            matched_k.strip_prefix(&db_prefix_str).unwrap_or(matched_k.as_str()).to_string()
+                                        };
+                                        { let mut wal = state.wal_engine.lock().expect("wal store_row bulk"); wal.store_row(&db, &raw_k_stripped, xid, Some(&updated)); }
+                                        rs.insert(xid, &matched_k, updated);
+                                    }
+                                    persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                                }
+                            } else {
+                                let k = db_prefix_key(&db, &raw_k);
+                                // Gap #3: record before-image for ROLLBACK support.
+                                let before = rs.read_latest(&k).cloned();
+                                // UPDATE keeps the row count the same — no stat delta needed.
+                                record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                                let _ = rs.begin_write_intent(xid, &k);
+                                { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
+                                rs.insert(xid, &k, d);
+                                persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                            }
+                        }
+                    } else if upper.starts_with("DELETE") {
+                        // Codd Rule 7: set-at-a-time DELETE — try bulk scan first when WHERE
+                        // is on a non-key column; fall through to single-key delete otherwise.
+                        let is_bulk_delete = extract_bulk_delete_target(stmt)
+                            .map(|(_, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
+                            .unwrap_or(false);
+                        if is_bulk_delete {
+                            if let Some((tbl, where_col, where_val)) = extract_bulk_delete_target(stmt) {
+                                let snapshot_xid = rs.current_xid();
+                                let table_prefix = format!("{tbl}:");
+                                let db_prefix_str = if db.is_empty() { String::new() } else { format!("{db}.") };
+                                let matching_keys: Vec<String> = rs
+                                    .scan_at_snapshot(snapshot_xid)
+                                    .into_iter()
+                                    .filter(|(k, row_data)| {
+                                        let key_matches = k.contains(&format!("{db_prefix_str}{table_prefix}"));
+                                        let val_matches = row_data.get(&where_col).map(|v| *v == where_val).unwrap_or(false);
+                                        key_matches && val_matches
+                                    })
+                                    .map(|(k, _)| k.to_string())
+                                    .collect();
+                                for matched_k in matching_keys {
+                                    let before = rs.read_latest(&matched_k).cloned();
+                                    if before.is_some() {
+                                        if let Some(colon) = matched_k.rfind(':') {
+                                            *stats_inserts.entry(matched_k[..colon].to_string()).or_insert(0) -= 1;
+                                        }
+                                    }
+                                    record_undo(&state.tx_undo_log, &connection_id, &matched_k, before);
+                                    let _ = rs.begin_write_intent(xid, &matched_k);
+                                    rs.delete(xid, &matched_k);
+                                    let raw_k = matched_k.trim_start_matches(&format!("{db_prefix_str}")).to_string();
+                                    { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
+                                }
+                                persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                            }
+                        } else if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                            let k = db_prefix_key(&db, &raw_k);
+                            // Gap #3: record before-image for ROLLBACK support.
+                            let before = rs.read_latest(&k).cloned();
+                            // Only decrement if the row actually existed.
+                            if before.is_some() {
+                                if let Some(colon) = k.rfind(':') {
+                                    *stats_inserts.entry(k[..colon].to_string()).or_insert(0) -= 1;
+                                }
+                            }
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                            let _ = rs.begin_write_intent(xid, &k);
+                            rs.delete(xid, &k);
+                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                        }
+                    }
+                }
+                rs.release_write_intents(xid);
+
+                // M-6: Commit (or rollback) the implicit ACID transaction if we registered one.
+                {
+                    let batch_has_rollback = ddl_snapshot.iter().any(|s| {
+                        let u = s.trim_start().to_ascii_uppercase();
+                        u == "ROLLBACK" || u.starts_with("ROLLBACK;") || u.starts_with("ROLLBACK ")
+                    });
+                    if let Some(ref tx_id) = implicit_tx_id {
+                        if let Ok(mut acid) = state.acid_transactions.lock() {
+                            if batch_has_rollback {
+                                acid.rollback(tx_id, now_unix_ms());
+                            } else {
+                                acid.commit(tx_id, now_unix_ms());
+                            }
+                        }
+                        if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                            conn_map.remove(&connection_id);
+                        }
+                    }
+                }
+
+                // Gap #7: Apply incremental stat deltas (O(tables_touched) instead of O(all_rows)).
+                if !stats_inserts.is_empty() {
+                    if let Ok(mut stats) = state.table_stats.lock() {
+                        for (table_key, delta) in &stats_inserts {
+                            let cur = stats.entry(table_key.clone()).or_insert(0);
+                            *cur = (*cur as i64 + delta).max(0) as u64;
+                        }
+                    }
+                }
+                // H-1: Update StatsRegistry after DML commit.
+                // Run async so we don't block the response path.
+                {
+                    let state_clone = state.clone();
+                    let db_clone = db.clone();
+                    tokio::spawn(async move {
+                        let snapshot = if let Ok(rs) = state_clone.row_store.lock() {
+                            rs.export_rows_snapshot()
+                        } else {
+                            return;
+                        };
+                        // Count rows per table (strip db prefix to get bare table name).
+                        let mut table_counts: std::collections::HashMap<String, usize> =
+                            std::collections::HashMap::new();
+                        for (k, _) in &snapshot {
+                            // Keys are stored as "db.table:pk" or "table:pk".
+                            let after_db = if !db_clone.is_empty() {
+                                k.strip_prefix(&format!("{db_clone}.")).unwrap_or(k)
+                            } else {
+                                k.as_str()
+                            };
+                            let table = after_db.split(':').next().unwrap_or(after_db);
+                            *table_counts.entry(table.to_string()).or_default() += 1;
+                        }
+                        if let Ok(mut reg) = state_clone.stats_registry.lock() {
+                            for (tbl, cnt) in table_counts {
+                                reg.update_table(&tbl, cnt, std::collections::HashMap::new());
+                            }
+                        }
+                    });
+                }
+                // Fire-and-forget: replicate to Raft log so followers catch up.
+                // append_command pre-advances last_applied so the apply loop skips re-execution.
+                {
+                    let mut node = match state.raft_state.lock() {
+                        Ok(g) => g,
+                        Err(_) => return Err(lock_poisoned_err("raft_state")),
+                    };
+                    if node.role == crate::RaftRole::Leader {
+                        for stmt in &ddl_snapshot {
+                            let upper = stmt.trim_start().to_ascii_uppercase();
+                            if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
+                                node.append_command(stmt.clone(), total_peers);
+                            }
+                        }
                     }
                 }
             }
@@ -1189,6 +1868,48 @@ pub(crate) async fn sql_execute(
                 drop(node); // Single-node follower: DML applied locally, no replication needed.
             }
         }
+    }
+
+    // Gap #3: ROLLBACK — apply undo log to restore before-images for this connection.
+    let has_rollback = ddl_snapshot.iter().any(|s| {
+        let u = s.trim_start().to_ascii_uppercase();
+        u == "ROLLBACK" || u.starts_with("ROLLBACK;") || u.starts_with("ROLLBACK ")
+    });
+    let has_commit = ddl_snapshot.iter().any(|s| {
+        let u = s.trim_start().to_ascii_uppercase();
+        u == "COMMIT" || u.starts_with("COMMIT;") || u.starts_with("COMMIT ")
+    });
+
+    if has_rollback {
+        let undo_entries = {
+            match state.tx_undo_log.lock() {
+                Ok(mut log) => log.remove(&connection_id).unwrap_or_default(),
+                Err(_) => Vec::new(),
+            }
+        };
+        if !undo_entries.is_empty() {
+            let mut rs = match state.row_store.lock() {
+                Ok(g) => g,
+                Err(_) => return Err(lock_poisoned_err("row_store")),
+            };
+            let undo_xid = rs.begin_xid();
+            for (key, before_data) in undo_entries.into_iter().rev() {
+                match before_data {
+                    Some(data) => {
+                        // Row existed before — restore it.
+                        rs.insert(undo_xid, &key, data);
+                    }
+                    None => {
+                        // Row was inserted fresh — delete it on rollback.
+                        rs.delete(undo_xid, &key);
+                    }
+                }
+            }
+            rs.release_write_intents(undo_xid);
+        }
+    } else if has_commit {
+        // Gap #3: COMMIT — clear the undo log for this connection.
+        if let Ok(mut log) = state.tx_undo_log.lock() { log.remove(&connection_id); }
     }
 
     if !olap_statements.is_empty() {
@@ -1290,11 +2011,30 @@ pub(crate) async fn sql_execute(
     let planner_path: Option<String> = {
         use voltnuerongrid_exec::{QueryPlanner, QueryPath};
         use voltnuerongrid_sql::parse_one;
+        // H-1: Build an index descriptor list for index-aware cost routing.
+        // Snapshot (table, column, index_name) from the IndexManager so the planner
+        // can promote Filter(Scan) → IndexScan and assign lower cost to index lookups.
+        let index_descriptors: Vec<(String, String, String)> = state.index_manager
+            .lock()
+            .ok()
+            .map(|mgr| {
+                mgr.list_indexes()
+                    .into_iter()
+                    .map(|d| (d.table.clone(), d.column.clone(), d.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let mut max_cost: f64 = f64::NEG_INFINITY;
         let mut dominant: Option<String> = None;
         for stmt in &olap_statements {
             if let Ok(parsed) = parse_one(stmt) {
-                let plan = QueryPlanner::plan(&parsed);
+                // H-1: Use index-aware planner when indexes are available.
+                let plan = if index_descriptors.is_empty() {
+                    QueryPlanner::plan(&parsed)
+                } else {
+                    QueryPlanner::plan_with_indexes(&parsed, &index_descriptors)
+                };
                 let estimate = QueryPlanner::estimate_cost(&plan);
                 let path_str = match estimate.recommended_path {
                     QueryPath::Olap => "olap",
@@ -1314,9 +2054,38 @@ pub(crate) async fn sql_execute(
     // S4-WS3-02: OLTP physical executor dispatch
     let oltp_rows: Option<Vec<OltpRowResult>> =
         if planner_path.as_deref() == Some("oltp") && !olap_statements.is_empty() {
-            let rs = state.row_store.lock().expect("row_store lock oltp select");
+            // C-3: use repeatable-read snapshot if this connection has one.
+            let rr_snapshot_xid: Option<u64> = {
+                let conn_map = state.connection_tx_active.lock().ok();
+                conn_map.and_then(|m| m.get(&connection_id).and_then(|tx_id| {
+                    state.acid_transactions.lock().ok()
+                        .and_then(|a| a.rr_read_snapshot_xid(tx_id))
+                }))
+            };
+            let rs = match state.row_store.lock() {
+                Ok(g) => g,
+                Err(_) => return Err(lock_poisoned_err("row_store")),
+            };
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
-            let rows = execute_oltp_select(&olap_statements, &rs, limit);
+            // C-1: fetch rows from RocksDB as primary read source when available.
+            let rocksdb_rows_oltp: Option<Vec<(String, std::collections::HashMap<String, String>)>> = {
+                let wal = match state.wal_engine.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("wal_engine")),
+                };
+                if wal.persists_rows() {
+                    let xid = rr_snapshot_xid.unwrap_or_else(|| rs.current_xid());
+                    Some(wal.scan_rows_for_db(&db, xid))
+                } else {
+                    None
+                }
+            };
+            let idx_mgr = state.index_manager.lock().ok();
+            // M-6: check deadline before OLTP select (full table scans can be slow).
+            check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
+            let rows = execute_oltp_select(&olap_statements, &rs, limit, &db, rr_snapshot_xid, rocksdb_rows_oltp, idx_mgr.as_deref());
+            // M-6: check deadline after OLTP select to avoid returning timed-out results.
+            check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
             if rows.is_empty() { None } else { Some(rows) }
         } else {
             None
@@ -1334,25 +2103,34 @@ pub(crate) async fn sql_execute(
             let first_sql = olap_statements.first().map(|s| s.clone());
             if let Some(sql) = first_sql {
                 // Snapshot rows for all referenced tables.
-                let rs = state.row_store.lock().expect("row_store lock olap agg df");
+                let rs = match state.row_store.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("row_store")),
+                };
                 let table_names = collect_query_table_names(&sql);
                 let all_rows = rs.export_rows_snapshot();
                 drop(rs);
                 let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
                     std::collections::HashMap::new();
                 for name in &table_names {
-                    let prefix = format!("{name}:");
+                    let prefix = make_table_scan_prefix(&db, name);
                     let filtered: Vec<_> = all_rows
                         .iter()
                         .filter(|(k, _)| *k == name.as_str() || k.starts_with(&prefix))
-                        .cloned()
+                        // Strip db prefix so DataFusion resolves by plain table name.
+                        .map(|(k, v)| {
+                            let stripped = if db.is_empty() { k.clone() } else {
+                                k.strip_prefix(&format!("{db}.")).unwrap_or(k).to_string()
+                            };
+                            (stripped, v.clone())
+                        })
                         .collect();
                     table_rows.insert(name.clone(), filtered);
                 }
                 if table_rows.is_empty() {
                     table_rows.insert("rows".to_string(), all_rows);
                 }
-                match run_async_in_executor(df_select_owned(sql, table_rows, limit)) {
+                match run_async_in_executor(df_select_owned(sql, table_rows, limit, String::new())) {
                     Ok(SelectOutput::Aggregate(agg)) => {
                         let mut out: Vec<OlapVecAggResult> = agg.columns.iter()
                             .zip(agg.values.iter())
@@ -1401,17 +2179,40 @@ pub(crate) async fn sql_execute(
     let (result_columns, result_rows): (Option<Vec<serde_json::Value>>, Option<Vec<serde_json::Value>>) =
         if !olap_statements.is_empty() {
             use voltnuerongrid_sql::{parse_one, Statement};
-            let rs = state.row_store.lock().expect("row_store lock select_result_builder");
+            let rs = match state.row_store.lock() {
+                Ok(g) => g,
+                Err(_) => return Err(lock_poisoned_err("row_store")),
+            };
             let snapshot_xid = rs.current_xid();
-            let all_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
-                .scan_at_snapshot(snapshot_xid)
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
+            let db_prefix_filter = if db.is_empty() { String::new() } else { format!("{db}.") };
+            // C-1: prefer RocksDB as primary read source when available.
+            let all_rows: Vec<(String, std::collections::HashMap<String, String>)> = {
+                let wal = match state.wal_engine.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("wal_engine")),
+                };
+                if wal.persists_rows() {
+                    // RocksDB rows are already db-scoped with no db prefix.
+                    wal.scan_rows_for_db(&db, snapshot_xid)
+                } else {
+                    rs.scan_at_snapshot(snapshot_xid)
+                        .into_iter()
+                        .filter(|(k, _)| db_prefix_filter.is_empty() || k.starts_with(&db_prefix_filter))
+                        .map(|(k, v)| {
+                            let stripped = if db_prefix_filter.is_empty() { k.to_string() } else {
+                                k.strip_prefix(&db_prefix_filter).unwrap_or(k).to_string()
+                            };
+                            (stripped, v.clone())
+                        })
+                        .collect()
+                }
+            };
             drop(rs);
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
             // final ordered column list and rows for this response
             let mut ordered_cols: Vec<String> = Vec::new();
+            // M-8 Rule 1: track best observed PG type per column (updated across all rows).
+            let mut col_pg_types: std::collections::HashMap<String, &'static str> = std::collections::HashMap::new();
             let mut out_rows: Vec<serde_json::Value> = Vec::new();
 
             for stmt_str in &olap_statements {
@@ -1431,7 +2232,7 @@ pub(crate) async fn sql_execute(
                     // These are used to (a) build the column header list in the right order,
                     // and (b) remap positional `col_N` storage keys back to readable names.
                     let ddl_cols: Vec<String> = filter_table.as_deref().map(|tbl| {
-                        let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock result_builder");
+                        let catalog = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
                         catalog.get(tbl)
                             .map(|e| extract_column_names_from_ddl(&e.original_statement))
                             .unwrap_or_default()
@@ -1468,13 +2269,23 @@ pub(crate) async fn sql_execute(
 
                         if !ddl_cols.is_empty() && select_star {
                             // Emit columns in CREATE TABLE order; remap col_N if needed.
+                            // Rule 3 (Codd): column absent from row data emits null, not "".
                             for (idx, col_name) in ddl_cols.iter().enumerate() {
                                 // Try real column name first, then positional fallback key.
-                                let val = data.get(col_name)
+                                // M-8 Rule 1: coerce to typed JSON value instead of raw String.
+                                let json_val = match data.get(col_name)
                                     .or_else(|| data.get(&format!("col_{idx}")))
-                                    .cloned()
-                                    .unwrap_or_default();
-                                row_obj.insert(col_name.clone(), serde_json::Value::String(val));
+                                {
+                                    Some(v) => infer_json_value(v),
+                                    None => serde_json::Value::Null,
+                                };
+                                // Track best non-null PG type for this column.
+                                if !matches!(json_val, serde_json::Value::Null) {
+                                    col_pg_types.entry(col_name.clone())
+                                        .and_modify(|t| { if *t == "text" { *t = json_value_pg_type(&json_val); } })
+                                        .or_insert_with(|| json_value_pg_type(&json_val));
+                                }
+                                row_obj.insert(col_name.clone(), json_val);
                                 if !ordered_cols.contains(col_name) {
                                     ordered_cols.push(col_name.clone());
                                 }
@@ -1487,7 +2298,15 @@ pub(crate) async fn sql_execute(
                                 .collect();
                             sorted_keys.sort();
                             for col in &sorted_keys {
-                                row_obj.insert((*col).to_string(), serde_json::Value::String(data[*col].clone()));
+                                // M-8 Rule 1: coerce to typed JSON value.
+                                let json_val = infer_json_value(&data[*col]);
+                                if !matches!(json_val, serde_json::Value::Null) {
+                                    let col_s = (*col).to_string();
+                                    col_pg_types.entry(col_s.clone())
+                                        .and_modify(|t| { if *t == "text" { *t = json_value_pg_type(&json_val); } })
+                                        .or_insert_with(|| json_value_pg_type(&json_val));
+                                }
+                                row_obj.insert((*col).to_string(), json_val);
                                 if !ordered_cols.contains(&(*col).to_string()) {
                                     ordered_cols.push((*col).to_string());
                                 }
@@ -1503,9 +2322,13 @@ pub(crate) async fn sql_execute(
             if out_rows.is_empty() {
                 (None, None)
             } else {
+                // M-8 Rule 1: use inferred PG types in column descriptors.
                 let cols: Vec<serde_json::Value> = ordered_cols
                     .iter()
-                    .map(|c| serde_json::json!({"name": c, "data_type": "text"}))
+                    .map(|c| {
+                        let dt = col_pg_types.get(c).copied().unwrap_or("text");
+                        serde_json::json!({"name": c, "data_type": dt})
+                    })
                     .collect();
                 (Some(cols), Some(out_rows))
             }
@@ -1548,6 +2371,9 @@ pub(crate) async fn sql_execute(
             "reason": response.reason,
             "rejected_statement_count": response.rejected_statement_count,
             "udf_guardrail_status": response.udf_guardrail_status,
+            // M-6: record client-requested isolation level and timeout hint for observability
+            "requested_isolation_level": req.isolation_level.as_deref().unwrap_or("read_committed"),
+            "statement_timeout_ms": req.statement_timeout_ms.unwrap_or(0),
         }),
     );
     release_sql_data_plane_connection(&state, &connection_id);
@@ -1569,7 +2395,10 @@ pub(crate) async fn sql_transactions_isolation(
         PrivilegeAction::Read,
         "sql/transactions/isolation",
     )?;
-    let acid = state.acid_transactions.lock().expect("acid_tx isolation lock");
+    let acid = match state.acid_transactions.lock() {
+        Ok(g) => g,
+        Err(_) => return Err(lock_poisoned_err("acid_transactions")),
+    };
     let active = acid.active_transactions();
     let transactions: Vec<TxIsolationEntry> = active
         .iter()
@@ -1595,7 +2424,10 @@ pub(crate) async fn sql_transactions_active(
         PrivilegeAction::Read,
         "sql/transactions/active",
     )?;
-    let acid = state.acid_transactions.lock().expect("acid_tx lock");
+    let acid = match state.acid_transactions.lock() {
+        Ok(g) => g,
+        Err(_) => return Err(lock_poisoned_err("acid_transactions")),
+    };
     let all = acid.all_transactions();
     let active = acid.active_transactions();
     let resp = AcidTransactionsResponse {
@@ -1605,4 +2437,230 @@ pub(crate) async fn sql_transactions_active(
         transactions: active.iter().map(|t| (*t).clone()).collect(),
     };
     Ok((StatusCode::OK, Json(resp)))
+}
+
+
+// ── M-2: CREATE INDEX helper ─────────────────────────────────────────────
+
+/// Parse `CREATE [UNIQUE] INDEX idx_name ON table_name (col1[, col2, ...])`.
+/// Returns `(index_name, table_name, columns, is_unique)`.
+fn parse_create_index_sql(sql: &str) -> Option<(String, String, Vec<String>, bool)> {
+    let lower = sql.trim().to_ascii_lowercase();
+    let (rest, is_unique) = if let Some(r) = lower.strip_prefix("create unique index ") {
+        (r, true)
+    } else if let Some(r) = lower.strip_prefix("create index ") {
+        (r, false)
+    } else {
+        return None;
+    };
+
+    // rest = "idx_name on table_name (col1, col2)"
+    // or    "if not exists idx_name on table_name (col1)"
+    let rest = rest
+        .strip_prefix("if not exists ")
+        .unwrap_or(rest);
+
+    let on_pos = rest.find(" on ")?;
+    let idx_name = rest[..on_pos].trim().to_string();
+    let after_on = rest[on_pos + 4..].trim();
+
+    // after_on = "table_name (col1, col2)"
+    let paren_pos = after_on.find('(')?;
+    let table_name = after_on[..paren_pos].trim().to_string();
+    let col_list = after_on[paren_pos + 1..].trim_end_matches(')').trim();
+
+    let columns: Vec<String> = col_list
+        .split(',')
+        .map(|c| c.trim().split_whitespace().next().unwrap_or("").to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+
+    if idx_name.is_empty() || table_name.is_empty() || columns.is_empty() {
+        return None;
+    }
+    Some((idx_name, table_name, columns, is_unique))
+}
+
+/// M-2: Execute a `CREATE [UNIQUE] INDEX` statement by registering the index in
+/// `IndexManager` and backfilling it from the current `PagedRowStore` snapshot.
+fn handle_create_index_ddl(state: &AppState, sql: &str, db: &str) {
+    let parsed = match parse_create_index_sql(sql) {
+        Some(p) => p,
+        None => {
+            tracing::warn!("CREATE INDEX: could not parse statement: {sql}");
+            return;
+        }
+    };
+    let (idx_name, table_name, columns, is_unique) = parsed;
+
+    // Register one BTree index per column (IndexDescriptor is single-column).
+    // For multi-column indexes, each column gets its own index entry named "idx_name_col".
+    let rs = state.row_store.lock().expect("row_store lock create_index backfill");
+    let snapshot_xid = rs.current_xid();
+    // Collect rows for this table from the row store.
+    let table_prefix = if db.is_empty() {
+        format!("{table_name}:")
+    } else {
+        format!("{db}.{table_name}:")
+    };
+    let rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = rs
+        .scan_at_snapshot(snapshot_xid)
+        .into_iter()
+        .filter(|(k, _)| k.starts_with(&table_prefix))
+        .map(|(k, v)| {
+            let raw_key = if db.is_empty() { k.to_string() } else {
+                k.strip_prefix(&format!("{db}.")).unwrap_or(k).to_string()
+            };
+            (raw_key, v.clone())
+        })
+        .collect();
+    drop(rs); // release row_store before acquiring index_manager
+
+    let mut mgr = state.index_manager.lock().expect("index_manager lock create_index");
+    for col in &columns {
+        let entry_name = if columns.len() == 1 {
+            idx_name.clone()
+        } else {
+            format!("{idx_name}_{col}")
+        };
+        let descriptor = voltnuerongrid_store::index::IndexDescriptor {
+            name: entry_name.clone(),
+            table: table_name.clone(),
+            column: col.clone(),
+            kind: voltnuerongrid_store::index::IndexKind::BTree,
+            unique: is_unique,
+        };
+        match mgr.create_index(descriptor) {
+            Ok(()) => {}
+            Err(voltnuerongrid_store::index::IndexError::IndexAlreadyExists(_)) => {
+                tracing::warn!("CREATE INDEX: index '{entry_name}' already exists — skipping");
+                continue;
+            }
+            Err(e) => {
+                tracing::error!("CREATE INDEX: failed to create index '{entry_name}': {e}");
+                continue;
+            }
+        }
+
+        // Backfill: insert existing rows into the new index.
+        if let Some(idx) = mgr.get_mut(&entry_name) {
+            for (row_key, data) in &rows {
+                if let Some(col_val) = data.get(col.as_str()) {
+                    if let Err(e) = idx.insert(col_val, row_key) {
+                        tracing::warn!("CREATE INDEX backfill: {e}");
+                    }
+                }
+            }
+        }
+        tracing::info!("CREATE INDEX: index '{entry_name}' on {table_name}({col}) created and backfilled with {} rows", rows.len());
+    }
+}
+
+// ── M-2: GRANT / REVOKE / CREATE ROLE / DROP ROLE helpers ───────────────────
+
+/// Parse and apply a GRANT statement to `state.db_grants`.
+///
+/// Accepted forms:
+///   GRANT <role> ON DATABASE <db> TO <user>
+///   GRANT <role> TO <user> ON DATABASE <db>
+fn handle_grant_sql(state: &AppState, sql: &str) {
+    let lower = sql.trim().to_ascii_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    if words.first() != Some(&"grant") {
+        return;
+    }
+    let role = words.get(1).copied().unwrap_or("").to_string();
+    let db_pos = words.iter().position(|&w| w == "database");
+    let db = db_pos
+        .and_then(|i| words.get(i + 1))
+        .copied()
+        .unwrap_or("")
+        .to_string();
+    if role.is_empty() || db.is_empty() {
+        return;
+    }
+    if let Ok(mut grants) = state.db_grants.lock() {
+        grants.entry(db).or_default().insert(role);
+    }
+}
+
+/// Parse and apply a REVOKE statement to `state.db_grants`.
+///
+/// Accepted form:
+///   REVOKE <role> FROM <user> ON DATABASE <db>
+fn handle_revoke_sql(state: &AppState, sql: &str) {
+    let lower = sql.trim().to_ascii_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    if words.first() != Some(&"revoke") {
+        return;
+    }
+    let role = words.get(1).copied().unwrap_or("").to_string();
+    let db_pos = words.iter().position(|&w| w == "database");
+    let db = db_pos
+        .and_then(|i| words.get(i + 1))
+        .copied()
+        .unwrap_or("")
+        .to_string();
+    if role.is_empty() || db.is_empty() {
+        return;
+    }
+    if let Ok(mut grants) = state.db_grants.lock() {
+        if let Some(roles) = grants.get_mut(&db) {
+            roles.remove(&role);
+        }
+    }
+}
+
+// ─── M-8 Rule 6: View expansion ─────────────────────────────────────────────
+
+/// Expand a SELECT statement that targets a registered view.
+///
+/// `view_catalog` is a snapshot of `(view_name_lower, original_ddl)` pairs.
+/// If the FROM table matches a view name, the view body is inlined:
+///   `SELECT * FROM my_view WHERE ...`
+///   → `SELECT * FROM (SELECT col1, col2 FROM base_table) AS my_view WHERE ...`
+///
+/// Falls back to the original SQL unchanged if no matching view is found.
+fn expand_select_view(sql: &str, view_catalog: &[(String, String)]) -> String {
+    use crate::helpers::sql_parse::{extract_view_select_body, expand_view_in_select};
+    let lower = sql.to_ascii_lowercase();
+    for (view_name, ddl) in view_catalog {
+        let pattern = format!(" from {}", view_name);
+        if lower.contains(&pattern) {
+            if let Some(body) = extract_view_select_body(ddl) {
+                return expand_view_in_select(sql, view_name, &body);
+            }
+        }
+    }
+    sql.to_string()
+}
+
+/// Rewrite a DML statement (INSERT/UPDATE/DELETE) that targets a simple updatable view.
+///
+/// Only simple single-table views (no JOIN, no GROUP BY, no aggregates) are updatable.
+/// The rewrite replaces the view name with the base table name so the DML applies to
+/// the actual underlying rows.
+fn rewrite_dml_for_view(sql: &str, view_catalog: &[(String, String)]) -> String {
+    use crate::helpers::sql_parse::extract_updatable_view_base_table;
+    let lower = sql.to_ascii_lowercase();
+    let first_word = lower.split_whitespace().next().unwrap_or("");
+    // Only rewrite DML statements.
+    if !matches!(first_word, "insert" | "update" | "delete") {
+        return sql.to_string();
+    }
+    for (view_name, ddl) in view_catalog {
+        // Check if the DML references the view name (as a word boundary).
+        if !lower.contains(view_name.as_str()) {
+            continue;
+        }
+        if let Some(base_table) = extract_updatable_view_base_table(ddl) {
+            // Replace the view name with the base table name (case-insensitive, whole-word).
+            // Simple approach: replace the first occurrence of view_name with base_table.
+            if let Some(pos) = lower.find(view_name.as_str()) {
+                let end = pos + view_name.len();
+                return format!("{}{}{}", &sql[..pos], base_table, &sql[end..]);
+            }
+        }
+    }
+    sql.to_string()
 }
