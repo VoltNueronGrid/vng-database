@@ -1,6 +1,11 @@
 use super::*;
+use std::fs;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderValue;
+use voltnuerongrid_auth::PrivilegeAction;
+use voltnuerongrid_ai::AutonomousActionDecision;
+use voltnuerongrid_store::{DurabilityConfig, htap_sync::MutationOp};
+use voltnuerongrid_sql::SupportedLocale;
 use voltnuerongrid_ingest::IngestionConnector;
 
 fn operator_headers(admin_key: &str, operator_id: &str) -> HeaderMap {
