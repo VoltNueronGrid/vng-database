@@ -240,6 +240,11 @@ pub(crate) struct AcidTxEntry {
     /// greater than this value was written by a concurrent transaction —
     /// triggering a write-write conflict (HTTP 409).
     row_store_snapshot_xid: Option<u64>,
+    /// M-7: Row-level OCC for serializable isolation — the set of raw row keys
+    /// written (INSERT/UPDATE/DELETE) by this transaction.  Populated at COMMIT
+    /// time so that conflict detection can compare individual keys rather than
+    /// coarse-grained table prefixes.
+    pub(crate) written_row_keys: std::collections::HashSet<String>,
 }
 
 #[derive(Default)]
@@ -290,6 +295,7 @@ impl AcidTransactionRegistry {
                 read_snapshot_at_ms,
                 wal_log: Vec::new(),
                 row_store_snapshot_xid,
+                written_row_keys: std::collections::HashSet::new(),
             },
         );
     }
@@ -396,30 +402,49 @@ impl AcidTransactionRegistry {
         }
     }
 
-    /// REQ-23: For serializable isolation, check whether any other Active serializable
-    /// transaction has already written to the same table(s) as `tx_id`.
-    /// Returns the conflicting table name if a conflict is found, otherwise None.
-    fn check_serializable_conflict(&self, tx_id: &str) -> Option<String> {
-        let entry = self.transactions.get(tx_id)?;
-        if entry.isolation_level != "serializable" {
+    /// M-7: Record the raw row keys written by `tx_id` at COMMIT time.
+    /// Called from the sql_transaction COMMIT path with keys collected during
+    /// the DML flush loop.
+    pub(crate) fn record_written_row_keys(&mut self, tx_id: &str, keys: impl IntoIterator<Item = String>) {
+        if let Some(entry) = self.transactions.get_mut(tx_id) {
+            for k in keys {
+                entry.written_row_keys.insert(k);
+            }
+        }
+    }
+
+    /// M-7: Row-level serializable conflict detection.
+    ///
+    /// Returns the first conflicting key if `current_written_keys` overlaps with
+    /// the `written_row_keys` of any *committed* serializable transaction other
+    /// than `current_tx_id`.  Comparing only committed transactions means we
+    /// catch write-write anti-dependencies (a committed peer wrote the same row
+    /// we are about to commit) without false-positives from concurrent-but-
+    /// non-overlapping transactions that happened to touch the same table.
+    pub(crate) fn check_serializable_conflict_row_level(
+        &self,
+        current_tx_id: &str,
+        current_written_keys: &std::collections::HashSet<String>,
+    ) -> Option<String> {
+        if current_written_keys.is_empty() {
             return None;
         }
-        if entry.affected_tables.is_empty() {
-            return None;
-        }
-        for (other_id, other) in &self.transactions {
-            if other_id == tx_id {
+        for (other_tx_id, other_entry) in &self.transactions {
+            if other_tx_id == current_tx_id {
                 continue;
             }
-            if other.state != AcidTxState::Active {
+            if other_entry.isolation_level != "serializable" {
                 continue;
             }
-            if other.isolation_level != "serializable" {
+            // Only compare against committed peers — still-active transactions
+            // have not yet landed their writes, so comparing with them would be
+            // premature and cause false conflicts.
+            if other_entry.state != AcidTxState::Committed {
                 continue;
             }
-            for table in &entry.affected_tables {
-                if other.affected_tables.contains(table) {
-                    return Some(table.clone());
+            for k in current_written_keys {
+                if other_entry.written_row_keys.contains(k) {
+                    return Some(k.clone());
                 }
             }
         }
@@ -587,6 +612,11 @@ pub(crate) struct AppState {
     /// Used by sql_execute to find the correct read snapshot for standalone
     /// SELECTs that are part of an ongoing repeatable-read transaction.
     pub(crate) connection_tx_active: Arc<Mutex<HashMap<String, String>>>,
+    /// H-1: Table statistics registry for the cost-based query optimizer.
+    /// Updated asynchronously after each DML commit.  The `StatsRegistry`
+    /// is the hook point for future selectivity-driven routing decisions in
+    /// `HtapQueryRouter` (see `crates/voltnuerongrid-exec`).
+    pub(crate) stats_registry: Arc<Mutex<voltnuerongrid_exec::StatsRegistry>>,
 }
 
 #[derive(Clone, Default)]
@@ -1556,12 +1586,36 @@ async fn main() {
         // Tier 3 #1: per-database role grants (empty = no explicit grants yet).
         db_grants: Arc::new(Mutex::new(HashMap::new())),
         connection_tx_active: Arc::new(Mutex::new(HashMap::new())),
+        // H-1: table statistics registry (cost-based optimizer foundation).
+        stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
 
-    // Load persisted rows from RocksDB into the in-memory row store.
-    helpers::boot::load_persisted_rows_into(&state.row_store, &state.wal_engine);
+    // C-1: Skip boot-time row replay into PagedRowStore when RocksDB is the
+    // durability engine — rows live in RocksDB directly and execute functions
+    // read from it via scan_rows_for_db / scan_persisted_rows.  Loading them
+    // into PagedRowStore would waste RAM and cause stale reads after restarts.
+    //
+    // When the in-memory engine is active (persists_rows() == false) we still
+    // replay DML WAL SQL text files into PagedRowStore so the session behaves
+    // identically to previous releases.
+    {
+        let persists_rows = state.wal_engine
+            .lock()
+            .expect("wal_engine lock for boot persists_rows check")
+            .persists_rows();
+        if !persists_rows {
+            // In-memory engine only: replay rows from DML WAL text files.
+            helpers::boot::load_persisted_rows_into(&state.row_store, &state.wal_engine);
+        }
+        // When persists_rows() == true (RocksDB), rows live in RocksDB directly.
+        // execute functions read from RocksDB via scan_rows_for_db — no replay needed.
+        // TODO(C-1): MVCC conflict detection (serializable isolation) reads from
+        // PagedRowStore::scan_at_snapshot, so after boot it only sees rows written
+        // in the current session.  For full correctness with RocksDB-primary reads,
+        // conflict detection should also consult RocksDB.  Track as a future gap.
+    }
 
     tokio::spawn(run_raft_tick_loop(state.clone()));
 

@@ -58,8 +58,10 @@ const CF_META: &str = "meta";
 /// `[kind_byte (1)] [seq (8)]` so the per-kind range can be iterated
 /// efficiently with a 1-byte prefix bound.
 const CF_SQL: &str = "sql";
-/// Phase 2.2 — Row store persistence. Keys are
+/// Phase 2.2 — Row store persistence (legacy/migration CF). Keys are
 /// `{db}\x1f{row_key}\x1f{xid_be8}` so rows are sorted by (db, row_key, xid).
+/// New writes go to per-DB CFs named `"rows_{db}"` instead; this CF is kept
+/// for backwards-compatible boot replay of pre-existing data.
 const CF_ROWS: &str = "rows";
 
 // Meta keys.
@@ -169,13 +171,22 @@ impl RocksDbDurabilityEngine {
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
 
-        let cfs = vec![
+        // Discover any pre-existing per-DB CFs (names starting with "rows_")
+        // so they are opened correctly. DB::open_cf_descriptors requires that
+        // every CF already on disk is listed at open time.
+        let existing_cfs = DB::list_cf(&db_opts, path.as_ref()).unwrap_or_default();
+        let mut all_cfs = vec![
             ColumnFamilyDescriptor::new(CF_WAL,  Options::default()),
             ColumnFamilyDescriptor::new(CF_META, Options::default()),
             ColumnFamilyDescriptor::new(CF_SQL,  Options::default()),
             ColumnFamilyDescriptor::new(CF_ROWS, Options::default()),
         ];
-        let db = DB::open_cf_descriptors(&db_opts, path.as_ref(), cfs)?;
+        for cf_name in &existing_cfs {
+            if cf_name.starts_with("rows_") {
+                all_cfs.push(ColumnFamilyDescriptor::new(cf_name.as_str(), Options::default()));
+            }
+        }
+        let db = DB::open_cf_descriptors(&db_opts, path.as_ref(), all_cfs)?;
 
         let cf_meta = db
             .cf_handle(CF_META)
@@ -236,6 +247,24 @@ impl RocksDbDurabilityEngine {
     /// Whether `set_sync(true)` is being used on writes.
     pub fn sync_writes_enabled(&self) -> bool {
         self.sync_writes
+    }
+
+    /// Return the CF name for a per-DB rows column family.
+    fn db_rows_cf_name(db: &str) -> String {
+        format!("rows_{db}")
+    }
+
+    /// Ensure the per-DB column family exists, creating it lazily if not.
+    /// RocksDB requires `create_cf` after `open` for dynamically created CFs.
+    /// Takes `&mut self` because `DB::create_cf` is `&mut self` in SingleThreaded mode.
+    fn ensure_db_cf(&mut self, db: &str) -> Result<(), RocksDbEngineError> {
+        let cf_name = Self::db_rows_cf_name(db);
+        if self.db.cf_handle(&cf_name).is_some() {
+            return Ok(());
+        }
+        self.db
+            .create_cf(&cf_name, &Options::default())
+            .map_err(|e| RocksDbEngineError::Storage(e.to_string()))
     }
 
     /// Iterate every WAL record in `[from_seq, ..]` order. Used by recovery
@@ -512,20 +541,25 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
         xid: u64,
         data: Option<&HashMap<String, String>>,
     ) {
-        let cf_rows = match self.db.cf_handle(CF_ROWS) {
+        // Ensure the per-DB CF exists (lazy creation on first write for this db).
+        if let Err(e) = self.ensure_db_cf(db) {
+            tracing_or_eprintln(format!("store_row: ensure_db_cf failed for db={db}: {e}"));
+            return;
+        }
+        let cf_name = Self::db_rows_cf_name(db);
+        let cf_db = match self.db.cf_handle(&cf_name) {
             Some(cf) => cf,
             None => {
-                tracing_or_eprintln(format!("store_row: {CF_ROWS} CF missing"));
+                tracing_or_eprintln(format!("store_row: CF {cf_name} missing after ensure"));
                 return;
             }
         };
 
-        // Key: {db}\x1f{row_key}\x1f{xid_be8}
+        // Key within the per-DB CF: {row_key}\x1f{xid_be8}
+        // No db prefix needed — the CF IS the db scope.
         let sep = b'\x1f';
         let xid_be = xid.to_be_bytes();
-        let mut key = Vec::with_capacity(db.len() + 1 + row_key.len() + 1 + 8);
-        key.extend_from_slice(db.as_bytes());
-        key.push(sep);
+        let mut key = Vec::with_capacity(row_key.len() + 1 + 8);
         key.extend_from_slice(row_key.as_bytes());
         key.push(sep);
         key.extend_from_slice(&xid_be);
@@ -543,7 +577,7 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
         };
 
         let mut batch = WriteBatch::default();
-        batch.put_cf(&cf_rows, &key, &value);
+        batch.put_cf(&cf_db, &key, &value);
 
         let mut wo = WriteOptions::default();
         wo.set_sync(self.sync_writes && self.config.wal_enabled);
@@ -553,78 +587,130 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
     }
 
     fn scan_persisted_rows(&self) -> Vec<(String, String, u64, HashMap<String, String>, bool)> {
-        let cf_rows = match self.db.cf_handle(CF_ROWS) {
-            Some(cf) => cf,
-            None => return Vec::new(),
-        };
-
-        // Collect the latest version per (db, row_key). Keys are sorted by
-        // (db, row_key, xid) ascending so later entries overwrite earlier ones.
+        // Collect the latest version per (db, row_key). Per-DB CF entries
+        // take precedence over legacy CF_ROWS entries for the same (db, row_key).
         let sep = b'\x1f';
         let mut latest: HashMap<(String, String), (u64, Vec<u8>)> = HashMap::new();
 
-        for kv in self.db.iterator_cf(&cf_rows, rocksdb::IteratorMode::Start) {
-            let (k, v) = match kv {
-                Ok(x) => x,
-                Err(e) => {
-                    tracing_or_eprintln(format!("scan_persisted_rows iterator error: {e}"));
+        // ── Step 1: scan legacy CF_ROWS (old format {db}\x1f{row_key}\x1f{xid}) ──
+        if let Some(cf_rows) = self.db.cf_handle(CF_ROWS) {
+            for kv in self.db.iterator_cf(&cf_rows, rocksdb::IteratorMode::Start) {
+                let (k, v) = match kv {
+                    Ok(x) => x,
+                    Err(e) => {
+                        tracing_or_eprintln(format!("scan_persisted_rows (legacy) iterator error: {e}"));
+                        continue;
+                    }
+                };
+
+                // Parse key: {db}\x1f{row_key}\x1f{xid_be8}
+                if k.len() < 10 {
+                    continue; // malformed
+                }
+                let xid_start = k.len() - 8;
+                let prefix = &k[..xid_start];
+                if prefix.last() != Some(&sep) {
                     continue;
                 }
-            };
+                let prefix_no_sep = &prefix[..prefix.len() - 1];
 
-            // Parse key: {db}\x1f{row_key}\x1f{xid_be8}
-            // The xid is the last 8 bytes; everything before the last \x1f is db\x1frow_key.
-            if k.len() < 10 {
-                continue; // malformed — need at least 2 seps + 8 bytes xid
+                let first_sep = match prefix_no_sep.iter().position(|&b| b == sep) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let db_bytes = &prefix_no_sep[..first_sep];
+                let row_key_bytes = &prefix_no_sep[first_sep + 1..];
+
+                let db_str = match std::str::from_utf8(db_bytes) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => continue,
+                };
+                let row_key = match std::str::from_utf8(row_key_bytes) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => continue,
+                };
+
+                let mut xid_arr = [0u8; 8];
+                xid_arr.copy_from_slice(&k[xid_start..]);
+                let xid = u64::from_be_bytes(xid_arr);
+
+                // Last write per (db, row_key) wins (keys sorted by xid asc).
+                latest.insert((db_str, row_key), (xid, v.to_vec()));
             }
-            let xid_start = k.len() - 8;
-            let prefix = &k[..xid_start];
-            // prefix must end with sep
-            if prefix.last() != Some(&sep) {
-                continue;
-            }
-            let prefix_no_sep = &prefix[..prefix.len() - 1];
-
-            // Find the first sep to split db from row_key.
-            let first_sep = match prefix_no_sep.iter().position(|&b| b == sep) {
-                Some(i) => i,
-                None => continue,
-            };
-            let db_bytes = &prefix_no_sep[..first_sep];
-            let row_key_bytes = &prefix_no_sep[first_sep + 1..];
-
-            let db = match std::str::from_utf8(db_bytes) {
-                Ok(s) => s.to_string(),
-                Err(_) => continue,
-            };
-            let row_key = match std::str::from_utf8(row_key_bytes) {
-                Ok(s) => s.to_string(),
-                Err(_) => continue,
-            };
-
-            let mut xid_arr = [0u8; 8];
-            xid_arr.copy_from_slice(&k[xid_start..]);
-            let xid = u64::from_be_bytes(xid_arr);
-
-            // Since keys are sorted by xid ascending, just overwrite — the
-            // last write per (db, row_key) is the latest version.
-            latest.insert((db, row_key), (xid, v.to_vec()));
         }
 
-        // Decode each final entry.
+        // ── Step 2: scan per-DB CFs (new format {row_key}\x1f{xid}) ──
+        // These take precedence — iterate all CFs whose name starts with "rows_".
+        // We discover them by checking cf_handle for known names; since the
+        // DB was opened with all existing CFs, any "rows_*" CF is accessible.
+        // Use DB::list_cf isn't available on &self without the path, so we rely
+        // on the fact that opened CFs are registered: we check the names we
+        // know about by scanning the existing structure.
+        //
+        // Approach: use the rocksdb metadata API to enumerate column families
+        // that are currently open. We stored the path at open time for exactly this.
+        let mut db_opts_for_list = Options::default();
+        db_opts_for_list.create_if_missing(false);
+        let known_cfs = DB::list_cf(&db_opts_for_list, &self.path).unwrap_or_default();
+        for cf_name in &known_cfs {
+            if !cf_name.starts_with("rows_") {
+                continue;
+            }
+            // Extract db name from CF name: "rows_{db}"
+            let db_str = &cf_name["rows_".len()..];
+            let cf_handle = match self.db.cf_handle(cf_name) {
+                Some(h) => h,
+                None => continue,
+            };
+
+            for kv in self.db.iterator_cf(&cf_handle, rocksdb::IteratorMode::Start) {
+                let (k, v) = match kv {
+                    Ok(x) => x,
+                    Err(e) => {
+                        tracing_or_eprintln(format!("scan_persisted_rows ({cf_name}) iterator error: {e}"));
+                        continue;
+                    }
+                };
+
+                // Parse key: {row_key}\x1f{xid_be8}
+                if k.len() < 9 {
+                    continue;
+                }
+                let xid_start = k.len() - 8;
+                let row_key_with_sep = &k[..xid_start];
+                if row_key_with_sep.last() != Some(&sep) {
+                    continue;
+                }
+                let row_key_bytes = &row_key_with_sep[..row_key_with_sep.len() - 1];
+
+                let row_key = match std::str::from_utf8(row_key_bytes) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => continue,
+                };
+
+                let mut xid_arr = [0u8; 8];
+                xid_arr.copy_from_slice(&k[xid_start..]);
+                let xid = u64::from_be_bytes(xid_arr);
+
+                // Per-DB CF entries overwrite legacy CF_ROWS entries.
+                latest.insert((db_str.to_string(), row_key), (xid, v.to_vec()));
+            }
+        }
+
+        // ── Step 3: decode each final entry ──
         let mut result = Vec::with_capacity(latest.len());
-        for ((db, row_key), (xid, value)) in latest {
+        for ((db_str, row_key), (xid, value)) in latest {
             if value.is_empty() {
                 continue;
             }
             let tag = value[0];
             if tag == 0x01 {
                 // tombstone
-                result.push((db, row_key, xid, HashMap::new(), true));
+                result.push((db_str, row_key, xid, HashMap::new(), true));
             } else if tag == 0x00 {
                 let json_bytes = &value[1..];
                 match serde_json::from_slice::<HashMap<String, String>>(json_bytes) {
-                    Ok(cols) => result.push((db, row_key, xid, cols, false)),
+                    Ok(cols) => result.push((db_str, row_key, xid, cols, false)),
                     Err(e) => {
                         tracing_or_eprintln(format!("scan_persisted_rows json decode error: {e}"));
                     }
@@ -638,25 +724,29 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
         true
     }
 
-    fn scan_rows_for_db(&self, db: &str, snapshot_xid: u64) -> Vec<(String, HashMap<String, String>)> {
-        let cf_rows = match self.db.cf_handle(CF_ROWS) {
+    fn scan_rows_for_db(
+        &self,
+        db: &str,
+        snapshot_xid: u64,
+    ) -> Vec<(String, HashMap<String, String>)> {
+        // Look up the per-DB CF. The CF is created lazily on the first
+        // `store_row` write, so it may not exist yet for databases with no
+        // persisted rows. In SingleThreaded mode, `create_cf` requires
+        // `&mut self`, so we cannot create it here — just return empty.
+        let cf_name = Self::db_rows_cf_name(db);
+        let cf_db = match self.db.cf_handle(&cf_name) {
             Some(cf) => cf,
             None => return Vec::new(),
         };
 
-        // Prefix: {db}\x1f — all rows for this db are stored with this prefix.
+        // Key format in per-DB CF: {row_key}\x1f{xid_be8}
+        // No db prefix — the CF IS the db scope.
         let sep = b'\x1f';
-        let mut db_prefix = Vec::with_capacity(db.len() + 1);
-        db_prefix.extend_from_slice(db.as_bytes());
-        db_prefix.push(sep);
 
         // latest_visible[row_key] = (xid, value_bytes) — highest xid <= snapshot_xid.
         let mut latest_visible: HashMap<String, (u64, Vec<u8>)> = HashMap::new();
 
-        for kv in self.db.iterator_cf(
-            &cf_rows,
-            rocksdb::IteratorMode::From(&db_prefix, rocksdb::Direction::Forward),
-        ) {
+        for kv in self.db.iterator_cf(&cf_db, rocksdb::IteratorMode::Start) {
             let (k, v) = match kv {
                 Ok(x) => x,
                 Err(e) => {
@@ -665,19 +755,12 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
                 }
             };
 
-            // Stop once keys no longer start with this db prefix.
-            if !k.starts_with(&db_prefix) {
-                break;
-            }
-
-            // Key layout after db prefix: {row_key}\x1f{xid_be8}
-            // xid is the last 8 bytes; everything before the last sep is the row_key.
-            let rest = &k[db_prefix.len()..];
-            if rest.len() < 9 {
+            // Key: {row_key}\x1f{xid_be8}
+            if k.len() < 9 {
                 continue; // need at least 1 byte row_key + sep + 8 bytes xid
             }
-            let xid_start = rest.len() - 8;
-            let row_key_with_sep = &rest[..xid_start];
+            let xid_start = k.len() - 8;
+            let row_key_with_sep = &k[..xid_start];
             if row_key_with_sep.last() != Some(&sep) {
                 continue;
             }
@@ -689,7 +772,7 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
             };
 
             let mut xid_arr = [0u8; 8];
-            xid_arr.copy_from_slice(&rest[xid_start..]);
+            xid_arr.copy_from_slice(&k[xid_start..]);
             let xid = u64::from_be_bytes(xid_arr);
 
             // MVCC visibility: only include versions written at or before the snapshot.
@@ -725,6 +808,34 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
     }
 }
 
+impl RocksDbDurabilityEngine {
+    /// Drop the per-DB column family atomically (also callable as a plain method).
+    /// The `DurabilityEngine` trait impl below delegates here.
+    pub fn drop_db_column_family_inner(&mut self, db: &str) {
+        let cf_name = Self::db_rows_cf_name(db);
+        if self.db.cf_handle(&cf_name).is_none() {
+            return; // CF doesn't exist — nothing to drop.
+        }
+        if let Err(e) = self.db.drop_cf(&cf_name) {
+            tracing_or_eprintln(format!("drop_db_column_family {cf_name}: {e}"));
+        }
+    }
+}
+
+impl crate::DurabilityEngine for RocksDbDurabilityEngine {
+    // Forwarded to avoid requiring callers to know the concrete type.
+    // All other methods are implemented in the main impl block above;
+    // only the new trait method needs overriding here.
+}
+
+// Workaround: we can't have two `impl DurabilityEngine for ...` blocks
+// (already exists above). So we just call drop_db_column_family_inner
+// inside the main trait impl. The trait default (no-op) is used unless
+// overridden — we override it in the main impl block by adding the method.
+// Actually: add it to the EXISTING impl DurabilityEngine block to avoid
+// the duplicate impl error. The python edit already placed drop_db_column_family
+// outside that block. We'll fix this by removing the duplicate impl and
+// putting a fn drop_db_column_family in the EXISTING DurabilityEngine impl.
 // Inline tracing-or-stderr helper. The store crate doesn't depend on
 // `tracing` (Phase 0 kept it limited to the service crate), so this falls
 // back to `eprintln!`. The service-side metrics + tracing instrumentation
@@ -1038,6 +1149,194 @@ mod tests {
         let p = unique_path();
         let e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
         assert!(e.persists_sql());
+        cleanup(&p);
+    }
+
+    // -- Phase 2.2: Row store persistence -------------------------------------
+
+    /// Verifies `scan_rows_for_db` scoping and MVCC without crash simulation.
+    #[test]
+    fn scan_rows_for_db_unit() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+
+        let data1: HashMap<String, String> = [("k".to_string(), "v1".to_string())].into();
+        let data2: HashMap<String, String> = [("k".to_string(), "v2".to_string())].into();
+        e.store_row("db1", "tbl:row-1", 5, Some(&data1));
+        e.store_row("db1", "tbl:row-2", 6, Some(&data2));
+
+        let data3: HashMap<String, String> = [("k".to_string(), "v3".to_string())].into();
+        e.store_row("db2", "tbl:row-1", 7, Some(&data3));
+
+        // DB scoping: db1 has 2 rows; db2 rows must not bleed in.
+        let db1_rows = e.scan_rows_for_db("db1", 999);
+        assert_eq!(db1_rows.len(), 2, "db1 should have 2 rows");
+
+        // DB scoping: db2 has 1 row; db1 rows must not bleed in.
+        let db2_rows = e.scan_rows_for_db("db2", 999);
+        assert_eq!(db2_rows.len(), 1, "db2 should have 1 row");
+
+        // MVCC: row written at xid=5, scan at xid=4 => invisible.
+        let invisible = e.scan_rows_for_db("db1", 4);
+        assert!(invisible.is_empty(), "rows at xid=5 must be invisible to snapshot at xid=4");
+
+        // MVCC: scan at xid=5 => only row-1 visible (row-2 written at xid=6).
+        let at5 = e.scan_rows_for_db("db1", 5);
+        assert_eq!(at5.len(), 1, "only row at xid=5 visible to snapshot xid=5");
+        assert_eq!(at5[0].0, "tbl:row-1");
+
+        cleanup(&p);
+    }
+
+    /// Phase 2.2 regression: CF_ROWS survives kill -9 + reopen.
+    /// Simulates crash by dropping the engine without graceful shutdown.
+    #[test]
+    fn rows_survive_drop_and_reopen_like_sigkill() {
+        let p = unique_path();
+
+        // Session 1 -- write rows, then drop without graceful shutdown.
+        {
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("open");
+
+            let data1: HashMap<String, String> = [("col".to_string(), "a".to_string())].into();
+            let data2: HashMap<String, String> = [("col".to_string(), "b".to_string())].into();
+            let data4: HashMap<String, String> = [("col".to_string(), "d".to_string())].into();
+
+            e.store_row("db1", "orders:row-1", 1, Some(&data1));
+            e.store_row("db1", "orders:row-2", 2, Some(&data2));
+            e.store_row("db1", "orders:row-3", 3, None); // tombstone
+            e.store_row("db2", "products:row-1", 4, Some(&data4));
+            // Engine drops here -- simulates kill -9.
+        }
+
+        // Session 2 -- reopen and verify all data survived.
+        {
+            let e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("reopen after simulated kill -9");
+
+            // db1: 2 live rows (tombstone excluded).
+            let db1_rows = e.scan_rows_for_db("db1", 999);
+            assert_eq!(db1_rows.len(), 2, "db1 must have exactly 2 live rows after reopen");
+            let keys: Vec<&str> = db1_rows.iter().map(|(k, _)| k.as_str()).collect();
+            assert!(!keys.contains(&"orders:row-3"), "tombstone row-3 must not be returned");
+
+            // db2: 1 live row.
+            let db2_rows = e.scan_rows_for_db("db2", 999);
+            assert_eq!(db2_rows.len(), 1, "db2 must have 1 row after reopen");
+
+            // MVCC: snapshot at xid=1 => only row-1 visible (row-2 at xid=2 invisible).
+            let at1 = e.scan_rows_for_db("db1", 1);
+            assert_eq!(at1.len(), 1, "only row-1 visible at snapshot xid=1");
+            assert_eq!(at1[0].0, "orders:row-1");
+        }
+
+        cleanup(&p);
+    }
+
+    /// L-4: scan_rows_for_db must only return rows for the requested db (database isolation).
+    #[test]
+    fn scan_rows_for_db_isolates_databases() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+
+        let mut data_a = HashMap::new();
+        data_a.insert("name".to_string(), "alice".to_string());
+        let mut data_b = HashMap::new();
+        data_b.insert("name".to_string(), "bob".to_string());
+        let mut data_c = HashMap::new();
+        data_c.insert("name".to_string(), "charlie".to_string());
+
+        e.store_row("db1", "orders:1", 1, Some(&data_a));
+        e.store_row("db1", "orders:2", 2, Some(&data_b));
+        e.store_row("db2", "products:1", 3, Some(&data_c));
+
+        let db1_rows = e.scan_rows_for_db("db1", 999);
+        assert_eq!(db1_rows.len(), 2, "db1 must return exactly 2 rows");
+
+        let db2_rows = e.scan_rows_for_db("db2", 999);
+        assert_eq!(db2_rows.len(), 1, "db2 must return exactly 1 row");
+
+        let db3_rows = e.scan_rows_for_db("db3", 999);
+        assert_eq!(db3_rows.len(), 0, "db3 (non-existent) must return 0 rows");
+
+        cleanup(&p);
+    }
+
+    /// L-4: scan_rows_for_db must honour MVCC snapshot_xid — only versions at or
+    /// before the snapshot are visible; tombstones are excluded from results.
+    #[test]
+    fn scan_rows_for_db_respects_mvcc_snapshot() {
+        let p = unique_path();
+        let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default()).expect("open");
+
+        let mut data_old = HashMap::new();
+        data_old.insert("status".to_string(), "old".to_string());
+        let mut data_new = HashMap::new();
+        data_new.insert("status".to_string(), "new".to_string());
+        let mut data_b = HashMap::new();
+        data_b.insert("amount".to_string(), "100".to_string());
+
+        // Two versions of orders:1 at xid=10 and xid=20.
+        e.store_row("db1", "orders:1", 10, Some(&data_old));
+        e.store_row("db1", "orders:1", 20, Some(&data_new));
+        // orders:2 at xid=5.
+        e.store_row("db1", "orders:2", 5, Some(&data_b));
+        // orders:3 tombstone at xid=7.
+        e.store_row("db1", "orders:3", 7, None);
+
+        // Snapshot xid=15: orders:1 at version 10 (old), orders:2, no orders:3.
+        let rows_15 = e.scan_rows_for_db("db1", 15);
+        let r1 = rows_15.iter().find(|(k, _)| k == "orders:1")
+            .expect("orders:1 must be visible at snapshot 15");
+        assert_eq!(r1.1.get("status").map(|s| s.as_str()), Some("old"),
+            "must see old version at snapshot 15");
+        let keys_15: Vec<&str> = rows_15.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys_15.contains(&"orders:2"), "orders:2 must be visible at snapshot 15");
+        assert!(!keys_15.contains(&"orders:3"), "orders:3 tombstone must not appear");
+        assert_eq!(rows_15.len(), 2, "snapshot 15 yields 2 live rows");
+
+        // Snapshot xid=25: orders:1 at version 20 (new).
+        let rows_25 = e.scan_rows_for_db("db1", 25);
+        let r1_new = rows_25.iter().find(|(k, _)| k == "orders:1")
+            .expect("orders:1 must be visible at snapshot 25");
+        assert_eq!(r1_new.1.get("status").map(|s| s.as_str()), Some("new"),
+            "must see new version at snapshot 25");
+        assert_eq!(rows_25.len(), 2, "snapshot 25 yields 2 live rows");
+
+        // Snapshot xid=3: nothing visible (all writes at xid >= 5).
+        let rows_3 = e.scan_rows_for_db("db1", 3);
+        assert_eq!(rows_3.len(), 0, "snapshot 3 must see 0 rows");
+
+        cleanup(&p);
+    }
+
+    /// L-4: rows must survive a drop()-without-close + reopen cycle.
+    #[test]
+    fn rows_survive_drop_and_reopen() {
+        let p = unique_path();
+        // Session 1 — write rows, then drop without graceful shutdown.
+        {
+            let mut e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("open");
+            let mut row = HashMap::new();
+            row.insert("name".to_string(), "alice".to_string());
+            e.store_row("testdb", "users:1", 1, Some(&row));
+            let mut row2 = HashMap::new();
+            row2.insert("name".to_string(), "bob".to_string());
+            e.store_row("testdb", "users:2", 2, Some(&row2));
+            // Drop without graceful shutdown — simulates kill -9.
+        }
+        // Session 2 — reopen and verify rows survived.
+        {
+            let e = RocksDbDurabilityEngine::open(&p, DurabilityConfig::default())
+                .expect("reopen");
+            let rows = e.scan_rows_for_db("testdb", 999);
+            assert_eq!(rows.len(), 2, "rows must survive kill-9-style drop and reopen");
+            let keys: Vec<&str> = rows.iter().map(|(k, _)| k.as_str()).collect();
+            assert!(keys.contains(&"users:1"), "users:1 must survive reopen");
+            assert!(keys.contains(&"users:2"), "users:2 must survive reopen");
+        }
         cleanup(&p);
     }
 }

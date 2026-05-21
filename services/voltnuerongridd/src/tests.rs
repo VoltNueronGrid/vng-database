@@ -115,6 +115,8 @@ fn state_with_key(key: Option<&str>) -> AppState {
         db_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
         // C-3: connection → tx_id map for repeatable-read tracking (empty for tests).
         connection_tx_active: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // H-1: table statistics registry (empty for tests).
+        stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
     }
 }
 
@@ -4302,14 +4304,19 @@ fn ws23_acid_isolation_level_from_request_field() {
 
 #[test]
 fn ws23_acid_serializable_conflict_returns_409() {
-    // Pre-seed a concurrent serializable transaction that has already written to "inventory"
+    // M-7: Pre-seed a *committed* serializable transaction that already wrote
+    // the exact row key "inventory:1" (what `UPDATE inventory ... WHERE id = 1` produces).
+    // Row-level OCC only conflicts against committed peers, not active ones.
     let state = state_with_key(None);
     {
         let mut acid = state.acid_transactions.lock().unwrap();
         acid.begin("tx-concurrent", "node-1", "serializable", 1_000_u128, None);
         acid.record_statement("tx-concurrent", Some("inventory".to_string()));
+        // Record the specific row key written and then commit the peer transaction.
+        acid.record_written_row_keys("tx-concurrent", std::iter::once("inventory:1".to_string()));
+        acid.commit("tx-concurrent", 2_000_u128);
     }
-    // Now attempt a second serializable transaction writing to the same table
+    // Now attempt a second serializable transaction writing to the same row key.
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let headers = tenant_user_headers("analyst-acme", "acme");
     let req = SqlTransactionRequest {
