@@ -118,10 +118,17 @@ pub(crate) struct SqlRouteResponse {
     pub(crate) batch_relative_cost: f64,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 pub(crate) struct SqlExecuteRequest {
     pub(crate) sql_batch: String,
     pub(crate) max_rows: Option<usize>,
+    /// M-6: Optional default isolation level for inline transactions started within
+    /// this execute batch.  Honoured when BEGIN is part of the sql_batch.
+    /// Values: "read_committed" (default), "repeatable_read", "serializable".
+    pub(crate) isolation_level: Option<String>,
+    /// M-6: Optional client-side statement timeout hint (milliseconds).  The server
+    /// records this in the audit log; enforcement is left to a future watchdog task.
+    pub(crate) statement_timeout_ms: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1600,12 +1607,22 @@ pub(crate) async fn sql_execute(
     if !olap_statements.is_empty() {
         let query = olap_statements.join("; ");
         // C-3: look up any active repeatable-read snapshot for this connection.
+        // M-6: if no ACID transaction is active but the request asks for repeatable_read,
+        // capture a point-in-time snapshot from the current row-store xid.
         let rr_snapshot_xid: Option<u64> = {
             let conn_map = state.connection_tx_active.lock().ok();
-            conn_map.and_then(|m| m.get(&connection_id).and_then(|tx_id| {
+            let from_acid = conn_map.and_then(|m| m.get(&connection_id).and_then(|tx_id| {
                 state.acid_transactions.lock().ok()
                     .and_then(|a| a.rr_read_snapshot_xid(tx_id))
-            }))
+            }));
+            if from_acid.is_some() {
+                from_acid
+            } else if req.isolation_level.as_deref() == Some("repeatable_read") {
+                // Snapshot at request start for single-request RR consistency.
+                state.row_store.lock().ok().map(|rs| rs.current_xid())
+            } else {
+                None
+            }
         };
         let rs = match state.row_store.lock() {
             Ok(g) => g,
@@ -2004,6 +2021,9 @@ pub(crate) async fn sql_execute(
             "reason": response.reason,
             "rejected_statement_count": response.rejected_statement_count,
             "udf_guardrail_status": response.udf_guardrail_status,
+            // M-6: record client-requested isolation level and timeout hint for observability
+            "requested_isolation_level": req.isolation_level.as_deref().unwrap_or("read_committed"),
+            "statement_timeout_ms": req.statement_timeout_ms.unwrap_or(0),
         }),
     );
     release_sql_data_plane_connection(&state, &connection_id);

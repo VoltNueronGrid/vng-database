@@ -15,6 +15,10 @@ export interface StudioConnection {
 export interface SqlExecuteRequest {
   sql_batch: string; // single SQL string — server deserialises as String
   max_rows?: number;
+  /** M-6: ACID isolation level for transactions in this batch. */
+  isolation_level?: string;
+  /** M-6: Client-side statement timeout hint (milliseconds, 0 = no limit). */
+  statement_timeout_ms?: number;
 }
 
 export type RoutePath = "oltp" | "olap" | "hybrid" | "unknown";

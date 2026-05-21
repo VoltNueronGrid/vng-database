@@ -3,12 +3,16 @@ import { StudioApiClient } from "@/api/studio-client";
 import { useConnectionStore } from "@/store/connection";
 import { useQueryStore } from "@/store/query";
 import { useSchema } from "@/hooks/useSchema";
+import { useSettingsStore } from "@/store/settings";
 
 export function useQuery(tabId: string) {
   const getActive = useConnectionStore((s) => s.getActive);
   const getActiveKey = useConnectionStore((s) => s.getActiveKey);
   const { setResult, setExecuting } = useQueryStore();
   const { refresh } = useSchema();
+  // M-6: read per-connection defaults from settings
+  const defaultIsolationLevel = useSettingsStore((s) => s.defaultIsolationLevel);
+  const statementTimeoutMs = useSettingsStore((s) => s.statementTimeoutMs);
 
   const execute = useCallback(
     async (sql: string) => {
@@ -29,6 +33,9 @@ export function useQuery(tabId: string) {
       try {
         const res = await client.executeSql({
           sql_batch: sql,
+          // M-6: include per-connection defaults from Studio settings
+          isolation_level: defaultIsolationLevel !== "read_committed" ? defaultIsolationLevel : undefined,
+          statement_timeout_ms: statementTimeoutMs > 0 ? statementTimeoutMs : undefined,
         });
 
         // ── Build columns + rows ──────────────────────────────────────────
@@ -104,7 +111,7 @@ export function useQuery(tabId: string) {
         setExecuting(tabId, false);
       }
     },
-    [tabId, getActive, getActiveKey, setResult, setExecuting]
+    [tabId, getActive, getActiveKey, setResult, setExecuting, defaultIsolationLevel, statementTimeoutMs]
   );
 
   return { execute };

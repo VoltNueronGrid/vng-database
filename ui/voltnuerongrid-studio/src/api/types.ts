@@ -3,6 +3,25 @@ export type RoutePath = "oltp" | "olap" | "hybrid" | "unknown";
 export interface SqlExecuteRequest {
   sql_batch: string;
   max_rows?: number;
+  /** M-6: ACID isolation level override for this request. */
+  isolation_level?: string;
+  /** M-6: Client-side statement timeout hint in milliseconds (0 = no limit). */
+  statement_timeout_ms?: number;
+}
+
+/** M-6: Server runtime configuration shape returned by GET /api/v1/admin/runtime-config */
+export interface RuntimeConfig {
+  storage: {
+    engine: string;
+    data_dir: string;
+    max_background_jobs: number;
+    wal_fsync_on_commit: boolean;
+  };
+  sql: {
+    engine: string;
+    htap_olap_threshold_rows: number;
+    max_result_rows: number;
+  };
 }
 
 export interface SqlTransactionResponse {

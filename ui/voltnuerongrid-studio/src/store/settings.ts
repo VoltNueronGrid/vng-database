@@ -18,6 +18,17 @@ export type DdlDoubleClickAction =
 
 export type TimeDisplayUnit = "auto" | "ms" | "s";
 
+// ─── M-6: Per-connection defaults ────────────────────────────────────────────
+
+/**
+ * ACID isolation level sent with every SQL execute request.
+ * Maps to the server's `isolation_level` field in SqlExecuteRequest.
+ */
+export type IsolationLevel =
+  | "read_committed"    // Default — no dirty reads, but non-repeatable reads possible
+  | "repeatable_read"   // Snapshot at BEGIN; no phantom reads within the transaction
+  | "serializable";     // Full SSI (row-level OCC); highest consistency, more aborts
+
 // ─── Full settings shape ──────────────────────────────────────────────────────
 
 export interface StudioSettings {
@@ -45,6 +56,21 @@ export interface StudioSettings {
    * @default true
    */
   confirmUnsavedClose: boolean;
+
+  // ── M-6: Connection defaults ──────────────────────────────────────────────
+
+  /**
+   * Default ACID isolation level passed with every SQL execute request.
+   * @default "read_committed"
+   */
+  defaultIsolationLevel: IsolationLevel;
+
+  /**
+   * Client-side statement timeout hint (milliseconds, 0 = no limit).
+   * Sent to the server as `statement_timeout_ms` in SqlExecuteRequest.
+   * @default 0
+   */
+  statementTimeoutMs: number;
 }
 
 // ─── Store interface ──────────────────────────────────────────────────────────
@@ -61,6 +87,8 @@ const DEFAULTS: StudioSettings = {
   defaultQueryLimit: 1000,
   timeDisplayUnit: "auto",
   confirmUnsavedClose: true,
+  defaultIsolationLevel: "read_committed",
+  statementTimeoutMs: 0,
 };
 
 export const useSettingsStore = create<SettingsState>()(

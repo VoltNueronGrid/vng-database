@@ -365,6 +365,7 @@ fn sql_execute_accepts_tenant_analyst_headers() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT udf_rust('hello');".to_string(),
                 max_rows: Some(10),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -447,6 +448,7 @@ fn h07_sql_data_plane_pool_acquire_release_on_sql_handlers() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT udf_rust('hello');".to_string(),
                 max_rows: Some(10),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -479,6 +481,7 @@ fn h07_sql_data_plane_pool_rejects_when_pool_exhausted() {
         Json(SqlExecuteRequest {
             sql_batch: "SELECT 1".to_string(),
             max_rows: Some(10),
+            ..Default::default()
         }),
     ));
 
@@ -2967,6 +2970,7 @@ fn ws3_sql_execute_routes_and_executes_olap_query() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT COUNT(*) FROM orders;".to_string(),
                 max_rows: Some(100),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -2995,6 +2999,7 @@ fn ws3_sql_execute_routes_and_executes_oltp_transaction() {
             Json(SqlExecuteRequest {
                 sql_batch: "BEGIN; UPDATE orders SET amount = 1500 WHERE id = 1; COMMIT;".to_string(),
                 max_rows: Some(10),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -3039,6 +3044,7 @@ fn ws3_routing_policy_enforces_max_rows_limit() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT COUNT(*) FROM orders;".to_string(),
                 max_rows: Some(50),
+                ..Default::default()
             }),
         ))
         .expect("sql execute response");
@@ -3191,6 +3197,7 @@ fn nt_s2_003_sql_execute_route_decision_wrapper_preserves_routing_result() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT * FROM orders WHERE id = '1';".to_string(),
         max_rows: Some(25),
+        ..Default::default()
     };
 
     let envelope = build_http_envelope(
@@ -3962,6 +3969,7 @@ fn ws3_legacy_agg_sum_routed_through_sql_execute_olap_path() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT SUM(amount) FROM orders;".to_string(),
                 max_rows: Some(100),
+                ..Default::default()
             }),
         ))
         .expect("sql execute should succeed");
@@ -3990,6 +3998,7 @@ fn ws3_legacy_agg_count_and_avg_detected_together() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT COUNT(id), AVG(price) FROM products;".to_string(),
                 max_rows: None,
+                ..Default::default()
             }),
         ))
         .expect("sql execute should succeed");
@@ -4014,6 +4023,7 @@ fn ws3_legacy_agg_none_when_no_aggregate_in_select() {
             Json(SqlExecuteRequest {
                 sql_batch: "SELECT id, name FROM orders;".to_string(),
                 max_rows: Some(50),
+                ..Default::default()
             }),
         ))
         .expect("sql execute should succeed");
@@ -4038,6 +4048,7 @@ fn ws3_legacy_agg_not_emitted_for_oltp_paths() {
             Json(SqlExecuteRequest {
                 sql_batch: "INSERT INTO orders (id, amount) VALUES (99, 500);".to_string(),
                 max_rows: None,
+                ..Default::default()
             }),
         ))
         .expect("sql execute should succeed");
@@ -4056,6 +4067,7 @@ fn ws2_ddl_catalog_create_table_wires_through_sql_execute() {
     let req = SqlExecuteRequest {
         sql_batch: "CREATE TABLE orders (id INT, amount FLOAT)".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let response = rt
         .block_on(sql_execute(
@@ -4082,6 +4094,7 @@ fn ws2_ddl_catalog_drop_table_removes_active_entry() {
     let create_req = SqlExecuteRequest {
         sql_batch: "CREATE TABLE temp_data (x INT)".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(create_req)))
         .expect("create should succeed");
@@ -4092,6 +4105,7 @@ fn ws2_ddl_catalog_drop_table_removes_active_entry() {
     let drop_req = SqlExecuteRequest {
         sql_batch: "DROP TABLE temp_data".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(drop_req)))
         .expect("drop should succeed");
@@ -4109,6 +4123,7 @@ fn ws2_catalog_table_columns_returns_columns_for_created_table() {
     let create_req = SqlExecuteRequest {
         sql_batch: "CREATE TABLE orders (id INT, amount FLOAT)".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let _ = rt.block_on(sql_execute(State(state.clone()), tenant_headers.clone(), Json(create_req)))
         .expect("create should succeed");
@@ -4163,6 +4178,7 @@ fn ws2_admin_schema_tree_returns_views_functions_triggers_and_events() {
         let req = SqlExecuteRequest {
             sql_batch: sql.to_string(),
             max_rows: None,
+            ..Default::default()
         };
         let response = rt
             .block_on(sql_execute(State(state.clone()), tenant_headers.clone(), Json(req)))
@@ -4364,6 +4380,7 @@ fn ws3_legacy_agg_uses_real_ingest_data_when_available() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT SUM(value) FROM metrics".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let response = rt
         .block_on(sql_execute(State(state), headers, Json(req)))
@@ -4397,6 +4414,7 @@ fn ws21_concurrent_sql_execute_tenant_isolation() {
                 let req = SqlExecuteRequest {
                     sql_batch: format!("SELECT COUNT(*) FROM metrics_thread_{i}"),
                     max_rows: None,
+                    ..Default::default()
                 };
                 let result = rt.block_on(sql_execute(
                     State((*state).clone()),
@@ -4554,6 +4572,7 @@ fn ws21_high_cardinality_tenant_sql_execute() {
                 let req = SqlExecuteRequest {
                     sql_batch: format!("SELECT * FROM metrics WHERE shard = {i}"),
                     max_rows: None,
+                    ..Default::default()
                 };
                 let result = rt.block_on(sql_execute(
                     State((*state).clone()),
@@ -5220,6 +5239,7 @@ fn ws21_mixed_ops_concurrent_ingest_sql_cache() {
         let req = SqlExecuteRequest {
             sql_batch: "SELECT COUNT(*) FROM events".to_string(),
             max_rows: None,
+            ..Default::default()
         };
         rt.block_on(sql_execute(State((*s1).clone()), headers, Json(req))).is_ok()
     });
@@ -5508,6 +5528,7 @@ fn ws21_sustained_load_sql_execute() {
         let req = SqlExecuteRequest {
             sql_batch: format!("SELECT {i} AS seq"),
             max_rows: None,
+            ..Default::default()
         };
         rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(req)))
             .unwrap_or_else(|_| panic!("sql_execute failed at iteration {i}"));
@@ -5753,6 +5774,7 @@ fn ws21_multi_tenant_ddl_catalog_isolation() {
                         "CREATE TABLE concurrent_table_{i} (id INT PRIMARY KEY, val FLOAT);"
                     ),
                     max_rows: None,
+                    ..Default::default()
                 };
                 let result = rt.block_on(sql_execute(State((*state).clone()), headers, Json(req)));
                 (i, result.is_ok())
@@ -6127,6 +6149,7 @@ fn s3_ws1_sql_execute_planner_path_populated_for_aggregate() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT region, SUM(revenue) FROM sales GROUP BY region".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let headers = operator_headers("test-key", "admin");
     let resp = tokio::runtime::Runtime::new()
@@ -6256,6 +6279,7 @@ async fn s4_ws3_sql_execute_oltp_path_returns_rows_from_row_store() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT value FROM rows WHERE id = 'oltp-key-1'".to_string(),
         max_rows: Some(10),
+        ..Default::default()
     };
     let headers = operator_headers("test-key", "admin");
     let resp = sql_execute(State(state), headers, Json(req)).await.unwrap();
@@ -6274,6 +6298,7 @@ async fn s4_ws3_sql_execute_olap_aggregate_has_no_oltp_rows() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT SUM(amount) FROM orders GROUP BY region".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let headers = operator_headers("test-key", "admin");
     let resp = sql_execute(State(state), headers, Json(req)).await.unwrap();
@@ -6335,6 +6360,7 @@ async fn s9_ws8a_02_audit_chain_verify_clean_chain_is_valid() {
     let req = SqlExecuteRequest {
         sql_batch: "SELECT 1".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let headers = operator_headers("test-key", "admin");
     sql_execute(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
@@ -6349,7 +6375,7 @@ async fn s9_ws8a_02_audit_chain_events_have_non_empty_hashes() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     // Trigger an audit event
-    let req = SqlExecuteRequest { sql_batch: "SELECT now()".to_string(), max_rows: None };
+    let req = SqlExecuteRequest { sql_batch: "SELECT now()".to_string(), max_rows: None, ..Default::default() };
     sql_execute(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
     // Retrieve events and check chain_hash populated
     let sink = state.audit_sink.lock().unwrap();
@@ -6717,6 +6743,7 @@ async fn s3_ws1_05_olap_filter_pushdown_reduces_batch() {
     let exec_req = SqlExecuteRequest {
         sql_batch: "SELECT COUNT(*) FROM products GROUP BY category".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let resp = sql_execute(State(state), headers, Json(exec_req)).await.unwrap();
     assert_eq!(resp.1.0.planner_path.as_deref(), Some("olap"));
@@ -6921,6 +6948,7 @@ async fn s4_ws3_02_olap_agg_results_populated_for_aggregate_query() {
     let exec_req = SqlExecuteRequest {
         sql_batch: "SELECT COUNT(*) FROM metrics GROUP BY value".to_string(),
         max_rows: None,
+        ..Default::default()
     };
     let resp = sql_execute(State(state.clone()), headers.clone(), Json(exec_req)).await.unwrap();
     assert_eq!(resp.1.0.planner_path.as_deref(), Some("olap"));

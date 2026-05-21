@@ -3,6 +3,7 @@ import type {
   AuthorizeActionRequest,
   AuthorizeActionResponse,
   AutonomousActionRecordsResponse,
+  RuntimeConfig,
   SqlExecuteRequest,
   SqlExecuteResponse,
 } from "./types.js";
@@ -108,6 +109,11 @@ export class StudioApiClient {
     return this.getJson<AutonomousActionRecordsResponse>(
       `/api/v1/autonomous/actions/records?max_items=${maxItems}`,
     );
+  }
+
+  /** M-6: Fetch the server boot-time runtime configuration. */
+  async getRuntimeConfig(): Promise<RuntimeConfig> {
+    return this.getJson<RuntimeConfig>("/api/v1/admin/runtime-config");
   }
 
   private async deleteJson<T>(path: string): Promise<T> {
