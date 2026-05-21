@@ -13035,3 +13035,36 @@ fn native_auth_open_listener_accepts_empty_payload() {
     );
 }
 
+
+// ── L-5: In-process E2E HTTP integration test ────────────────────────────────
+
+/// Spins up a real Axum HTTP server on a random port and fires a real HTTP
+/// request through reqwest to verify the full request→handler→response path.
+/// Marked ignore: requires network socket access not available in sandbox CI.
+/// Run manually: `cargo test -- --ignored e2e_http_roundtrip_sql_execute`.
+#[tokio::test]
+#[ignore = "requires network access (TcpListener::bind)"]
+async fn e2e_http_roundtrip_sql_execute() {
+    let state = state_with_key(Some("e2e-test-key"));
+    let app = crate::router::build_router(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap_or(());
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{addr}/api/v1/sql/execute"))
+        .header("X-Admin-Api-Key", "e2e-test-key")
+        .json(&serde_json::json!({
+            "sql_batch": "CREATE TABLE e2e_test (id INT, name TEXT)"
+        }))
+        .send()
+        .await
+        .expect("HTTP request failed");
+
+    assert_eq!(resp.status().as_u16(), 200, "expected 200 OK from sql/execute");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok", "response status field must be 'ok'");
+}
