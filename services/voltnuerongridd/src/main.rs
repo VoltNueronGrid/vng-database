@@ -37,7 +37,7 @@ use voltnuerongrid_plugins::PluginLifecycleManager;
 
 pub(crate) mod raft;
 use raft::RaftNode;
-pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftSnapshotChunkResponse, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftDurableState, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftSnapshotChunkResponse, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 pub mod resilience;
 pub mod observability;
@@ -1714,6 +1714,25 @@ async fn main() {
         // PagedRowStore::scan_at_snapshot, so after boot it only sees rows written
         // in the current session.  For full correctness with RocksDB-primary reads,
         // conflict detection should also consult RocksDB.  Track as a future gap.
+    }
+
+    // H-2: Restore durable Raft state (current_term, voted_for, log entries)
+    // from the previous process run.  This prevents a restarted node from
+    // double-voting in an old term or losing committed log entries.
+    {
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        if let Some(durable) = helpers::raft_loop::load_raft_state(&data_dir) {
+            let mut node = state.raft_state.lock().expect("raft restore lock");
+            let log_len = durable.log.len();
+            let restored_term = durable.current_term;
+            node.restore_durable(durable);
+            tracing::info!(
+                target: "vng.raft",
+                current_term = restored_term,
+                log_length = log_len,
+                "raft durable state restored from disk"
+            );
+        }
     }
 
     tokio::spawn(run_raft_tick_loop(state.clone()));

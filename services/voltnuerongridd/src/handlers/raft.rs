@@ -390,6 +390,9 @@ pub(crate) async fn raft_status(
 
 
 /// Handle an incoming RequestVote RPC.
+///
+/// H-2: Persists durable Raft state after updating `voted_for` / `current_term`
+/// so the vote survives a crash before the next tick-loop persist.
 pub(crate) async fn raft_vote(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -399,12 +402,21 @@ pub(crate) async fn raft_vote(
     if check_cluster_token(&headers, &state).is_err() {
         require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     }
-    let resp = state.raft_state.lock().expect("raft_state lock").handle_vote_request(&req);
+    let resp = {
+        let mut node = state.raft_state.lock().expect("raft_state lock");
+        let r = node.handle_vote_request(&req);
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        crate::helpers::raft_loop::persist_raft_state(&data_dir, &node);
+        r
+    };
     Ok(Json(resp))
 }
 
 
 /// Handle an incoming AppendEntries RPC (heartbeat or log replication).
+///
+/// H-2: Persists durable Raft state after appending new log entries so the
+/// log survives a crash before the next tick-loop persist.
 pub(crate) async fn raft_append(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -414,7 +426,13 @@ pub(crate) async fn raft_append(
     if check_cluster_token(&headers, &state).is_err() {
         require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     }
-    let resp = state.raft_state.lock().expect("raft_state lock").handle_append_entries(&req);
+    let resp = {
+        let mut node = state.raft_state.lock().expect("raft_state lock");
+        let r = node.handle_append_entries(&req);
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        crate::helpers::raft_loop::persist_raft_state(&data_dir, &node);
+        r
+    };
     Ok(Json(resp))
 }
 
@@ -454,9 +472,14 @@ pub(crate) async fn raft_install_snapshot(
     }
 
     // Apply the snapshot to the Raft state first (updates snapshot_index etc.).
+    // H-2: persist durable state immediately after applying the snapshot so
+    // snapshot_index / snapshot_term survive a crash.
     let resp = {
         let mut node = state.raft_state.lock().expect("raft install_snapshot lock");
-        node.handle_install_snapshot(&req)
+        let r = node.handle_install_snapshot(&req);
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        crate::helpers::raft_loop::persist_raft_state(&data_dir, &node);
+        r
     };
 
     if resp.success {

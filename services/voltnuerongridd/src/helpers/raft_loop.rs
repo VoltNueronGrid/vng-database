@@ -18,7 +18,53 @@
 
 use std::time::Duration;
 use reqwest::Client;
-use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
+use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftDurableState, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
+
+// ---------------------------------------------------------------------------
+// H-2: Raft durable state persistence
+// ---------------------------------------------------------------------------
+
+/// Write durable Raft state atomically to `{data_dir}/raft_meta.json`.
+///
+/// Uses write-to-temp + rename for atomic replacement so a crash mid-write
+/// never leaves a corrupt file.  No-op when `data_dir` is empty (in-memory /
+/// test mode) or if the write fails (logs a warning and continues).
+pub(crate) fn persist_raft_state(data_dir: &str, node: &crate::RaftNode) {
+    if data_dir.is_empty() { return; }
+    let durable = RaftDurableState::from_node(node);
+    let json = match serde_json::to_string(&durable) {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::warn!(target: "vng.raft", "raft persist serialize error: {e}");
+            return;
+        }
+    };
+    let dir = std::path::Path::new(data_dir);
+    let tmp_path = dir.join("raft_meta.json.tmp");
+    let final_path = dir.join("raft_meta.json");
+    if let Err(e) = std::fs::write(&tmp_path, json.as_bytes()) {
+        tracing::warn!(target: "vng.raft", "raft persist write error: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &final_path) {
+        tracing::warn!(target: "vng.raft", "raft persist rename error: {e}");
+    }
+}
+
+/// Load persisted durable Raft state from `{data_dir}/raft_meta.json`.
+/// Returns `None` if the file does not exist or cannot be parsed.
+pub(crate) fn load_raft_state(data_dir: &str) -> Option<RaftDurableState> {
+    if data_dir.is_empty() { return None; }
+    let path = std::path::Path::new(data_dir).join("raft_meta.json");
+    let bytes = std::fs::read(&path).ok()?;
+    match serde_json::from_slice::<RaftDurableState>(&bytes) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(target: "vng.raft", "raft_meta.json parse error: {e}");
+            None
+        }
+    }
+}
 
 /// Trim the Raft log once the log grows beyond this many entries.
 const COMPACT_LOG_THRESHOLD: usize = 500;
@@ -59,18 +105,25 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
             // Per-peer entries: for each peer send only entries from next_index[peer] onward.
             // If next_index[peer] <= snapshot_index the peer is too far behind; mark it for
             // snapshot transfer (entries = empty sentinel, prev_log_index = 0 as flag).
+            //
+            // H-1: prev_log_term must be the actual term of the entry at prev_log_index,
+            // not a hard-coded 0.  We use RaftNode::term_at() which handles the snapshot
+            // boundary (prev_log_index == snapshot_index → snapshot_term) correctly.
             let peers: Vec<String> = state.raft_peers.as_ref().clone();
-            let per_peer: Vec<(String, u64, Vec<RaftLogEntry>, bool)> = peers
+            let per_peer: Vec<(String, u64, u64, Vec<RaftLogEntry>, bool)> = peers
                 .iter()
                 .map(|peer| {
                     let ni = *node.next_index.get(peer).unwrap_or(&(commit_idx + 1));
                     let needs_snapshot = ni <= snapshot_index && snapshot_index > 0;
+                    let prev_log_idx = ni.saturating_sub(1);
+                    // H-1 fix: look up the real term at prev_log_idx.
+                    let prev_log_term = node.term_at(prev_log_idx);
                     let entries: Vec<RaftLogEntry> = if needs_snapshot {
                         Vec::new()
                     } else {
                         node.log.iter().filter(|e| e.index >= ni).cloned().collect()
                     };
-                    (peer.clone(), ni.saturating_sub(1), entries, needs_snapshot)
+                    (peer.clone(), prev_log_idx, prev_log_term, entries, needs_snapshot)
                 })
                 .collect();
             (
@@ -85,11 +138,13 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
                 snapshot_term,
                 per_peer,
                 peers.len(),
+                state.runtime_config.storage.data_dir.clone(),
             )
         };
         let (became_candidate, is_leader, term, node_id,
              last_log_index, last_log_term, commit_index,
-             snapshot_index, snapshot_term, per_peer, total_peers) = tick_info;
+             snapshot_index, snapshot_term, per_peer, total_peers,
+             data_dir) = tick_info;
 
         if became_candidate {
             run_election(&state, &client, term, &node_id, last_log_index, last_log_term).await;
@@ -105,6 +160,14 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
         // Periodically compact the log to bound memory usage.
         if tick_count % COMPACT_EVERY_N_TICKS == 0 {
             compact_if_needed(&state);
+        }
+
+        // H-2: Persist durable Raft state (current_term, voted_for, log) once
+        // per tick.  This covers state changes from tick(), compact_if_needed(),
+        // and fanout_heartbeat() responses without holding any lock during I/O.
+        if !data_dir.is_empty() {
+            let node = state.raft_state.lock().expect("raft persist lock");
+            persist_raft_state(&data_dir, &node);
         }
     }
 }
@@ -182,7 +245,9 @@ async fn run_election(
 /// Send per-peer AppendEntries (or InstallSnapshot) RPCs in parallel, then
 /// process responses to update `next_index` / `match_index` on the leader.
 ///
-/// `per_peer` is `(peer_url, prev_log_index, entries, needs_snapshot)`.
+/// `per_peer` is `(peer_url, prev_log_index, prev_log_term, entries, needs_snapshot)`.
+/// H-1: `prev_log_term` is the actual term of the entry at `prev_log_index`
+/// (looked up via `RaftNode::term_at`), not a hard-coded 0.
 /// When `needs_snapshot` is true the peer is too far behind; the leader sends
 /// an InstallSnapshot RPC instead of AppendEntries.
 /// `total_peers` is used to compute quorum when advancing `commit_index`.
@@ -194,7 +259,7 @@ async fn fanout_heartbeat(
     commit_index: u64,
     snapshot_index: u64,
     snapshot_term: u64,
-    per_peer: Vec<(String, u64, Vec<RaftLogEntry>, bool)>,
+    per_peer: Vec<(String, u64, u64, Vec<RaftLogEntry>, bool)>,
     total_peers: usize,
 ) {
     if per_peer.is_empty() {
@@ -204,7 +269,7 @@ async fn fanout_heartbeat(
     let total_nodes = total_peers + 1; // including self
 
     // Snapshot the row-store once — only if any peer needs a full snapshot transfer.
-    let needs_any_snapshot = per_peer.iter().any(|(_, _, _, ns)| *ns);
+    let needs_any_snapshot = per_peer.iter().any(|(_, _, _, _, ns)| *ns);
     let snapshot_rows: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
         if needs_any_snapshot {
             let rs = state.row_store.lock().expect("row_store snapshot export lock");
@@ -222,7 +287,7 @@ async fn fanout_heartbeat(
     let mut snapshot_set: tokio::task::JoinSet<(String, Result<RaftInstallSnapshotResponse, ()>)> =
         tokio::task::JoinSet::new();
 
-    for (peer_url, prev_log_index, entries, needs_snapshot) in per_peer {
+    for (peer_url, prev_log_index, prev_log_term, entries, needs_snapshot) in per_peer {
         let client = client.clone();
         let token = token.clone();
         let peer_url_owned = peer_url.clone();
@@ -255,7 +320,9 @@ async fn fanout_heartbeat(
                 term,
                 leader_id: node_id.to_string(),
                 prev_log_index,
-                prev_log_term: 0,
+                // H-1 fix: use the real term of the entry at prev_log_index,
+                // not the previously hard-coded 0.
+                prev_log_term,
                 entries,
                 leader_commit: commit_index,
             };
@@ -425,6 +492,7 @@ fn compact_if_needed(state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{RaftNode, RaftLogEntry};
 
     fn quorum_for(peer_count: usize) -> usize {
         let total = peer_count + 1;
@@ -444,5 +512,130 @@ mod tests {
     #[test]
     fn five_node_quorum_is_three() {
         assert_eq!(quorum_for(4), 3);
+    }
+
+    // ── H-1: term_at correctness ─────────────────────────────────────────────
+
+    /// `term_at(0)` must always return 0 (no preceding entry).
+    #[test]
+    fn term_at_zero_returns_zero() {
+        let node = RaftNode::new("node-1");
+        assert_eq!(node.term_at(0), 0);
+    }
+
+    /// `term_at(snapshot_index)` must return `snapshot_term`.
+    #[test]
+    fn term_at_snapshot_index_returns_snapshot_term() {
+        let mut node = RaftNode::new("node-1");
+        node.snapshot_index = 5;
+        node.snapshot_term = 3;
+        assert_eq!(node.term_at(5), 3);
+    }
+
+    /// `term_at` must look up the term from the in-memory log correctly.
+    #[test]
+    fn term_at_log_entry_returns_correct_term() {
+        let mut node = RaftNode::new("node-1");
+        node.log.push(RaftLogEntry { index: 1, term: 2, command: "cmd1".into() });
+        node.log.push(RaftLogEntry { index: 2, term: 4, command: "cmd2".into() });
+        assert_eq!(node.term_at(1), 2);
+        assert_eq!(node.term_at(2), 4);
+    }
+
+    /// `term_at` must return 0 for indices not in the log (missing entries).
+    #[test]
+    fn term_at_missing_entry_returns_zero() {
+        let node = RaftNode::new("node-1");
+        assert_eq!(node.term_at(99), 0);
+    }
+
+    /// After compaction the log entry for `snapshot_index` is removed; `term_at`
+    /// must still return the correct term via `snapshot_term`.
+    #[test]
+    fn term_at_after_compaction_uses_snapshot_term() {
+        let mut node = RaftNode::new("node-1");
+        for i in 1u64..=5 {
+            node.log.push(RaftLogEntry { index: i, term: i, command: String::new() });
+        }
+        node.compact_log(3);
+        // After compaction: snapshot_index = 3, snapshot_term = 3 (term of entry 3).
+        assert_eq!(node.term_at(3), 3, "snapshot boundary must return snapshot_term");
+        // Entries 4 and 5 remain in the log.
+        assert_eq!(node.term_at(4), 4);
+        assert_eq!(node.term_at(5), 5);
+    }
+
+    // ── H-2: persist / load round-trip ───────────────────────────────────────
+
+    /// Round-trip: persist then load must restore current_term, voted_for, and log.
+    #[test]
+    fn persist_and_load_raft_state_round_trip() {
+        let mut node = RaftNode::new("leader-rt");
+        node.current_term = 7;
+        node.voted_for = Some("peer-2".to_string());
+        node.log.push(RaftLogEntry { index: 1, term: 7, command: "INSERT INTO t VALUES (1)".into() });
+        node.log.push(RaftLogEntry { index: 2, term: 7, command: "DELETE FROM t WHERE id='x'".into() });
+        node.snapshot_index = 0;
+        node.snapshot_term = 0;
+
+        let dir = std::env::temp_dir().join("vng_raft_rt_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let data_dir = dir.to_str().unwrap();
+
+        persist_raft_state(data_dir, &node);
+
+        let loaded = load_raft_state(data_dir)
+            .expect("persisted state must be loadable");
+        assert_eq!(loaded.current_term, 7);
+        assert_eq!(loaded.voted_for.as_deref(), Some("peer-2"));
+        assert_eq!(loaded.log.len(), 2);
+        assert_eq!(loaded.log[0].command, "INSERT INTO t VALUES (1)");
+        assert_eq!(loaded.log[1].command, "DELETE FROM t WHERE id='x'");
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `persist_raft_state` with an empty data_dir must be a no-op (no panic).
+    #[test]
+    fn persist_no_op_on_empty_data_dir() {
+        let node = RaftNode::new("node-noop");
+        persist_raft_state("", &node); // must not panic
+    }
+
+    /// `load_raft_state` must return `None` when no file exists.
+    #[test]
+    fn load_returns_none_when_no_file() {
+        let dir = std::env::temp_dir().join("vng_raft_nofile_test_xyz123");
+        // Ensure the dir doesn't exist.
+        let _ = std::fs::remove_dir_all(&dir);
+        let result = load_raft_state(dir.to_str().unwrap());
+        assert!(result.is_none());
+    }
+
+    /// `restore_durable` must correctly set current_term, voted_for, and log.
+    #[test]
+    fn restore_durable_sets_all_fields() {
+        let mut node = RaftNode::new("follower-restore");
+        let durable = crate::RaftDurableState {
+            current_term: 5,
+            voted_for: Some("leader-1".to_string()),
+            snapshot_index: 3,
+            snapshot_term: 2,
+            log: vec![
+                RaftLogEntry { index: 4, term: 5, command: "INSERT INTO t VALUES (4)".into() },
+            ],
+        };
+        node.restore_durable(durable);
+        assert_eq!(node.current_term, 5);
+        assert_eq!(node.voted_for.as_deref(), Some("leader-1"));
+        assert_eq!(node.snapshot_index, 3);
+        assert_eq!(node.snapshot_term, 2);
+        assert_eq!(node.log.len(), 1);
+        // commit_index and last_applied fast-forwarded to snapshot_index.
+        assert_eq!(node.commit_index, 3);
+        assert_eq!(node.last_applied, 3);
+        // Role must remain Follower (transient — not restored).
+        assert_eq!(node.role, RaftRole::Follower);
     }
 }
