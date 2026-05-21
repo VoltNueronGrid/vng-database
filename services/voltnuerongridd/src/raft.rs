@@ -570,12 +570,92 @@ impl RaftNode {
         self.log.get(offset)
     }
 
+    /// Return the term of the log entry at `index`, accounting for the snapshot
+    /// offset.  Used by the leader when building `prev_log_term` for AppendEntries.
+    ///
+    /// - `index == 0`              → 0 (no preceding entry)
+    /// - `index == snapshot_index` → `snapshot_term` (last compacted term)
+    /// - otherwise                 → term from the in-memory log, or 0 if missing
+    pub(crate) fn term_at(&self, index: u64) -> u64 {
+        if index == 0 { return 0; }
+        if index == self.snapshot_index { return self.snapshot_term; }
+        self.log_entry_at(index).map(|e| e.term).unwrap_or(0)
+    }
+
     fn last_log_position(&self) -> (u64, u64) {
         match self.log.last() {
             Some(e) => (e.index, e.term),
             // Log is empty but we may have a non-empty snapshot.
             None if self.snapshot_index > 0 => (self.snapshot_index, self.snapshot_term),
             None => (0, 0),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Durable state — persisted across restarts (H-2)
+// ---------------------------------------------------------------------------
+
+/// The subset of `RaftNode` fields that **must** be written to stable storage
+/// before responding to any RPC (Raft paper §5.4):
+///
+/// - `current_term` — latest term seen (monotone increasing)
+/// - `voted_for` — candidate voted for in current term (prevents double-voting)
+/// - `log` — replicated command log
+/// - `snapshot_index` / `snapshot_term` — last compacted position
+///
+/// Transient fields (`role`, `next_index`, `match_index`, `commit_index`,
+/// `last_applied`, `ticks_since_heartbeat`) are intentionally excluded —
+/// they are re-derived as the node participates in Raft rounds after restart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftDurableState {
+    pub current_term: u64,
+    pub voted_for: Option<String>,
+    pub snapshot_index: u64,
+    pub snapshot_term: u64,
+    pub log: Vec<RaftLogEntry>,
+}
+
+impl RaftDurableState {
+    /// Capture the durable fields from `node`.
+    pub fn from_node(node: &RaftNode) -> Self {
+        RaftDurableState {
+            current_term: node.current_term,
+            voted_for: node.voted_for.clone(),
+            snapshot_index: node.snapshot_index,
+            snapshot_term: node.snapshot_term,
+            log: node.log.clone(),
+        }
+    }
+}
+
+impl RaftNode {
+    /// Restore durable fields from a previously persisted snapshot.
+    ///
+    /// Transient fields (`role`, `next_index`, `match_index`,
+    /// `ticks_since_heartbeat`) are left at their defaults so the node
+    /// starts as a Follower and re-participates in elections normally.
+    ///
+    /// `commit_index` and `last_applied` are fast-forwarded to `snapshot_index`
+    /// so the apply loop does not re-apply entries already captured in the
+    /// last compaction snapshot.
+    pub fn restore_durable(&mut self, state: RaftDurableState) {
+        self.current_term = state.current_term;
+        self.voted_for = state.voted_for;
+        self.snapshot_index = state.snapshot_index;
+        self.snapshot_term = state.snapshot_term;
+        self.log = state.log;
+        // Fast-forward the applied pointers to the last known snapshot so the
+        // apply loop starts from the correct position.
+        if state.snapshot_index > self.commit_index {
+            self.commit_index = state.snapshot_index;
+        }
+        if state.snapshot_index > self.last_applied {
+            self.last_applied = state.snapshot_index;
         }
     }
 }
