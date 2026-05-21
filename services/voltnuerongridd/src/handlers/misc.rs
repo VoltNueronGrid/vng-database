@@ -1661,10 +1661,17 @@ pub(crate) async fn demo_seed(
             let val = crate::synthesize_demo_value(&col_name, &table_name, row_id);
             row_data.insert(col_name, val);
         }
+        // M-8 Rule 12: demo seed rows must go through MVCC *and* RocksDB persistence
+        // so they are durable across restarts (previously only in-memory PagedRowStore).
         match state.row_store.lock() {
             Ok(mut rs) => {
                 let xid = rs.begin_xid();
-                rs.insert(xid, &key, row_data);
+                rs.insert(xid, &key, row_data.clone());
+                // Persist to RocksDB CF so rows survive a SIGKILL.
+                if let Ok(mut wal) = state.wal_engine.lock() {
+                    let raw_key = key.trim_start_matches(&format!("{db}.")).to_string();
+                    wal.store_row(&db, &raw_key, xid, Some(&row_data));
+                }
                 inserted += 1;
             }
             Err(_) => break,
