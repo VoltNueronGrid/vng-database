@@ -1643,20 +1643,46 @@ pub(crate) async fn sql_execute(
                                     } else {
                                         format!("{db}.")
                                     };
-                                    let matching_keys: Vec<(String, std::collections::HashMap<String, String>)> = rs
-                                        .scan_at_snapshot(snapshot_xid)
+                                    // C-1: prefer RocksDB as the primary scan source for bulk
+                                    // UPDATE when the durability engine persists rows.  RocksDB
+                                    // rows survive restarts; PagedRowStore may be empty after
+                                    // a crash-recovery boot.  Lock ordering: wal_engine inside
+                                    // row_store is already the established pattern (store_row).
+                                    let scan_rows: Vec<(String, std::collections::HashMap<String, String>)> =
+                                        if let Ok(wal) = state.wal_engine.lock() {
+                                            if wal.persists_rows() {
+                                                // RocksDB keys have NO db prefix — add it so the
+                                                // existing filter/write logic (which strips it) works unchanged.
+                                                wal.scan_rows_for_db(&db, snapshot_xid)
+                                                    .into_iter()
+                                                    .map(|(k, v)| {
+                                                        let prefixed = if db_prefix_str.is_empty() { k } else { format!("{db_prefix_str}{k}") };
+                                                        (prefixed, v)
+                                                    })
+                                                    .collect()
+                                            } else {
+                                                rs.scan_at_snapshot(snapshot_xid)
+                                                    .into_iter()
+                                                    .map(|(k, v)| (k.to_string(), v.clone()))
+                                                    .collect()
+                                            }
+                                        } else {
+                                            rs.scan_at_snapshot(snapshot_xid)
+                                                .into_iter()
+                                                .map(|(k, v)| (k.to_string(), v.clone()))
+                                                .collect()
+                                        };
+                                    let matching_keys: Vec<(String, std::collections::HashMap<String, String>)> = scan_rows
                                         .into_iter()
                                         .filter(|(k, row_data)| {
-                                            let k_str: &str = k;
                                             let local_k = if db_prefix_str.is_empty() {
-                                                k_str.to_string()
+                                                k.clone()
                                             } else {
-                                                k_str.strip_prefix(&db_prefix_str).unwrap_or(k_str).to_string()
+                                                k.strip_prefix(&db_prefix_str).unwrap_or(k.as_str()).to_string()
                                             };
                                             local_k.starts_with(&table_prefix)
                                                 && row_data.get(&where_col).map(|v| v == &where_val).unwrap_or(false)
                                         })
-                                        .map(|(k, row_data)| (k.to_string(), row_data.clone()))
                                         .collect();
 
                                     for (matched_k, existing) in matching_keys {
@@ -1698,15 +1724,38 @@ pub(crate) async fn sql_execute(
                                 let snapshot_xid = rs.current_xid();
                                 let table_prefix = format!("{tbl}:");
                                 let db_prefix_str = if db.is_empty() { String::new() } else { format!("{db}.") };
-                                let matching_keys: Vec<String> = rs
-                                    .scan_at_snapshot(snapshot_xid)
+                                // C-1: prefer RocksDB as the primary scan source for bulk DELETE
+                                // when the durability engine persists rows (same reasoning as bulk UPDATE).
+                                let scan_rows: Vec<(String, std::collections::HashMap<String, String>)> =
+                                    if let Ok(wal) = state.wal_engine.lock() {
+                                        if wal.persists_rows() {
+                                            wal.scan_rows_for_db(&db, snapshot_xid)
+                                                .into_iter()
+                                                .map(|(k, v)| {
+                                                    let prefixed = if db_prefix_str.is_empty() { k } else { format!("{db_prefix_str}{k}") };
+                                                    (prefixed, v)
+                                                })
+                                                .collect()
+                                        } else {
+                                            rs.scan_at_snapshot(snapshot_xid)
+                                                .into_iter()
+                                                .map(|(k, v)| (k.to_string(), v.clone()))
+                                                .collect()
+                                        }
+                                    } else {
+                                        rs.scan_at_snapshot(snapshot_xid)
+                                            .into_iter()
+                                            .map(|(k, v)| (k.to_string(), v.clone()))
+                                            .collect()
+                                    };
+                                let matching_keys: Vec<String> = scan_rows
                                     .into_iter()
                                     .filter(|(k, row_data)| {
                                         let key_matches = k.contains(&format!("{db_prefix_str}{table_prefix}"));
                                         let val_matches = row_data.get(&where_col).map(|v| *v == where_val).unwrap_or(false);
                                         key_matches && val_matches
                                     })
-                                    .map(|(k, _)| k.to_string())
+                                    .map(|(k, _)| k)
                                     .collect();
                                 for matched_k in matching_keys {
                                     let before = rs.read_latest(&matched_k).cloned();
