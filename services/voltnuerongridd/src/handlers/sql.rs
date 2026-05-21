@@ -1433,6 +1433,34 @@ pub(crate) async fn sql_execute(
                     Err(_) => return Err(lock_poisoned_err("row_store")),
                 };
                 let xid = rs.begin_xid();
+
+                // M-6: If the batch contains a BEGIN and the client requested a non-default
+                // isolation level, register the implicit transaction in acid_transactions so
+                // that RR snapshot and serializable conflict detection apply to DML in this batch.
+                let implicit_tx_id: Option<String> = {
+                    let req_iso = req.isolation_level.as_deref().unwrap_or("read_committed");
+                    let has_begin = ddl_snapshot.iter().any(|s| {
+                        matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Begin)
+                    });
+                    if has_begin && req_iso != "read_committed" {
+                        let tx_id = format!("implicit-tx-{}-{}", connection_id, now_unix_ms());
+                        let begin_snapshot_xid = if req_iso == "repeatable_read" {
+                            Some(rs.current_xid())
+                        } else {
+                            None
+                        };
+                        if let Ok(mut acid) = state.acid_transactions.lock() {
+                            acid.begin(&tx_id, &state.node_id, req_iso, now_unix_ms(), begin_snapshot_xid);
+                        }
+                        if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                            conn_map.insert(connection_id.clone(), tx_id.clone());
+                        }
+                        Some(tx_id)
+                    } else {
+                        None
+                    }
+                };
+
                 // Gap #7: Track per-table insert/delete deltas for incremental stats update.
                 let mut stats_inserts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
                 for stmt in &ddl_snapshot {
@@ -1575,6 +1603,27 @@ pub(crate) async fn sql_execute(
                     }
                 }
                 rs.release_write_intents(xid);
+
+                // M-6: Commit (or rollback) the implicit ACID transaction if we registered one.
+                {
+                    let batch_has_rollback = ddl_snapshot.iter().any(|s| {
+                        let u = s.trim_start().to_ascii_uppercase();
+                        u == "ROLLBACK" || u.starts_with("ROLLBACK;") || u.starts_with("ROLLBACK ")
+                    });
+                    if let Some(ref tx_id) = implicit_tx_id {
+                        if let Ok(mut acid) = state.acid_transactions.lock() {
+                            if batch_has_rollback {
+                                acid.rollback(tx_id, now_unix_ms());
+                            } else {
+                                acid.commit(tx_id, now_unix_ms());
+                            }
+                        }
+                        if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                            conn_map.remove(&connection_id);
+                        }
+                    }
+                }
+
                 // Gap #7: Apply incremental stat deltas (O(tables_touched) instead of O(all_rows)).
                 if !stats_inserts.is_empty() {
                     if let Ok(mut stats) = state.table_stats.lock() {
@@ -1644,6 +1693,7 @@ pub(crate) async fn sql_execute(
         let u = s.trim_start().to_ascii_uppercase();
         u == "COMMIT" || u.starts_with("COMMIT;") || u.starts_with("COMMIT ")
     });
+
     if has_rollback {
         let undo_entries = {
             match state.tx_undo_log.lock() {
