@@ -154,7 +154,7 @@ test.describe("live-headed: connection via UI", () => {
 
     // Test connection
     await page.locator("button", { hasText: "Test Connection" }).click();
-    await expect(page.locator(".test-status")).toContainText("Connected", { timeout: 10_000 });
+    await expect(page.locator(".test-status")).toContainText("Authenticated", { timeout: 10_000 });
 
     // Save & Connect
     await page.locator("button", { hasText: "Save & Connect" }).click();

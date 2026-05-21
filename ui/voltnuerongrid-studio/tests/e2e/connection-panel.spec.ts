@@ -145,7 +145,7 @@ test.describe("Connection Panel", () => {
     const testStatus = mockedPage.locator(".test-status");
     await expect(testStatus).toBeVisible({ timeout: 5000 });
     await expect(testStatus).toHaveClass(/ok/);
-    await expect(testStatus).toContainText("Connected");
+    await expect(testStatus).toContainText("Authenticated");
   });
 
   test("Test Connection shows failure state when server is unreachable", async ({ mockedPage }) => {

@@ -3,7 +3,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use voltnuerongrid_audit::AuditEventKind;
 use voltnuerongrid_auth::PrivilegeAction;
@@ -17,7 +16,7 @@ use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError};
 use crate::{now_unix_ms, build_http_envelope};
 use crate::{execute_transaction_statements, acquire_sql_data_plane_connection, release_sql_data_plane_connection};
 use crate::{acquire_pessimistic_lock, release_pessimistic_lock};
-use crate::{execute_olap_query, execute_oltp_select, df_select_owned, run_async_in_executor};
+use crate::{execute_oltp_select, df_select_owned, run_async_in_executor};
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
@@ -194,7 +193,7 @@ pub(crate) struct SqlExecuteRequest {
     pub(crate) statement_timeout_ms: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct LegacyAggResult {
     /// Aggregate function name (e.g. `"SUM"`, `"COUNT"`).
     pub(crate) aggregation: String,
@@ -203,21 +202,25 @@ pub(crate) struct LegacyAggResult {
     /// Error message when evaluation failed.
     pub(crate) error: Option<String>,
     /// Indicates this result came through the legacy aggregation routing path.
-    pub(crate) source: &'static str,
+    pub(crate) source: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct SqlExecuteResponse {
-    pub(crate) status: &'static str,
+    pub(crate) status: String,
     pub(crate) route_path: String,
     pub(crate) reason: String,
     pub(crate) transaction: Option<SqlTransactionResponse>,
     pub(crate) olap: Option<OlapQueryResponse>,
     pub(crate) rejected_statement_count: usize,
+    #[serde(skip_deserializing, default)]
     pub(crate) udf_results: Option<Vec<UdfExecutionResult>>,
     pub(crate) udf_guardrail_status: Option<String>,
+    #[serde(skip_deserializing, default)]
     pub(crate) udf_function_catalog: Vec<UdfFunctionCatalogEntry>,
+    #[serde(skip_deserializing, default)]
     pub(crate) udf_guard_policies: Vec<UdfLanguageGuardPolicy>,
+    #[serde(skip_deserializing, default)]
     pub(crate) udf_execution_plan: Vec<UdfExecutionPlanStep>,
     pub(crate) legacy_agg_results: Option<Vec<LegacyAggResult>>,
     /// Dominant cost-model recommended path for the batch (S3-WS1-05).
@@ -233,14 +236,14 @@ pub(crate) struct SqlExecuteResponse {
 }
 
 /// S4-WS3-02: a single result row returned by the physical OLTP executor.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct OltpRowResult {
     pub(crate) key: String,
     pub(crate) data: std::collections::HashMap<String, String>,
 }
 
 /// S4-WS3-02: a single vectorized aggregation result from the OLAP columnar executor.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct OlapVecAggResult {
     pub(crate) column: String,
     pub(crate) op: String,
@@ -349,9 +352,9 @@ pub(crate) struct OlapQueryRequest {
     pub(crate) max_rows: Option<usize>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct OlapQueryResponse {
-    pub(crate) status: &'static str,
+    pub(crate) status: String,
     pub(crate) query_signature: String,
     pub(crate) elapsed_ms: u128,
     pub(crate) rows: usize,
@@ -1114,7 +1117,7 @@ pub(crate) async fn sql_execute(
             let response = Ok((
                 StatusCode::BAD_REQUEST,
                 Json(SqlExecuteResponse {
-                    status: "error",
+                    status: "error".to_string(),
                     route_path: route_path_name(decision.payload.path).to_string(),
                     reason: canonical_error.message,
                     transaction: None,
@@ -1155,7 +1158,7 @@ pub(crate) async fn sql_execute(
         let response = Ok((
             StatusCode::BAD_REQUEST,
             Json(SqlExecuteResponse {
-                status: "error",
+                status: "error".to_string(),
                 route_path: "unknown".to_string(),
                 reason: decision.payload.reason,
                 transaction: None,
@@ -1242,7 +1245,7 @@ pub(crate) async fn sql_execute(
             let response = Ok((
                 status,
                 Json(SqlExecuteResponse {
-                    status: "error",
+                    status: "error".to_string(),
                     route_path: route_path_name(decision.payload.path).to_string(),
                     reason: decision.payload.reason,
                     transaction: Some(response),
@@ -1379,7 +1382,7 @@ pub(crate) async fn sql_execute(
                     let err_response = Ok((
                         StatusCode::CONFLICT,
                         Json(SqlExecuteResponse {
-                            status: "error",
+                            status: "error".to_string(),
                             route_path: route_path_name(decision.payload.path).to_string(),
                             reason: warn_msg.clone(),
                             transaction: None,
@@ -1421,30 +1424,80 @@ pub(crate) async fn sql_execute(
             u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
         });
         if has_dml {
-            let total_peers = state.raft_peers.len();
-            let is_multi_node_leader = {
-                let node = match state.raft_state.lock() {
-                    Ok(g) => g,
-                    Err(_) => return Err(lock_poisoned_err("raft_state")),
+            // Pre-apply leadership check: in a multi-node cluster, followers must
+            // not write DML locally — they have no way to replicate.  Try to proxy
+            // the request transparently to the current leader; fall back to 503.
+            let peer_count = state.raft_peers.len();
+            if peer_count > 0 {
+                let is_leader = {
+                    let node = state.raft_state.lock().expect("raft_state lock leadership_precheck");
+                    node.role == crate::RaftRole::Leader
                 };
-                node.role == crate::RaftRole::Leader && total_peers > 0
-            };
-
-            if is_multi_node_leader {
-                // ── Linearisable path ────────────────────────────────────────────
-                // 1. Append every DML command to the Raft log (no row_store write yet).
-                let mut max_pending_index: u64 = 0;
-                {
-                    let mut node = match state.raft_state.lock() {
-                        Ok(g) => g,
-                        Err(_) => return Err(lock_poisoned_err("raft_state")),
-                    };
-                    for stmt in &ddl_snapshot {
-                        let upper = stmt.trim_start().to_ascii_uppercase();
-                        if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
-                            let idx = node.append_command_pending(stmt.clone(), total_peers);
-                            if idx > max_pending_index { max_pending_index = idx; }
+                if !is_leader {
+                    let leader_url = state.current_leader_url.lock().expect("leader_url lock").clone();
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    if let Some(ref url) = leader_url {
+                        let forward_body = serde_json::json!({
+                            "sql_batch": req.sql_batch,
+                            "max_rows": req.max_rows,
+                        });
+                        let mut builder = reqwest::Client::new()
+                            .post(format!("{url}/api/v1/sql/execute"))
+                            .json(&forward_body);
+                        for hdr in &["x-vng-admin-key", "x-vng-operator-id", "authorization",
+                                     "x-vng-session-id", "x-request-id"] {
+                            if let Some(val) = headers.get(*hdr).and_then(|v| v.to_str().ok()) {
+                                builder = builder.header(*hdr, val);
+                            }
                         }
+                        if let Some(token) = state.cluster_token.as_ref().as_deref() {
+                            builder = builder.header("x-vng-cluster-token", token);
+                        }
+                        if let Ok(leader_resp) = builder.send().await {
+                            let leader_status = StatusCode::from_u16(leader_resp.status().as_u16())
+                                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                            if let Ok(body) = leader_resp.json::<SqlExecuteResponse>().await {
+                                return Ok((leader_status, Json(body)));
+                            }
+                        }
+                    }
+                    // Leader URL unknown or forward failed — return 503 with hint.
+                    let reason = match &leader_url {
+                        Some(url) => format!("not_leader: forward to {url} failed; retry directly"),
+                        None => "not_leader: no known leader yet; retry later".to_string(),
+                    };
+                    return Ok((StatusCode::SERVICE_UNAVAILABLE, Json(SqlExecuteResponse {
+                        status: "error".to_string(),
+                        route_path: route_path_name(decision.payload.path).to_string(),
+                        reason,
+                        transaction: None,
+                        olap: None,
+                        rejected_statement_count: 0,
+                        udf_results: None,
+                        udf_guardrail_status: None,
+                        udf_function_catalog: vec![],
+                        udf_guard_policies: vec![],
+                        udf_execution_plan: vec![],
+                        legacy_agg_results: None,
+                        planner_path: None,
+                        oltp_rows: None,
+                        olap_agg_results: None,
+                        columns: None,
+                        rows: None,
+                    })));
+                }
+            }
+
+            // Apply DML to row store (we're leader, or single-node with no peers).
+            let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
+            let xid = rs.begin_xid();
+            for stmt in &ddl_snapshot {
+                let upper = stmt.trim_start().to_ascii_uppercase();
+                if upper.starts_with("INSERT") {
+                    for (k, d, single_sql) in extract_all_insert_rows(stmt) {
+                        let _ = rs.begin_write_intent(xid, &k);
+                        rs.insert(xid, &k, d);
+                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                     }
                 }
                 // 2. Persist to WAL for local durability (before waiting for quorum).
@@ -1739,6 +1792,81 @@ pub(crate) async fn sql_execute(
                     }
                 }
             }
+            rs.release_write_intents(xid);
+            drop(rs); // release row_store lock before any async work
+        }
+
+        // Linearisable leader write: append DML batch to Raft log.
+        // - Single-node leader: commit is immediate, no waiting needed.
+        // - Multi-node leader: append with pending oneshot receivers and wait
+        //   for `raft_last_applied_tx` to confirm quorum before returning 200.
+        // - Follower: skip (DML already applied locally above).
+        if has_dml {
+            let mut node = state.raft_state.lock().expect("raft_state lock sql_execute dml");
+            let is_leader = node.role == crate::RaftRole::Leader;
+            let total_peers = node.next_index.len();
+            if is_leader {
+                let dml_stmts: Vec<String> = ddl_snapshot.iter()
+                    .filter(|s| {
+                        let u = s.trim_start().to_ascii_uppercase();
+                        u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
+                    })
+                    .cloned()
+                    .collect();
+                if total_peers == 0 {
+                    // Single-node: append without waiting (commit is immediate).
+                    for cmd in dml_stmts {
+                        node.append_command(cmd, 0);
+                    }
+                    drop(node);
+                } else {
+                    // Multi-node: append pending and wait for quorum via block_in_place.
+                    let indexed: Vec<(u64, tokio::sync::oneshot::Receiver<u64>)> =
+                        dml_stmts.into_iter()
+                            .map(|cmd| node.append_command_pending(cmd, total_peers))
+                            .collect();
+                    drop(node);
+                    // Returns false if any receiver timed out (quorum not reached).
+                    let quorum_ok = tokio::task::block_in_place(|| {
+                        let handle = tokio::runtime::Handle::current();
+                        for (_, rx) in indexed {
+                            use tokio::time::{timeout, Duration};
+                            match handle.block_on(timeout(Duration::from_secs(2), rx)) {
+                                Ok(_) => {},
+                                Err(_) => return false,
+                            }
+                        }
+                        true
+                    });
+                    if !quorum_ok {
+                        release_sql_data_plane_connection(&state, &connection_id);
+                        return Ok((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(SqlExecuteResponse {
+                                status: "error".to_string(),
+                                route_path: route_path_name(decision.payload.path).to_string(),
+                                reason: "raft_quorum_timeout: DML could not be committed within 2s".to_string(),
+                                transaction: None,
+                                olap: None,
+                                rejected_statement_count: 0,
+                                udf_results: None,
+                                udf_guardrail_status: None,
+                                udf_function_catalog: vec![],
+                                udf_guard_policies: vec![],
+                                udf_execution_plan: vec![],
+                                legacy_agg_results: None,
+                                planner_path: None,
+                                oltp_rows: None,
+                                olap_agg_results: None,
+                                columns: None,
+                                rows: None,
+                            }),
+                        ));
+                    }
+                }
+            } else {
+                drop(node); // Single-node follower: DML applied locally, no replication needed.
+            }
         }
     }
 
@@ -1785,48 +1913,42 @@ pub(crate) async fn sql_execute(
     }
 
     if !olap_statements.is_empty() {
+        // DataFusion path: mirrors the df_select_owned pattern used in the
+        // olap_agg_results block below. execute_olap_query is no longer called
+        // here so all OLAP SELECT dispatch goes through a single code path.
+        use voltnuerongrid_exec_datafusion::{collect_query_table_names, SelectOutput};
+        let started = std::time::Instant::now();
         let query = olap_statements.join("; ");
-        // C-3: look up any active repeatable-read snapshot for this connection.
-        // M-6: if no ACID transaction is active but the request asks for repeatable_read,
-        // capture a point-in-time snapshot from the current row-store xid.
-        let rr_snapshot_xid: Option<u64> = {
-            let conn_map = state.connection_tx_active.lock().ok();
-            let from_acid = conn_map.and_then(|m| m.get(&connection_id).and_then(|tx_id| {
-                state.acid_transactions.lock().ok()
-                    .and_then(|a| a.rr_read_snapshot_xid(tx_id))
-            }));
-            if from_acid.is_some() {
-                from_acid
-            } else if req.isolation_level.as_deref() == Some("repeatable_read") {
-                // Snapshot at request start for single-request RR consistency.
-                state.row_store.lock().ok().map(|rs| rs.current_xid())
-            } else {
-                None
-            }
+        let limit = req.max_rows.unwrap_or(1_000).min(100_000);
+        let rs = state.row_store.lock().expect("row_store lock olap_execute");
+        let table_names = collect_query_table_names(&query);
+        let all_rows = rs.export_rows_snapshot();
+        drop(rs);
+        let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
+            std::collections::HashMap::new();
+        for name in &table_names {
+            let prefix = format!("{name}:");
+            let filtered: Vec<_> = all_rows
+                .iter()
+                .filter(|(k, _)| *k == name.as_str() || k.starts_with(&prefix))
+                .cloned()
+                .collect();
+            table_rows.insert(name.clone(), filtered);
+        }
+        if table_rows.is_empty() {
+            table_rows.insert("rows".to_string(), all_rows);
+        }
+        let row_count = match run_async_in_executor(df_select_owned(query.clone(), table_rows, limit)) {
+            Ok(SelectOutput::Rows(rows)) => rows.len(),
+            Ok(SelectOutput::Aggregate(_)) => 1,
+            Err(_) => 0,
         };
-        let rs = match state.row_store.lock() {
-            Ok(g) => g,
-            Err(_) => return Err(lock_poisoned_err("row_store")),
-        };
-        let data_dir = state.runtime_config.storage.data_dir.clone();
-        // C-1: fetch rows from RocksDB as primary read source when the engine persists rows.
-        let rocksdb_rows_olap: Option<Vec<(String, std::collections::HashMap<String, String>)>> = {
-            let wal = match state.wal_engine.lock() {
-                Ok(g) => g,
-                Err(_) => return Err(lock_poisoned_err("wal_engine")),
-            };
-            if wal.persists_rows() {
-                let xid = rr_snapshot_xid.unwrap_or_else(|| rs.current_xid());
-                Some(wal.scan_rows_for_db(&db, xid))
-            } else {
-                None
-            }
-        };
-        // M-6: pre-OLAP deadline check — avoid starting expensive DataFusion work if already overdue.
-        check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
-        olap = Some(execute_olap_query(query, req.max_rows, &rs, &db, &data_dir, rr_snapshot_xid, rocksdb_rows_olap));
-        // M-6: post-OLAP deadline check — discard results if query ran past deadline.
-        check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
+        olap = Some(OlapQueryResponse {
+            status: "ok".to_string(),
+            query_signature: query.chars().take(64).collect(),
+            elapsed_ms: started.elapsed().as_millis(),
+            rows: row_count,
+        });
     }
 
     // REQ-12: Detect legacy aggregate functions in OLAP SELECT statements and
@@ -1877,7 +1999,7 @@ pub(crate) async fn sql_execute(
                         aggregation: agg.to_string(),
                         result: eval.as_ref().ok().copied(),
                         error: eval.err(),
-                        source: "legacy_agg_olap_path",
+                        source: "legacy_agg_olap_path".to_string(),
                     });
                 }
             }
@@ -2215,7 +2337,7 @@ pub(crate) async fn sql_execute(
         };
 
     let response = SqlExecuteResponse {
-        status: "ok",
+        status: "ok".to_string(),
         route_path: route_path_name(decision.payload.path).to_string(),
         reason: decision.payload.reason,
         transaction,

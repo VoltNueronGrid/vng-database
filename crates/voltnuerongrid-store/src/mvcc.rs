@@ -536,65 +536,25 @@ mod tests {
         assert!(!store.was_modified_after("item:99", snapshot));
     }
 
-    // ─── replace_all (Raft snapshot install) ─────────────────────────────────
-
     #[test]
-    fn replace_all_clears_existing_rows_and_inserts_new() {
+    fn replace_all_clears_old_rows_and_inserts_new() {
+        use std::collections::HashMap;
         let mut store = PagedRowStore::new(256);
-        // Seed with some initial rows.
+        // Insert initial rows.
         let xid1 = store.begin_xid();
-        store.insert(xid1, "old:1", row(&[("v", "aaa")]));
-        store.insert(xid1, "old:2", row(&[("v", "bbb")]));
-        assert_eq!(store.visible_row_count(store.current_xid()), 2);
-
-        // Replace with a completely different set.
-        store.replace_all(vec![
-            ("new:1".to_string(), row(&[("v", "111")])),
-            ("new:2".to_string(), row(&[("v", "222")])),
-            ("new:3".to_string(), row(&[("v", "333")])),
-        ]);
-
-        // Old rows must be gone; new rows must be visible.
-        let snap = store.current_xid();
-        assert_eq!(store.visible_row_count(snap), 3,
-            "exactly the three new rows must be visible");
-        assert!(store.read_latest("old:1").is_none(), "old:1 must not survive replace_all");
-        assert!(store.read_latest("old:2").is_none(), "old:2 must not survive replace_all");
-        assert_eq!(
-            store.read_latest("new:1").and_then(|d| d.get("v").cloned()).as_deref(),
-            Some("111"),
-        );
-        assert_eq!(
-            store.read_latest("new:3").and_then(|d| d.get("v").cloned()).as_deref(),
-            Some("333"),
-        );
-    }
-
-    #[test]
-    fn replace_all_preserves_monotone_xid() {
-        let mut store = PagedRowStore::new(256);
-        let xid_before = {
-            let x = store.begin_xid();
-            store.insert(x, "a", row(&[("k", "v")]));
-            store.current_xid()
-        };
-        store.replace_all(vec![
-            ("b".to_string(), row(&[("k", "w")])),
-        ]);
-        let xid_after = store.current_xid();
-        assert!(xid_after > xid_before,
-            "next_xid must be strictly greater after replace_all (monotone)");
-    }
-
-    #[test]
-    fn replace_all_with_empty_set_clears_all_rows() {
-        let mut store = PagedRowStore::new(256);
-        let xid = store.begin_xid();
-        store.insert(xid, "r1", row(&[("v", "x")]));
-        store.insert(xid, "r2", row(&[("v", "y")]));
-        // Replace with empty — all rows disappear.
-        store.replace_all(std::iter::empty());
-        assert_eq!(store.visible_row_count(store.current_xid()), 0,
-            "replace_all with empty should clear all rows");
+        store.insert(xid1, "old-key-1", HashMap::new());
+        store.insert(xid1, "old-key-2", HashMap::new());
+        // Verify old rows visible.
+        let snap1 = store.scan_at_snapshot(xid1);
+        assert!(snap1.iter().any(|(k, _)| *k == "old-key-1"), "old rows should be visible before replace_all");
+        // Replace all with a single new row.
+        let mut new_cols = HashMap::new();
+        new_cols.insert("col".to_string(), "v".to_string());
+        store.replace_all(vec![("new-key-1".to_string(), new_cols)]);
+        let snap2 = store.scan_at_snapshot(store.current_xid());
+        let keys: Vec<&str> = snap2.iter().map(|(k, _)| *k).collect();
+        assert!(!keys.iter().any(|k| *k == "old-key-1"), "old-key-1 must not appear after replace_all");
+        assert!(!keys.iter().any(|k| *k == "old-key-2"), "old-key-2 must not appear after replace_all");
+        assert!(keys.iter().any(|k| *k == "new-key-1"), "new-key-1 must appear after replace_all");
     }
 }

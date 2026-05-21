@@ -99,10 +99,10 @@ test.describe("live: Test Connection button", () => {
     // Click Test Connection
     await page.locator("button", { hasText: "Test Connection" }).click();
 
-    // Expect the success message — "Connected" followed by response time
+    // Expect the success message for admin auth
     await expect(
       page.locator(".test-status")
-    ).toContainText("Connected", { timeout: 10_000 });
+    ).toContainText("Authenticated", { timeout: 10_000 });
   });
 
   test("shows validation error when Admin Key is missing", async ({ page }) => {

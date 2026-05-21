@@ -201,7 +201,7 @@ test.describe("Connection Creation", () => {
     const status = mockedPage.locator(".test-status");
     await expect(status).toBeVisible({ timeout: 6000 });
     await expect(status).toHaveClass(/ok/);
-    await expect(status).toContainText("Connected");
+    await expect(status).toContainText("Authenticated");
   });
 
   test("Test Connection shows failure when server is unreachable", async ({ mockedPage }) => {

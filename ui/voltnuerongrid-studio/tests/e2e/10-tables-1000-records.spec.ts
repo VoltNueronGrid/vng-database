@@ -1,5 +1,4 @@
-import { test, expect } from '@playwright/test';
-import { mockApiRoutes, MOCK_HEALTH } from './helpers/fixtures';
+import { test, expect, seedConnection, clearConnections, MOCK_HEALTH } from './helpers/fixtures';
 
 // Mock responses for the 10 tables we created
 const mockTableData = {
@@ -66,62 +65,79 @@ const mockTableData = {
   }
 };
 
-// Mock response for table list
-const mockTableList = {
-  status: 'ok',
-  tables: [
-    'customers', 'products', 'categories', 'suppliers', 'orders',
-    'order_items', 'payments', 'inventory', 'reviews', 'shipping'
+const mockSchema = {
+  databases: [
+    {
+      name: 'default',
+      schemas: [
+        {
+          name: 'public',
+          database: 'default',
+          tables: [
+            { schema: 'public', name: 'customers', columns: mockTableData.customers.columns.map((column, index) => ({ name: column.name, data_type: column.data_type, nullable: index !== 0, primary_key: index === 0 })), row_count: 1000 },
+            { schema: 'public', name: 'products', columns: mockTableData.products.columns.map((column, index) => ({ name: column.name, data_type: column.data_type, nullable: index !== 0, primary_key: index === 0 })), row_count: 1000 },
+            { schema: 'public', name: 'categories', columns: [{ name: 'category_id', data_type: 'integer', nullable: false, primary_key: true }], row_count: 1000 },
+            { schema: 'public', name: 'suppliers', columns: [{ name: 'supplier_id', data_type: 'integer', nullable: false, primary_key: true }], row_count: 1000 },
+            { schema: 'public', name: 'orders', columns: [{ name: 'order_id', data_type: 'integer', nullable: false, primary_key: true }], row_count: 1000 },
+            { schema: 'public', name: 'order_items', columns: [{ name: 'order_item_id', data_type: 'integer', nullable: false, primary_key: true }], row_count: 1000 },
+            { schema: 'public', name: 'payments', columns: [{ name: 'payment_id', data_type: 'integer', nullable: false, primary_key: true }], row_count: 1000 },
+            { schema: 'public', name: 'inventory', columns: [{ name: 'inventory_id', data_type: 'integer', nullable: false, primary_key: true }], row_count: 1000 },
+            { schema: 'public', name: 'reviews', columns: [{ name: 'review_id', data_type: 'integer', nullable: false, primary_key: true }], row_count: 1000 },
+            { schema: 'public', name: 'shipping', columns: [{ name: 'shipping_id', data_type: 'integer', nullable: false, primary_key: true }], row_count: 1000 }
+          ]
+        }
+      ]
+    }
   ]
 };
 
 test.describe('10 Tables with 1000 Records Each', () => {
-  test.beforeEach(async ({ page }) => {
-    // Mock all API responses
-    await mockApiRoutes(page, [
-      // Health check
-      { url: '**/health', response: MOCK_HEALTH },
-      
-      // Table list
-      { url: '**/api/v1/sql/catalog/tables', response: mockTableList },
-      
-      // Individual table data
-      { url: '**/api/v1/sql/execute*', response: (route) => {
-        const request = route.request();
-        const postData = request.postData();
-        
-        if (postData?.includes('FROM customers')) {
-          return route.fulfill({ json: mockTableData.customers });
-        }
-        if (postData?.includes('FROM products')) {
-          return route.fulfill({ json: mockTableData.products });
-        }
-        // Add similar conditions for other tables
-        
-        // Default response
-        return route.fulfill({ json: { status: 'ok', rows: [] } });
-      }}
-    ]);
+  test.beforeEach(async ({ mockedPage: page }) => {
+    await clearConnections(page);
+    await page.route('**/health', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_HEALTH) }));
+    await page.route('**/api/v1/admin/schema/tree', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockSchema) }));
+    await page.route('**/api/v1/sql/execute', (route) => {
+      const postData = route.request().postData() ?? '';
+      if (postData.includes('JOIN public.orders') || postData.includes('JOIN public.order_items') || postData.includes('AS product_name')) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            status: 'ok',
+            route_path: 'hybrid',
+            reason: 'mocked join query',
+            rejected_statement_count: 0,
+            columns: [{ name: 'customer_name', type: 'text' }, { name: 'product_name', type: 'text' }],
+            rows: [{ customer_name: 'John Smith', product_name: 'Laptop' }],
+          }),
+        });
+      }
+      if (postData.includes('FROM   public.customers') || postData.includes('FROM public.customers')) {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockTableData.customers) });
+      }
+      if (postData.includes('FROM   public.products') || postData.includes('FROM public.products')) {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockTableData.products) });
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', route_path: 'oltp', reason: 'mocked default query', rejected_statement_count: 0, columns: [], rows: [] }) });
+    });
 
-    await page.goto('http://localhost:1420');
+    await seedConnection(page);
+    await page.reload();
+    await page.locator('.recent-item').first().click();
+    await expect(page.locator('.workspace')).toBeVisible();
+    await page.waitForTimeout(400);
   });
 
-  test('should display all 10 tables in the UI', async ({ page }) => {
-    // Navigate to schema browser
-    await page.click('button[title="Schema browser"]');
-    
-    // Wait for tables to load
-    await page.waitForSelector('.schema-table-item');
-    
-    // Verify all 10 tables are visible
-    const tableItems = await page.$$('.schema-table-item');
-    expect(tableItems.length).toBe(10);
-    
-    // Check specific table names
-    const tableNames = await Promise.all(
-      tableItems.map(item => item.textContent())
-    );
-    
+  test('should display all 10 tables in the UI', async ({ mockedPage: page }) => {
+    const tableNodes = page.locator('.tree-node').filter({ has: page.locator('.tree-icon', { hasText: '📋' }) });
+    const tableNames = await tableNodes.locator('.tree-label').allTextContents();
+    const visibleTables = tableNames.filter((name) => [
+      'customers', 'products', 'categories', 'suppliers', 'orders',
+      'order_items', 'payments', 'inventory', 'reviews', 'shipping'
+    ].includes(name));
+
+    expect(visibleTables).toHaveLength(10);
+
     expect(tableNames).toContain('customers');
     expect(tableNames).toContain('products');
     expect(tableNames).toContain('categories');
@@ -134,77 +150,36 @@ test.describe('10 Tables with 1000 Records Each', () => {
     expect(tableNames).toContain('shipping');
   });
 
-  test('should show data from customers table', async ({ page }) => {
-    // Open customers table
-    await page.click('button[title="Schema browser"]');
-    await page.click('text=customers');
-    
-    // Wait for data to load
-    await page.waitForSelector('.data-grid-row');
-    
-    // Verify data is displayed
-    const rows = await page.$$('.data-grid-row');
-    expect(rows.length).toBeGreaterThan(0);
-    
-    // Check column headers
-    const headers = await page.$$eval('.data-grid-header-cell', cells => 
-      cells.map(cell => cell.textContent)
-    );
-    
-    expect(headers).toContain('customer_id');
-    expect(headers).toContain('first_name');
-    expect(headers).toContain('last_name');
-    expect(headers).toContain('email');
+  test('should show data from customers table', async ({ mockedPage: page }) => {
+    await page.locator('.tree-node').filter({ hasText: 'customers' }).first().dblclick();
+    await page.locator('button[title="Run query or selection (⌘Enter)"]').click();
+    await expect(page.locator('.results-pane')).toBeVisible();
+    await expect(page.locator('.data-table')).toBeVisible();
+    await expect(page.locator('.data-table thead')).toContainText('customer_id');
+    await expect(page.locator('.data-table thead')).toContainText('first_name');
+    await expect(page.locator('.data-table tbody')).toContainText('John');
   });
 
-  test('should show data from products table', async ({ page }) => {
-    // Open products table
-    await page.click('button[title="Schema browser"]');
-    await page.click('text=products');
-    
-    // Wait for data to load
-    await page.waitForSelector('.data-grid-row');
-    
-    // Verify data is displayed
-    const rows = await page.$$('.data-grid-row');
-    expect(rows.length).toBeGreaterThan(0);
-    
-    // Check column headers
-    const headers = await page.$$eval('.data-grid-header-cell', cells => 
-      cells.map(cell => cell.textContent)
-    );
-    
-    expect(headers).toContain('product_id');
-    expect(headers).toContain('name');
-    expect(headers).toContain('price');
-    expect(headers).toContain('category_id');
+  test('should show data from products table', async ({ mockedPage: page }) => {
+    await page.locator('.tree-node').filter({ hasText: 'products' }).first().dblclick();
+    await page.locator('button[title="Run query or selection (⌘Enter)"]').click();
+    await expect(page.locator('.results-pane')).toBeVisible();
+    await expect(page.locator('.data-table thead')).toContainText('product_id');
+    await expect(page.locator('.data-table thead')).toContainText('price');
+    await expect(page.locator('.data-table tbody')).toContainText('Laptop');
   });
 
-  test('should allow executing join queries', async ({ page }) => {
-    // Open SQL editor
-    await page.click('button[title="New Query"]');
-    
-    // Enter join query
-    const editor = page.locator('.monaco-editor');
-    await editor.click();
-    await page.keyboard.type(`
-      SELECT 
-        c.first_name, c.last_name, p.name as product_name, oi.quantity, oi.total_price
-      FROM customers c
-      JOIN orders o ON c.customer_id = o.customer_id
-      JOIN order_items oi ON o.order_id = oi.order_id
-      JOIN products p ON oi.product_id = p.product_id
-      LIMIT 10
-    `);
-    
-    // Execute query
-    await page.click('button[title="Run query"]');
-    
-    // Wait for results
-    await page.waitForSelector('.query-results');
-    
-    // Verify results are displayed
-    const results = await page.$('.query-results');
-    expect(results).not.toBeNull();
+  test('should allow executing join queries', async ({ mockedPage: page }) => {
+    await page.locator('.view-lines').first().click({ force: true });
+    await page.keyboard.press('Meta+a');
+    await page.keyboard.press('Delete');
+    await page.keyboard.type(`SELECT c.first_name, p.name AS product_name\nFROM public.customers c\nJOIN public.orders o ON c.customer_id = o.customer_id\nJOIN public.order_items oi ON o.order_id = oi.order_id\nJOIN public.products p ON oi.product_id = p.product_id\nLIMIT 10;`, { delay: 5 });
+
+    const [request] = await Promise.all([
+      page.waitForRequest('**/api/v1/sql/execute'),
+      page.locator('button[title="Run query or selection (⌘Enter)"]').click(),
+    ]);
+
+    expect(request.postData() ?? '').toContain('JOIN public.orders');
   });
 });

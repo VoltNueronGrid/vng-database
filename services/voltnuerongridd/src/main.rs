@@ -7,18 +7,19 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use voltnuerongrid_auth::{
     ConfiguredKmsProviderAdapter, KmsKeyResolution,
-    RbacPrivilegeMatrix, SecurityConfigContract,
+    PrivilegeAction, RbacPrivilegeMatrix, SecurityConfigContract,
 };
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::AutonomousActionExecutionRecord;
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
-use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
+use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind, SupportedLocale};
 use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, ReplicaReplayState, RowStoreSyncOrigin,
 };
@@ -26,7 +27,7 @@ use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::ddl_catalog::DdlCatalog;
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
-use voltnuerongrid_store::BoxedDurabilityEngine;
+use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
 use voltnuerongrid_driver_rust::ConnectionPoolManager;
 use voltnuerongrid_ingest::{
     ManagedEventBusTransport, ManagedReplayCursorStore,
@@ -36,7 +37,7 @@ use voltnuerongrid_plugins::PluginLifecycleManager;
 
 pub(crate) mod raft;
 use raft::RaftNode;
-pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftSnapshotChunkResponse, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 pub mod resilience;
 pub mod observability;
@@ -83,7 +84,7 @@ pub(crate) use helpers::time::{now_unix_ms, now_unix_ms_u64, now_epoch_ms_chaos}
 pub(crate) use helpers::env_helpers::{read_env_bool, read_env_usize, read_env_u64};
 // sql_parse
 pub(crate) use helpers::sql_parse::{
-    extract_request_id, build_http_envelope,
+    build_http_envelope,
     extract_delete_key_from_sql, extract_update_row_from_sql,
     extract_column_names_from_ddl, extract_insert_row_from_sql,
     extract_all_insert_rows,
@@ -92,7 +93,7 @@ pub(crate) use helpers::sql_parse::{
 pub(crate) use helpers::execution::{
     svc_unavailable_sql_response, execute_transaction_statements,
     acquire_pessimistic_lock, release_pessimistic_lock,
-    execute_olap_query, execute_oltp_select, execute_oltp_select_legacy,
+    execute_olap_query, execute_oltp_select,
     df_select_owned, run_async_in_executor,
 };
 // udf
@@ -119,11 +120,8 @@ pub(crate) use helpers::boot::{
     replay_ddl_into, replay_dml_into, replay_database_catalog_into,
 };
 // ─── Re-export auth helpers so handler/helper modules can use `crate::fn` ────
-pub(crate) use auth::{
-    require_cluster_failover_privilege, require_audit_runtime_principal,
-};
 // ─── Re-export audit helpers ──────────────────────────────────────────────────
-pub(crate) use audit_helpers::{append_runtime_audit_event, filter_audit_events_for_principal};
+pub(crate) use audit_helpers::append_runtime_audit_event;
 // ─── Re-export native protocol helpers ───────────────────────────────────────
 pub(crate) use helpers::native_protocol::{
     load_native_tls_acceptor, vng_native_listener_log,
@@ -142,7 +140,7 @@ pub(crate) use handlers::sre::{
     DrHookPolicyStateEnvelope, DrHookPolicyStateSnapshot, DrHookRetryPlanStep,
     DrHookRuntimeState, DrHookScheduledTask,
     FailureBudgetAlertResponse, FailureBudgetSnapshot,
-    RateLimitPolicySnapshot, SreGateCriterion, SreGateEvaluationResponse,
+    RateLimitPolicySnapshot,
 };
 // ─── Re-export SQL handler types needed by helpers ────────────────────────────
 // Note: SqlTransactionResponse and PessimisticLockRecord are defined in main.rs, not sql.rs
@@ -554,10 +552,17 @@ pub(crate) struct AppState {
     /// Shared secret for intra-cluster Raft RPCs, loaded from `VNG_CLUSTER_TOKEN`.
     /// `None` means no auth is required (single-node / dev).
     pub(crate) cluster_token: Arc<Option<String>>,
-    /// Broadcast channel: the apply loop sends the latest `last_applied` value
-    /// each time it advances.  Handlers waiting for linearisable confirmation
-    /// subscribe and wait until `last_applied >= their_entry_index`.
+    /// Watch channel that broadcasts the latest `last_applied` Raft index.
     pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    /// This node's own advertised base URL, loaded from `VNG_NODE_URL`.
+    /// Sent in AppendEntries so followers can forward DML writes to the leader.
+    pub(crate) node_url: Arc<Option<String>>,
+    /// URL of the current Raft leader, learned from `x-vng-leader-url` headers.
+    /// Updated on every accepted AppendEntries. Used by follower DML forwarding.
+    pub(crate) current_leader_url: Arc<Mutex<Option<String>>>,
+    /// In-progress chunked snapshot transfer sessions keyed by `session_id`.
+    /// Each entry accumulates row chunks from the leader until `is_last = true`.
+    pub(crate) snapshot_chunk_sessions: Arc<Mutex<HashMap<String, SnapshotChunkSession>>>,
     /// S9-WS8-02: Per-model-identity request counters for rate limiting.
     /// Maps model_id → request count in current window.
     pub(crate) ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
@@ -665,6 +670,18 @@ impl OperatorRole {
             Self::AiOperator => "ai_operator",
         }
     }
+}
+
+/// Accumulates row chunks from a leader snapshot-transfer session.
+/// Keyed in `AppState::snapshot_chunk_sessions` by `session_id`.
+#[derive(Clone)]
+pub(crate) struct SnapshotChunkSession {
+    pub(crate) term: u64,
+    pub(crate) leader_id: String,
+    pub(crate) snapshot_index: u64,
+    pub(crate) snapshot_term: u64,
+    pub(crate) rows: Vec<(String, serde_json::Value)>,
+    pub(crate) next_expected_chunk: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1221,9 +1238,9 @@ pub(crate) struct DriverSession {
     pub(crate) pooled_connection_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SqlTransactionResponse {
-    pub(crate) status: &'static str,
+    pub(crate) status: String,
     pub(crate) transaction_id: String,
     pub(crate) statements_executed: usize,
     pub(crate) requires_transaction: bool,
@@ -1486,6 +1503,9 @@ async fn main() {
     let wal_engine_for_catalog = wal_engine.clone();
     let wal_engine_for_users = wal_engine.clone();
 
+    let (raft_last_applied_tx, _raft_last_applied_rx) = tokio::sync::watch::channel(0u64);
+    let raft_last_applied_tx = Arc::new(raft_last_applied_tx);
+
     let state = AppState {
         node_id: node_id.clone(),
         cluster_mode,
@@ -1546,7 +1566,10 @@ async fn main() {
         raft_state: Arc::new(Mutex::new(RaftNode::new(&node_id))),
         raft_peers: Arc::new(load_raft_peers()),
         cluster_token: Arc::new(load_cluster_token()),
-        raft_last_applied_tx: Arc::new(tokio::sync::watch::channel(0).0),
+        raft_last_applied_tx: raft_last_applied_tx.clone(),
+        node_url: Arc::new(std::env::var("VNG_NODE_URL").ok()),
+        current_leader_url: Arc::new(Mutex::new(None)),
+        snapshot_chunk_sessions: Arc::new(Mutex::new(HashMap::new())),
         ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
         driver_sessions: Arc::new(Mutex::new(HashMap::new())),
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
@@ -1934,11 +1957,11 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     let udf_guard_policies = udf_guard_policy_contract();
     let udf_execution_plan = build_udf_execution_plan(&req.sql_batch);
     Some(Ok((StatusCode::OK, Json(SqlExecuteResponse {
-        status: "ok",
+        status: "ok".to_string(),
         route_path: "oltp".to_string(),
         reason: format!("inserted {inserted} demo rows into {table_name}"),
         transaction: Some(SqlTransactionResponse {
-            status: "committed",
+            status: "committed".to_string(),
             transaction_id: format!("call-{start_ms}"),
             statements_executed: inserted,
             requires_transaction: false,

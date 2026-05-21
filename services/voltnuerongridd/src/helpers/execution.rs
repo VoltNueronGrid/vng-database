@@ -25,7 +25,7 @@ pub(crate) fn svc_unavailable_sql_response(reason: &str) -> (StatusCode, Json<Sq
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(SqlExecuteResponse {
-            status: "error",
+            status: "error".to_string(),
             route_path: "unknown".to_string(),
             reason: format!("internal state unavailable: {reason}"),
             transaction: None,
@@ -52,7 +52,7 @@ pub(crate) fn execute_transaction_statements(statements: Vec<String>) -> (Status
         return (
             StatusCode::BAD_REQUEST,
             SqlTransactionResponse {
-                status: "error",
+                status: "error".to_string(),
                 transaction_id: String::new(),
                 statements_executed: 0,
                 requires_transaction: false,
@@ -79,7 +79,7 @@ pub(crate) fn execute_transaction_statements(statements: Vec<String>) -> (Status
         return (
             StatusCode::BAD_REQUEST,
             SqlTransactionResponse {
-                status: "error",
+                status: "error".to_string(),
                 transaction_id: String::new(),
                 statements_executed: 0,
                 requires_transaction,
@@ -96,7 +96,7 @@ pub(crate) fn execute_transaction_statements(statements: Vec<String>) -> (Status
     (
         StatusCode::OK,
         SqlTransactionResponse {
-            status: "committed",
+            status: "committed".to_string(),
             transaction_id: format!("tx-{tx_id}"),
             statements_executed: statements.len(),
             requires_transaction,
@@ -418,7 +418,7 @@ pub(crate) fn execute_olap_query(
     };
 
     OlapQueryResponse {
-        status: "ok",
+        status: "ok".to_string(),
         query_signature: query.chars().take(64).collect(),
         elapsed_ms: started.elapsed().as_millis(),
         rows: row_count,
