@@ -806,12 +806,8 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
         }
         result
     }
-}
 
-impl RocksDbDurabilityEngine {
-    /// Drop the per-DB column family atomically (also callable as a plain method).
-    /// The `DurabilityEngine` trait impl below delegates here.
-    pub fn drop_db_column_family_inner(&mut self, db: &str) {
+    fn drop_db_column_family(&mut self, db: &str) {
         let cf_name = Self::db_rows_cf_name(db);
         if self.db.cf_handle(&cf_name).is_none() {
             return; // CF doesn't exist — nothing to drop.
@@ -822,20 +818,6 @@ impl RocksDbDurabilityEngine {
     }
 }
 
-impl crate::DurabilityEngine for RocksDbDurabilityEngine {
-    // Forwarded to avoid requiring callers to know the concrete type.
-    // All other methods are implemented in the main impl block above;
-    // only the new trait method needs overriding here.
-}
-
-// Workaround: we can't have two `impl DurabilityEngine for ...` blocks
-// (already exists above). So we just call drop_db_column_family_inner
-// inside the main trait impl. The trait default (no-op) is used unless
-// overridden — we override it in the main impl block by adding the method.
-// Actually: add it to the EXISTING impl DurabilityEngine block to avoid
-// the duplicate impl error. The python edit already placed drop_db_column_family
-// outside that block. We'll fix this by removing the duplicate impl and
-// putting a fn drop_db_column_family in the EXISTING DurabilityEngine impl.
 // Inline tracing-or-stderr helper. The store crate doesn't depend on
 // `tracing` (Phase 0 kept it limited to the service crate), so this falls
 // back to `eprintln!`. The service-side metrics + tracing instrumentation

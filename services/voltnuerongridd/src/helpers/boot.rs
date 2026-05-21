@@ -332,7 +332,7 @@ pub(crate) fn load_persisted_rows_into(
 pub(crate) fn purge_database_rows(
     db: &str,
     row_store: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::mvcc::PagedRowStore>>,
-    _wal_engine: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+    wal_engine: &std::sync::Arc<std::sync::Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
 ) {
     let prefix = format!("{db}.");
     // In-memory purge: delete all rows whose key starts with the db prefix.
@@ -347,7 +347,11 @@ pub(crate) fn purge_database_rows(
     for k in keys_to_purge {
         rs.delete(xid, &k);
     }
-    // TODO: add RocksDB CF_ROWS range delete for the db prefix (Phase 2 of this gap).
+    // C-2: Drop the per-DB RocksDB column family atomically so all on-disk
+    // rows for this database are removed without a full scan/delete loop.
+    if let Ok(mut wal) = wal_engine.lock() {
+        wal.drop_db_column_family(db);
+    }
 }
 
 

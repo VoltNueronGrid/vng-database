@@ -319,9 +319,18 @@ pub trait DurabilityEngine: Send {
     /// Returns the latest non-tombstone version per row_key where xid <= snapshot_xid.
     /// The returned keys are raw row_keys WITHOUT the db prefix (e.g. `"orders:row-1"`).
     /// Returns an empty vec for engines that don't persist rows (default impl).
-    fn scan_rows_for_db(&self, _db: &str, _snapshot_xid: u64) -> Vec<(String, HashMap<String, String>)> {
+    fn scan_rows_for_db(
+        &self,
+        _db: &str,
+        _snapshot_xid: u64,
+    ) -> Vec<(String, HashMap<String, String>)> {
         Vec::new()
     }
+
+    /// Drop the per-DB column family (C-2: per-DB CF isolation).
+    /// Called by DROP DATABASE to physically remove all on-disk rows for `db`.
+    /// No-op for engines that don't support per-DB CFs (default impl).
+    fn drop_db_column_family(&mut self, _db: &str) {}
 }
 
 impl DurabilityEngine for InMemoryDurabilityEngine {
@@ -465,8 +474,17 @@ impl BoxedDurabilityEngine {
     pub fn persists_rows(&self) -> bool {
         self.inner.persists_rows()
     }
-    pub fn scan_rows_for_db(&self, db: &str, snapshot_xid: u64) -> Vec<(String, HashMap<String, String>)> {
+    pub fn scan_rows_for_db(
+        &self,
+        db: &str,
+        snapshot_xid: u64,
+    ) -> Vec<(String, HashMap<String, String>)> {
         self.inner.scan_rows_for_db(db, snapshot_xid)
+    }
+
+    /// Drop the per-DB column family (C-2). No-op for in-memory engine.
+    pub fn drop_db_column_family(&mut self, db: &str) {
+        self.inner.drop_db_column_family(db);
     }
 }
 
