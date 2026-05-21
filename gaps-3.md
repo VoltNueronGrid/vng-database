@@ -42,10 +42,13 @@ This document records all remaining gaps after the full audit pass.
 | L-4 | `scan_rows_for_db` unit tests | `4ede555` | `scan_rows_for_db_isolates_databases`, `scan_rows_for_db_respects_mvcc_snapshot`, `rows_survive_drop_and_reopen` |
 | L-5 | E2E HTTP roundtrip test | `4428f9b` | `e2e_http_roundtrip_sql_execute` (marked `#[ignore]` in sandbox) |
 | M-8 Rule 3 | Emit `null` for columns absent from row | `4ede555` | `execute_select` emits `serde_json::Value::Null` for missing keys |
-| M-8 Rule 7 | Set-at-a-time UPDATE scan path | `4ede555` | `extract_bulk_update_target()` + full table scan in `sql.rs` UPDATE path |
+| M-8 Rule 7 (UPDATE) | Set-at-a-time UPDATE scan path | `4ede555` | `extract_bulk_update_target()` + full table scan in `sql.rs` UPDATE path |
+| M-8 Rule 7 (DELETE) | Set-at-a-time DELETE scan path | `778b78c` | `extract_bulk_delete_target()` + full table scan in `sql.rs` DELETE path |
+| M-8 Rule 1 | Typed column values in result rows | `778b78c` | `infer_json_value()` coerces null/bool/int/float from storage strings; `json_value_pg_type()` sets descriptor type |
 | M-7 | Serializable → row-level OCC conflict detection | `a047b26` | `check_serializable_conflict_row_level()` tracks per-row keys; eliminates false aborts |
 | M-3 | `.expect("lock")` → 503 in all handler hot-paths | `a047b26` | `sql.rs`, `user_mgmt.rs`, `misc.rs` converted; `lock_poisoned_err()` helper |
-| M-6 | Studio settings: isolation level, timeout, server config view | (this session) | `settings.ts`, `SettingsPanel.tsx`, `useQuery.ts` updated; `SqlExecuteRequest` extended |
+| M-6 | Studio settings: isolation level, timeout, server config view | `94ca606` | `settings.ts`, `SettingsPanel.tsx`, `useQuery.ts` updated; `SqlExecuteRequest` extended; OLAP RR snapshot wired |
+| M-8 Rule 12 (partial) | Demo seed rows persisted to RocksDB WAL | `d5c5e56` | `misc.rs` demo seed now calls `wal.store_row()` after `rs.insert()` |
 | M-4 | CF_ROWS crash-recovery unit tests | `4ede555` | `rows_survive_drop_and_reopen`, `scan_rows_for_db_isolates_databases` |
 | M-2 (full) | GRANT / REVOKE / CREATE ROLE classified and executed | `d524035` + prior | `handle_grant_sql()`, `handle_revoke_sql()` in `sql.rs`; WAL persistence |
 
@@ -177,14 +180,13 @@ a live server exists.
 
 | Priority | Gap | Effort | Impact |
 |---|---|---|---|
-| 1 | **M-6 sub-gaps** — statement timeout watchdog; OLTP isolation_level wire-up | S | Complete M-6 |
-| 2 | **M-8 Rule 1** — typed column values in result rows (parse numbers/booleans) | S | Correctness |
-| 3 | **M-8 Rule 7** — set-at-a-time DELETE scan path | S | Codd compliance |
-| 4 | **M-8 Rule 12** — MVCC-wrap admin mutation endpoints | M | Non-subversion |
-| 5 | **H-1** — index-aware cost routing in QueryPlanner | L | Query performance |
-| 6 | **C-1** — PagedRowStore backed by RocksDB reads (eliminate in-memory primary) | XXL | Production durability |
+| 1 | **M-6 sub-gap** — OLTP isolation_level wire-up in sql_execute DML path | S | Complete M-6 |
+| 2 | **M-8 Rule 6** — view updatability (propagate writes to base tables) | L | Codd Rule 6 |
+| 3 | **M-8 Rule 12** — ingest handlers bypass WAL (same as demo seed fix) | S | Non-subversion |
+| 4 | **H-1** — index-aware cost routing in QueryPlanner | L | Query performance |
+| 5 | **C-1** — PagedRowStore backed by RocksDB reads (eliminate in-memory primary) | XXL | Production durability |
 
 ---
 
-*Total remaining gaps: 5 (1 critical, 1 high, 2 medium, 1 low) — down from 15 at session 27 start.*
-*Session 28 closed: H-2, M-5, C-2, L-1, L-2, L-3, L-4, L-5, M-8 Rules 3+7 (partial), M-7, M-3, M-6 (partial), M-4, M-2.*
+*Total remaining gaps: 4 (1 critical, 1 high, 2 medium) — down from 15 at session 27 start.*
+*Session 28 closed: H-2, M-3, M-4, M-5, M-6 (partial), M-7, M-8 Rules 1+3+7+12 (partial), C-2, L-1..L-5, M-2.*
