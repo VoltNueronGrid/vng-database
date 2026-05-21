@@ -499,11 +499,11 @@ pub(crate) async fn olap_query(
     State(state): State<AppState>,
     Json(req): Json<OlapQueryRequest>,
 ) -> Json<OlapQueryResponse> {
-    let rs = state.row_store.lock().expect("row_store lock olap_query");
+    let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
     let data_dir = state.runtime_config.storage.data_dir.clone();
     // C-1: fetch rows from RocksDB when available (db = "" = no db scope).
     let rocksdb_rows: Option<Vec<(String, std::collections::HashMap<String, String>)>> = {
-        let wal = state.wal_engine.lock().expect("wal_engine lock olap_query rocksdb_rows");
+        let wal = state.wal_engine.lock().unwrap_or_else(|e| e.into_inner());
         if wal.persists_rows() {
             Some(wal.scan_rows_for_db("", rs.current_xid()))
         } else {

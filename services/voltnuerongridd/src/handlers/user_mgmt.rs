@@ -18,6 +18,21 @@ use crate::auth::require_sql_runtime_principal;
 use crate::user_store::{user_to_wal, UserAccount};
 use voltnuerongrid_auth::PrivilegeAction;
 
+/// M-3: Build a 503 AuthErrorResponse for a poisoned mutex — keeps the
+/// auth handler alive instead of panicking on `.expect()`.
+#[inline]
+fn lock_poisoned(what: &str) -> (StatusCode, Json<AuthErrorResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(AuthErrorResponse {
+            status: "error",
+            reason: format!("{what} mutex poisoned"),
+            locale: "en".to_string(),
+            localized_message: "Service temporarily unavailable".to_string(),
+        }),
+    )
+}
+
 // ─── DTOs ─────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -88,7 +103,10 @@ pub(crate) async fn admin_create_user(
 
     // Check for duplicate
     {
-        let store = state.user_store.lock().expect("user_store lock");
+        let store = match state.user_store.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("user_store")),
+        };
         if store.get_by_username(&username).is_some() {
             return Err((
                 StatusCode::CONFLICT,
@@ -147,14 +165,18 @@ pub(crate) async fn admin_create_user(
     // Persist to WAL before mutating in-memory state.
     let wal_line = user_to_wal(&account);
     {
-        let mut wal = state.wal_engine.lock().expect("wal_engine lock");
-        wal.append_sql(voltnuerongrid_store::SqlWalKind::Ddl, &wal_line);
+        match state.wal_engine.lock() {
+            Ok(mut wal) => { wal.append_sql(voltnuerongrid_store::SqlWalKind::Ddl, &wal_line); }
+            Err(_) => return Err(lock_poisoned("wal_engine")),
+        }
     }
 
     // Insert into in-memory store.
     {
-        let mut store = state.user_store.lock().expect("user_store lock");
-        store.insert(account);
+        match state.user_store.lock() {
+            Ok(mut store) => { store.insert(account); }
+            Err(_) => return Err(lock_poisoned("user_store")),
+        }
     }
 
     Ok((
@@ -178,7 +200,10 @@ pub(crate) async fn admin_list_users(
     )?;
 
     let users: Vec<serde_json::Value> = {
-        let store = state.user_store.lock().expect("user_store lock");
+        let store = match state.user_store.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("user_store")),
+        };
         store.all().map(|u| serde_json::json!({
             "user_id": u.user_id,
             "username": u.username,
@@ -210,7 +235,10 @@ pub(crate) async fn admin_delete_user(
     )?;
 
     let removed = {
-        let mut store = state.user_store.lock().expect("user_store lock");
+        let mut store = match state.user_store.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("user_store")),
+        };
         store.remove_by_id(&user_id)
     };
 
@@ -228,14 +256,18 @@ pub(crate) async fn admin_delete_user(
 
     // Invalidate all sessions for this user.
     {
-        let mut sessions = state.session_store.lock().expect("session_store lock");
-        sessions.remove_by_user(&user_id);
+        match state.session_store.lock() {
+            Ok(mut sessions) => { sessions.remove_by_user(&user_id); }
+            Err(_) => return Err(lock_poisoned("session_store")),
+        }
     }
 
     // WAL: record DROP USER (for crash recovery).
     {
-        let mut wal = state.wal_engine.lock().expect("wal_engine lock");
-        wal.append_sql(voltnuerongrid_store::SqlWalKind::Ddl, &format!("DROP USER {user_id}"));
+        match state.wal_engine.lock() {
+            Ok(mut wal) => { wal.append_sql(voltnuerongrid_store::SqlWalKind::Ddl, &format!("DROP USER {user_id}")); }
+            Err(_) => return Err(lock_poisoned("wal_engine")),
+        }
     }
 
     Ok((
@@ -261,7 +293,10 @@ pub(crate) async fn admin_revoke_user_sessions(
 
     // Verify the user actually exists before revoking sessions.
     {
-        let store = state.user_store.lock().expect("user_store lock");
+        let store = match state.user_store.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("user_store")),
+        };
         if store.get_by_id(&user_id).is_none() {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -276,7 +311,10 @@ pub(crate) async fn admin_revoke_user_sessions(
     }
 
     let sessions_revoked = {
-        let mut sessions = state.session_store.lock().expect("session_store lock");
+        let mut sessions = match state.session_store.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("session_store")),
+        };
         let before = sessions
             .sessions_for_user(&user_id)
             .len();
@@ -303,7 +341,10 @@ pub(crate) async fn auth_login(
     let username = req.username.trim().to_ascii_lowercase();
 
     let account = {
-        let store = state.user_store.lock().expect("user_store lock");
+        let store = match state.user_store.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("user_store")),
+        };
         store.get_by_username(&username).cloned()
     };
 
@@ -339,7 +380,10 @@ pub(crate) async fn auth_login(
     }
 
     // Issue session token.
-    let signer = state.session_signer.lock().expect("session_signer lock");
+    let signer = match state.session_signer.lock() {
+        Ok(g) => g,
+        Err(_) => return Err(lock_poisoned("session_signer")),
+    };
     let token = signer.issue(&account.user_id);
     let (_, expires_at_secs) = signer.verify(&token).expect("just issued token must verify");
     drop(signer);
@@ -353,8 +397,10 @@ pub(crate) async fn auth_login(
         expires_at_secs,
     };
     {
-        let mut sessions = state.session_store.lock().expect("session_store lock");
-        sessions.insert(fingerprint, entry);
+        match state.session_store.lock() {
+            Ok(mut sessions) => { sessions.insert(fingerprint, entry); }
+            Err(_) => return Err(lock_poisoned("session_store")),
+        }
     }
 
     Ok((

@@ -47,6 +47,11 @@ pub enum SqlStatementKind {
     Savepoint,
     ReleaseSavepoint,
     RollbackToSavepoint,
+    // M-2: privilege / role management
+    Grant,
+    Revoke,
+    CreateRole,
+    DropRole,
     Unknown,
 }
 
@@ -248,6 +253,11 @@ impl SqlAnalyzer {
             (Some("ROLLBACK"), _, _) => SqlStatementKind::Rollback,
             (Some("SAVEPOINT"), _, _) => SqlStatementKind::Savepoint,
             (Some("RELEASE"), Some("SAVEPOINT"), _) => SqlStatementKind::ReleaseSavepoint,
+            // M-2: privilege / role management
+            (Some("GRANT"), _, _) => SqlStatementKind::Grant,
+            (Some("REVOKE"), _, _) => SqlStatementKind::Revoke,
+            (Some("CREATE"), Some("ROLE"), _) => SqlStatementKind::CreateRole,
+            (Some("DROP"), Some("ROLE"), _) => SqlStatementKind::DropRole,
             _ => SqlStatementKind::Unknown,
         }
     }
@@ -289,6 +299,10 @@ impl SqlAnalyzer {
                     | SqlStatementKind::DropFunction
                     | SqlStatementKind::DropTrigger
                     | SqlStatementKind::DropEvent
+                    | SqlStatementKind::Grant
+                    | SqlStatementKind::Revoke
+                    | SqlStatementKind::CreateRole
+                    | SqlStatementKind::DropRole
             ),
             touches_catalog: matches!(
                 kind,
@@ -306,6 +320,10 @@ impl SqlAnalyzer {
                     | SqlStatementKind::DropFunction
                     | SqlStatementKind::DropTrigger
                     | SqlStatementKind::DropEvent
+                    | SqlStatementKind::Grant
+                    | SqlStatementKind::Revoke
+                    | SqlStatementKind::CreateRole
+                    | SqlStatementKind::DropRole
             ),
             kind,
         }
