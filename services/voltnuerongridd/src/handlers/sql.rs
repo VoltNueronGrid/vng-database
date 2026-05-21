@@ -44,6 +44,32 @@ fn lock_poisoned_err(what: &str) -> (StatusCode, Json<AuthErrorResponse>) {
     )
 }
 
+/// M-6: Statement timeout error — returned when a deadline set by `statement_timeout_ms`
+/// has elapsed before (or immediately after) query execution completes.
+fn statement_timeout_err() -> (StatusCode, Json<AuthErrorResponse>) {
+    (
+        StatusCode::REQUEST_TIMEOUT,
+        Json(AuthErrorResponse {
+            status: "error",
+            reason: "statement_timeout".to_string(),
+            locale: "en".to_string(),
+            localized_message: "Statement exceeded the configured timeout".to_string(),
+        }),
+    )
+}
+
+/// Return `Err(statement_timeout_err())` if `deadline` is `Some` and has already elapsed.
+/// No-op when `deadline` is `None` (timeout not configured).
+#[inline]
+fn check_deadline(deadline: Option<std::time::Instant>) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
+    if let Some(dl) = deadline {
+        if std::time::Instant::now() >= dl {
+            return Err(statement_timeout_err());
+        }
+    }
+    Ok(())
+}
+
 // ─── M-8 Rule 1: typed value inference ───────────────────────────────────────
 
 /// Coerce a string storage value to the most specific JSON scalar type.
@@ -986,6 +1012,16 @@ pub(crate) async fn sql_execute(
         None
     };
 
+    // M-6: Statement timeout enforcement.
+    // If the client specified statement_timeout_ms, record a deadline. The timeout
+    // is checked before and after each major execution phase. Because the core
+    // executor is synchronous (no preemption point), this is deadline-based rather
+    // than pre-emptive — it prevents returning results that took longer than the
+    // budget and returns a 408 to the client.
+    let statement_deadline: Option<std::time::Instant> = req.statement_timeout_ms
+        .filter(|&ms| ms > 0)
+        .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+
     let dispatcher = CommandDispatcher::new();
     let envelope = build_http_envelope(
         &headers,
@@ -1179,6 +1215,9 @@ pub(crate) async fn sql_execute(
     // Hoisted so the DML WAL/row_store commit block below can access it
     // regardless of whether touches_catalog is true or false.
     let mut ddl_snapshot: Vec<String> = Vec::new();
+
+    // M-6: pre-execution deadline check — reject immediately if deadline already passed.
+    check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
 
     if !transaction_statements.is_empty() {
         // REQ-02: snapshot statements for DDL catalog update after ownership transfer
@@ -1783,7 +1822,11 @@ pub(crate) async fn sql_execute(
                 None
             }
         };
+        // M-6: pre-OLAP deadline check — avoid starting expensive DataFusion work if already overdue.
+        check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
         olap = Some(execute_olap_query(query, req.max_rows, &rs, &db, &data_dir, rr_snapshot_xid, rocksdb_rows_olap));
+        // M-6: post-OLAP deadline check — discard results if query ran past deadline.
+        check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
     }
 
     // REQ-12: Detect legacy aggregate functions in OLAP SELECT statements and
@@ -1916,7 +1959,11 @@ pub(crate) async fn sql_execute(
                 }
             };
             let idx_mgr = state.index_manager.lock().ok();
+            // M-6: check deadline before OLTP select (full table scans can be slow).
+            check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
             let rows = execute_oltp_select(&olap_statements, &rs, limit, &db, rr_snapshot_xid, rocksdb_rows_oltp, idx_mgr.as_deref());
+            // M-6: check deadline after OLTP select to avoid returning timed-out results.
+            check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
             if rows.is_empty() { None } else { Some(rows) }
         } else {
             None

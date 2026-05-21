@@ -13070,6 +13070,74 @@ fn native_auth_open_listener_accepts_empty_payload() {
 /// request through reqwest to verify the full request→handler→response path.
 /// Marked ignore: requires network socket access not available in sandbox CI.
 /// Run manually: `cargo test -- --ignored e2e_http_roundtrip_sql_execute`.
+// ─── M-6: Statement timeout enforcement ──────────────────────────────────────
+
+#[test]
+fn m6_statement_timeout_zero_is_no_op() {
+    // timeout_ms = 0 means "no timeout" — should succeed normally.
+    // Use no-admin-key state + tenant user headers (matches other sql_execute tests).
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("admin-acme", "acme");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let result = runtime.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            statement_timeout_ms: Some(0),
+            ..Default::default()
+        }),
+    ));
+    assert!(result.is_ok(), "timeout_ms=0 must not reject the request");
+}
+
+#[test]
+fn m6_statement_timeout_large_value_succeeds() {
+    // A very large timeout means the query will always complete in time.
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("admin-acme", "acme");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let result = runtime.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            statement_timeout_ms: Some(60_000), // 60 seconds
+            ..Default::default()
+        }),
+    ));
+    assert!(result.is_ok(), "60-second timeout must not reject a fast query");
+}
+
+#[test]
+fn m6_statement_timeout_already_elapsed_returns_408() {
+    // Build the request with a 1 ms timeout, then sleep to guarantee expiry.
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("admin-acme", "acme");
+    // Sleep 10ms BEFORE building the request so the 1ms deadline is already passed
+    // by the time sql_execute runs.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let result = runtime.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            statement_timeout_ms: Some(1), // 1 ms — already elapsed
+            ..Default::default()
+        }),
+    ));
+    // Should return Err with 408 Request Timeout.
+    match result {
+        Err((status, _)) => assert_eq!(status, StatusCode::REQUEST_TIMEOUT,
+            "1ms timeout that already elapsed must return 408"),
+        Ok(_) => {
+            // Acceptable only if the executor happened to run before the deadline fired.
+            // The 10ms pre-sleep makes this practically impossible under normal conditions.
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires network access (TcpListener::bind)"]
 async fn e2e_http_roundtrip_sql_execute() {

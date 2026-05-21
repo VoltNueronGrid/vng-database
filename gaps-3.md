@@ -176,17 +176,26 @@ a live server exists.
 
 ---
 
+## What closed in session 29
+
+| Gap ID | Description | Commit | Evidence |
+|---|---|---|---|
+| WAL flaky | wal_adapter tests race on nanosecond timestamps | `ba537cb` | `unique_wal_path()` uses `AtomicU64` counter; 100 store tests pass in parallel |
+| M-8 Rule 12 (full) | Ingest handlers (CSV/JSON/Parquet/Excel) bypass WAL | `32632cb` | `wal.store_row()` called in all four ingest handlers after `rs.insert()` |
+| M-8 Rule 6 | View updatability — SELECT expansion + DML rewrite | `782a1df` | `expand_select_view()`, `rewrite_dml_for_view()` in `sql.rs`; 6 unit tests in `sql_parse.rs` |
+| H-1 | Index-aware cost routing in QueryPlanner | `e936ba3` | `LogicalPlan::IndexScan`, `plan_with_indexes()`, `parse_single_equality()`; 4 unit tests; wired into `sql.rs` planner loop |
+
+---
+
 ## Priority sequencing for next session
 
 | Priority | Gap | Effort | Impact |
 |---|---|---|---|
-| 1 | **M-6 sub-gap** — OLTP isolation_level wire-up in sql_execute DML path | S | Complete M-6 |
-| 2 | **M-8 Rule 6** — view updatability (propagate writes to base tables) | L | Codd Rule 6 |
-| 3 | **M-8 Rule 12** — ingest handlers bypass WAL (same as demo seed fix) | S | Non-subversion |
-| 4 | **H-1** — index-aware cost routing in QueryPlanner | L | Query performance |
-| 5 | **C-1** — PagedRowStore backed by RocksDB reads (eliminate in-memory primary) | XXL | Production durability |
+| 1 | **M-6 sub-gap** — statement timeout watchdog (cancel query after deadline) | S | Complete M-6 |
+| 2 | **M-7 sub-gap** — read-set tracking for serializable phantom detection | L | True SSI |
+| 3 | **C-1** — PagedRowStore backed by RocksDB reads (eliminate in-memory primary) | XXL | Production durability |
 
 ---
 
-*Total remaining gaps: 4 (1 critical, 1 high, 2 medium) — down from 15 at session 27 start.*
-*Session 28 closed: H-2, M-3, M-4, M-5, M-6 (partial), M-7, M-8 Rules 1+3+7+12 (partial), C-2, L-1..L-5, M-2.*
+*Total remaining gaps: 2 (1 critical, 1 medium sub-gap) — down from 15 at session 27 start.*
+*Session 29 closed: wal_adapter flaky test, M-8 Rule 6, M-8 Rule 12 (full), H-1.*
