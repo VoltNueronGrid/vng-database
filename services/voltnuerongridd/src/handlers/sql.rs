@@ -1846,11 +1846,30 @@ pub(crate) async fn sql_execute(
     let planner_path: Option<String> = {
         use voltnuerongrid_exec::{QueryPlanner, QueryPath};
         use voltnuerongrid_sql::parse_one;
+        // H-1: Build an index descriptor list for index-aware cost routing.
+        // Snapshot (table, column, index_name) from the IndexManager so the planner
+        // can promote Filter(Scan) → IndexScan and assign lower cost to index lookups.
+        let index_descriptors: Vec<(String, String, String)> = state.index_manager
+            .lock()
+            .ok()
+            .map(|mgr| {
+                mgr.list_indexes()
+                    .into_iter()
+                    .map(|d| (d.table.clone(), d.column.clone(), d.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let mut max_cost: f64 = f64::NEG_INFINITY;
         let mut dominant: Option<String> = None;
         for stmt in &olap_statements {
             if let Ok(parsed) = parse_one(stmt) {
-                let plan = QueryPlanner::plan(&parsed);
+                // H-1: Use index-aware planner when indexes are available.
+                let plan = if index_descriptors.is_empty() {
+                    QueryPlanner::plan(&parsed)
+                } else {
+                    QueryPlanner::plan_with_indexes(&parsed, &index_descriptors)
+                };
                 let estimate = QueryPlanner::estimate_cost(&plan);
                 let path_str = match estimate.recommended_path {
                     QueryPath::Olap => "olap",
