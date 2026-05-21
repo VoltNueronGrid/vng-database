@@ -18,13 +18,16 @@
 
 use std::time::Duration;
 use reqwest::Client;
-use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftSnapshotChunkResponse, RaftVoteRequest, RaftVoteResponse};
+use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
+
+/// Trim the Raft log once the log grows beyond this many entries.
+const COMPACT_LOG_THRESHOLD: usize = 500;
+/// Check compaction every N ticks (~450 ms at default tick rate).
+const COMPACT_EVERY_N_TICKS: u64 = 3;
 
 const TICK_INTERVAL_MS: u64 = 150;
 const HEARTBEAT_EVERY_N_TICKS: u64 = 3;
 const PEER_TIMEOUT_MS: u64 = 100;
-/// Maximum rows per snapshot chunk.  Keeps individual HTTP request bodies small.
-const SNAPSHOT_CHUNK_SIZE: usize = 500;
 
 
 pub(crate) async fn run_raft_tick_loop(state: AppState) {
@@ -85,7 +88,8 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
             )
         };
         let (became_candidate, is_leader, term, node_id,
-             last_log_index, last_log_term, commit_index, snapshot_index, snapshot_term, per_peer, total_peers) = tick_info;
+             last_log_index, last_log_term, commit_index,
+             snapshot_index, snapshot_term, per_peer, total_peers) = tick_info;
 
         if became_candidate {
             run_election(&state, &client, term, &node_id, last_log_index, last_log_term).await;
@@ -95,9 +99,13 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
             fanout_heartbeat(&state, &client, term, &node_id, commit_index, snapshot_index, snapshot_term, per_peer, total_peers).await;
         }
 
-        // Advance last_applied up to commit_index and broadcast the new value
-        // so that any waiters in sql_execute (multi-node leader path) can unblock.
+        // Apply any newly committed log entries to the local state machine.
         apply_committed_entries(&state);
+
+        // Periodically compact the log to bound memory usage.
+        if tick_count % COMPACT_EVERY_N_TICKS == 0 {
+            compact_if_needed(&state);
+        }
     }
 }
 
@@ -174,11 +182,9 @@ async fn run_election(
 /// Send per-peer AppendEntries (or InstallSnapshot) RPCs in parallel, then
 /// process responses to update `next_index` / `match_index` on the leader.
 ///
-/// Peers whose `next_index` has fallen behind `snapshot_index` receive a
-/// chunked snapshot transfer instead of log entries.  Each chunk is
-/// `SNAPSHOT_CHUNK_SIZE` rows; the final chunk carries `is_last = true`.
-///
-/// `per_peer` is `(peer_url, prev_log_index, entries_from_next_index)`.
+/// `per_peer` is `(peer_url, prev_log_index, entries, needs_snapshot)`.
+/// When `needs_snapshot` is true the peer is too far behind; the leader sends
+/// an InstallSnapshot RPC instead of AppendEntries.
 /// `total_peers` is used to compute quorum when advancing `commit_index`.
 async fn fanout_heartbeat(
     state: &AppState,
@@ -188,15 +194,13 @@ async fn fanout_heartbeat(
     commit_index: u64,
     snapshot_index: u64,
     snapshot_term: u64,
-    per_peer: Vec<(String, u64, Vec<RaftLogEntry>)>,
+    per_peer: Vec<(String, u64, Vec<RaftLogEntry>, bool)>,
     total_peers: usize,
 ) {
     if per_peer.is_empty() {
         return;
     }
     let token = state.cluster_token.as_deref().map(str::to_string);
-    // Advertise our own URL so followers can forward DML writes to us.
-    let leader_url = state.node_url.as_deref().map(str::to_string);
     let total_nodes = total_peers + 1; // including self
 
     // Snapshot the row-store once — only if any peer needs a full snapshot transfer.
@@ -218,105 +222,24 @@ async fn fanout_heartbeat(
     let mut snapshot_set: tokio::task::JoinSet<(String, Result<RaftInstallSnapshotResponse, ()>)> =
         tokio::task::JoinSet::new();
 
-    for (peer_url, prev_log_index, entries) in per_peer {
-        // If the peer's next_index has fallen behind the snapshot boundary,
-        // send a chunked snapshot instead of log entries.
-        let peer_next_index = prev_log_index + 1;
-        if snapshot_index > 0 && peer_next_index <= snapshot_index {
-            let client = client.clone();
-            let token = token.clone();
-            let peer_url_clone = peer_url.clone();
-            // Stable session-id: includes snapshot_index so each unique snapshot
-            // version gets its own session; retries of the same snapshot reuse it.
-            let session_id = format!("snap-{}-{}-{}", node_id, peer_url, snapshot_index);
-            let node_id_owned = node_id.to_string();
-            let state_clone = state.clone();
-            // Export current row store for this snapshot.
-            let all_rows: Vec<(String, serde_json::Value)> = {
-                let rs = state.row_store.lock().expect("row_store snapshot lock");
-                rs.export_rows_snapshot()
-                    .into_iter()
-                    .map(|(k, v)| {
-                        let json_val = serde_json::Value::Object(
-                            v.iter().map(|(ck, cv)| (ck.clone(), serde_json::Value::String(cv.clone()))).collect()
-                        );
-                        (k, json_val)
-                    })
-                    .collect()
-            };
-            let mut chunks: Vec<Vec<(String, serde_json::Value)>> = all_rows
-                .chunks(SNAPSHOT_CHUNK_SIZE)
-                .map(|c| c.to_vec())
-                .collect();
-            // Empty store: always send at least one terminal chunk so the follower
-            // applies the snapshot (clearing its state) even when there are no rows.
-            if chunks.is_empty() {
-                chunks.push(Vec::new());
-            }
-            let total_chunks = chunks.len();
-            tokio::spawn(async move {
-                for (i, chunk) in chunks.into_iter().enumerate() {
-                    let is_last = i + 1 == total_chunks;
-                    let req = RaftSnapshotChunkRequest {
-                        session_id: session_id.clone(),
-                        term,
-                        leader_id: node_id_owned.clone(),
-                        snapshot_index,
-                        snapshot_term,
-                        chunk_index: i as u32,
-                        is_last,
-                        rows: chunk,
-                    };
-                    let url = format!("{peer_url_clone}/api/v1/cluster/raft/install_snapshot/chunk");
-                    let mut builder = client.post(&url).json(&req);
-                    if let Some(t) = &token {
-                        builder = builder.header("Authorization", format!("Bearer {t}"));
-                    }
-                    match builder.send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            if is_last {
-                                // On final chunk: parse response and advance next_index if complete.
-                                if let Ok(chunk_resp) = resp.json::<RaftSnapshotChunkResponse>().await {
-                                    if chunk_resp.complete {
-                                        let mut node = state_clone.raft_state.lock()
-                                            .expect("raft advance lock");
-                                        if node.role == RaftRole::Leader && node.current_term == term {
-                                            // Advance next_index past the snapshot so this peer
-                                            // receives normal AppendEntries on the next heartbeat.
-                                            node.record_append_success(
-                                                &peer_url_clone,
-                                                snapshot_index,
-                                                total_nodes + 1,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => break, // abort; next tick retries from chunk 0 if session is new
-                    }
-                }
-            });
-            // Do not add to join_set — snapshot fanout result is handled inside the task.
-            continue;
-        }
-
-        let url = format!("{}/api/v1/cluster/raft/append", peer_url);
+    for (peer_url, prev_log_index, entries, needs_snapshot) in per_peer {
         let client = client.clone();
         let token = token.clone();
         let peer_url_owned = peer_url.clone();
-        let leader_url_clone = leader_url.clone();
-        join_set.spawn(async move {
-            let mut builder = client.post(&url).json(&req);
-            if let Some(t) = &token {
-                builder = builder.header("Authorization", format!("Bearer {t}"));
-            }
-            if let Some(lurl) = &leader_url_clone {
-                builder = builder.header("x-vng-leader-url", lurl.as_str());
-            }
-            let result = match builder.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    resp.json::<RaftAppendResponse>().await.map_err(|_| ())
+
+        if needs_snapshot {
+            let url = format!("{}/api/v1/cluster/raft/install_snapshot", peer_url);
+            let req = RaftInstallSnapshotRequest {
+                term,
+                leader_id: node_id.to_string(),
+                snapshot_index,
+                snapshot_term,
+                rows: snapshot_rows.clone(),
+            };
+            snapshot_set.spawn(async move {
+                let mut builder = client.post(&url).json(&req);
+                if let Some(t) = &token {
+                    builder = builder.header("Authorization", format!("Bearer {t}"));
                 }
                 let result = match builder.send().await {
                     Ok(resp) if resp.status().is_success() => {
@@ -496,24 +419,6 @@ fn compact_if_needed(state: &AppState) {
             "raft log compacted"
         );
     }
-}
-
-
-/// Advance `last_applied` to match `commit_index` and broadcast the new value
-/// on `raft_last_applied_tx`.
-///
-/// Called once per tick so followers and leaders both keep `last_applied`
-/// current.  The watch channel fires to unblock any waiters in `sql_execute`
-/// (multi-node leader linearisable-write path).
-fn apply_committed_entries(state: &AppState) {
-    let mut node = state.raft_state.lock().expect("raft apply_committed lock");
-    if node.last_applied >= node.commit_index {
-        return; // nothing to apply
-    }
-    node.last_applied = node.commit_index;
-    let last_applied = node.last_applied;
-    drop(node);
-    let _ = state.raft_last_applied_tx.send(last_applied);
 }
 
 

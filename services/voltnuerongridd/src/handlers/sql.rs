@@ -3,7 +3,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 use voltnuerongrid_audit::AuditEventKind;
 use voltnuerongrid_auth::PrivilegeAction;
 use voltnuerongrid_exec::QueryPath;
@@ -1091,7 +1091,7 @@ pub(crate) async fn sql_execute(
         return Ok((
             StatusCode::OK,
             Json(SqlExecuteResponse {
-                status: "ok",
+                status: "ok".to_string(),
                 route_path: "virtual_catalog".to_string(),
                 reason: "information_schema_intercept".to_string(),
                 transaction: None,
@@ -1516,16 +1516,30 @@ pub(crate) async fn sql_execute(
                 }
             }
 
-            // Apply DML to row store (we're leader, or single-node with no peers).
-            let mut rs = state.row_store.lock().expect("row_store lock dml_execute");
-            let xid = rs.begin_xid();
-            for stmt in &ddl_snapshot {
-                let upper = stmt.trim_start().to_ascii_uppercase();
-                if upper.starts_with("INSERT") {
-                    for (k, d, single_sql) in extract_all_insert_rows(stmt) {
-                        let _ = rs.begin_write_intent(xid, &k);
-                        rs.insert(xid, &k, d);
-                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
+            let total_peers = state.raft_peers.len();
+            let is_multi_node_leader = {
+                let node = match state.raft_state.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("raft_state")),
+                };
+                node.role == crate::RaftRole::Leader && total_peers > 0
+            };
+
+            if is_multi_node_leader {
+                // ── Linearisable path ────────────────────────────────────────────
+                // 1. Append every DML command to the Raft log (no row_store write yet).
+                let mut max_pending_index: u64 = 0;
+                {
+                    let mut node = match state.raft_state.lock() {
+                        Ok(g) => g,
+                        Err(_) => return Err(lock_poisoned_err("raft_state")),
+                    };
+                    for stmt in &ddl_snapshot {
+                        let upper = stmt.trim_start().to_ascii_uppercase();
+                        if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
+                            let idx = node.append_command_pending(stmt.clone(), total_peers);
+                            if idx > max_pending_index { max_pending_index = idx; }
+                        }
                     }
                 }
                 // 2. Persist to WAL for local durability (before waiting for quorum).
@@ -1551,7 +1565,7 @@ pub(crate) async fn sql_execute(
                         return Ok((
                             StatusCode::SERVICE_UNAVAILABLE,
                             Json(SqlExecuteResponse {
-                                status: "error",
+                                status: "error".to_string(),
                                 route_path: route_path_name(decision.payload.path).to_string(),
                                 reason: "raft_quorum_timeout".to_string(),
                                 transaction, olap: None,
@@ -1869,81 +1883,6 @@ pub(crate) async fn sql_execute(
                     }
                 }
             }
-            rs.release_write_intents(xid);
-            drop(rs); // release row_store lock before any async work
-        }
-
-        // Linearisable leader write: append DML batch to Raft log.
-        // - Single-node leader: commit is immediate, no waiting needed.
-        // - Multi-node leader: append with pending oneshot receivers and wait
-        //   for `raft_last_applied_tx` to confirm quorum before returning 200.
-        // - Follower: skip (DML already applied locally above).
-        if has_dml {
-            let mut node = state.raft_state.lock().expect("raft_state lock sql_execute dml");
-            let is_leader = node.role == crate::RaftRole::Leader;
-            let total_peers = node.next_index.len();
-            if is_leader {
-                let dml_stmts: Vec<String> = ddl_snapshot.iter()
-                    .filter(|s| {
-                        let u = s.trim_start().to_ascii_uppercase();
-                        u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
-                    })
-                    .cloned()
-                    .collect();
-                if total_peers == 0 {
-                    // Single-node: append without waiting (commit is immediate).
-                    for cmd in dml_stmts {
-                        node.append_command(cmd, 0);
-                    }
-                    drop(node);
-                } else {
-                    // Multi-node: append pending and wait for quorum via block_in_place.
-                    let indexed: Vec<(u64, tokio::sync::oneshot::Receiver<u64>)> =
-                        dml_stmts.into_iter()
-                            .map(|cmd| node.append_command_pending(cmd, total_peers))
-                            .collect();
-                    drop(node);
-                    // Returns false if any receiver timed out (quorum not reached).
-                    let quorum_ok = tokio::task::block_in_place(|| {
-                        let handle = tokio::runtime::Handle::current();
-                        for (_, rx) in indexed {
-                            use tokio::time::{timeout, Duration};
-                            match handle.block_on(timeout(Duration::from_secs(2), rx)) {
-                                Ok(_) => {},
-                                Err(_) => return false,
-                            }
-                        }
-                        true
-                    });
-                    if !quorum_ok {
-                        release_sql_data_plane_connection(&state, &connection_id);
-                        return Ok((
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            Json(SqlExecuteResponse {
-                                status: "error".to_string(),
-                                route_path: route_path_name(decision.payload.path).to_string(),
-                                reason: "raft_quorum_timeout: DML could not be committed within 2s".to_string(),
-                                transaction: None,
-                                olap: None,
-                                rejected_statement_count: 0,
-                                udf_results: None,
-                                udf_guardrail_status: None,
-                                udf_function_catalog: vec![],
-                                udf_guard_policies: vec![],
-                                udf_execution_plan: vec![],
-                                legacy_agg_results: None,
-                                planner_path: None,
-                                oltp_rows: None,
-                                olap_agg_results: None,
-                                columns: None,
-                                rows: None,
-                            }),
-                        ));
-                    }
-                }
-            } else {
-                drop(node); // Single-node follower: DML applied locally, no replication needed.
-            }
         }
     }
 
@@ -2015,7 +1954,8 @@ pub(crate) async fn sql_execute(
         if table_rows.is_empty() {
             table_rows.insert("rows".to_string(), all_rows);
         }
-        let row_count = match run_async_in_executor(df_select_owned(query.clone(), table_rows, limit)) {
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        let row_count = match run_async_in_executor(df_select_owned(query.clone(), table_rows, limit, data_dir)) {
             Ok(SelectOutput::Rows(rows)) => rows.len(),
             Ok(SelectOutput::Aggregate(_)) => 1,
             Err(_) => 0,
