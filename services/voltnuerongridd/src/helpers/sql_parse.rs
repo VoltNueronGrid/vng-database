@@ -202,6 +202,72 @@ pub(crate) fn extract_bulk_update_target(
 }
 
 
+/// Extract bulk-delete target for `DELETE FROM table WHERE pred_col = 'val'`.
+///
+/// Returns `Some((table_name, where_col, where_val))` when the WHERE clause filters on a
+/// non-key column (full table scan required).  Returns `None` when the WHERE column is
+/// "id" (primary-key DELETE — single-row `extract_delete_key_from_sql` is sufficient) or
+/// when the statement cannot be parsed.
+///
+/// This enables Codd Rule 7 (set-at-a-time DELETE): callers scan all rows of `table_name`
+/// and delete every row where `row[where_col] == where_val`.
+pub(crate) fn extract_bulk_delete_target(sql: &str) -> Option<(String, String, String)> {
+    use voltnuerongrid_sql::tokenizer::{semantic_tokens, Token};
+
+    let upper = sql.trim_start().to_ascii_uppercase();
+    if !upper.starts_with("DELETE") {
+        return None;
+    }
+
+    let tokens = semantic_tokens(sql);
+
+    // Parse: DELETE FROM <table> WHERE <col> = <val>
+    let mut past_from = false;
+    let mut table: Option<String> = None;
+    let mut after_where = false;
+    let mut where_col: Option<String> = None;
+    let mut past_eq = false;
+    let mut where_val: Option<String> = None;
+
+    for tok in &tokens {
+        match tok {
+            Token::Keyword(k) if k.eq_ignore_ascii_case("FROM") && !past_from => {
+                past_from = true;
+            }
+            Token::Identifier(t) | Token::Keyword(t) if past_from && table.is_none() => {
+                let unqualified = t.rsplit('.').next().unwrap_or(t.as_str());
+                table = Some(unqualified.to_ascii_lowercase());
+            }
+            Token::Keyword(k) if k.eq_ignore_ascii_case("WHERE") => after_where = true,
+            Token::Identifier(id) if after_where && where_col.is_none() => {
+                where_col = Some(id.to_ascii_lowercase());
+            }
+            Token::Symbol(s) if s == "=" && after_where && where_col.is_some() && !past_eq => {
+                past_eq = true;
+            }
+            Token::StringLiteral(s) if past_eq && where_val.is_none() => {
+                where_val = Some(s.clone());
+            }
+            Token::Number(n) if past_eq && where_val.is_none() => {
+                where_val = Some(n.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let table = table?;
+    let where_col = where_col?;
+    let where_val = where_val?;
+
+    // If WHERE is on "id", single-row delete already handled it — skip the scan path.
+    if where_col.eq_ignore_ascii_case("id") {
+        return None;
+    }
+
+    Some((table, where_col, where_val))
+}
+
+
 /// Extract ordered column names from a CREATE TABLE DDL statement.
 /// Returns `vec!["id", "name", ...]` or an empty Vec if parsing fails.
 pub(crate) fn extract_column_names_from_ddl(ddl: &str) -> Vec<String> {
@@ -429,4 +495,58 @@ pub(crate) fn db_prefix_key(db: &str, raw_key: &str) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    // ─── extract_bulk_delete_target ──────────────────────────────────────────
+
+    #[test]
+    fn bulk_delete_parses_non_key_where_clause() {
+        let sql = "DELETE FROM employees WHERE department = 'engineering'";
+        let result = extract_bulk_delete_target(sql);
+        assert!(result.is_some(), "should parse non-key WHERE clause");
+        let (tbl, col, val) = result.unwrap();
+        assert_eq!(tbl, "employees");
+        assert_eq!(col, "department");
+        assert_eq!(val, "engineering");
+    }
+
+    #[test]
+    fn bulk_delete_skips_id_where_clause() {
+        // WHERE id = '123' is handled by single-row extract_delete_key_from_sql
+        let sql = "DELETE FROM employees WHERE id = '123'";
+        let result = extract_bulk_delete_target(sql);
+        assert!(result.is_none(), "id WHERE clause should delegate to single-key path");
+    }
+
+    #[test]
+    fn bulk_delete_handles_numeric_where_value() {
+        let sql = "DELETE FROM orders WHERE status = 0";
+        let result = extract_bulk_delete_target(sql);
+        assert!(result.is_some());
+        let (_, col, val) = result.unwrap();
+        assert_eq!(col, "status");
+        assert_eq!(val, "0");
+    }
+
+    #[test]
+    fn bulk_delete_returns_none_for_non_delete() {
+        assert!(extract_bulk_delete_target("SELECT * FROM t").is_none());
+        assert!(extract_bulk_delete_target("UPDATE t SET x = 1").is_none());
+    }
+
+    // ─── extract_bulk_update_target ──────────────────────────────────────────
+
+    #[test]
+    fn bulk_update_parses_non_key_set_where() {
+        let sql = "UPDATE employees SET salary = '90000' WHERE department = 'engineering'";
+        let result = extract_bulk_update_target(sql);
+        assert!(result.is_some());
+        let (tbl, set_col, _set_val, where_col, where_val) = result.unwrap();
+        assert_eq!(tbl, "employees");
+        assert_eq!(set_col, "salary");
+        assert_eq!(where_col, "department");
+        assert_eq!(where_val, "engineering");
+    }
+}

@@ -21,7 +21,7 @@ use crate::{execute_olap_query, execute_oltp_select, df_select_owned, run_async_
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
-use crate::helpers::sql_parse::extract_bulk_update_target;
+use crate::helpers::sql_parse::{extract_bulk_update_target, extract_bulk_delete_target};
 use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix};
 use crate::{persist_sql_statement};
 use crate::auth::{require_sql_runtime_principal, locale_from_headers};
@@ -42,6 +42,43 @@ fn lock_poisoned_err(what: &str) -> (StatusCode, Json<AuthErrorResponse>) {
             localized_message: "Service temporarily unavailable".to_string(),
         }),
     )
+}
+
+// ─── M-8 Rule 1: typed value inference ───────────────────────────────────────
+
+/// Coerce a string storage value to the most specific JSON scalar type.
+///
+/// Priority: null → boolean → integer → float → string (Codd Rule 1 partial).
+/// This prevents every column from appearing as "text" in client result sets
+/// when the underlying value is a number or boolean.
+#[inline]
+fn infer_json_value(s: &str) -> serde_json::Value {
+    if s.is_empty() || s.eq_ignore_ascii_case("null") {
+        return serde_json::Value::Null;
+    }
+    if s.eq_ignore_ascii_case("true") { return serde_json::Value::Bool(true); }
+    if s.eq_ignore_ascii_case("false") { return serde_json::Value::Bool(false); }
+    if let Ok(i) = s.parse::<i64>() { return serde_json::Value::Number(i.into()); }
+    if let Ok(f) = s.parse::<f64>() {
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            return serde_json::Value::Number(n);
+        }
+    }
+    serde_json::Value::String(s.to_string())
+}
+
+/// Return the PostgreSQL-style type name for a JSON value produced by `infer_json_value`.
+#[inline]
+fn json_value_pg_type(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null    => "text",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(n) => {
+            if n.is_f64() { "double precision" } else { "integer" }
+        }
+        serde_json::Value::String(_) => "text",
+        _ => "text",
+    }
 }
 
 // ─── Gap #3: undo log helper ─────────────────────────────────────────────────
@@ -1484,7 +1521,42 @@ pub(crate) async fn sql_execute(
                             }
                         }
                     } else if upper.starts_with("DELETE") {
-                        if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
+                        // Codd Rule 7: set-at-a-time DELETE — try bulk scan first when WHERE
+                        // is on a non-key column; fall through to single-key delete otherwise.
+                        let is_bulk_delete = extract_bulk_delete_target(stmt)
+                            .map(|(_, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
+                            .unwrap_or(false);
+                        if is_bulk_delete {
+                            if let Some((tbl, where_col, where_val)) = extract_bulk_delete_target(stmt) {
+                                let snapshot_xid = rs.current_xid();
+                                let table_prefix = format!("{tbl}:");
+                                let db_prefix_str = if db.is_empty() { String::new() } else { format!("{db}.") };
+                                let matching_keys: Vec<String> = rs
+                                    .scan_at_snapshot(snapshot_xid)
+                                    .into_iter()
+                                    .filter(|(k, row_data)| {
+                                        let key_matches = k.contains(&format!("{db_prefix_str}{table_prefix}"));
+                                        let val_matches = row_data.get(&where_col).map(|v| *v == where_val).unwrap_or(false);
+                                        key_matches && val_matches
+                                    })
+                                    .map(|(k, _)| k.to_string())
+                                    .collect();
+                                for matched_k in matching_keys {
+                                    let before = rs.read_latest(&matched_k).cloned();
+                                    if before.is_some() {
+                                        if let Some(colon) = matched_k.rfind(':') {
+                                            *stats_inserts.entry(matched_k[..colon].to_string()).or_insert(0) -= 1;
+                                        }
+                                    }
+                                    record_undo(&state.tx_undo_log, &connection_id, &matched_k, before);
+                                    let _ = rs.begin_write_intent(xid, &matched_k);
+                                    rs.delete(xid, &matched_k);
+                                    let raw_k = matched_k.trim_start_matches(&format!("{db_prefix_str}")).to_string();
+                                    { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
+                                }
+                                persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                            }
+                        } else if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
                             // Gap #3: record before-image for ROLLBACK support.
                             let before = rs.read_latest(&k).cloned();
@@ -1882,6 +1954,8 @@ pub(crate) async fn sql_execute(
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
             // final ordered column list and rows for this response
             let mut ordered_cols: Vec<String> = Vec::new();
+            // M-8 Rule 1: track best observed PG type per column (updated across all rows).
+            let mut col_pg_types: std::collections::HashMap<String, &'static str> = std::collections::HashMap::new();
             let mut out_rows: Vec<serde_json::Value> = Vec::new();
 
             for stmt_str in &olap_statements {
@@ -1941,12 +2015,19 @@ pub(crate) async fn sql_execute(
                             // Rule 3 (Codd): column absent from row data emits null, not "".
                             for (idx, col_name) in ddl_cols.iter().enumerate() {
                                 // Try real column name first, then positional fallback key.
+                                // M-8 Rule 1: coerce to typed JSON value instead of raw String.
                                 let json_val = match data.get(col_name)
                                     .or_else(|| data.get(&format!("col_{idx}")))
                                 {
-                                    Some(v) => serde_json::Value::String(v.clone()),
+                                    Some(v) => infer_json_value(v),
                                     None => serde_json::Value::Null,
                                 };
+                                // Track best non-null PG type for this column.
+                                if !matches!(json_val, serde_json::Value::Null) {
+                                    col_pg_types.entry(col_name.clone())
+                                        .and_modify(|t| { if *t == "text" { *t = json_value_pg_type(&json_val); } })
+                                        .or_insert_with(|| json_value_pg_type(&json_val));
+                                }
                                 row_obj.insert(col_name.clone(), json_val);
                                 if !ordered_cols.contains(col_name) {
                                     ordered_cols.push(col_name.clone());
@@ -1960,7 +2041,15 @@ pub(crate) async fn sql_execute(
                                 .collect();
                             sorted_keys.sort();
                             for col in &sorted_keys {
-                                row_obj.insert((*col).to_string(), serde_json::Value::String(data[*col].clone()));
+                                // M-8 Rule 1: coerce to typed JSON value.
+                                let json_val = infer_json_value(&data[*col]);
+                                if !matches!(json_val, serde_json::Value::Null) {
+                                    let col_s = (*col).to_string();
+                                    col_pg_types.entry(col_s.clone())
+                                        .and_modify(|t| { if *t == "text" { *t = json_value_pg_type(&json_val); } })
+                                        .or_insert_with(|| json_value_pg_type(&json_val));
+                                }
+                                row_obj.insert((*col).to_string(), json_val);
                                 if !ordered_cols.contains(&(*col).to_string()) {
                                     ordered_cols.push((*col).to_string());
                                 }
@@ -1976,9 +2065,13 @@ pub(crate) async fn sql_execute(
             if out_rows.is_empty() {
                 (None, None)
             } else {
+                // M-8 Rule 1: use inferred PG types in column descriptors.
                 let cols: Vec<serde_json::Value> = ordered_cols
                     .iter()
-                    .map(|c| serde_json::json!({"name": c, "data_type": "text"}))
+                    .map(|c| {
+                        let dt = col_pg_types.get(c).copied().unwrap_or("text");
+                        serde_json::json!({"name": c, "data_type": dt})
+                    })
                     .collect();
                 (Some(cols), Some(out_rows))
             }

@@ -71,7 +71,23 @@ export function useQuery(tabId: string) {
             .filter((r, idx, arr) => arr.findIndex((x) => x.key === r.key) === idx)
             .map((r) => {
               const out: Record<string, unknown> = {};
-              for (const c of colList) out[c] = r.data[c] ?? null;
+              for (const c of colList) {
+                const raw = r.data[c];
+                // M-8 Rule 1: coerce string storage values to typed scalars client-side.
+                if (raw == null || raw === "" || raw === "null") {
+                  out[c] = null;
+                } else if (raw === "true") {
+                  out[c] = true;
+                } else if (raw === "false") {
+                  out[c] = false;
+                } else if (/^-?\d+$/.test(raw)) {
+                  out[c] = parseInt(raw, 10);
+                } else if (/^-?\d+\.?\d*([eE][+-]?\d+)?$/.test(raw)) {
+                  out[c] = parseFloat(raw);
+                } else {
+                  out[c] = raw;
+                }
+              }
               return out;
             });
         }
