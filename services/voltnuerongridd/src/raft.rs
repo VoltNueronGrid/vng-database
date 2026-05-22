@@ -108,6 +108,7 @@ pub struct RaftInstallSnapshotResponse {
 /// accumulates chunks and applies the snapshot on the final chunk
 /// (`is_last = true`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)] // used by the chunked snapshot Raft RPC — referenced at runtime via serde
 pub struct RaftSnapshotChunkRequest {
     /// Unique ID for this snapshot-transfer session (UUID or similar).
     pub session_id: String,
@@ -125,6 +126,7 @@ pub struct RaftSnapshotChunkRequest {
 
 /// Reply to a single snapshot chunk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)] // used by the chunked snapshot Raft RPC — referenced at runtime via serde
 pub struct RaftSnapshotChunkResponse {
     pub term: u64,
     pub success: bool,

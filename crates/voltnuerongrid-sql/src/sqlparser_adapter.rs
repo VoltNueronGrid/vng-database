@@ -271,7 +271,7 @@ fn backfill_extended_flags_from_raw(sql: &str, out: &mut SelectStatement) {
         if out.order_by.len() > 1 { out.has_order_by_multi_column = true; }
         if keyword_outside_strings(&up, "NULLS FIRST") || keyword_outside_strings(&up, "NULLS LAST") { out.has_nulls_ordering = true; }
         if keyword_outside_strings(&up, "COLLATE") { out.has_order_by_collation = true; }
-        let ob_part = find_keyword_outside_strings(&up, "ORDER BY").map(|p| &up[p..]).unwrap_or("");
+        let _ob_part = find_keyword_outside_strings(&up, "ORDER BY").map(|p| &up[p..]).unwrap_or("");
         // Positional: check the structural order_by list — sqlparser renders
         // positional references as plain numbers in the column string.
         let is_positional = out.order_by.iter().any(|o| o.column.trim().parse::<u64>().is_ok());
