@@ -275,7 +275,7 @@ test.describe("ResourceModal — Create Role", () => {
     await goToMain(mockedPage);
     // Trigger create-role via user context menu
     await mockedPage.locator(".activity-btn", { hasText: "Users" }).click();
-    await mockedPage.locator(".conn-item").first().click({ button: "right" });
+    await mockedPage.locator(".user-item").first().click({ button: "right" });
     // The user menu may have "Create Role…" if it's wired; otherwise skip
     const createRoleItem = mockedPage.locator(".ctx-menu-item .ctx-menu-label", {
       hasText: "Create Role…",
@@ -305,7 +305,7 @@ test.describe("ResourceModal — Grant Role", () => {
     await mockedPage.reload();
     await goToMain(mockedPage);
     await mockedPage.locator(".activity-btn", { hasText: "Users" }).click();
-    await mockedPage.locator(".conn-item").first().click({ button: "right" });
+    await mockedPage.locator(".user-item").first().click({ button: "right" });
     await mockedPage.locator(".ctx-menu-item .ctx-menu-label", { hasText: "Grant Role…" }).click();
     await expect(mockedPage.locator(".conn-panel-title")).toContainText("Grant Role");
   });
@@ -335,7 +335,7 @@ test.describe("ResourceModal — Drop (confirmation form)", () => {
     await goToMain(mockedPage);
     // Trigger drop-user via user context menu
     await mockedPage.locator(".activity-btn", { hasText: "Users" }).click();
-    await mockedPage.locator(".conn-item").first().click({ button: "right" });
+    await mockedPage.locator(".user-item").first().click({ button: "right" });
     await mockedPage.locator(".ctx-menu-item.danger .ctx-menu-label", { hasText: "Drop User…" }).click();
     await expect(mockedPage.locator(".conn-panel-title")).toContainText("Drop User");
   });

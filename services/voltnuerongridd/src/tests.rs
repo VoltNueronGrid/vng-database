@@ -126,6 +126,9 @@ fn state_with_key(key: Option<&str>) -> AppState {
             reg.register_builtins();
             Arc::new(Mutex::new(reg))
         },
+        // ISSUE-03: trigger registry + no-op emitter for tests.
+        trigger_registry: Arc::new(Mutex::new(voltnuerongrid_store::triggers::TriggerRegistry::new())),
+        trigger_emitter: Arc::new(voltnuerongrid_store::trigger_emitter::NoOpTriggerEmitter),
     }
 }
 

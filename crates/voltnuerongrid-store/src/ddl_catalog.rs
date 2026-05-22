@@ -203,6 +203,24 @@ impl DdlCatalog {
     pub fn active_count(&self) -> usize {
         self.entries.values().filter(|e| !e.dropped).count()
     }
+
+    /// Return all active (non-dropped) function entries registered via `CREATE FUNCTION`.
+    /// Used by the UDF execution engine to resolve catalog-defined functions at query time.
+    pub fn list_active_functions(&self) -> Vec<&DdlCatalogEntry> {
+        self.entries
+            .values()
+            .filter(|e| !e.dropped && e.object_kind == "function")
+            .collect()
+    }
+
+    /// Look up an active function entry by its unqualified name (case-insensitive).
+    /// Returns `None` if the function is not registered or has been dropped.
+    pub fn get_active_function(&self, name: &str) -> Option<&DdlCatalogEntry> {
+        let lower = name.trim().to_ascii_lowercase();
+        self.entries
+            .values()
+            .find(|e| !e.dropped && e.object_kind == "function" && e.object_name == lower)
+    }
 }
 
 // ── Helper: extract DDL object name + kind from a SQL string ─────────────

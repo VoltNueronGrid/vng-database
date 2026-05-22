@@ -277,6 +277,23 @@ html, body, #root {
   background: var(--brand-cyan);
   border-radius: 0 2px 2px 0;
 }
+/* User-item and role-item: semantic aliases that share .conn-item layout.
+   Separating the class names prevents CSS/Playwright selector collisions. */
+.user-item {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 10px 5px 12px;
+  cursor: pointer;
+  transition: background .1s;
+  position: relative;
+}
+.user-item:hover { background: var(--bg-hover); }
+.role-item {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 10px 5px 12px;
+  transition: background .1s;
+  position: relative;
+}
+.role-item:hover { background: var(--bg-hover); }
 .conn-dot {
   width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
 }

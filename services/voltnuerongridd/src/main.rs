@@ -27,6 +27,8 @@ use voltnuerongrid_store::ddl_catalog::DdlCatalog;
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_store::BoxedDurabilityEngine;
+use voltnuerongrid_store::triggers::TriggerRegistry;
+use voltnuerongrid_store::trigger_emitter::{LoggingTriggerEmitter, TriggerEmitter};
 use voltnuerongrid_driver_rust::ConnectionPoolManager;
 use voltnuerongrid_ingest::{
     ManagedEventBusTransport, ManagedReplayCursorStore,
@@ -700,6 +702,11 @@ pub(crate) struct AppState {
     /// Pre-populated with built-ins at boot; extended at runtime via
     /// `CREATE [OR REPLACE] PROCEDURE … AS $$ … $$` DDL.
     pub(crate) proc_registry: Arc<Mutex<helpers::stored_proc::ProcedureRegistry>>,
+    /// ISSUE-03: DML trigger registry — stores `CREATE TRIGGER` definitions and
+    /// fires matching triggers on INSERT / UPDATE / DELETE operations.
+    /// The emitter (LoggingTriggerEmitter by default) is swappable for testing.
+    pub(crate) trigger_registry: Arc<Mutex<TriggerRegistry>>,
+    pub(crate) trigger_emitter: Arc<dyn TriggerEmitter>,
 }
 
 #[derive(Clone, Default)]
@@ -1706,6 +1713,9 @@ async fn main() {
             reg.register_builtins();
             Arc::new(Mutex::new(reg))
         },
+        // ISSUE-03: trigger registry + emitter.
+        trigger_registry: Arc::new(Mutex::new(TriggerRegistry::new())),
+        trigger_emitter: Arc::new(LoggingTriggerEmitter),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));

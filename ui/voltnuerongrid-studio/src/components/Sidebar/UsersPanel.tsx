@@ -130,7 +130,7 @@ export function UsersPanel() {
       {!loading && users.map((u) => (
         <div
           key={u.user_id}
-          className="conn-item"
+          className="user-item"
           onContextMenu={openMenuFor(() => buildUserMenu(u.username))}
           title={`${u.user_id} — created ${new Date(u.created_ms).toLocaleDateString()}`}
         >
@@ -162,7 +162,7 @@ export function UsersPanel() {
       </div>
 
       {BUILT_IN_ROLES.map((r) => (
-        <div key={r} className="conn-item" style={{ cursor: "default" }}>
+        <div key={r} className="role-item" style={{ cursor: "default" }}>
           <span className="tree-icon">🛡</span>
           <span className="conn-item-name">{r}</span>
           <span className="tree-count">

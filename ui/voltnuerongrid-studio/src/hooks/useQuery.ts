@@ -25,6 +25,8 @@ export function useQuery(tabId: string) {
         operatorId: conn.operatorId,
         tenantId: conn.tenantId,
         userId: conn.userId,
+        // Database isolation: scope all SQL to the connection's selected database.
+        database: conn.database,
       });
 
       setExecuting(tabId, true);

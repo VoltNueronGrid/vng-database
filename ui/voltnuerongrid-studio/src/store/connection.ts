@@ -54,6 +54,9 @@ export function defaultConnection(
     baseUrl: "http://127.0.0.1:8080",
     host: "127.0.0.1",
     port: 8080,
+    // Default database ensures new connections are isolated from the global namespace.
+    // Users can change this to any existing database or leave blank to browse all.
+    database: "default",
     mode: "admin",
     sslEnabled: false,
     createdAt: now,

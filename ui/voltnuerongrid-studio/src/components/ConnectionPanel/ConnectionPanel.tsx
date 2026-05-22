@@ -150,6 +150,16 @@ export function ConnectionPanel() {
       });
       try {
         await verifyHttpConnection(client);
+        // Auto-create the target database when the connection specifies one.
+        // This ensures fresh connections get an isolated namespace immediately.
+        const dbName = form.database?.trim();
+        if (dbName) {
+          try {
+            await client.createDatabase({ name: dbName, if_not_exists: true });
+          } catch (_) {
+            // Non-fatal: database may already exist or server may not support it yet
+          }
+        }
       } catch (e) {
         setError(`Admin authentication failed: ${String(e)}`);
         setActiveTab("auth");
@@ -298,13 +308,16 @@ export function ConnectionPanel() {
               </div>
               <div className="form-row">
                 <div className="form-field full">
-                  <label className="form-label">Database (optional)</label>
+                  <label className="form-label">Database</label>
                   <input
                     className="form-input"
                     value={form.database ?? ""}
                     onChange={(e) => patch("database", e.target.value || undefined)}
-                    placeholder="Leave blank to browse all"
+                    placeholder="e.g. default — blank = global shared namespace"
                   />
+                  <div style={{ fontSize: 10.5, color: "var(--text-3)", marginTop: 3 }}>
+                    Scopes all SQL to this database. Auto-created on connect if it does not exist.
+                  </div>
                 </div>
               </div>
             </>

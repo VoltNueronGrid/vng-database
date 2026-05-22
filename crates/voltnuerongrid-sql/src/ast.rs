@@ -1224,6 +1224,31 @@ fn parse_delete(tokens: &[Token]) -> DeleteStatement {
 
 // ─── CREATE TABLE ─────────────────────────────────────────────────────────────
 
+/// Join type-part tokens into a compact SQL type string.
+/// Tokens immediately following `(` or `,` (inside parens) or immediately
+/// preceding `)` are not separated by spaces, so the result is
+/// `"VARCHAR(255)"` rather than `"VARCHAR ( 255 )"`.
+fn compact_type_string(parts: &[String]) -> String {
+    let mut out = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        if part == "(" {
+            out.push('(');
+        } else if part == ")" {
+            out.push(')');
+        } else if part == "," {
+            out.push(',');
+        } else {
+            // Add a space separator unless we're immediately after `(` or `,`.
+            let prev = parts.get(i.wrapping_sub(1)).map(|s| s.as_str());
+            if i > 0 && prev != Some("(") && prev != Some(",") {
+                out.push(' ');
+            }
+            out.push_str(part);
+        }
+    }
+    out
+}
+
 fn parse_create(tokens: &[Token]) -> Result<CreateTableStatement, String> {
     // CREATE [OR REPLACE] TABLE <name> (<col_def>, ...)
     let mut pos = 1usize; // skip CREATE
@@ -1259,11 +1284,28 @@ fn parse_create(tokens: &[Token]) -> Result<CreateTableStatement, String> {
                     };
                     pos += 1;
                     let mut type_parts = Vec::new();
+                    // Track parenthesis depth so that `VARCHAR(255)` or
+                    // `DECIMAL(10,2)` are consumed in full without breaking the
+                    // outer column-list parser when it sees the closing `)`.
+                    let mut paren_depth: usize = 0;
                     while pos < tokens.len() {
                         match &tokens[pos] {
-                            Token::Symbol(s) if s == "," || s == ")" => break,
+                            // Only treat `,` / `)` as terminators at depth 0.
+                            Token::Symbol(s) if (s == "," || s == ")") && paren_depth == 0 => break,
                             Token::Symbol(s) if s == "(" => {
+                                paren_depth += 1;
                                 type_parts.push("(".to_string());
+                                pos += 1;
+                            }
+                            Token::Symbol(s) if s == ")" => {
+                                // paren_depth > 0 here (else the arm above would match)
+                                paren_depth = paren_depth.saturating_sub(1);
+                                type_parts.push(")".to_string());
+                                pos += 1;
+                            }
+                            Token::Symbol(s) if s == "," && paren_depth > 0 => {
+                                // comma inside parentheses (e.g. DECIMAL(10,2)) — keep it
+                                type_parts.push(",".to_string());
                                 pos += 1;
                             }
                             t => {
@@ -1276,9 +1318,12 @@ fn parse_create(tokens: &[Token]) -> Result<CreateTableStatement, String> {
                             }
                         }
                     }
+                    // Normalise: join without spaces inside parens for compact
+                    // type strings like "VARCHAR(255)" rather than "VARCHAR ( 255 )".
+                    let data_type = compact_type_string(&type_parts);
                     columns.push(ColumnDef {
                         name: col_name,
-                        data_type: type_parts.join(" "),
+                        data_type,
                     });
                 }
             }
@@ -5181,5 +5226,65 @@ mod column_alias_tests {
             !s.has_column_alias,
             "SELECT without column aliases must keep has_column_alias = false"
         );
+    }
+}
+
+// ─── ISSUE-01 regression tests: parenthesis depth tracking in CREATE TABLE ───
+
+#[cfg(test)]
+mod create_table_paren_depth_tests {
+    use super::*;
+
+    /// VARCHAR(255) must parse correctly and NOT break the column list.
+    #[test]
+    fn varchar_with_length_preserves_subsequent_columns() {
+        let sql = "CREATE TABLE products (id INT, name VARCHAR(255), price DECIMAL(10,2), active BOOLEAN)";
+        let stmt = parse_one(sql).unwrap();
+        let Statement::CreateTable(ct) = stmt else { panic!("expected CreateTable") };
+        assert_eq!(ct.table, "products");
+        assert_eq!(ct.columns.len(), 4, "all 4 columns must be parsed: {:?}", ct.columns);
+        assert_eq!(ct.columns[0].name, "id");
+        assert_eq!(ct.columns[1].name, "name");
+        assert_eq!(ct.columns[1].data_type, "VARCHAR(255)");
+        assert_eq!(ct.columns[2].name, "price");
+        assert_eq!(ct.columns[2].data_type, "DECIMAL(10,2)");
+        assert_eq!(ct.columns[3].name, "active");
+    }
+
+    /// The exact table from the E2E test that was failing.
+    #[test]
+    fn rp_gen_insert_e2e_table_all_columns_parsed() {
+        let sql = "CREATE TABLE rp_gen_insert_e2e (
+            id INT,
+            name VARCHAR(255),
+            score DECIMAL(10,2),
+            active BOOLEAN,
+            created_at TIMESTAMP
+        )";
+        let stmt = parse_one(sql).unwrap();
+        let Statement::CreateTable(ct) = stmt else { panic!("expected CreateTable") };
+        assert_eq!(ct.columns.len(), 5, "all 5 columns must survive VARCHAR(255): {:?}", ct.columns);
+        let names: Vec<&str> = ct.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["id", "name", "score", "active", "created_at"]);
+    }
+
+    /// DECIMAL(10,2) — comma inside parens must not split the column list.
+    #[test]
+    fn decimal_with_precision_and_scale() {
+        let sql = "CREATE TABLE ledger (amount DECIMAL(10,2), note TEXT)";
+        let stmt = parse_one(sql).unwrap();
+        let Statement::CreateTable(ct) = stmt else { panic!("expected CreateTable") };
+        assert_eq!(ct.columns.len(), 2);
+        assert_eq!(ct.columns[0].data_type, "DECIMAL(10,2)");
+        assert_eq!(ct.columns[1].name, "note");
+    }
+
+    /// Type with no parens must still work (regression guard).
+    #[test]
+    fn simple_types_still_parse_correctly() {
+        let sql = "CREATE TABLE t (id INT, name TEXT, score FLOAT)";
+        let stmt = parse_one(sql).unwrap();
+        let Statement::CreateTable(ct) = stmt else { panic!("expected CreateTable") };
+        assert_eq!(ct.columns.len(), 3);
     }
 }
