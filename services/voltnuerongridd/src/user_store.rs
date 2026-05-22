@@ -75,6 +75,7 @@ impl UserStore {
 #[derive(Clone, Debug)]
 pub(crate) struct SessionEntry {
     pub(crate) user_id: String,
+    #[allow(dead_code)] // stored for future audit trail / session inspection
     pub(crate) username: String,
     pub(crate) role: String,
     pub(crate) tenant_id: Option<String>,

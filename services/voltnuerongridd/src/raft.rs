@@ -107,6 +107,7 @@ pub struct RaftInstallSnapshotResponse {
 /// The leader splits a large row-store export into fixed-size chunks and
 /// accumulates chunks and applies the snapshot on the final chunk
 /// (`is_last = true`).
+#[allow(dead_code)] // DTOs reserved for future chunked-snapshot protocol upgrade
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaftSnapshotChunkRequest {
     /// Unique ID for this snapshot-transfer session (UUID or similar).
@@ -124,6 +125,7 @@ pub struct RaftSnapshotChunkRequest {
 }
 
 /// Reply to a single snapshot chunk.
+#[allow(dead_code)] // DTO reserved for future chunked-snapshot protocol upgrade
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaftSnapshotChunkResponse {
     pub term: u64,

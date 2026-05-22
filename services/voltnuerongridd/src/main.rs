@@ -7,19 +7,18 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use voltnuerongrid_auth::{
     ConfiguredKmsProviderAdapter, KmsKeyResolution,
-    PrivilegeAction, RbacPrivilegeMatrix, SecurityConfigContract,
+    RbacPrivilegeMatrix, SecurityConfigContract,
 };
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::AutonomousActionExecutionRecord;
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
-use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind, SupportedLocale};
+use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
 use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, ReplicaReplayState, RowStoreSyncOrigin,
 };
@@ -27,7 +26,7 @@ use voltnuerongrid_store::constraints::ConstraintManager;
 use voltnuerongrid_store::ddl_catalog::DdlCatalog;
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
-use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
+use voltnuerongrid_store::BoxedDurabilityEngine;
 use voltnuerongrid_driver_rust::ConnectionPoolManager;
 use voltnuerongrid_ingest::{
     ManagedEventBusTransport, ManagedReplayCursorStore,
@@ -37,7 +36,7 @@ use voltnuerongrid_plugins::PluginLifecycleManager;
 
 pub(crate) mod raft;
 use raft::RaftNode;
-pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftDurableState, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftSnapshotChunkRequest, RaftSnapshotChunkResponse, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
+pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftDurableState, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
 
 pub mod resilience;
 pub mod observability;
@@ -48,33 +47,38 @@ pub(crate) mod handlers;
 pub(crate) mod helpers;
 pub(crate) mod router;
 pub(crate) mod user_store;
-use auth::*;
+// ── Glob imports — many are only consumed by tests.rs via `use super::*` ─────
+// These MUST NOT be removed: tests.rs relies on them being in the crate root
+// namespace so `use super::*` / `use crate::*` can resolve all handler and
+// helper symbols without individual imports in every test.
+// See CLAUDE.md § "Known Issues / Gotchas" for the full explanation.
+#[allow(unused_imports)] use auth::*;
 use config_init::*;
-use audit_helpers::*;
-use handlers::cdc::*;
-use handlers::catalog::*;
+#[allow(unused_imports)] use audit_helpers::*;
+#[allow(unused_imports)] use handlers::cdc::*;
+#[allow(unused_imports)] use handlers::catalog::*;
 use handlers::autonomous::*;
-use handlers::security::*;
-use handlers::admin::*;
-use handlers::driver::*;
+#[allow(unused_imports)] use handlers::security::*;
+#[allow(unused_imports)] use handlers::admin::*;
+#[allow(unused_imports)] use handlers::driver::*;
 use handlers::ingest::*;
 use handlers::sql::*;
 use handlers::sre::*;
-use handlers::store::*;
-use handlers::wal::*;
-use handlers::audit::*;
-use handlers::rows::*;
-use handlers::raft::*;
+#[allow(unused_imports)] use handlers::store::*;
+#[allow(unused_imports)] use handlers::wal::*;
+#[allow(unused_imports)] use handlers::audit::*;
+#[allow(unused_imports)] use handlers::rows::*;
+#[allow(unused_imports)] use handlers::raft::*;
 use handlers::misc::*;
 use router::build_router;
-use helpers::time::*;
-use helpers::env_helpers::*;
-use helpers::sql_parse::*;
+#[allow(unused_imports)] use helpers::time::*;
+#[allow(unused_imports)] use helpers::env_helpers::*;
+#[allow(unused_imports)] use helpers::sql_parse::*;
 use helpers::dr_hook::*;
-use helpers::execution::*;
-use helpers::udf::*;
+#[allow(unused_imports)] use helpers::execution::*;
+#[allow(unused_imports)] use helpers::udf::*;
 use helpers::cluster::*;
-use helpers::boot::*;
+#[allow(unused_imports)] use helpers::boot::*;
 use helpers::native_protocol::*;
 use helpers::raft_loop::run_raft_tick_loop;
 // ─── Re-export helpers so handler modules can use `crate::X` ─────────────────
@@ -165,6 +169,7 @@ pub(crate) use auth::locale_from_headers;
 pub(crate) const DEFAULT_DB_MAX_CONNECTIONS: usize = 100;
 
 pub(crate) static TX_COUNTER: AtomicU64 = AtomicU64::new(1);
+#[allow(dead_code)] // reserved for future action telemetry tracing
 static ACTION_TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub(crate) static DR_HOOK_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub(crate) static PESSIMISTIC_LOCK_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -622,12 +627,14 @@ pub(crate) struct AppState {
     pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>,
     /// This node's own advertised base URL, loaded from `VNG_NODE_URL`.
     /// Sent in AppendEntries so followers can forward DML writes to the leader.
+    #[allow(dead_code)] // will be read when follower-→-leader DML forwarding is wired in
     pub(crate) node_url: Arc<Option<String>>,
     /// URL of the current Raft leader, learned from `x-vng-leader-url` headers.
     /// Updated on every accepted AppendEntries. Used by follower DML forwarding.
     pub(crate) current_leader_url: Arc<Mutex<Option<String>>>,
     /// In-progress chunked snapshot transfer sessions keyed by `session_id`.
     /// Each entry accumulates row chunks from the leader until `is_last = true`.
+    #[allow(dead_code)] // will be read when the chunked snapshot handler consumes sessions
     pub(crate) snapshot_chunk_sessions: Arc<Mutex<HashMap<String, SnapshotChunkSession>>>,
     /// S9-WS8-02: Per-model-identity request counters for rate limiting.
     /// Maps model_id → request count in current window.
@@ -745,6 +752,7 @@ impl OperatorRole {
 
 /// Accumulates row chunks from a leader snapshot-transfer session.
 /// Keyed in `AppState::snapshot_chunk_sessions` by `session_id`.
+#[allow(dead_code)] // fields written on chunk receipt; consumed when is_last = true
 #[derive(Clone)]
 pub(crate) struct SnapshotChunkSession {
     pub(crate) term: u64,

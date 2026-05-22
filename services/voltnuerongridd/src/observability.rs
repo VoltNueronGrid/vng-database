@@ -131,6 +131,7 @@ where
     use opentelemetry::KeyValue;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::trace::{BatchSpanProcessor, TracerProvider};
+    use opentelemetry_sdk::Resource;
     use opentelemetry::trace::TracerProvider as _;
 
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok()?;
@@ -156,16 +157,15 @@ where
         .build();
 
     // Resource attributes that identify this service in the OTLP backend.
-    let resource = opentelemetry_sdk::Resource::new(vec![
+    let resource = Resource::new(vec![
         KeyValue::new("service.name", service_name),
         KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
     ]);
 
+    // Use the non-deprecated Builder API (opentelemetry-sdk 0.27+).
     let provider = TracerProvider::builder()
         .with_span_processor(batch)
-        .with_config(
-            opentelemetry_sdk::trace::config().with_resource(resource),
-        )
+        .with_resource(resource)
         .build();
 
     // Stash the provider so shutdown_otel() can flush it on process exit.

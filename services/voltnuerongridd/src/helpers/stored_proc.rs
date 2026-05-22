@@ -141,7 +141,9 @@ impl ProcedureRegistry {
         }
     }
 
-    /// List all registered procedures (name + param count).
+    /// List all registered procedures (name + param count + builtin flag).
+    /// Used by the `SHOW PROCEDURES` introspection path and unit tests.
+    #[allow(dead_code)]
     pub fn list(&self) -> Vec<(&str, usize, bool)> {
         let mut out: Vec<_> = self
             .procedures
