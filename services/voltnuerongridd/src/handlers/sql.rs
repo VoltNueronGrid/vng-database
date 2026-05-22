@@ -1405,6 +1405,12 @@ pub(crate) async fn sql_execute(
                         // Only purge rows if actually dropped
                         if dropped_opt.is_some() {
                             crate::helpers::boot::purge_database_rows(&db_name, &state.row_store, &state.wal_engine);
+                            // Also purge all DDL catalog entries (tables, views, functions,
+                            // triggers, events) for the dropped database so that the schema tree
+                            // reflects the deletion on the next refresh.
+                            if let Ok(mut ddl_cat) = state.ddl_catalog.lock() {
+                                ddl_cat.purge_database(&db_name);
+                            }
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, &format!("DROP DATABASE {}", db_name));
                         }
                         

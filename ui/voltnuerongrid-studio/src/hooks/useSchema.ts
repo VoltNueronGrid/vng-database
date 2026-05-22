@@ -15,6 +15,9 @@ export function useSchema() {
       baseUrl: conn.baseUrl,
       adminApiKey: conn.mode === "admin" ? getActiveKey() : undefined,
       operatorId: conn.operatorId,
+      // Pass the active database so the schema tree is scoped correctly and the
+      // x-vng-database header is sent with the request.
+      database: conn.database,
     });
 
     try {

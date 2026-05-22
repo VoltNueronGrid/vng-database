@@ -204,6 +204,26 @@ impl DdlCatalog {
         self.entries.values().filter(|e| !e.dropped).count()
     }
 
+    /// Remove ALL entries (tables, views, functions, triggers, events) that belong
+    /// to the given database.  Called when `DROP DATABASE` is executed so the DDL
+    /// catalog stays in sync with the database catalog.
+    ///
+    /// Returns the number of entries removed.
+    pub fn purge_database(&mut self, database_name: &str) -> usize {
+        let lower = database_name.trim().to_ascii_lowercase();
+        let keys_to_remove: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.database_name.to_ascii_lowercase() == lower)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let count = keys_to_remove.len();
+        for k in keys_to_remove {
+            self.entries.remove(&k);
+        }
+        count
+    }
+
     /// Return all active (non-dropped) function entries registered via `CREATE FUNCTION`.
     /// Used by the UDF execution engine to resolve catalog-defined functions at query time.
     pub fn list_active_functions(&self) -> Vec<&DdlCatalogEntry> {
