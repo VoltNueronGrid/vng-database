@@ -10,6 +10,7 @@ use voltnuerongrid_exec::QueryPath;
 use voltnuerongrid_sql::{eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind};
 use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
 use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult};
+use voltnuerongrid_store::triggers::TriggerEvent;
 use crate::{AppState, AuthErrorResponse, RuntimeAccessPrincipal, AcidTxEntry};
 use crate::{SqlTransactionResponse, PessimisticLockRecord};
 use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError};
@@ -148,6 +149,79 @@ fn read_latest_with_rocksdb_fallback(
         }
     }
     None
+}
+
+// ─── ISSUE-03: Trigger execution helper ──────────────────────────────────────
+
+/// Fire all registered DML triggers that match `(table, schema, event)`.
+///
+/// This is best-effort: errors from the emitter are logged to stderr but never
+/// propagate to the caller so that a failing trigger does not abort the DML
+/// statement.  The function acquires the `trigger_registry` lock, looks up
+/// matching triggers, builds a minimal JSON payload, and calls
+/// `trigger_emitter.emit()` for each match.
+///
+/// `old_row` is `Some` for UPDATE/DELETE; `new_row` is `Some` for INSERT/UPDATE.
+fn fire_dml_triggers(
+    state: &crate::AppState,
+    table: &str,
+    schema: &str,
+    event: &voltnuerongrid_store::triggers::TriggerEvent,
+    old_row: Option<&voltnuerongrid_store::mvcc::RowData>,
+    new_row: Option<&voltnuerongrid_store::mvcc::RowData>,
+) {
+    // Build a minimal JSON payload without pulling in a full serde_json dependency
+    // on the RowData map — the emitter only needs enough context for logging/CDC.
+    let payload = {
+        let old_part = match old_row {
+            Some(r) => {
+                let fields: Vec<String> = r
+                    .iter()
+                    .map(|(k, v)| format!("\"{}\":\"{}\"", k, v.replace('"', "\\\"")))
+                    .collect();
+                format!("{{{}}}",  fields.join(","))
+            }
+            None => "null".to_string(),
+        };
+        let new_part = match new_row {
+            Some(r) => {
+                let fields: Vec<String> = r
+                    .iter()
+                    .map(|(k, v)| format!("\"{}\":\"{}\"", k, v.replace('"', "\\\"")))
+                    .collect();
+                format!("{{{}}}", fields.join(","))
+            }
+            None => "null".to_string(),
+        };
+        format!(
+            "{{\"event\":\"{}\",\"table\":\"{}\",\"schema\":\"{}\",\"old_row\":{},\"new_row\":{}}}",
+            event.as_str(),
+            table,
+            schema,
+            old_part,
+            new_part,
+        )
+    };
+
+    let triggers_to_fire: Vec<voltnuerongrid_store::triggers::TriggerDefinition> = {
+        match state.trigger_registry.lock() {
+            Ok(reg) => reg
+                .find_triggers(table, schema, event)
+                .into_iter()
+                .cloned()
+                .collect(),
+            Err(_) => return, // lock poisoned — skip silently
+        }
+    };
+
+    for trigger in &triggers_to_fire {
+        if let Err(e) = state.trigger_emitter.emit(trigger, &payload) {
+            eprintln!(
+                "[vng:trigger] emit error for trigger '{}' on {}.{}: {e}",
+                trigger.name, schema, table
+            );
+        }
+    }
 }
 
 // ─── SQL DTOs ─────────────────────────────────────────────────────────────────
@@ -1413,14 +1487,26 @@ pub(crate) async fn sql_execute(
     // ── Statement dispatch ───────────────────────────────────────────────────
     // M-8 Rule 6: Snapshot the DDL catalog once so we can resolve view definitions
     // without holding the lock across the entire dispatch loop.
-    let view_catalog_snapshot: Vec<(String, String)> = {
+    // ISSUE-05: Also snapshot catalog-registered UDFs for inline substitution.
+    let (view_catalog_snapshot, udf_catalog_snapshot): (Vec<(String, String)>, Vec<crate::helpers::udf::CatalogUdfEntry>) = {
         match state.ddl_catalog.lock() {
-            Ok(cat) => cat.active_entries()
-                .into_iter()
-                .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
-                .map(|e| (e.object_name.to_ascii_lowercase(), e.original_statement.clone()))
-                .collect(),
-            Err(_) => Vec::new(),
+            Ok(cat) => {
+                let views = cat.active_entries()
+                    .into_iter()
+                    .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
+                    .map(|e| (e.object_name.to_ascii_lowercase(), e.original_statement.clone()))
+                    .collect();
+                let udfs = cat.list_active_functions()
+                    .into_iter()
+                    .map(|e| crate::helpers::udf::CatalogUdfEntry {
+                        name: e.object_name.to_ascii_lowercase(),
+                        sql_body: crate::helpers::udf::extract_sql_function_body(&e.original_statement),
+                        ddl: e.original_statement.clone(),
+                    })
+                    .collect();
+                (views, udfs)
+            }
+            Err(_) => (Vec::new(), Vec::new()),
         }
     };
 
@@ -1432,6 +1518,9 @@ pub(crate) async fn sql_execute(
             // M-8 Rule 6: If the SELECT targets a registered view, expand it to the
             // view's underlying query body before passing to the executor.
             let expanded = expand_select_view(&statement.raw, &view_catalog_snapshot);
+            // ISSUE-05: If the (view-expanded) SELECT calls a catalog UDF with a SQL
+            // body, inline the function body as a subquery so the query can execute.
+            let expanded = inline_catalog_udf_calls(expanded, &udf_catalog_snapshot);
             olap_statements.push(expanded);
         } else {
             // M-8 Rule 6: For DML (INSERT/UPDATE/DELETE) targeting a simple updatable
@@ -1856,7 +1945,9 @@ pub(crate) async fn sql_execute(
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
-                            rs.insert(xid, &k, d);
+                            rs.insert(xid, &k, d.clone());
+                            // ISSUE-03: fire AFTER INSERT triggers.
+                            fire_dml_triggers(&state, table_name, "public", &TriggerEvent::AfterInsert, None, Some(&d));
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                         }
                     } else if upper.starts_with("UPDATE") {
@@ -1927,7 +2018,7 @@ pub(crate) async fn sql_execute(
                                         let before = rs.read_latest(&matched_k).cloned();
                                         let mut updated = existing;
                                         updated.insert(set_col.clone(), set_val.clone());
-                                        record_undo(&state.tx_undo_log, &connection_id, &matched_k, before);
+                                        record_undo(&state.tx_undo_log, &connection_id, &matched_k, before.clone());
                                         let _ = rs.begin_write_intent(xid, &matched_k);
                                         let raw_k_stripped = if db_prefix_str.is_empty() {
                                             matched_k.clone()
@@ -1935,7 +2026,9 @@ pub(crate) async fn sql_execute(
                                             matched_k.strip_prefix(&db_prefix_str).unwrap_or(matched_k.as_str()).to_string()
                                         };
                                         { let mut wal = state.wal_engine.lock().expect("wal store_row bulk"); wal.store_row(&db, &raw_k_stripped, xid, Some(&updated)); }
-                                        rs.insert(xid, &matched_k, updated);
+                                        rs.insert(xid, &matched_k, updated.clone());
+                                        // ISSUE-03: fire AFTER UPDATE triggers.
+                                        fire_dml_triggers(&state, &tbl, "public", &TriggerEvent::AfterUpdate, before.as_ref(), Some(&updated));
                                     }
                                     persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                                 }
@@ -1950,10 +2043,13 @@ pub(crate) async fn sql_execute(
                                 for (col, val) in &d {
                                     merged.insert(col.clone(), val.clone());
                                 }
-                                record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                                let table_name_upd = d.get("__table").map(|s| s.as_str()).unwrap_or("");
+                                record_undo(&state.tx_undo_log, &connection_id, &k, before.clone());
                                 let _ = rs.begin_write_intent(xid, &k);
                                 { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&merged)); }
-                                rs.insert(xid, &k, merged);
+                                rs.insert(xid, &k, merged.clone());
+                                // ISSUE-03: fire AFTER UPDATE triggers.
+                                fire_dml_triggers(&state, table_name_upd, "public", &TriggerEvent::AfterUpdate, before.as_ref(), Some(&merged));
                                 persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                             }
                         }
@@ -2008,11 +2104,13 @@ pub(crate) async fn sql_execute(
                                             *stats_inserts.entry(matched_k[..colon].to_string()).or_insert(0) -= 1;
                                         }
                                     }
-                                    record_undo(&state.tx_undo_log, &connection_id, &matched_k, before);
+                                    record_undo(&state.tx_undo_log, &connection_id, &matched_k, before.clone());
                                     let _ = rs.begin_write_intent(xid, &matched_k);
                                     rs.delete(xid, &matched_k);
                                     let raw_k = matched_k.trim_start_matches(&format!("{db_prefix_str}")).to_string();
                                     { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
+                                    // ISSUE-03: fire AFTER DELETE triggers.
+                                    fire_dml_triggers(&state, &tbl, "public", &TriggerEvent::AfterDelete, before.as_ref(), None);
                                 }
                                 persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                             }
@@ -2026,10 +2124,14 @@ pub(crate) async fn sql_execute(
                                     *stats_inserts.entry(k[..colon].to_string()).or_insert(0) -= 1;
                                 }
                             }
-                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                            // Extract table name from the raw key (format: "table:id").
+                            let del_table = raw_k.split(':').next().unwrap_or("");
+                            record_undo(&state.tx_undo_log, &connection_id, &k, before.clone());
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
                             { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
+                            // ISSUE-03: fire AFTER DELETE triggers.
+                            fire_dml_triggers(&state, del_table, "public", &TriggerEvent::AfterDelete, before.as_ref(), None);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     }
@@ -2950,6 +3052,30 @@ fn handle_revoke_sql(state: &AppState, sql: &str) {
     }
 }
 
+// ─── ISSUE-05: Catalog UDF inline expansion ───────────────────────────────────
+
+/// Inline catalog-registered UDF calls in a SELECT statement.
+///
+/// For each catalog function whose `sql_body` is a simple `SELECT` or `RETURN`
+/// expression, replace `fn_name(arg)` with `(SELECT body)` so the downstream OLTP
+/// or OLAP executor can evaluate the expression without requiring DataFusion UDF
+/// registration.
+///
+/// Multiple UDFs in the same statement are inlined iteratively. Falls back to the
+/// original statement if no UDF could be inlined.
+fn inline_catalog_udf_calls(sql: String, udfs: &[crate::helpers::udf::CatalogUdfEntry]) -> String {
+    use crate::helpers::udf::try_inline_catalog_udf;
+    let mut result = sql;
+    for udf in udfs {
+        if let Some(body) = &udf.sql_body {
+            if let Some(inlined) = try_inline_catalog_udf(&result, &udf.name, body) {
+                result = inlined;
+            }
+        }
+    }
+    result
+}
+
 // ─── M-8 Rule 6: View expansion ─────────────────────────────────────────────
 
 /// Expand a SELECT statement that targets a registered view.
@@ -2979,6 +3105,11 @@ fn expand_select_view(sql: &str, view_catalog: &[(String, String)]) -> String {
 /// Only simple single-table views (no JOIN, no GROUP BY, no aggregates) are updatable.
 /// The rewrite replaces the view name with the base table name so the DML applies to
 /// the actual underlying rows.
+///
+/// ISSUE-04 improvement: uses proper word-boundary checks so that a view name appearing
+/// inside a string literal, comment, or as part of a longer identifier is NOT replaced.
+/// A word boundary is defined as the characters surrounding the match being
+/// non-alphanumeric / non-underscore (i.e. SQL identifier delimiters).
 fn rewrite_dml_for_view(sql: &str, view_catalog: &[(String, String)]) -> String {
     use crate::helpers::sql_parse::extract_updatable_view_base_table;
     let lower = sql.to_ascii_lowercase();
@@ -2987,16 +3118,50 @@ fn rewrite_dml_for_view(sql: &str, view_catalog: &[(String, String)]) -> String 
     if !matches!(first_word, "insert" | "update" | "delete") {
         return sql.to_string();
     }
+
+    /// Check whether a character is a SQL identifier character (alphanumeric or `_`).
+    fn is_ident_char(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+
     for (view_name, ddl) in view_catalog {
-        // Check if the DML references the view name (as a word boundary).
-        if !lower.contains(view_name.as_str()) {
+        let vname_lower = view_name.to_ascii_lowercase();
+        let vlen = vname_lower.len();
+        if vlen == 0 {
             continue;
         }
-        if let Some(base_table) = extract_updatable_view_base_table(ddl) {
-            // Replace the view name with the base table name (case-insensitive, whole-word).
-            // Simple approach: replace the first occurrence of view_name with base_table.
-            if let Some(pos) = lower.find(view_name.as_str()) {
-                let end = pos + view_name.len();
+        // Scan `lower` for the view name at a word boundary.
+        // We want to find the FIRST occurrence that:
+        //   - is preceded by a non-ident char (or start of string), AND
+        //   - is followed by a non-ident char (or end of string).
+        let lower_bytes = lower.as_bytes();
+        let view_bytes = vname_lower.as_bytes();
+        let mut match_pos: Option<usize> = None;
+        let limit = lower.len().saturating_sub(vlen) + 1;
+        for i in 0..limit {
+            if &lower_bytes[i..i + vlen] != view_bytes {
+                continue;
+            }
+            // Check left boundary.
+            let left_ok = if i == 0 {
+                true
+            } else {
+                !is_ident_char(lower.as_bytes()[i - 1] as char)
+            };
+            // Check right boundary.
+            let right_ok = if i + vlen >= lower.len() {
+                true
+            } else {
+                !is_ident_char(lower.as_bytes()[i + vlen] as char)
+            };
+            if left_ok && right_ok {
+                match_pos = Some(i);
+                break;
+            }
+        }
+        if let Some(pos) = match_pos {
+            if let Some(base_table) = extract_updatable_view_base_table(ddl) {
+                let end = pos + vlen;
                 return format!("{}{}{}", &sql[..pos], base_table, &sql[end..]);
             }
         }

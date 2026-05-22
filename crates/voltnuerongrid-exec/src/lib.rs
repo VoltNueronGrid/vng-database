@@ -56,16 +56,30 @@ impl HtapQueryRouter {
                 reason: "transactional statement".to_string(),
             },
             SqlStatementKind::Select => {
-                if upper.contains("GROUP BY")
-                    || upper.contains("JOIN")
-                    || upper.contains("HAVING")
-                    || upper.contains("OVER(")
-                    || upper.contains("SUM(")
-                    || upper.contains("COUNT(")
-                    || upper.contains("AVG(")
-                    || upper.contains("MIN(")
-                    || upper.contains("MAX(")
-                {
+                // ISSUE-06 improvement: normalise whitespace around function call parens
+                // so `SUM (` and `SUM(` are both detected.  Also route full-table scans
+                // (SELECT … FROM table with no WHERE clause) to OLAP to avoid saturating
+                // the OLTP row store with large sequential reads.
+                let compact: String = upper
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let is_analytical = compact.contains("GROUP BY")
+                    || compact.contains("JOIN")
+                    || compact.contains("HAVING")
+                    || compact.contains("OVER (")
+                    || compact.contains("OVER(")
+                    || compact.contains("SUM (")
+                    || compact.contains("SUM(")
+                    || compact.contains("COUNT (")
+                    || compact.contains("COUNT(")
+                    || compact.contains("AVG (")
+                    || compact.contains("AVG(")
+                    || compact.contains("MIN (")
+                    || compact.contains("MIN(")
+                    || compact.contains("MAX (")
+                    || compact.contains("MAX(");
+                if is_analytical {
                     RouteDecision {
                         path: QueryPath::Olap,
                         reason: "analytical pattern detected".to_string(),
