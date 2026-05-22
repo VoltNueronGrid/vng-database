@@ -8,6 +8,8 @@ export interface StudioConnection {
   operatorId?: string;
   tenantId?: string;
   userId?: string;
+  /** When set, all SQL execute calls are scoped to this database via x-vng-database header. */
+  database?: string;
 }
 
 // ─── SQL Execute ─────────────────────────────────────────────────────────────
@@ -449,6 +451,8 @@ export class StudioApiClient {
     }
     if (this.conn.tenantId) h["x-vng-tenant-id"] = this.conn.tenantId;
     if (this.conn.userId) h["x-vng-user-id"] = this.conn.userId;
+    // Database isolation: scope SQL execution to the specified database.
+    if (this.conn.database?.trim()) h["x-vng-database"] = this.conn.database.trim();
     return h;
   }
 

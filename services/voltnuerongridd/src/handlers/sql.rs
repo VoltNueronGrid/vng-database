@@ -759,10 +759,16 @@ pub(crate) async fn sql_transaction(
                                 let k = db_prefix_key(&db, &raw_k);
                                 // Gap #3 + M-2: record before-image for ROLLBACK support.
                                 let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
+                                // Read-before-write: merge SET columns into the existing row so
+                                // non-SET fields are preserved (fix for UPDATE nullifying columns).
+                                let mut merged = before.clone().unwrap_or_default();
+                                for (col, val) in &d {
+                                    merged.insert(col.clone(), val.clone());
+                                }
                                 record_undo(&state.tx_undo_log, &connection_id, &k, before);
                                 let _ = rs.begin_write_intent(xid, &k);
-                                if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
-                                rs.insert(xid, &k, d);
+                                if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&merged)); }
+                                rs.insert(xid, &k, merged);
                                 persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                             }
                         }
@@ -1937,11 +1943,17 @@ pub(crate) async fn sql_execute(
                                 let k = db_prefix_key(&db, &raw_k);
                                 // Gap #3 + M-2: record before-image for ROLLBACK support.
                                 let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
+                                // Read-before-write: merge SET columns into the existing row so
+                                // non-SET fields are preserved (fix for UPDATE nullifying columns).
                                 // UPDATE keeps the row count the same — no stat delta needed.
+                                let mut merged = before.clone().unwrap_or_default();
+                                for (col, val) in &d {
+                                    merged.insert(col.clone(), val.clone());
+                                }
                                 record_undo(&state.tx_undo_log, &connection_id, &k, before);
                                 let _ = rs.begin_write_intent(xid, &k);
-                                { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
-                                rs.insert(xid, &k, d);
+                                { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&merged)); }
+                                rs.insert(xid, &k, merged);
                                 persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                             }
                         }

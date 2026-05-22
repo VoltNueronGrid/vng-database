@@ -33,7 +33,11 @@ async function serverIsUp(): Promise<boolean> {
   }
 }
 
-/** Seed a live connection (with adminKey) directly into localStorage. */
+/** Seed a live connection (with adminKey) directly into localStorage.
+ * IMPORTANT: uses database "e2e" to keep test data isolated from the global namespace.
+ * All E2E-created tables (e2e_products, e2e_seq_test, rp_gen_insert_e2e) land in
+ * the "e2e" database, not the shared "" (global) namespace.
+ */
 async function seedLiveConn(page: import("@playwright/test").Page) {
   const conn = {
     id: "conn-live-e2e",
@@ -44,6 +48,8 @@ async function seedLiveConn(page: import("@playwright/test").Page) {
     baseUrl: LIVE_BASE,
     host: "127.0.0.1",
     port: 8080,
+    // Isolated database scope — prevents test tables from polluting the global namespace
+    database: "e2e",
     mode: "admin",
     adminKey: ADMIN_KEY,
     sslEnabled: false,
@@ -130,6 +136,22 @@ async function runQuery(page: import("@playwright/test").Page) {
 test.beforeAll(async () => {
   if (!(await serverIsUp())) {
     test.skip();
+    return;
+  }
+  // Ensure the isolated e2e database exists before any test runs.
+  // This mirrors what the ConnectionPanel save() does for regular users.
+  try {
+    await fetch(`${LIVE_BASE}/api/v1/admin/databases`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vng-admin-key": ADMIN_KEY,
+        "x-vng-operator-id": "admin",
+      },
+      body: JSON.stringify({ name: "e2e", if_not_exists: true }),
+    });
+  } catch {
+    // Non-fatal — tests will proceed; CREATE DATABASE may already be done
   }
 });
 
