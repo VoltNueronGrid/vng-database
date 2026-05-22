@@ -7,7 +7,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-#[allow(unused_imports)] use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -16,12 +15,10 @@ use voltnuerongrid_auth::{
     ConfiguredKmsProviderAdapter, KmsKeyResolution,
     RbacPrivilegeMatrix, SecurityConfigContract,
 };
-#[allow(unused_imports)] use voltnuerongrid_auth::PrivilegeAction;
 use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
 use voltnuerongrid_ai::AutonomousActionExecutionRecord;
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
-#[allow(unused_imports)] use voltnuerongrid_sql::SupportedLocale;
 use voltnuerongrid_store::htap_sync::{
     InMemoryReplicationTransport, ReplicaReplayState, RowStoreSyncOrigin,
 };
@@ -30,7 +27,6 @@ use voltnuerongrid_store::ddl_catalog::DdlCatalog;
 use voltnuerongrid_store::index::IndexManager;
 use voltnuerongrid_store::mvcc::PagedRowStore;
 use voltnuerongrid_store::BoxedDurabilityEngine;
-#[allow(unused_imports)] use voltnuerongrid_store::DurabilityConfig;
 use voltnuerongrid_driver_rust::ConnectionPoolManager;
 use voltnuerongrid_ingest::{
     ManagedEventBusTransport, ManagedReplayCursorStore,
@@ -41,7 +37,6 @@ use voltnuerongrid_plugins::PluginLifecycleManager;
 pub(crate) mod raft;
 use raft::RaftNode;
 pub(crate) use raft::{RaftAppendRequest, RaftAppendResponse, RaftDurableState, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftStatusSnapshot, RaftVoteRequest, RaftVoteResponse};
-#[allow(unused_imports)] pub(crate) use raft::{RaftSnapshotChunkRequest, RaftSnapshotChunkResponse};
 
 pub mod resilience;
 pub mod observability;
@@ -700,6 +695,11 @@ pub(crate) struct AppState {
     /// is the hook point for future selectivity-driven routing decisions in
     /// `HtapQueryRouter` (see `crates/voltnuerongrid-exec`).
     pub(crate) stats_registry: Arc<Mutex<voltnuerongrid_exec::StatsRegistry>>,
+    /// L-2: Stored-procedure registry.
+    /// Maps lower-case procedure name → registered `StoredProcedure`.
+    /// Pre-populated with built-ins at boot; extended at runtime via
+    /// `CREATE [OR REPLACE] PROCEDURE … AS $$ … $$` DDL.
+    pub(crate) proc_registry: Arc<Mutex<helpers::stored_proc::ProcedureRegistry>>,
 }
 
 #[derive(Clone, Default)]
@@ -752,8 +752,8 @@ impl OperatorRole {
 
 /// Accumulates row chunks from a leader snapshot-transfer session.
 /// Keyed in `AppState::snapshot_chunk_sessions` by `session_id`.
+#[allow(dead_code)] // fields written on chunk receipt; consumed when is_last = true
 #[derive(Clone)]
-#[allow(dead_code)] // fields consumed by the chunked snapshot install handler at runtime
 pub(crate) struct SnapshotChunkSession {
     pub(crate) term: u64,
     pub(crate) leader_id: String,
@@ -1700,6 +1700,12 @@ async fn main() {
         connection_tx_active: Arc::new(Mutex::new(HashMap::new())),
         // H-1: table statistics registry (cost-based optimizer foundation).
         stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
+        // L-2: stored-procedure registry — pre-populated with built-ins.
+        proc_registry: {
+            let mut reg = helpers::stored_proc::ProcedureRegistry::new();
+            reg.register_builtins();
+            Arc::new(Mutex::new(reg))
+        },
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -1729,6 +1735,45 @@ async fn main() {
         // conflict detection should also consult RocksDB.  Track as a future gap.
     }
 
+    // M-3: Restore committed serializable write-sets from the previous process run.
+    // Without this, cross-restart serializable isolation is only correct within a
+    // single process lifetime — a transaction committed just before a crash would
+    // not conflict-check correctly with transactions starting after the restart.
+    {
+        let data_dir = state.runtime_config.storage.data_dir.clone();
+        let sets = helpers::raft_loop::load_committed_write_sets(&data_dir);
+        if !sets.is_empty() {
+            let mut acid = state.acid_transactions.lock().expect("acid restore lock");
+            let restored = sets.len();
+            for ws in sets {
+                acid.transactions.insert(
+                    ws.tx_id.clone(),
+                    AcidTxEntry {
+                        transaction_id: ws.tx_id,
+                        assigned_node_id: "restored".to_string(),
+                        state: AcidTxState::Committed,
+                        isolation_level: "serializable".to_string(),
+                        started_at_unix_ms: ws.committed_at_ms,
+                        completed_at_unix_ms: Some(ws.committed_at_ms),
+                        statement_count: 0,
+                        affected_tables: Vec::new(),
+                        savepoints: Vec::new(),
+                        read_snapshot_at_ms: None,
+                        wal_log: Vec::new(),
+                        row_store_snapshot_xid: None,
+                        written_row_keys: ws.written_keys.into_iter().collect(),
+                        read_row_keys: ws.read_keys.into_iter().collect(),
+                    },
+                );
+            }
+            tracing::info!(
+                target: "vng.acid",
+                count = restored,
+                "serializable write-sets restored from disk for cross-restart SSI"
+            );
+        }
+    }
+
     // H-2: Restore durable Raft state (current_term, voted_for, log entries)
     // from the previous process run.  This prevents a restarted node from
     // double-voting in an old term or losing committed log entries.
@@ -1750,7 +1795,9 @@ async fn main() {
 
     tokio::spawn(run_raft_tick_loop(state.clone()));
 
-    // Gap #6: Background Parquet flush task — exports row data to disk for OLAP queries.
+    // Gap #6 + L-5: Background Parquet flush task — exports row data to disk for OLAP queries.
+    // L-5: Run one immediate flush at startup so OLAP queries have Parquet files from the
+    // first request instead of waiting up to `flush_interval_secs` (default 60 s).
     {
         let flush_state = state.clone();
         let flush_interval_secs = std::env::var("VNG_PARQUET_FLUSH_INTERVAL_SECS")
@@ -1758,11 +1805,32 @@ async fn main() {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(60);
         let data_dir = state.runtime_config.storage.data_dir.clone();
+
+        // L-5: immediate startup flush — populates Parquet before the first OLAP query.
+        if !data_dir.is_empty() {
+            let startup_rows = {
+                let rs = state.row_store.lock().expect("row_store parquet startup flush");
+                let xid = rs.current_xid();
+                rs.scan_at_snapshot(xid)
+                    .into_iter()
+                    .map(|(k, d)| (k.to_string(), d.clone()))
+                    .collect::<Vec<_>>()
+            };
+            let flushed = helpers::parquet_flush::flush_rows_to_parquet(&startup_rows, &data_dir);
+            if flushed > 0 {
+                tracing::info!(
+                    target: "vng.parquet",
+                    tables = flushed,
+                    "parquet startup flush complete (L-5)"
+                );
+            }
+        }
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(
                 std::time::Duration::from_secs(flush_interval_secs)
             );
-            interval.tick().await; // skip the first immediate tick
+            interval.tick().await; // skip the first immediate tick (startup flush already ran)
             loop {
                 interval.tick().await;
                 let rows = {

@@ -66,6 +66,86 @@ pub(crate) fn load_raft_state(data_dir: &str) -> Option<RaftDurableState> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// M-3: Committed write-set persistence for cross-restart serializable isolation
+// ---------------------------------------------------------------------------
+
+/// Maximum number of committed write-set entries retained across restarts.
+/// Older entries are evicted so the file doesn't grow unbounded.
+const MAX_PERSISTED_WRITE_SETS: usize = 1_000;
+
+/// A single committed serializable transaction's write/read set — the minimum
+/// data needed for post-restart SSI conflict detection.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PersistedWriteSet {
+    pub tx_id: String,
+    pub written_keys: Vec<String>,
+    pub read_keys: Vec<String>,
+    pub committed_at_ms: u128,
+}
+
+/// Persist the last N committed serializable write-sets to
+/// `{data_dir}/acid_write_sets.json`.  Older entries beyond
+/// `MAX_PERSISTED_WRITE_SETS` are evicted.  No-op when `data_dir` is empty.
+pub(crate) fn persist_committed_write_sets(
+    data_dir: &str,
+    registry: &crate::AcidTransactionRegistry,
+) {
+    if data_dir.is_empty() { return; }
+
+    let mut entries: Vec<PersistedWriteSet> = registry
+        .transactions
+        .values()
+        .filter(|e| {
+            e.isolation_level == "serializable"
+                && e.state == crate::AcidTxState::Committed
+                && !e.written_row_keys.is_empty()
+        })
+        .map(|e| PersistedWriteSet {
+            tx_id: e.transaction_id.clone(),
+            written_keys: e.written_row_keys.iter().cloned().collect(),
+            read_keys: e.read_row_keys.iter().cloned().collect(),
+            committed_at_ms: e.completed_at_unix_ms.unwrap_or(0),
+        })
+        .collect();
+
+    // Keep only the most recent N entries.
+    entries.sort_by_key(|e| e.committed_at_ms);
+    if entries.len() > MAX_PERSISTED_WRITE_SETS {
+        entries.drain(..entries.len() - MAX_PERSISTED_WRITE_SETS);
+    }
+
+    let path = std::path::Path::new(data_dir).join("acid_write_sets.json");
+    let tmp_path = std::path::Path::new(data_dir).join("acid_write_sets.json.tmp");
+    match serde_json::to_vec(&entries) {
+        Ok(bytes) => {
+            if std::fs::write(&tmp_path, &bytes).is_ok() {
+                let _ = std::fs::rename(&tmp_path, &path);
+            }
+        }
+        Err(e) => tracing::warn!(target: "vng.acid", "acid_write_sets serialize error: {e}"),
+    }
+}
+
+/// Load previously persisted committed write-sets from
+/// `{data_dir}/acid_write_sets.json`.  Returns an empty vec if the file is
+/// missing or cannot be parsed.
+pub(crate) fn load_committed_write_sets(data_dir: &str) -> Vec<PersistedWriteSet> {
+    if data_dir.is_empty() { return Vec::new(); }
+    let path = std::path::Path::new(data_dir).join("acid_write_sets.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+    match serde_json::from_slice::<Vec<PersistedWriteSet>>(&bytes) {
+        Ok(sets) => sets,
+        Err(e) => {
+            tracing::warn!(target: "vng.acid", "acid_write_sets.json parse error: {e}");
+            Vec::new()
+        }
+    }
+}
+
 /// Trim the Raft log once the log grows beyond this many entries.
 const COMPACT_LOG_THRESHOLD: usize = 500;
 /// Check compaction every N ticks (~450 ms at default tick rate).
@@ -436,6 +516,12 @@ pub(crate) fn apply_committed_entries(state: &AppState) {
 /// Supports INSERT, UPDATE, and DELETE.  Unknown or unparseable commands are
 /// silently skipped — the Raft log is the source of truth and we never want a
 /// bad entry to stall the apply loop.
+///
+/// M-1 fix: commands may be prefixed with `"__vng_db:<name>\n"` to carry the
+/// originating database scope.  The prefix is stripped before parsing and the
+/// database name is passed to `wal.store_row` so Raft-applied rows land in the
+/// correct per-DB column family (or in-memory namespace), matching the
+/// direct-write path that uses `db_prefix_key`.
 fn apply_dml_command(
     command: &str,
     rs: &mut voltnuerongrid_store::mvcc::PagedRowStore,
@@ -443,24 +529,37 @@ fn apply_dml_command(
     state: &AppState,
 ) {
     use crate::{extract_all_insert_rows, extract_update_row_from_sql, extract_delete_key_from_sql};
-    let upper = command.trim_start().to_ascii_uppercase();
+
+    // M-1: peel off the optional `__vng_db:<name>\n` scope prefix.
+    let (db, sql) = if let Some(rest) = command.strip_prefix("__vng_db:") {
+        if let Some(nl) = rest.find('\n') {
+            (&rest[..nl], &rest[nl + 1..])
+        } else {
+            // Malformed prefix — treat as unscoped.
+            ("", command)
+        }
+    } else {
+        ("", command)
+    };
+
+    let upper = sql.trim_start().to_ascii_uppercase();
     if upper.starts_with("INSERT") {
-        for (k, d, _) in extract_all_insert_rows(command) {
+        for (k, d, _) in extract_all_insert_rows(sql) {
             let _ = rs.begin_write_intent(xid, &k);
-            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row("", &k, xid, Some(&d)); }
+            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, Some(&d)); }
             rs.insert(xid, &k, d);
         }
     } else if upper.starts_with("UPDATE") {
-        if let Some((k, d)) = extract_update_row_from_sql(command) {
+        if let Some((k, d)) = extract_update_row_from_sql(sql) {
             let _ = rs.begin_write_intent(xid, &k);
-            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row("", &k, xid, Some(&d)); }
+            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, Some(&d)); }
             rs.insert(xid, &k, d);
         }
     } else if upper.starts_with("DELETE") {
-        if let Some(k) = extract_delete_key_from_sql(command) {
+        if let Some(k) = extract_delete_key_from_sql(sql) {
             let _ = rs.begin_write_intent(xid, &k);
             rs.delete(xid, &k);
-            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row("", &k, xid, None); }
+            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, None); }
         }
     }
     // SELECT / DDL / unknown — no-op.
@@ -637,5 +736,42 @@ mod tests {
         assert_eq!(node.last_applied, 3);
         // Role must remain Follower (transient — not restored).
         assert_eq!(node.role, RaftRole::Follower);
+    }
+
+    // M-1: verify db-scope prefix parsing used in apply_dml_command.
+    #[test]
+    fn vng_db_prefix_parse_with_db() {
+        let cmd = "__vng_db:mydb\nINSERT INTO t VALUES (1)";
+        let (db, sql) = if let Some(rest) = cmd.strip_prefix("__vng_db:") {
+            if let Some(nl) = rest.find('\n') {
+                (&rest[..nl], &rest[nl + 1..])
+            } else { ("", cmd) }
+        } else { ("", cmd) };
+        assert_eq!(db, "mydb");
+        assert_eq!(sql, "INSERT INTO t VALUES (1)");
+    }
+
+    #[test]
+    fn vng_db_prefix_parse_empty_db() {
+        let cmd = "__vng_db:\nDELETE FROM t WHERE id='x'";
+        let (db, sql) = if let Some(rest) = cmd.strip_prefix("__vng_db:") {
+            if let Some(nl) = rest.find('\n') {
+                (&rest[..nl], &rest[nl + 1..])
+            } else { ("", cmd) }
+        } else { ("", cmd) };
+        assert_eq!(db, "");
+        assert_eq!(sql, "DELETE FROM t WHERE id='x'");
+    }
+
+    #[test]
+    fn vng_db_prefix_parse_no_prefix() {
+        let cmd = "INSERT INTO t VALUES (1)";
+        let (db, sql) = if let Some(rest) = cmd.strip_prefix("__vng_db:") {
+            if let Some(nl) = rest.find('\n') {
+                (&rest[..nl], &rest[nl + 1..])
+            } else { ("", cmd) }
+        } else { ("", cmd) };
+        assert_eq!(db, "");
+        assert_eq!(sql, "INSERT INTO t VALUES (1)");
     }
 }

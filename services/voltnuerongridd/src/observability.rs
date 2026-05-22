@@ -74,6 +74,15 @@ pub fn init_observability() {
 fn init_tracing() {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+    // L-4: Register the W3C TraceContext propagator globally so the
+    // `propagate_trace_context` axum middleware can extract `traceparent`
+    // / `tracestate` headers from every inbound HTTP request and stitch
+    // the incoming distributed trace into our local spans — regardless of
+    // whether OTLP export is configured.
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
     let filter = EnvFilter::try_from_env("VNG_LOG")
         .unwrap_or_else(|_| EnvFilter::new("info,voltnuerongridd=info"));
 
