@@ -6087,7 +6087,7 @@ fn s2_ws2_commit_flush_handles_update_statement() {
 // ── S3-WS1-05: planner routes aggregate query to OLAP ───────────────────
 #[test]
 fn s3_ws1_planner_routes_aggregate_to_olap() {
-    use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};
+    use voltnuerongrid_exec::QueryPlanner;
     use voltnuerongrid_sql::parse_one;
     let stmt = parse_one("SELECT region, SUM(revenue) FROM sales GROUP BY region").unwrap();
     let plan = QueryPlanner::plan(&stmt);
@@ -6103,7 +6103,7 @@ fn s3_ws1_planner_routes_aggregate_to_olap() {
 // ── S3-WS1-05: planner routes filtered SELECT to OLTP ───────────────────
 #[test]
 fn s3_ws1_planner_select_with_filter_routes_oltp() {
-    use voltnuerongrid_exec::{LogicalPlan, QueryPlanner};
+    use voltnuerongrid_exec::QueryPlanner;
     use voltnuerongrid_sql::parse_one;
     let stmt = parse_one("SELECT id FROM users WHERE id = 'u1'").unwrap();
     let plan = QueryPlanner::plan(&stmt);
@@ -9110,7 +9110,7 @@ fn linearisable_write_apply_loop_applies_committed_entry_to_row_store() {
     let state = state_with_key(Some("test-key"));
 
     // Subscribe a receiver so send() can succeed.
-    let mut rx = state.raft_last_applied_tx.subscribe();
+    let rx = state.raft_last_applied_tx.subscribe();
 
     // Promote the node to Leader with 0 peers (single-node cluster).
     {
@@ -9164,7 +9164,7 @@ fn linearisable_write_two_pending_commands_both_applied() {
     let state = state_with_key(Some("test-key"));
 
     // Subscribe before appending so send() sees at least one receiver.
-    let mut rx = state.raft_last_applied_tx.subscribe();
+    let rx = state.raft_last_applied_tx.subscribe();
 
     {
         let mut node = state.raft_state.lock().unwrap();

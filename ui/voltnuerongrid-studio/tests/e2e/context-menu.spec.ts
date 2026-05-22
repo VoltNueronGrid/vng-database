@@ -203,30 +203,30 @@ test.describe("ContextMenu — Users panel", () => {
     await mockedPage.reload();
     await goToMain(mockedPage);
     await mockedPage.locator(".activity-btn", { hasText: "Users" }).click();
-    await expect(mockedPage.locator(".conn-item").first()).toBeVisible();
+    await expect(mockedPage.locator(".user-item").first()).toBeVisible();
   });
 
   test("right-clicking a user item shows user context menu", async ({ mockedPage }) => {
-    await mockedPage.locator(".conn-item").first().click({ button: "right" });
+    await mockedPage.locator(".user-item").first().click({ button: "right" });
     await expect(mockedPage.locator(".ctx-menu")).toBeVisible();
   });
 
   test("user context menu shows Edit User item", async ({ mockedPage }) => {
-    await mockedPage.locator(".conn-item").first().click({ button: "right" });
+    await mockedPage.locator(".user-item").first().click({ button: "right" });
     await expect(
       mockedPage.locator(".ctx-menu-item .ctx-menu-label", { hasText: "Edit User…" })
     ).toBeVisible();
   });
 
   test("user context menu shows Grant Role item", async ({ mockedPage }) => {
-    await mockedPage.locator(".conn-item").first().click({ button: "right" });
+    await mockedPage.locator(".user-item").first().click({ button: "right" });
     await expect(
       mockedPage.locator(".ctx-menu-item .ctx-menu-label", { hasText: "Grant Role…" })
     ).toBeVisible();
   });
 
   test("user context menu shows Drop User item with danger styling", async ({ mockedPage }) => {
-    await mockedPage.locator(".conn-item").first().click({ button: "right" });
+    await mockedPage.locator(".user-item").first().click({ button: "right" });
     const dropItem = mockedPage.locator(".ctx-menu-item.danger .ctx-menu-label", {
       hasText: "Drop User…",
     });
@@ -235,7 +235,7 @@ test.describe("ContextMenu — Users panel", () => {
   });
 
   test("clicking Grant Role from user context menu opens grant-role modal", async ({ mockedPage }) => {
-    await mockedPage.locator(".conn-item").first().click({ button: "right" });
+    await mockedPage.locator(".user-item").first().click({ button: "right" });
     await mockedPage.locator(".ctx-menu-item .ctx-menu-label", { hasText: "Grant Role…" }).click();
     await expect(mockedPage.locator(".conn-panel-title")).toContainText("Grant Role");
   });

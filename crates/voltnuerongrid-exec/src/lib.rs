@@ -104,7 +104,9 @@ impl HtapQueryRouter {
             | SqlStatementKind::DropView
             | SqlStatementKind::DropFunction
             | SqlStatementKind::DropTrigger
-            | SqlStatementKind::DropEvent => RouteDecision {
+            | SqlStatementKind::DropEvent
+            | SqlStatementKind::CreateDatabase
+            | SqlStatementKind::DropDatabase => RouteDecision {
                 path: QueryPath::Hybrid,
                 reason: "catalog-changing statement affects both planes".to_string(),
             },

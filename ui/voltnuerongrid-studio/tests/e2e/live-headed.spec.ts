@@ -81,41 +81,45 @@ async function goToWorkspace(page: import("@playwright/test").Page) {
   await expect(page.locator(".workspace")).toBeVisible({ timeout: 8_000 });
 }
 
-/** Fill the Monaco editor with SQL text.
- *  Monaco intercepts pointer events on its textarea in headed mode,
- *  so we click the content area (.view-lines) to focus the editor,
- *  then select-all and type via keyboard API.
- */
 async function fillEditor(page: import("@playwright/test").Page, sql: string) {
-  // Click the visible content area to focus the editor
-  const viewLines = page.locator(".view-lines").first();
-  const editorContainer = page.locator(".monaco-editor").first();
+  // Wait up to 10 seconds for Monaco and the editor to be registered
+  await page.waitForFunction(() => {
+    const m = (window as any).monaco;
+    return m && m.editor && m.editor.getEditors && m.editor.getEditors().length > 0;
+  }, null, { timeout: 10000 }).catch(() => {});
 
-  if (await viewLines.isVisible({ timeout: 3_000 }).catch(() => false)) {
-    await viewLines.click({ force: true });
-  } else {
-    await editorContainer.click({ force: true });
-  }
+  // Primary: use Monaco's own API so onChange fires and updates the Zustand store
+  const injected = await page.evaluate((s: string) => {
+    const m = (window as Record<string, any>)["monaco"];
+    if (!m) return false;
+    const editors = m.editor.getEditors();
+    if (!editors.length) return false;
+    editors[0].setValue(s);
+    return true;
+  }, sql);
 
-  // Select all existing content and replace it
-  await page.keyboard.press("Meta+a");
-  await page.keyboard.press("Delete");
+  if (!injected) {
+    // Fallback: click and type
+    const viewLines = page.locator(".view-lines").first();
+    const editorContainer = page.locator(".monaco-editor").first();
 
-  if (sql.length > 0) {
-    // Use clipboard for reliable multi-line input
-    await page.evaluate((text) => {
-      navigator.clipboard.writeText(text).catch(() => {});
-    }, sql);
-    await page.keyboard.press("Meta+v");
+    if (await viewLines.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await viewLines.click({ force: true });
+    } else {
+      await editorContainer.click({ force: true });
+    }
 
-    // Fallback: if clipboard paste didn't work, type character by character
-    const content = await page.locator(".view-lines").first().textContent().catch(() => "");
-    if (!content || content.trim().length === 0) {
-      await page.keyboard.press("Meta+a");
-      await page.keyboard.press("Delete");
-      await page.keyboard.type(sql, { delay: 10 });
+    // Select all existing content and replace it
+    await page.keyboard.press("Meta+a");
+    await page.keyboard.press("Delete");
+
+    if (sql.length > 0) {
+      await page.keyboard.type(sql, { delay: 5 });
     }
   }
+
+  // Give React/Zustand time to propagate the state change
+  await page.waitForTimeout(150);
 }
 
 /** Click Run and wait for the results pane to update. */

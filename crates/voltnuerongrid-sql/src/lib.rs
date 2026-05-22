@@ -52,6 +52,8 @@ pub enum SqlStatementKind {
     Revoke,
     CreateRole,
     DropRole,
+    CreateDatabase,
+    DropDatabase,
     Unknown,
 }
 
@@ -258,6 +260,8 @@ impl SqlAnalyzer {
             (Some("REVOKE"), _, _) => SqlStatementKind::Revoke,
             (Some("CREATE"), Some("ROLE"), _) => SqlStatementKind::CreateRole,
             (Some("DROP"), Some("ROLE"), _) => SqlStatementKind::DropRole,
+            (Some("CREATE"), Some("DATABASE"), _) => SqlStatementKind::CreateDatabase,
+            (Some("DROP"), Some("DATABASE"), _) => SqlStatementKind::DropDatabase,
             _ => SqlStatementKind::Unknown,
         }
     }
@@ -303,6 +307,8 @@ impl SqlAnalyzer {
                     | SqlStatementKind::Revoke
                     | SqlStatementKind::CreateRole
                     | SqlStatementKind::DropRole
+                    | SqlStatementKind::CreateDatabase
+                    | SqlStatementKind::DropDatabase
             ),
             touches_catalog: matches!(
                 kind,
@@ -324,6 +330,8 @@ impl SqlAnalyzer {
                     | SqlStatementKind::Revoke
                     | SqlStatementKind::CreateRole
                     | SqlStatementKind::DropRole
+                    | SqlStatementKind::CreateDatabase
+                    | SqlStatementKind::DropDatabase
             ),
             kind,
         }

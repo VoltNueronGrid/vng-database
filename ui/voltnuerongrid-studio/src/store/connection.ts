@@ -152,14 +152,8 @@ export const useConnectionStore = create<ConnectionState>()(
       },
 
       getDatabases() {
-        const { schema, activeId, connections } = get();
-        const databases = schema?.databases ?? [];
-        const active = connections.find((c) => c.id === activeId);
-        const selectedDatabase = active?.database?.trim().toLowerCase();
-        if (!selectedDatabase) return databases;
-        return databases.filter(
-          (db) => db.name.trim().toLowerCase() === selectedDatabase
-        );
+        const { schema } = get();
+        return schema?.databases ?? [];
       },
     }),
     {

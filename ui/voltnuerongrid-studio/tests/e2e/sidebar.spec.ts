@@ -140,8 +140,7 @@ test.describe("Sidebar", () => {
   test("users panel shows default user items", async ({ mockedPage }) => {
     await mockedPage.locator(".activity-btn", { hasText: "Users" }).click();
     // UsersPanel seeds 3 default users (admin, analyst, etl_bot)
-    const items = mockedPage.locator(".conn-item");
-    await expect(items.count()).resolves.toBeGreaterThanOrEqual(1);
+    await expect(mockedPage.locator(".user-item").first()).toBeVisible({ timeout: 5000 });
   });
 
   test("users panel shows Users section header with add button", async ({ mockedPage }) => {

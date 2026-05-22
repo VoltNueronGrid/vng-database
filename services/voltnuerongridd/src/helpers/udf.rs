@@ -167,6 +167,7 @@ pub(crate) struct CatalogUdfEntry {
     /// The SQL body extracted from the `CREATE FUNCTION` DDL, if any.
     pub(crate) sql_body: Option<String>,
     /// The full original DDL statement.
+    #[allow(dead_code)]
     pub(crate) ddl: String,
 }
 
@@ -195,6 +196,7 @@ pub(crate) fn extract_sql_function_body(ddl: &str) -> Option<String> {
 /// The caller can use `sql_body` to inline or evaluate the function.
 ///
 /// Accepts a snapshot of the DDL catalog entries (call site should lock + clone).
+#[allow(dead_code)]
 pub(crate) fn resolve_catalog_udfs(
     sql_batch: &str,
     catalog_functions: &[CatalogUdfEntry],

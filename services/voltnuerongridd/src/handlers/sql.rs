@@ -1338,6 +1338,107 @@ pub(crate) async fn sql_execute(
         }
     };
 
+    // ── Intercept CREATE DATABASE and DROP DATABASE ──────────────────────────
+    if let Some((kind, db_name, flag)) = parse_db_ddl_statement(&req.sql_batch) {
+        let start_time = std::time::Instant::now();
+        release_sql_data_plane_connection(&state, &connection_id);
+        
+        match kind {
+            voltnuerongrid_sql::SqlStatementKind::CreateDatabase => {
+                let mut catalog = state.database_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                let now_ms = crate::now_unix_ms() as u128;
+                match catalog.create(&db_name, now_ms, None, None) {
+                    Ok(_) => {
+                        // Persist to DDL WAL using standard format
+                        persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, &format!("CREATE DATABASE {}", db_name));
+                        
+                        let elapsed_ms = start_time.elapsed().as_millis();
+                        return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                            status: "ok".to_string(),
+                            route_path: "database_catalog".to_string(),
+                            reason: format!("Database '{db_name}' created successfully"),
+                            transaction: Some(crate::SqlTransactionResponse {
+                                status: "ok".to_string(),
+                                transaction_id: "direct".to_string(),
+                                statements_executed: 1,
+                                requires_transaction: true,
+                                touches_catalog: true,
+                                rejected_statement_count: 0,
+                                elapsed_ms,
+                            }),
+                            ..Default::default()
+                        })));
+                    }
+                    Err(e) => {
+                        // If IF NOT EXISTS was passed and it's already exists, we can treat as success
+                        if flag && matches!(e, voltnuerongrid_meta::DatabaseCatalogError::AlreadyExists { .. }) {
+                            let elapsed_ms = start_time.elapsed().as_millis();
+                            return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                                status: "ok".to_string(),
+                                route_path: "database_catalog".to_string(),
+                                reason: format!("Database '{db_name}' already exists (IF NOT EXISTS)"),
+                                transaction: Some(crate::SqlTransactionResponse {
+                                    status: "ok".to_string(),
+                                    transaction_id: "direct".to_string(),
+                                    statements_executed: 1,
+                                    requires_transaction: true,
+                                    touches_catalog: true,
+                                    rejected_statement_count: 0,
+                                    elapsed_ms,
+                                }),
+                                ..Default::default()
+                            })));
+                        }
+                        return Ok((StatusCode::BAD_REQUEST, Json(SqlExecuteResponse {
+                            status: "error".to_string(),
+                            route_path: "database_catalog".to_string(),
+                            reason: format!("Failed to create database: {}", e),
+                            ..Default::default()
+                        })));
+                    }
+                }
+            }
+            voltnuerongrid_sql::SqlStatementKind::DropDatabase => {
+                let mut catalog = state.database_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                match catalog.drop_database(&db_name, flag) {
+                    Ok(dropped_opt) => {
+                        // Only purge rows if actually dropped
+                        if dropped_opt.is_some() {
+                            crate::helpers::boot::purge_database_rows(&db_name, &state.row_store, &state.wal_engine);
+                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, &format!("DROP DATABASE {}", db_name));
+                        }
+                        
+                        let elapsed_ms = start_time.elapsed().as_millis();
+                        return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                            status: "ok".to_string(),
+                            route_path: "database_catalog".to_string(),
+                            reason: format!("Database '{db_name}' dropped successfully"),
+                            transaction: Some(crate::SqlTransactionResponse {
+                                status: "ok".to_string(),
+                                transaction_id: "direct".to_string(),
+                                statements_executed: 1,
+                                requires_transaction: true,
+                                touches_catalog: true,
+                                rejected_statement_count: 0,
+                                elapsed_ms,
+                            }),
+                            ..Default::default()
+                        })));
+                    }
+                    Err(e) => {
+                        return Ok((StatusCode::BAD_REQUEST, Json(SqlExecuteResponse {
+                            status: "error".to_string(),
+                            route_path: "database_catalog".to_string(),
+                            reason: format!("Failed to drop database: {}", e),
+                            ..Default::default()
+                        })));
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
     // ── Demo CALL intercept (built-in insert_rows shim) ───────────────────────
     // Handles CALL insert_rows('<table>', <count>).
     // Gate behind VNG_DEMO_MODE=true to avoid shadowing user-defined stored procedures.
@@ -3167,4 +3268,67 @@ fn rewrite_dml_for_view(sql: &str, view_catalog: &[(String, String)]) -> String 
         }
     }
     sql.to_string()
+}
+
+fn parse_db_ddl_statement(sql: &str) -> Option<(voltnuerongrid_sql::SqlStatementKind, String, bool)> {
+    let sql_trimmed = sql.trim();
+    // Normalize spaces by splitting into words
+    let words: Vec<&str> = sql_trimmed
+        .split_whitespace()
+        .map(|w| w.trim_end_matches(';'))
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    if words.len() < 3 {
+        return None;
+    }
+
+    let first = words[0].to_ascii_uppercase();
+    let second = words[1].to_ascii_uppercase();
+
+    if first == "CREATE" && second == "DATABASE" {
+        // CREATE DATABASE [IF NOT EXISTS] <name>
+        let mut db_name = String::new();
+        let mut if_not_exists = false;
+
+        if words.len() >= 6 
+            && words[2].to_ascii_uppercase() == "IF"
+            && words[3].to_ascii_uppercase() == "NOT"
+            && words[4].to_ascii_uppercase() == "EXISTS" 
+        {
+            if_not_exists = true;
+            db_name = words[5].to_ascii_lowercase();
+        } else if words.len() >= 3 {
+            db_name = words[2].to_ascii_lowercase();
+        }
+
+        // Clean db_name if it has quotes
+        let db_name = db_name.trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string();
+        if db_name.is_empty() {
+            return None;
+        }
+        Some((voltnuerongrid_sql::SqlStatementKind::CreateDatabase, db_name, if_not_exists))
+    } else if first == "DROP" && second == "DATABASE" {
+        // DROP DATABASE [IF EXISTS] <name> [CASCADE | RESTRICT]
+        let mut db_name = String::new();
+        let mut if_exists = false;
+
+        if words.len() >= 5 
+            && words[2].to_ascii_uppercase() == "IF"
+            && words[3].to_ascii_uppercase() == "EXISTS"
+        {
+            if_exists = true;
+            db_name = words[4].to_ascii_lowercase();
+        } else if words.len() >= 3 {
+            db_name = words[2].to_ascii_lowercase();
+        }
+
+        let db_name = db_name.trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string();
+        if db_name.is_empty() {
+            return None;
+        }
+        Some((voltnuerongrid_sql::SqlStatementKind::DropDatabase, db_name, if_exists))
+    } else {
+        None
+    }
 }
