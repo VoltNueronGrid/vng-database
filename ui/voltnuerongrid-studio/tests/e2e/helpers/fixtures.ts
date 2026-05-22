@@ -119,6 +119,31 @@ export const MOCK_SCHEMA = {
   ],
 };
 
+export const MOCK_USERS = {
+  status: "ok",
+  count: 3,
+  users: [
+    {
+      user_id: "u-admin",
+      username: "admin",
+      role: "dba",
+      created_ms: Date.now() - 1_000_000_000,
+    },
+    {
+      user_id: "u-analyst",
+      username: "analyst",
+      role: "operator",
+      created_ms: Date.now() - 500_000_000,
+    },
+    {
+      user_id: "u-etl-bot",
+      username: "etl_bot",
+      role: "readwrite",
+      created_ms: Date.now() - 100_000_000,
+    },
+  ],
+};
+
 // ─── Route Mocking ────────────────────────────────────────────────────────────
 
 export async function mockApiRoutes(page: Page) {
@@ -140,6 +165,10 @@ export async function mockApiRoutes(page: Page) {
 
   await page.route("**/api/v1/admin/schema/tree", (route: Route) => {
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_SCHEMA) });
+  });
+
+  await page.route("**/api/v1/admin/users", (route: Route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USERS) });
   });
 }
 
