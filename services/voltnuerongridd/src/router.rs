@@ -546,8 +546,9 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/demo/seed", post(demo_seed))
         .with_state(state.clone());
 
-
-    app
+    // L-4: Outermost layer — extracts W3C traceparent/tracestate headers from every
+    // inbound request and attaches the upstream trace as the parent of the per-request span.
+    app.layer(from_fn(propagate_trace_context))
 }
 
 pub(crate) async fn add_cors(req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next) -> axum::response::Response {
@@ -616,6 +617,55 @@ pub(crate) async fn track_http_metrics(req: axum::http::Request<axum::body::Body
     }
 
     response
+}
+
+// ── L-4: W3C TraceContext propagation middleware ──────────────────────────────
+//
+// Extracts the `traceparent` (and optional `tracestate`) headers sent by an
+// upstream caller and attaches the encoded remote span as the parent of a
+// fresh "vng.http_request" span.  All `#[instrument]`-annotated handlers that
+// run beneath this middleware will automatically become children of that span,
+// so distributed traces stitched by an OTEL backend (e.g. Jaeger / Tempo) will
+// show the full call graph across service boundaries.
+//
+// The global `TraceContextPropagator` is registered in `init_tracing()`.  When
+// no `traceparent` header is present the propagator returns an empty context
+// and the span becomes a new local root — identical to the pre-L-4 behaviour.
+pub(crate) async fn propagate_trace_context(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use opentelemetry::propagation::Extractor;
+    use tracing::Instrument as _;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    /// Thin wrapper so axum's `HeaderMap` satisfies `opentelemetry`'s `Extractor` trait.
+    struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
+
+    impl<'a> Extractor for HeaderExtractor<'a> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).and_then(|v| v.to_str().ok())
+        }
+        fn keys(&self) -> Vec<&str> {
+            self.0.keys().map(|k| k.as_str()).collect()
+        }
+    }
+
+    // Extract the remote trace context (no-op when no traceparent header).
+    let parent_ctx = opentelemetry::global::get_text_map_propagator(|prop| {
+        prop.extract(&HeaderExtractor(req.headers()))
+    });
+
+    // Create a per-request span and stitch it under the upstream trace.
+    let span = tracing::info_span!(
+        "vng.http_request",
+        "otel.kind" = "server",
+        "http.method" = %req.method(),
+        "http.url"    = %req.uri(),
+    );
+    span.set_parent(parent_ctx);
+
+    next.run(req).instrument(span).await
 }
 
 fn coarsen_route_for_metrics(path: &str) -> String {

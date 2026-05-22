@@ -21,7 +21,7 @@ use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_gua
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
 use crate::helpers::sql_parse::{extract_bulk_update_target, extract_bulk_delete_target};
-use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix};
+use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix, validate_row_against_ddl};
 use crate::{persist_sql_statement};
 use crate::auth::{require_sql_runtime_principal, locale_from_headers};
 use crate::audit_helpers::append_runtime_audit_event;
@@ -122,6 +122,34 @@ fn record_undo(
         .push((key.to_string(), before));
 }
 
+/// M-2: Read the latest version of `key` from the in-memory row store, falling
+/// back to a RocksDB point read when the in-memory lookup misses and the
+/// durability engine persists rows.  This ensures before-images for ROLLBACK
+/// support and MVCC conflict detection are correct after a crash-recovery boot
+/// when rows live only in RocksDB (not yet replayed into `PagedRowStore`).
+///
+/// `db`    — database scope (empty for no-DB deployments)
+/// `key`   — db-prefixed key used in `PagedRowStore` (e.g. `"mydb.orders:1"`)
+/// `raw_k` — raw key WITHOUT db prefix (e.g. `"orders:1"`) passed to `get_row`
+fn read_latest_with_rocksdb_fallback(
+    rs: &voltnuerongrid_store::mvcc::PagedRowStore,
+    wal: &crate::AppState,
+    db: &str,
+    key: &str,
+    raw_k: &str,
+) -> Option<voltnuerongrid_store::mvcc::RowData> {
+    if let Some(row) = rs.read_latest(key) {
+        return Some(row.clone());
+    }
+    // In-memory miss — try RocksDB if it persists rows.
+    if let Ok(wal_guard) = wal.wal_engine.lock() {
+        if wal_guard.persists_rows() {
+            return wal_guard.get_row(db, raw_k);
+        }
+    }
+    None
+}
+
 // ─── SQL DTOs ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Deserialize)]
@@ -205,7 +233,7 @@ pub(crate) struct LegacyAggResult {
     pub(crate) source: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub(crate) struct SqlExecuteResponse {
     pub(crate) status: String,
     pub(crate) route_path: String,
@@ -608,6 +636,14 @@ pub(crate) async fn sql_transaction(
             // future serializable transactions can detect row-level conflicts.
             acid.record_written_row_keys(&tx_id, commit_write_keys.into_iter());
             acid.commit(&tx_id, now_ms);
+            // M-3: Persist committed serializable write-sets to disk so they survive
+            // restarts and serializable isolation is enforced across process boundaries.
+            {
+                let data_dir = state.runtime_config.storage.data_dir.clone();
+                if !data_dir.is_empty() {
+                    crate::helpers::raft_loop::persist_committed_write_sets(&data_dir, &acid);
+                }
+            }
             // C-3: Clear the connection→tx mapping on COMMIT so sql_execute no longer
             // applies the repeatable-read snapshot to standalone SELECTs.
             if let Ok(mut conn_map) = state.connection_tx_active.lock() {
@@ -632,8 +668,9 @@ pub(crate) async fn sql_transaction(
                         // Each row is individually inserted and individually WAL-persisted.
                         for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
-                            // Gap #3: record before-image for ROLLBACK support.
-                            let before = rs.read_latest(&k).cloned();
+                            // Gap #3 + M-2: record before-image for ROLLBACK support, falling
+                            // back to RocksDB if the row is not in the in-memory store yet.
+                            let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
@@ -643,8 +680,8 @@ pub(crate) async fn sql_transaction(
                     } else if upper.starts_with("DELETE") {
                         if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
-                            // Gap #3: record before-image for ROLLBACK support.
-                            let before = rs.read_latest(&k).cloned();
+                            // Gap #3 + M-2: record before-image for ROLLBACK support.
+                            let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
@@ -652,15 +689,82 @@ pub(crate) async fn sql_transaction(
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     } else if upper.starts_with("UPDATE") {
+                        // M-5: mirror the bulk-scan UPDATE logic from sql_execute so that
+                        // a transaction-wrapped UPDATE with a non-PK WHERE clause updates all
+                        // matching rows instead of silently updating at most one.
                         if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
-                            let k = db_prefix_key(&db, &raw_k);
-                            // Gap #3: record before-image for ROLLBACK support.
-                            let before = rs.read_latest(&k).cloned();
-                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
-                            let _ = rs.begin_write_intent(xid, &k);
-                            if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
-                            rs.insert(xid, &k, d);
-                            persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                            let table_name = d.get("__table").map(|t| t.clone()).unwrap_or_default();
+                            let is_scan_update = raw_k == table_name
+                                && extract_bulk_update_target(stmt)
+                                    .map(|(_, _, _, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
+                                    .unwrap_or(false);
+                            if is_scan_update {
+                                if let Some((tbl, set_col, set_val, where_col, where_val)) =
+                                    extract_bulk_update_target(stmt)
+                                {
+                                    let snapshot_xid = rs.current_xid();
+                                    let table_prefix = format!("{tbl}:");
+                                    let db_prefix_str = if db.is_empty() { String::new() } else { format!("{db}.") };
+                                    let scan_rows: Vec<(String, std::collections::HashMap<String, String>)> =
+                                        if let Ok(wal) = state.wal_engine.lock() {
+                                            if wal.persists_rows() {
+                                                wal.scan_rows_for_db(&db, snapshot_xid)
+                                                    .into_iter()
+                                                    .map(|(k, v)| {
+                                                        let prefixed = if db_prefix_str.is_empty() { k } else { format!("{db_prefix_str}{k}") };
+                                                        (prefixed, v)
+                                                    })
+                                                    .collect()
+                                            } else {
+                                                rs.scan_at_snapshot(snapshot_xid)
+                                                    .into_iter()
+                                                    .map(|(k, v)| (k.to_string(), v.clone()))
+                                                    .collect()
+                                            }
+                                        } else {
+                                            rs.scan_at_snapshot(snapshot_xid)
+                                                .into_iter()
+                                                .map(|(k, v)| (k.to_string(), v.clone()))
+                                                .collect()
+                                        };
+                                    let matching_keys: Vec<(String, std::collections::HashMap<String, String>)> = scan_rows
+                                        .into_iter()
+                                        .filter(|(k, row_data)| {
+                                            let local_k = if db_prefix_str.is_empty() {
+                                                k.clone()
+                                            } else {
+                                                k.strip_prefix(&db_prefix_str).unwrap_or(k.as_str()).to_string()
+                                            };
+                                            local_k.starts_with(&table_prefix)
+                                                && row_data.get(&where_col).map(|v| v == &where_val).unwrap_or(false)
+                                        })
+                                        .collect();
+                                    for (matched_k, existing) in matching_keys {
+                                        let before = rs.read_latest(&matched_k).cloned();
+                                        let mut updated = existing;
+                                        updated.insert(set_col.clone(), set_val.clone());
+                                        record_undo(&state.tx_undo_log, &connection_id, &matched_k, before);
+                                        let _ = rs.begin_write_intent(xid, &matched_k);
+                                        let raw_k_stripped = if db_prefix_str.is_empty() {
+                                            matched_k.clone()
+                                        } else {
+                                            matched_k.strip_prefix(&db_prefix_str).unwrap_or(matched_k.as_str()).to_string()
+                                        };
+                                        { let mut wal = state.wal_engine.lock().expect("wal store_row bulk txn"); wal.store_row(&db, &raw_k_stripped, xid, Some(&updated)); }
+                                        rs.insert(xid, &matched_k, updated);
+                                    }
+                                    persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                                }
+                            } else {
+                                let k = db_prefix_key(&db, &raw_k);
+                                // Gap #3 + M-2: record before-image for ROLLBACK support.
+                                let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
+                                record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                                let _ = rs.begin_write_intent(xid, &k);
+                                if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
+                                rs.insert(xid, &k, d);
+                                persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
+                            }
                         }
                     }
                 }
@@ -1063,8 +1167,99 @@ pub(crate) async fn sql_execute(
     let decision = dispatcher.dispatch_sql_execute_route_decision(&envelope);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
 
-    // ── Demo CALL intercept (TODO: replace with real stored-procedure execution) ─
-    // Handle CALL insert_rows('<table>', <count>) ONLY in demo mode.
+    // ── L-2: CREATE PROCEDURE / DROP PROCEDURE / CALL dispatch ──────────────
+    // Route stored-procedure DDL and CALL statements through the
+    // `ProcedureRegistry` before the normal SQL execution path.
+    //
+    // Strategy:
+    //  - CREATE / DROP PROCEDURE → mutate registry, return early.
+    //  - CALL user-defined proc  → expand body, rebind `req` with expanded SQL.
+    //  - CALL built-in proc      → fall through to the demo shim below.
+    let req = {
+        use crate::helpers::stored_proc::ProcedureRegistry;
+        let sql_trim = req.sql_batch.trim().to_string();
+
+        if ProcedureRegistry::is_create_procedure(&sql_trim) {
+            let mut reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+            match reg.register_from_ddl(&sql_trim) {
+                Ok(name) => {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                        status: "ok".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: format!("procedure '{name}' registered"),
+                        ..Default::default()
+                    })));
+                }
+                Err(msg) => {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::BAD_REQUEST, Json(SqlExecuteResponse {
+                        status: "error".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: msg,
+                        ..Default::default()
+                    })));
+                }
+            }
+        } else if ProcedureRegistry::is_drop_procedure(&sql_trim) {
+            let name = sql_trim["DROP PROCEDURE ".len()..]
+                .trim()
+                .trim_end_matches(';')
+                .trim()
+                .to_ascii_lowercase();
+            let mut reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+            match reg.drop_procedure(&name) {
+                Ok(()) => {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                        status: "ok".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: format!("procedure '{name}' dropped"),
+                        ..Default::default()
+                    })));
+                }
+                Err(msg) => {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::BAD_REQUEST, Json(SqlExecuteResponse {
+                        status: "error".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: msg,
+                        ..Default::default()
+                    })));
+                }
+            }
+        } else if ProcedureRegistry::is_call(&sql_trim) {
+            let resolved = {
+                let reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+                reg.resolve_call(&sql_trim)
+            };
+            match resolved {
+                Err(msg) => {
+                    // Unknown procedure or arity mismatch.
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::BAD_REQUEST, Json(SqlExecuteResponse {
+                        status: "error".to_string(),
+                        route_path: "proc_registry".to_string(),
+                        reason: msg,
+                        ..Default::default()
+                    })));
+                }
+                Ok(Some(expanded_sql)) => {
+                    // User-defined procedure: rebind `req` with the expanded SQL
+                    // body so the rest of the handler executes it transparently.
+                    let mut r = req;
+                    r.sql_batch = expanded_sql;
+                    r
+                }
+                Ok(None) => req, // built-in — pass through unchanged
+            }
+        } else {
+            req // not a procedure statement — pass through unchanged
+        }
+    };
+
+    // ── Demo CALL intercept (built-in insert_rows shim) ───────────────────────
+    // Handles CALL insert_rows('<table>', <count>).
     // Gate behind VNG_DEMO_MODE=true to avoid shadowing user-defined stored procedures.
     if std::env::var("VNG_DEMO_MODE").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false) {
         if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req, &db) {
@@ -1537,7 +1732,9 @@ pub(crate) async fn sql_execute(
                     for stmt in &ddl_snapshot {
                         let upper = stmt.trim_start().to_ascii_uppercase();
                         if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
-                            let idx = node.append_command_pending(stmt.clone(), total_peers);
+                            // M-1: embed db scope in command so followers apply to the right CF.
+                            let scoped = format!("__vng_db:{db}\n{stmt}");
+                            let idx = node.append_command_pending(scoped, total_peers);
                             if idx > max_pending_index { max_pending_index = idx; }
                         }
                     }
@@ -1620,9 +1817,30 @@ pub(crate) async fn sql_execute(
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
                         for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
+                            // M-6: Validate column types against the DDL schema before storing.
+                            let table_name = d.get("__table").map(|t| t.as_str()).unwrap_or("");
+                            if !table_name.is_empty() {
+                                let validation_result = {
+                                    let cat = state.ddl_catalog.lock().expect("ddl_catalog validate");
+                                    validate_row_against_ddl(table_name, &d, &cat)
+                                };
+                                if let Err(msg) = validation_result {
+                                    rs.release_write_intents(xid);
+                                    release_sql_data_plane_connection(&state, &connection_id);
+                                    return Err((
+                                        StatusCode::BAD_REQUEST,
+                                        Json(crate::AuthErrorResponse {
+                                            status: "error",
+                                            reason: format!("type_validation_error: {msg}"),
+                                            locale: "en".to_string(),
+                                            localized_message: format!("Type mismatch on INSERT into '{table_name}': {msg}"),
+                                        }),
+                                    ));
+                                }
+                            }
                             let k = db_prefix_key(&db, &raw_k);
-                            // Gap #3: record before-image for ROLLBACK support.
-                            let before = rs.read_latest(&k).cloned();
+                            // Gap #3 + M-2: record before-image for ROLLBACK support.
+                            let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
                             // Only increment if this is a fresh insert (not an overwrite).
                             if before.is_none() {
                                 if let Some(colon) = k.rfind(':') {
@@ -1717,8 +1935,8 @@ pub(crate) async fn sql_execute(
                                 }
                             } else {
                                 let k = db_prefix_key(&db, &raw_k);
-                                // Gap #3: record before-image for ROLLBACK support.
-                                let before = rs.read_latest(&k).cloned();
+                                // Gap #3 + M-2: record before-image for ROLLBACK support.
+                                let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
                                 // UPDATE keeps the row count the same — no stat delta needed.
                                 record_undo(&state.tx_undo_log, &connection_id, &k, before);
                                 let _ = rs.begin_write_intent(xid, &k);
@@ -1788,8 +2006,8 @@ pub(crate) async fn sql_execute(
                             }
                         } else if let Some(raw_k) = extract_delete_key_from_sql(stmt) {
                             let k = db_prefix_key(&db, &raw_k);
-                            // Gap #3: record before-image for ROLLBACK support.
-                            let before = rs.read_latest(&k).cloned();
+                            // Gap #3 + M-2: record before-image for ROLLBACK support.
+                            let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
                             // Only decrement if the row actually existed.
                             if before.is_some() {
                                 if let Some(colon) = k.rfind(':') {
@@ -1877,7 +2095,9 @@ pub(crate) async fn sql_execute(
                         for stmt in &ddl_snapshot {
                             let upper = stmt.trim_start().to_ascii_uppercase();
                             if upper.starts_with("INSERT") || upper.starts_with("UPDATE") || upper.starts_with("DELETE") {
-                                node.append_command(stmt.clone(), total_peers);
+                                // M-1: embed db scope so followers apply to the right CF.
+                                let scoped = format!("__vng_db:{db}\n{stmt}");
+                                node.append_command(scoped, total_peers);
                             }
                         }
                     }
@@ -1929,6 +2149,48 @@ pub(crate) async fn sql_execute(
     }
 
     if !olap_statements.is_empty() {
+        // M-8: Linearisable reads — if VNG_REQUIRE_LEADER_READS=true, only the
+        // current Raft leader may serve SELECT queries.  Followers and deposed
+        // leaders return 503 so clients retry against the leader.  Single-node
+        // deployments are unaffected (total_peers == 0 → always allowed).
+        let require_leader_reads = std::env::var("VNG_REQUIRE_LEADER_READS")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        if require_leader_reads {
+            let total_peers = state.raft_peers.len();
+            if total_peers > 0 {
+                let is_leader = {
+                    let node = state.raft_state.lock().expect("raft_state leader read check");
+                    node.role == crate::RaftRole::Leader
+                };
+                if !is_leader {
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(SqlExecuteResponse {
+                            status: "error".to_string(),
+                            route_path: route_path_name(decision.payload.path).to_string(),
+                            reason: "not_leader_reads_rejected".to_string(),
+                            transaction: None,
+                            olap: None,
+                            rejected_statement_count: olap_statements.len(),
+                            udf_results: None,
+                            udf_guardrail_status: None,
+                            udf_function_catalog: vec![],
+                            udf_guard_policies: vec![],
+                            udf_execution_plan: vec![],
+                            legacy_agg_results: None,
+                            planner_path: None,
+                            oltp_rows: None,
+                            olap_agg_results: None,
+                            columns: None,
+                            rows: None,
+                        }),
+                    ));
+                }
+            }
+        }
+
         // DataFusion path: mirrors the df_select_owned pattern used in the
         // olap_agg_results block below. execute_olap_query is no longer called
         // here so all OLAP SELECT dispatch goes through a single code path.
@@ -1955,7 +2217,27 @@ pub(crate) async fn sql_execute(
             table_rows.insert("rows".to_string(), all_rows);
         }
         let data_dir = state.runtime_config.storage.data_dir.clone();
-        let row_count = match run_async_in_executor(df_select_owned(query.clone(), table_rows, limit, data_dir)) {
+        // M-4: wrap DataFusion execution in a preemptive timeout when the
+        // caller specified statement_timeout_ms.  tokio::time::timeout inside
+        // the future is the only cancellation point that can interrupt a
+        // running DataFusion plan — the synchronous block_in_place wrapper
+        // itself cannot be interrupted from outside.
+        let df_future = df_select_owned(query.clone(), table_rows, limit, data_dir);
+        let df_result = if let Some(dl) = statement_deadline {
+            let remaining = dl.saturating_duration_since(std::time::Instant::now());
+            run_async_in_executor(async move {
+                tokio::time::timeout(remaining, df_future).await
+                    .map_err(|_| voltnuerongrid_exec_datafusion::ExecError::Timeout)
+                    .and_then(|r| r)
+            })
+        } else {
+            run_async_in_executor(df_future)
+        };
+        if let Err(voltnuerongrid_exec_datafusion::ExecError::Timeout) = &df_result {
+            release_sql_data_plane_connection(&state, &connection_id);
+            return Err(statement_timeout_err());
+        }
+        let row_count = match df_result {
             Ok(SelectOutput::Rows(rows)) => rows.len(),
             Ok(SelectOutput::Aggregate(_)) => 1,
             Err(_) => 0,
@@ -2163,7 +2445,19 @@ pub(crate) async fn sql_execute(
                 if table_rows.is_empty() {
                     table_rows.insert("rows".to_string(), all_rows);
                 }
-                match run_async_in_executor(df_select_owned(sql, table_rows, limit, String::new())) {
+                // M-4: apply preemptive timeout to aggregate DataFusion path.
+                let df_agg_future = df_select_owned(sql, table_rows, limit, String::new());
+                let df_agg_result = if let Some(dl) = statement_deadline {
+                    let remaining = dl.saturating_duration_since(std::time::Instant::now());
+                    run_async_in_executor(async move {
+                        tokio::time::timeout(remaining, df_agg_future).await
+                            .map_err(|_| voltnuerongrid_exec_datafusion::ExecError::Timeout)
+                            .and_then(|r| r)
+                    })
+                } else {
+                    run_async_in_executor(df_agg_future)
+                };
+                match df_agg_result {
                     Ok(SelectOutput::Aggregate(agg)) => {
                         let mut out: Vec<OlapVecAggResult> = agg.columns.iter()
                             .zip(agg.values.iter())

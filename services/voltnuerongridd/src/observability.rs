@@ -74,6 +74,15 @@ pub fn init_observability() {
 fn init_tracing() {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+    // L-4: Register the W3C TraceContext propagator globally so the
+    // `propagate_trace_context` axum middleware can extract `traceparent`
+    // / `tracestate` headers from every inbound HTTP request and stitch
+    // the incoming distributed trace into our local spans — regardless of
+    // whether OTLP export is configured.
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
     let filter = EnvFilter::try_from_env("VNG_LOG")
         .unwrap_or_else(|_| EnvFilter::new("info,voltnuerongridd=info"));
 
@@ -122,6 +131,7 @@ where
     use opentelemetry::KeyValue;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::trace::{BatchSpanProcessor, TracerProvider};
+    use opentelemetry_sdk::Resource;
     use opentelemetry::trace::TracerProvider as _;
 
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok()?;
@@ -147,16 +157,15 @@ where
         .build();
 
     // Resource attributes that identify this service in the OTLP backend.
-    let resource = opentelemetry_sdk::Resource::new(vec![
+    let resource = Resource::new(vec![
         KeyValue::new("service.name", service_name),
         KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
     ]);
 
+    // Use the non-deprecated Builder API (opentelemetry-sdk 0.27+).
     let provider = TracerProvider::builder()
         .with_span_processor(batch)
-        .with_config(
-            opentelemetry_sdk::trace::config().with_resource(resource),
-        )
+        .with_resource(resource)
         .build();
 
     // Stash the provider so shutdown_otel() can flush it on process exit.

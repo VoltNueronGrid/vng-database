@@ -120,6 +120,12 @@ fn state_with_key(key: Option<&str>) -> AppState {
         connection_tx_active: Arc::new(Mutex::new(std::collections::HashMap::new())),
         // H-1: table statistics registry (empty for tests).
         stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
+        // L-2: stored-procedure registry (pre-populated with built-ins for tests).
+        proc_registry: {
+            let mut reg = helpers::stored_proc::ProcedureRegistry::new();
+            reg.register_builtins();
+            Arc::new(Mutex::new(reg))
+        },
     }
 }
 
@@ -13254,6 +13260,133 @@ fn m7_ssi_no_conflict_on_disjoint_keys() {
 
     let conflict = reg.check_serializable_rw_conflict("tx-current", &current_write, &current_read);
     assert!(conflict.is_none(), "disjoint keys must not produce a false conflict");
+}
+
+// ── L-6: Crash-recovery integration test ─────────────────────────────────────
+//
+// Verifies that data written before a simulated crash survives a restart and is
+// visible after WAL/RocksDB replay.
+//
+// # Why `#[ignore]`
+//
+// This test spawns the real `voltnuerongridd` binary via `std::process::Command`,
+// which requires:
+//   1. A pre-built release (or debug) binary at a known path.
+//   2. A writable data directory for RocksDB + WAL state.
+//   3. Network socket access (loopback) to communicate via HTTP.
+//
+// Run manually in CI with a built binary:
+//   ```
+//   cargo build -p voltnuerongridd
+//   cargo test -- --ignored l6_crash_recovery_data_survives_restart
+//   ```
+#[tokio::test]
+#[ignore = "requires built binary + loopback network + writable data dir — run in real CI"]
+async fn l6_crash_recovery_data_survives_restart() {
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    // ── Step 0: find a free port ──────────────────────────────────────────────
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener); // release the socket before the server process binds it
+
+    // ── Step 1: prepare a temp data directory ────────────────────────────────
+    let data_dir = std::env::temp_dir().join(format!("vng-crash-test-{port}"));
+    let _ = std::fs::remove_dir_all(&data_dir); // clean state
+    std::fs::create_dir_all(&data_dir).expect("create data dir");
+
+    let bin_path = {
+        // Prefer a release build; fall back to debug.
+        let release = std::path::PathBuf::from("target/release/voltnuerongridd");
+        let debug   = std::path::PathBuf::from("target/debug/voltnuerongridd");
+        if release.exists() { release } else { debug }
+    };
+    assert!(bin_path.exists(), "binary not found at {bin_path:?} — run `cargo build -p voltnuerongridd` first");
+
+    let admin_key = "crash-test-secret";
+    let bind_addr = format!("127.0.0.1:{port}");
+
+    // Helper: spawn the server process.
+    let spawn_server = || {
+        std::process::Command::new(&bin_path)
+            .env("VNG_ADMIN_API_KEY",           admin_key)
+            .env("VNG_DATA_DIR",                data_dir.to_str().unwrap())
+            .env("VNG_NATIVE_LISTENER_ENABLED", "false")
+            .env("VNG_LOG",                     "warn")
+            .env("VNG_BIND_ADDR",               &bind_addr)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn voltnuerongridd")
+    };
+
+    let client = reqwest::Client::new();
+    let base   = format!("http://{bind_addr}");
+
+    // Helper: wait until the server's /health endpoint responds (up to 5 s).
+    // Returns a fresh future each call (the closure captures by ref so it is
+    // callable multiple times without moving the async block).
+    let wait_healthy = || async {
+        for _ in 0..50 {
+            if client.get(format!("{base}/health")).send().await.map(|r| r.status().is_success()).unwrap_or(false) {
+                return;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        panic!("server did not become healthy within 5 s");
+    };
+
+    // ── Step 2: first boot — write data ──────────────────────────────────────
+    let mut proc1 = spawn_server();
+    wait_healthy().await;
+
+    // Create table and insert a row.
+    let ddl = client
+        .post(format!("{base}/api/v1/sql/execute"))
+        .header("X-Admin-Api-Key", admin_key)
+        .json(&serde_json::json!({
+            "sql_batch": "CREATE TABLE crash_test (id INT, label TEXT)"
+        }))
+        .send().await.expect("DDL request failed");
+    assert_eq!(ddl.status().as_u16(), 200, "CREATE TABLE must succeed");
+
+    let dml = client
+        .post(format!("{base}/api/v1/sql/execute"))
+        .header("X-Admin-Api-Key", admin_key)
+        .json(&serde_json::json!({
+            "sql_batch": "INSERT INTO crash_test VALUES (42, 'survived')"
+        }))
+        .send().await.expect("INSERT request failed");
+    assert_eq!(dml.status().as_u16(), 200, "INSERT must succeed");
+
+    // ── Step 3: simulate crash (SIGKILL) ─────────────────────────────────────
+    proc1.kill().expect("SIGKILL first server instance");
+    let _ = proc1.wait(); // reap zombie to avoid OS resource leak
+
+    // ── Step 4: restart — verify data survived ───────────────────────────────
+    let mut proc2 = spawn_server();
+    wait_healthy().await;
+
+    let sel = client
+        .post(format!("{base}/api/v1/sql/execute"))
+        .header("X-Admin-Api-Key", admin_key)
+        .json(&serde_json::json!({
+            "sql_batch": "SELECT id, label FROM crash_test WHERE id = 42"
+        }))
+        .send().await.expect("SELECT request failed");
+    assert_eq!(sel.status().as_u16(), 200, "SELECT after restart must succeed");
+
+    let body: serde_json::Value = sel.json().await.unwrap();
+    let rows = body["rows"].as_array().expect("rows must be an array");
+    assert_eq!(rows.len(), 1, "exactly one row must survive the crash");
+    assert_eq!(rows[0]["id"],    42,          "id field must equal 42");
+    assert_eq!(rows[0]["label"], "survived",  "label field must match");
+
+    // ── Step 5: clean up ─────────────────────────────────────────────────────
+    proc2.kill().ok();
+    let _ = proc2.wait();
+    let _ = std::fs::remove_dir_all(&data_dir);
 }
 
 #[tokio::test]

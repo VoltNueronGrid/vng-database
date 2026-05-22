@@ -816,6 +816,61 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
             tracing_or_eprintln(format!("drop_db_column_family {cf_name}: {e}"));
         }
     }
+
+    /// M-2: Point-read the latest committed version of a single row.
+    ///
+    /// Scans the per-DB CF for all entries whose key starts with
+    /// `{row_key}\x1f`, picks the highest xid version, and returns the
+    /// decoded columns — or `None` if deleted (tombstone) or not found.
+    fn get_row(&self, db: &str, row_key: &str) -> Option<HashMap<String, String>> {
+        let cf_name = Self::db_rows_cf_name(db);
+        let cf_db = match self.db.cf_handle(&cf_name) {
+            Some(cf) => cf,
+            None => return None,
+        };
+
+        // Prefix scan: all keys for this row_key are `{row_key}\x1f{xid_be8}`.
+        let sep = b'\x1f';
+        let mut prefix = row_key.as_bytes().to_vec();
+        prefix.push(sep);
+
+        let iter_mode = rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward);
+        let mut best: Option<(u64, Vec<u8>)> = None;
+
+        for kv in self.db.iterator_cf(&cf_db, iter_mode) {
+            let (k, v) = match kv {
+                Ok(x) => x,
+                Err(_) => break,
+            };
+            if !k.starts_with(&prefix) {
+                break; // Past this row's entries.
+            }
+            // Extract xid from the last 8 bytes.
+            if k.len() < prefix.len() + 8 {
+                continue;
+            }
+            let mut xid_arr = [0u8; 8];
+            xid_arr.copy_from_slice(&k[k.len() - 8..]);
+            let xid = u64::from_be_bytes(xid_arr);
+            // Keep the highest xid (latest committed version).
+            if best.as_ref().map(|(bx, _)| xid > *bx).unwrap_or(true) {
+                best = Some((xid, v.to_vec()));
+            }
+        }
+
+        let (_, value) = best?;
+        if value.is_empty() {
+            return None;
+        }
+        match value[0] {
+            0x01 => None, // tombstone
+            0x00 => {
+                let json_bytes = &value[1..];
+                serde_json::from_slice::<HashMap<String, String>>(json_bytes).ok()
+            }
+            _ => None,
+        }
+    }
 }
 
 // Inline tracing-or-stderr helper. The store crate doesn't depend on
