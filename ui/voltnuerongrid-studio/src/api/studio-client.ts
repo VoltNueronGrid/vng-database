@@ -154,6 +154,38 @@ export interface AuditEventsResponse {
   events: AuditEvent[];
 }
 
+// ─── SRE / Autonomous Action Types ──────────────────────────────────────────
+
+export interface AuthorizeActionRequest {
+  action: string;
+  scope?: string;
+}
+
+export interface AuthorizeActionResponse {
+  status: string;
+  action: string;
+  requested_scope: string;
+  decision: string;
+  reason: string;
+  trace_id: string;
+}
+
+export interface AutonomousActionRecord {
+  trace_id: string;
+  occurred_epoch_ms: number;
+  action: string;
+  scope: string;
+  requested_by: string;
+  decision: string;
+  reason: string;
+}
+
+export interface AutonomousActionRecordsResponse {
+  status: string;
+  total_records: number;
+  records: AutonomousActionRecord[];
+}
+
 // ─── Cluster Topology ────────────────────────────────────────────────────────
 
 export interface ClusterTopologyResponse {
@@ -418,6 +450,20 @@ export class StudioApiClient {
     return this.del<DbGrantsResponse>(
       `/api/v1/admin/databases/${encodeURIComponent(dbName)}/grants/${encodeURIComponent(role)}`,
     );
+  }
+
+  // ─── SRE / Autonomous & Audit ────────────────────────────────────────────────
+
+  async authorizeAction(req: AuthorizeActionRequest): Promise<AuthorizeActionResponse> {
+    return this.post<AuthorizeActionResponse>("/api/v1/autonomous/actions/authorize", req);
+  }
+
+  async listAuditEvents(maxItems = 100): Promise<AuditEventsResponse> {
+    return this.get<AuditEventsResponse>(`/api/v1/audit/events?max_items=${maxItems}`);
+  }
+
+  async listAutonomousRecords(maxItems = 100): Promise<AutonomousActionRecordsResponse> {
+    return this.get<AutonomousActionRecordsResponse>(`/api/v1/autonomous/actions/records?max_items=${maxItems}`);
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────

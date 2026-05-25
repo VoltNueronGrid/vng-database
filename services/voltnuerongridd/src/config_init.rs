@@ -122,8 +122,14 @@ pub(crate) fn load_runtime_security_config(allowed_operator_roles: &HashSet<Oper
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "x-vng-admin-key".to_string()),
-        tls_required: false,
-        mtls_required: false,
+        tls_required: env::var("VNG_TLS_REQUIRED")
+            .ok()
+            .map(|value| value.trim().eq_ignore_ascii_case("true") || value.trim() == "1")
+            .unwrap_or(false),
+        mtls_required: env::var("VNG_MTLS_REQUIRED")
+            .ok()
+            .map(|value| value.trim().eq_ignore_ascii_case("true") || value.trim() == "1")
+            .unwrap_or(false),
         encryption_at_rest_required: true,
         kms_key_ref_env: env::var("VNG_KMS_KEY_REF_ENV")
             .ok()

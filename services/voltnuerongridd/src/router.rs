@@ -563,7 +563,7 @@ pub(crate) async fn add_cors(req: axum::http::Request<axum::body::Body>, next: a
     );
     res.headers_mut().insert(
         "Access-Control-Allow-Headers",
-        axum::http::HeaderValue::from_static("content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id"),
+        axum::http::HeaderValue::from_static("content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id,x-vng-session-id"),
     );
     res
 }
@@ -575,7 +575,7 @@ pub(crate) async fn options_preflight() -> axum::response::Response {
         .header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         .header(
             "Access-Control-Allow-Headers",
-            "content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id",
+            "content-type,x-vng-admin-key,x-vng-operator-id,x-vng-tenant-id,x-vng-user-id,x-vng-session-id",
         )
         .body(axum::body::Body::empty())
         .unwrap()

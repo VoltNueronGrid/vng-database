@@ -4,7 +4,11 @@
 # This script creates 10 related tables, inserts 1000 records each, and tests joins
 
 SERVER_URL="http://127.0.0.1:8080/api/v1/sql/execute"
-AUTH_HEADERS="-H 'Content-Type: application/json' -H 'x-vng-admin-key: secret' -H 'x-vng-operator-id: admin'"
+AUTH_HEADERS=(
+    "-H" "Content-Type: application/json"
+    "-H" "x-vng-admin-key: secret"
+    "-H" "x-vng-operator-id: admin"
+)
 
 # Function to execute SQL and check for errors
 execute_sql() {
@@ -18,7 +22,7 @@ execute_sql() {
     local escaped_sql=${sql//"/\\"}
     
     # Execute the SQL
-    local response=$(curl -s -X POST "$SERVER_URL" $AUTH_HEADERS -d "{\"sql_batch\": \"$escaped_sql\"}")
+    local response=$(curl -s -X POST "$SERVER_URL" "${AUTH_HEADERS[@]}" -d "{\"sql_batch\": \"$escaped_sql\"}")
     
     # Check for errors
     if echo "$response" | grep -q '"status":"error"'; then
@@ -43,7 +47,7 @@ execute_sql_file() {
     local sql_content=$(cat "$file_path" | tr -d '\n' | sed 's/"/\\"/g')
     
     # Execute the SQL
-    local response=$(curl -s -X POST "$SERVER_URL" $AUTH_HEADERS -d "{\"sql_batch\": \"$sql_content\"}")
+    local response=$(curl -s -X POST "$SERVER_URL" "${AUTH_HEADERS[@]}" -d "{\"sql_batch\": \"$sql_content\"}")
     
     # Check for errors
     if echo "$response" | grep -q '"status":"error"'; then

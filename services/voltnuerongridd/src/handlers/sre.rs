@@ -6,6 +6,8 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
+use std::time::Instant;
 use voltnuerongrid_audit::AuditEventKind;
 use voltnuerongrid_auth::PrivilegeAction;
 use voltnuerongrid_store::htap_sync::MutationOp;
@@ -21,6 +23,13 @@ use crate::{
 use crate::auth::{require_operator_auth, require_operator_privilege};
 use crate::audit_helpers::append_audit_event;
 
+static START_TIME: OnceLock<Instant> = OnceLock::new();
+
+fn get_uptime_ms() -> u64 {
+    let start = START_TIME.get_or_init(Instant::now);
+    start.elapsed().as_millis() as u64
+}
+
 // ─── SRE DTOs ─────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -29,6 +38,9 @@ pub(crate) struct SreReliabilityStatusResponse {
     pub(crate) service_health: &'static str,
     pub(crate) failure_budget: FailureBudgetSnapshot,
     pub(crate) rate_limit_policy: RateLimitPolicySnapshot,
+    pub(crate) uptime_ms: u64,
+    pub(crate) node_count: usize,
+    pub(crate) replication_lag_ms: u64,
 }
 
 #[derive(Serialize, Clone, Copy)]
@@ -434,11 +446,16 @@ pub(crate) async fn sre_reliability_status(
         "sre/reliability",
         PrivilegeAction::Read,
     )?;
+    let node_count = state.raft_peers.len() + 1;
+    let uptime_ms = get_uptime_ms();
     Ok(Json(SreReliabilityStatusResponse {
         status: "ok",
         service_health: "healthy",
         failure_budget: failure_budget_snapshot(12.5),
         rate_limit_policy: rate_limit_policy_snapshot(540),
+        uptime_ms,
+        node_count,
+        replication_lag_ms: 0,
     }))
 }
 

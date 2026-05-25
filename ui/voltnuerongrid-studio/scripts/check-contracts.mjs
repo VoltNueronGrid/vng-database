@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 const required = [
   "src/api/types.ts",
-  "src/api/client.ts",
+  "src/api/studio-client.ts",
 ];
 
 for (const file of required) {
@@ -13,7 +13,7 @@ for (const file of required) {
 }
 
 const typesContent = fs.readFileSync(new URL("../src/api/types.ts", import.meta.url), "utf8");
-const clientContent = fs.readFileSync(new URL("../src/api/client.ts", import.meta.url), "utf8");
+const clientContent = fs.readFileSync(new URL("../src/api/studio-client.ts", import.meta.url), "utf8");
 const requiredSnippets = [
   "trace_id",
   "/api/v1/sql/execute",
