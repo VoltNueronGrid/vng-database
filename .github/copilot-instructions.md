@@ -70,3 +70,8 @@ Mixed operator-or-tenant surfaces check `x-vng-admin-key` OR `x-vng-operator-id`
 - `status_tracker.md` — main tracker (REQ-01..REQ-31, sections 2–9)
 - `status-tracker-sprintwise-v1.md` — sprint breakdown (Sprint 0-11)
 - Gate Reality Check: section 5.22 of `status_tracker.md`
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->

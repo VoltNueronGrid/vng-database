@@ -1,0 +1,6 @@
+catalogs:
+  - name: "aide"
+    url: "https://raw.githubusercontent.com/mnriem/spec-kit-extensions/main/catalog.json"
+    priority: 5
+    install_allowed: true
+    description: "AI-Driven Engineering AIDE"
