@@ -1,5 +1,13 @@
 # Gap Analysis — `vng-database` vs HTAP RDBMS Production Requirements
 
+> ⚠️ **SUPERSEDED — 2026-06-23**
+> This is the original gap analysis from session 1 (pre-implementation scan). It has been superseded by the living gap register:
+> **`docs/gaps-4.md`** — Post-session 32, all remaining open gaps with current status.
+> Many gaps listed here were closed in sessions 16–32. Do not use this document to assess current state.
+> It is retained as historical baseline evidence only.
+
+---
+
 **Prepared:** 2026-05-04
 **Reviewer:** Claude (code review pass)
 **Repo:** `VoltNueronGrid/vng-database` @ `5dcebab`

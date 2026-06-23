@@ -41,3 +41,5 @@ ui/voltnuerongrid-studio/src-tauri/target/
 ui/voltnuerongrid-studio/playwright-report/
 ui/voltnuerongrid-studio/test-results/
 data/
+scripts/by-poc-app.2026-06-23.private-key.pem
+.env

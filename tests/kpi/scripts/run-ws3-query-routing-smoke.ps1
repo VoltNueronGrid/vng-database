@@ -76,7 +76,7 @@ $exitCode = 1
 $testExitCode = -1
 $timedOut = $false
 $testsExecuted = 0
-$expectedTests = 11
+$expectedTests = 18
 
 try {
   $result = Invoke-CargoWithCapture -Arguments @("test", "-p", "voltnuerongridd", "ws3_", "--", "--test-threads=1", "--nocapture") -TimeoutSecondsValue $TimeoutSeconds
@@ -92,6 +92,11 @@ try {
       $outputLines += "=== MATCHED ERROR LINES ==="
       $outputLines += @($errorLines | Select-Object -First 30)
     }
+    $exitCode = 1
+  }
+  elseif ($testsExecuted -ne $expectedTests) {
+    # Fail the gate when the count does not match — prevents silently ignoring new or removed tests.
+    $outputLines += "=== COUNT MISMATCH: executed=$testsExecuted expected=$expectedTests ==="
     $exitCode = 1
   }
   else {
@@ -123,7 +128,7 @@ $artifact = [ordered]@{
 $artifact | ConvertTo-Json -Depth 8 | Set-Content -Path $OutputPath
 
 if ($status -ne "passed") {
-  Write-Error "WS3 query-routing smoke failed. exit=$testExitCode tests=$testsExecuted/$expectedTests timeout=$timedOut artifact=$OutputPath"
+  Write-Error "WS3 query-routing smoke failed. exit=$testExitCode tests=$testsExecuted/$expectedTests timeout=$timedOut countMatch=$($testsExecuted -eq $expectedTests) artifact=$OutputPath"
   exit 1
 }
 

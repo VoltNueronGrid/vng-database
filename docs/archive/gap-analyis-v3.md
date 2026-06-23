@@ -1,5 +1,12 @@
 # Gap Analysis v3 — Prompt Requirements vs Current Code
 
+> ⚠️ **SUPERSEDED — 2026-06-23**
+> This document covers sessions up to approximately session 30. It has been superseded by the living gap register:
+> **`docs/gaps-4.md`** — Post-session 32, all remaining open gaps with current status.
+> Do not update this file. It is retained as historical evidence only.
+
+---
+
 **Project:** `polap-db`  
 **Input baseline:** `prompts/prompt-1.md`  
 **Assessment date:** 2026-04-17  

@@ -1,13 +1,52 @@
 # Gap Analysis — VoltNueronGrid Remaining Gaps (post-session 32)
 
-**Prepared:** 2026-05-21 (session 32 close)
+> **Living gap register** — This is the authoritative gap document. All previous gap files
+> (`docs/archive/gaps-3.md`, `docs/archive/gaps-may20-2.md`, `docs/archive/gaps-may26-1.md`,
+> `docs/archive/gap-analyis-v3.md`) have been superseded and are retained as historical evidence only.
+
+**Prepared:** 2026-05-21 (session 32 close) · **Updated:** 2026-06-23 (sessions 30–32 reconciliation)
 **Branch:** `claude/friendly-hertz-3b69fb`
 **Commit:** `e6f6c3d` (session 32 — all 9 medium gaps closed)
 **Based on:** `gaps-4.md` (post-session 31) + session 32 implementation
-**Test baseline:** 807 passed (voltnuerongridd), 0 failed, 1 ignored
+**Test baseline:** 818 passed (voltnuerongridd), 0 failed, 2 ignored *(updated 2026-06-23; was 807 at session 32 close)*
 
 This document records all remaining gaps after the full audit pass in session 31.
 ✅ items below were closed in session 31 and are noted for history only.
+
+---
+
+## Durability Terminology (adopted 2026-06-23)
+
+Throughout this document and all related tracker/gate files, the following terms have precise meanings:
+
+| Term | Definition | Current Status |
+|---|---|---|
+| **WAL durability** | Write-ahead log records that track committed statements for crash recovery. Implemented via `raft_meta.json` (Raft log + term/index), `acid_write_sets.json` (committed write sets), and `persist_committed_write_sets` in `raft_loop.rs`. | ✅ Implemented (sessions 31–32) |
+| **Page-level durability** | Row data written to a persistent on-disk store so that rows survive a process kill+restart without replaying the WAL. `PagedRowStore` in `crates/voltnuerongrid-store/src/mvcc.rs` is **in-memory only** — rows are lost on process exit. | ❌ Not yet implemented |
+| **RocksDB read fallback** | Gap M-2 (closed session 32): `read_latest_with_rocksdb_fallback` fetches from RocksDB on page-miss. This is a read-path fallback for rows not in the page cache, NOT a write-path durability guarantee. | ✅ Implemented (session 32) |
+| **Crash recovery** | The ability to re-serve all acknowledged writes after an unclean shutdown. Requires page-level durability OR WAL replay that re-populates the row store from the Raft log on boot. | ❌ Not yet implemented — tracked as C1 |
+
+**Why this matters:** REQ-16 (encryption-at-rest for row data) and REQ-17 (zero data loss / distributed failover) both require page-level durability. WS5 and WS6 gates validate protocol-level scaffolds (TLS/RBAC/RTO simulation), but these requirements cannot be fully claimed until page-level durability is implemented.
+
+---
+
+## C1 — Durable Row Store (Critical open item, added 2026-06-23)
+
+**Severity:** 🔴 · **Effort:** S–M (WAL replay Option A: S; file-backed Option B: M) · **Blocks:** REQ-17, REQ-16, WS6 zero-data-loss
+
+The primary `PagedRowStore` is in-memory. All row data is lost on process exit.
+
+**Evidence of gap:** `tests/kpi/scripts/run-crash-recovery-gate.ps1` reports `rows_survived:false` and
+`page_level_durability_implemented:false` when run against a live server with kill+restart.
+
+**Feature spec:** `.specify/features/durable-row-store/spec.md`
+
+**Recommended fix (Option A — WAL replay):** On server startup in `helpers/boot.rs`, iterate committed log entries from `raft_meta.json` and replay each DML command through `apply_dml_command`. This re-populates `PagedRowStore` from the durable Raft log with no changes to the row store itself.
+
+**Closure criteria:**
+- `run-crash-recovery-gate.ps1 -RequireRowSurvival` exits 0
+- `crash-recovery-smoke.json` has `rows_survived:true`, `page_level_durability_implemented:true`
+- REQ-17 and WS6 completion updated to ≥90%
 
 ---
 

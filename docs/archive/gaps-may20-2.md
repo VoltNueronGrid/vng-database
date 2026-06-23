@@ -1,5 +1,12 @@
 # Gap Analysis — Remaining Gaps After Sessions 16–22
 
+> ⚠️ **SUPERSEDED — 2026-06-23**
+> This document covers sessions 16–22 only. It has been superseded by the living gap register:
+> **`docs/gaps-4.md`** — Post-session 32, all remaining open gaps with current status.
+> Do not update this file. It is retained as historical evidence only.
+
+---
+
 **Prepared:** 2026-05-20
 **Based on:** `gaps-may26-1.md` (original 35+ gaps) cross-referenced against code through session 22
 **Branch:** `claude/friendly-hertz-3b69fb`
