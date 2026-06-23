@@ -41,7 +41,7 @@ Development boundaries must keep runtime authority, database capabilities, clien
 | Invariant | Source Boundary / Contract / Dependency Rule | Risk If Violated |
 |-----------|----------------------------------------------|------------------|
 | Clients depend on runtime contracts for database truth. | Interface Contract and Database Lifecycle | UI/driver schema drift and phantom resources. |
-| Capability packages expose focused responsibilities. | Modular Rust-first constitution; workspace manifest facts | Monolithic runtime behavior and duplicated logic. |
+| Capability packages expose focused responsibilities. | Modular Rust-first architecture boundary | Monolithic runtime behavior and duplicated logic. |
 | Security rules apply across packages. | Security authority and constitution | Inconsistent RBAC or secret handling. |
 | Evidence artifacts are produced by validation packages, not authored as claims. | Evidence boundary | Tracker/release false positives. |
 
@@ -50,7 +50,7 @@ Development boundaries must keep runtime authority, database capabilities, clien
 | Non-goal / Anti-pattern | Why It Is Out of Scope or Harmful |
 |-------------------------|-----------------------------------|
 | Encoding database lifecycle only in Studio state | It bypasses runtime authority and breaks other clients. |
-| Treating HTTP-only driver contract as final native parity | Repo facts show native protocol is required and driver breadth is a gap. |
+| Treating HTTP-only client behavior as final native parity | Native protocol is a separate architecture surface and driver breadth remains a gap. |
 | Copying provider-specific deployment concerns into database capability packages | It couples core semantics to draft cloud assets. |
 | Updating trackers without current gate artifacts | It violates evidence-boundary ownership. |
 

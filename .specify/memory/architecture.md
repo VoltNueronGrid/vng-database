@@ -13,11 +13,11 @@
 
 | View | File | Purpose | Current Status |
 |------|------|---------|----------------|
-| Scenario | `.specify/memory/architecture-scenario-view.md` | Actor, use case, path, branch, and acceptance semantics | Reverse-generated from repo facts |
-| Logical | `.specify/memory/architecture-logical-view.md` | Capability boundaries, domain objects, states, and invariants | Reverse-generated from scenario and repo facts |
-| Process | `.specify/memory/architecture-process-view.md` | Runtime links, handoffs, approvals, receipts, failure closure | Reverse-generated from scenario and logical views |
-| Development | `.specify/memory/architecture-development-view.md` | Architecture-level components, package boundaries, contracts, dependencies | Reverse-generated from logical and process views |
-| Physical | `.specify/memory/architecture-physical-view.md` | Deployment, external systems, fact sources, observability, operations | Reverse-generated from process and development views |
+| Scenario | `.specify/memory/architecture-scenario-view.md` | UC-producing actor, use case, path, branch, and acceptance semantics | Generated project SSOT |
+| Logical | `.specify/memory/architecture-logical-view.md` | Capability boundaries, domain objects, states, and invariants | Generated from scenario view |
+| Process | `.specify/memory/architecture-process-view.md` | Runtime links, handoffs, approvals, receipts, failure closure | Generated from scenario and logical views |
+| Development | `.specify/memory/architecture-development-view.md` | Architecture-level components, package boundaries, contracts, dependencies | Generated from logical and process views |
+| Physical | `.specify/memory/architecture-physical-view.md` | Deployment, external systems, fact sources, observability, operations | Generated from process and development views |
 
 ## Architecture Intent
 

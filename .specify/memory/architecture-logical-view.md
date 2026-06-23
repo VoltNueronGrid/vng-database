@@ -72,13 +72,13 @@ The logical architecture separates database identity, connection/session access,
 
 | Object | Meaning | Owning Capability | Key Relationships | Fact Source | Invariants |
 |--------|---------|-------------------|-------------------|-------------|------------|
-| Database | Isolated persistence and metadata namespace. | Database Lifecycle | Contains resources, roles, metadata, and connections. | Repo facts: README, constitution, router, sample database docs | Unique namespace, explicit bootstrap/provenance, durable state. |
-| Connection | Authorized access path to a database through a protocol. | Connection and Session Access | References endpoint, credentials, protocol, selected database, limits. | Repo facts: local guide, driver contract, selected issue | Cannot be valid without authorized database scope. |
-| Role/Privilege | Authority relation between actor and database/resource. | Authorization and Governance | Grants or denies access to database actions. | Repo facts: security checklist, router grants, constitution | Authorization precedes protected operations. |
-| Query Workload | User intent requiring transactional, analytical, or hybrid execution. | HTAP Query Capability | Reads database state and route/freshness facts. | Repo facts: design doc, router, WS3 scripts | Routing cannot weaken correctness. |
-| Persisted State | Durable data and metadata after committed work. | Durable State Capability | Backed by storage/WAL/config and recovered by runtime. | Repo facts: config, router WAL routes | Acknowledged committed data must be recoverable for claimed scope. |
-| Interface Contract | Shared semantics across client surfaces. | Interface Contract Capability | Binds drivers, Studio, MCP, and runtime behavior. | Repo facts: driver contract, Studio README, README | Interfaces cannot bypass auth or database rules. |
-| Evidence Artifact | Proof of behavior or release status. | Evidence Capability | Supports tracker and architecture confidence. | Repo facts: KPI scripts, workflows, constitution | Status follows artifact truth. |
+| Database | Isolated persistence and metadata namespace. | Database Lifecycle | Contains resources, roles, metadata, and connections. | Scenario view | Unique namespace, explicit bootstrap/provenance, durable state. |
+| Connection | Authorized access path to a database through a protocol. | Connection and Session Access | References endpoint, credentials, protocol, selected database, limits. | Scenario view | Cannot be valid without authorized database scope. |
+| Role/Privilege | Authority relation between actor and database/resource. | Authorization and Governance | Grants or denies access to database actions. | Scenario view | Authorization precedes protected operations. |
+| Query Workload | User intent requiring transactional, analytical, or hybrid execution. | HTAP Query Capability | Reads database state and route/freshness facts. | Scenario view | Routing cannot weaken correctness. |
+| Persisted State | Durable data and metadata after committed work. | Durable State Capability | Backed by storage/recovery policy and recovered by runtime. | Scenario view | Acknowledged committed data must be recoverable for claimed scope. |
+| Interface Contract | Shared semantics across client surfaces. | Interface Contract Capability | Binds drivers, Studio, MCP, and runtime behavior. | Scenario view | Interfaces cannot bypass auth or database rules. |
+| Evidence Artifact | Proof of behavior or release status. | Evidence Capability | Supports tracker and architecture confidence. | Scenario view | Status follows artifact truth. |
 
 ## State and Lifecycle
 

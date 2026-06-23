@@ -48,7 +48,7 @@ The physical architecture must distinguish proven local runtime operation from d
 
 | Non-goal / Anti-pattern | Why It Is Out of Scope or Harmful |
 |-------------------------|-----------------------------------|
-| Describing exact cloud infrastructure as production-ready | Repo evidence explicitly says cloud is deferred/draft. |
+| Describing exact cloud infrastructure as production-ready | Cloud remains an architecture gap until production evidence exists. |
 | Treating browser inability to test native as removal of native protocol | Native is documented as optional listener and driver surface. |
 | Assuming WAL route presence proves crash recovery | Physical recovery needs executed evidence. |
 | Using sample data resources without bootstrap provenance | It confuses physical sample seed source with user database state. |

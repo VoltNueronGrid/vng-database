@@ -19,10 +19,10 @@ VoltNueronGrid DB must present one coherent database platform across local runti
 
 | Boundary | Must Remain Stable Because | Explicitly Does Not Cover |
 |----------|----------------------------|---------------------------|
-| Database lifecycle | Requirements and constitution require database isolation, persisted state, roles, and unique resources. | It does not hide missing bootstrap or schema provenance behavior in Studio. |
-| Runtime service | Repo facts show the service coordinates SQL, admin, security, WAL, HTAP, failover, audit, and automation. | It does not by itself prove production multi-process deployment. |
-| Native interface | README, driver docs, and local guide show native protocol and drivers as first-class surfaces. | It does not make browser-only tests sufficient for native behavior. |
-| Evidence | Gate scripts and constitution make artifacts the completion source of truth. | It does not accept narrative or route existence as proof. |
+| Database lifecycle | Product rules require database isolation, persisted state, roles, and unique resources. | It does not hide missing bootstrap or schema provenance behavior in Studio. |
+| Runtime service | Runtime authority coordinates SQL, admin, security, durability, HTAP, failover, audit, and automation. | It does not by itself prove production multi-process deployment. |
+| Native interface | Native protocol and language drivers are first-class user-facing surfaces. | It does not make browser-only tests sufficient for native behavior. |
+| Evidence | Validation artifacts are the completion source of truth. | It does not accept narrative or surface existence as proof. |
 
 ## Change Axes
 
@@ -37,10 +37,10 @@ VoltNueronGrid DB must present one coherent database platform across local runti
 
 | Invariant | Scenario Evidence | Risk If Violated |
 |-----------|-------------------|------------------|
-| A valid connection must resolve to an authorized, existing or explicitly created database. | Repo facts: active user selection, constitution, database admin routes, sample database docs | Empty phantom connections and cross-database leakage. |
-| Database resources shown to a user must come from the selected database or a declared bootstrap source. | Repo facts: active user selection, sample database docs | User cannot trust Studio schema tree. |
-| Protected actions require documented credential and role boundaries. | Repo facts: security checklist, constitution, README admin header examples | Unauthorized access or tenant/database leakage. |
-| Completion claims require evidence artifacts. | Repo facts: gate scripts, constitution, traceability matrix | Architecture becomes wishful rather than observable. |
+| A valid connection must resolve to an authorized, existing or explicitly created database. | Connection and database lifecycle scenarios | Empty phantom connections and cross-database leakage. |
+| Database resources shown to a user must come from the selected database or a declared bootstrap source. | Database bootstrap and workspace acceptance semantics | User cannot trust Studio schema tree. |
+| Protected actions require documented credential and role boundaries. | Administration and autonomous-operation scenarios | Unauthorized access or tenant/database leakage. |
+| Completion claims require evidence artifacts. | Release/workstream validation scenario | Architecture becomes wishful rather than observable. |
 
 ## Non-goals / Anti-patterns
 
@@ -48,7 +48,7 @@ VoltNueronGrid DB must present one coherent database platform across local runti
 |-------------------------|-----------------------------------|
 | Treating native protocol as a browser-only option | Native listener and drivers are documented product surfaces. |
 | Showing sample resources without explicit sample bootstrap | It violates database provenance and isolation expectations. |
-| Promoting cloud or trillion-row claims without evidence | Repo facts mark these as deferred or not proven. |
+| Promoting cloud or trillion-row claims without evidence | Those claims are outside this pass until supported by validation evidence. |
 | Letting Studio bypass runtime auth and database lifecycle rules | UI is a product interface, not an alternate authority. |
 
 ## Actors and Participants

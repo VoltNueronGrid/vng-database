@@ -50,7 +50,7 @@ Runtime collaboration must ensure every user/tool request is authorized, scoped 
 |-------------------------|-----------------------------------|
 | Optimistically creating a local UI connection before runtime validation | It breaks database authority and user trust. |
 | Swallowing bootstrap failure and showing sample objects anyway | It hides provenance and recovery state. |
-| Treating single-process failover scaffold as proven production failover | Repo facts explicitly limit that claim. |
+| Treating limited failover scaffolding as proven production failover | The architecture separates operational intent from validated production guarantees. |
 | Running autonomous actions without audit receipts | It blocks enterprise review and rollback. |
 
 ## Main Runtime Links
