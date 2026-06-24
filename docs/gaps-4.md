@@ -57,6 +57,33 @@ The primary `PagedRowStore` is in-memory. All row data is lost on process exit.
 
 ---
 
+## Architecture-Level vs Implementation-Level Gap Distinction (added 2026-06-24, I5)
+
+> **IMPORTANT:** This document tracks **implementation-level gaps only** — code-level correctness
+> issues closed through sessions 30–33. The "🔴 Critical — 0 remaining" section below refers
+> exclusively to those implementation gaps.
+>
+> Architecture-level correctness risks (system-wide properties requiring end-to-end evidence) are
+> tracked separately in `docs/tasks-v4.md` (P/R-series tasks). Do NOT cite this document as proof
+> that all critical risks are resolved.
+
+### Five Architecture Critical Risks — task cross-references (I5)
+
+The architecture synthesis (`.specify/memory/architecture.md`, updated 2026-06-23) carries five
+critical-severity open risks. Each is cross-referenced to a `tasks-v4.md` task ID:
+
+| # | Risk | Severity | Status | Task IDs |
+|---|------|----------|--------|----------|
+| 1 | Row store data loss on crash — `PagedRowStore` is in-memory; all rows lost on process exit | 🔴 Critical | OPEN (C1 above) | **P1** (durable row store), **E3** (crash recovery gate) |
+| 2 | Phantom connections in Studio — `ConnectionPoolManager` / `NativeConnectionPool` overlap; no state machine | 🔴 Critical | OPEN | **P8** (Studio DB lifecycle), **R9** (Studio connection state machine), **C2**, **C3** |
+| 3 | Cross-database leakage via key-prefix scan — `PagedRowStore` uses flat namespace; `db.table:key` prefix scan can bleed across databases | 🔴 Critical | OPEN | **P2** (per-database column families), **R3** (per-database RBAC scope) |
+| 4 | Multi-statement partial commit — partial DML batches can leave row store in inconsistent state | 🟠 High | PARTIAL (UNDO log + isolation done via R5/R6; group commit blocked on P1) | **P3** |
+| 5 | Legacy SELECT substring false matches — hand-rolled WHERE clause evaluation matched `id=5` against `id=15`, `id=50` | 🟢 Closed | RESOLVED in session R1 | **R1** (DONE) |
+
+This table satisfies I5 acceptance criterion: "Each architecture view critical risk is cross-referenced with a task ID in this file."
+
+---
+
 ## What closed in session 32
 
 All 9 medium gaps closed in session 32. Commit `e6f6c3d`.

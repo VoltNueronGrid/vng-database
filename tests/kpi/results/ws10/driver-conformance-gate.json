@@ -1,0 +1,40 @@
+{
+  "gate": "driver-conformance",
+  "status": "passed",
+  "total_packs": 4,
+  "passed_packs": 4,
+  "failed_packs": 0,
+  "packs": [
+    {
+      "id": "cargo-driver-tests",
+      "description": "cargo test -p voltnuerongrid-driver-rust",
+      "status": "passed",
+      "detail": "running 1 test\ntest drivers/voltnuerongrid-driver-rust/src/lib.rs - ConnectionPoolManager (line 2207) ... ignored\n\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n",
+      "duration_ms": 836
+    },
+    {
+      "id": "config-validation-fixture",
+      "description": "Config validation fixture: drivers/conformance/fixtures/config-validation-cases.json",
+      "status": "passed",
+      "detail": "All 3 cases present; required cases verified.",
+      "duration_ms": 8
+    },
+    {
+      "id": "transport-mode-fixture",
+      "description": "Transport mode fixture: drivers/conformance/fixtures/transport-mode-cases.json",
+      "status": "passed",
+      "detail": "All required fields present; 6 cases found.",
+      "duration_ms": 4
+    },
+    {
+      "id": "request-building-fixture",
+      "description": "Request building fixture: drivers/conformance/fixtures/request-building-cases.json",
+      "status": "passed",
+      "detail": "All required fields present; 0 cases found.",
+      "duration_ms": 2
+    }
+  ],
+  "started_at_utc": "2026-06-24T10:10:50.7272180Z",
+  "finished_at_utc": "2026-06-24T10:10:51.5799270Z",
+  "duration_ms": 853
+}

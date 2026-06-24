@@ -1317,8 +1317,9 @@ pub(crate) async fn admin_db_grant_add(
 
     let granted_roles = {
         let mut grants = state.db_grants.lock().expect("db_grants lock");
-        grants.entry(name.clone()).or_default().insert(role);
-        let mut roles: Vec<String> = grants.get(&name).unwrap().iter().cloned().collect();
+        let roles_set = grants.entry(name.clone()).or_default();
+        roles_set.insert(role);
+        let mut roles: Vec<String> = roles_set.iter().cloned().collect();
         roles.sort();
         roles
     };

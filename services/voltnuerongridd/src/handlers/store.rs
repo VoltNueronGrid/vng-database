@@ -637,7 +637,7 @@ pub(crate) async fn store_create_index(
             );
             (
                 StatusCode::CREATED,
-                Json(serde_json::to_value(response).expect("json")),
+                Json(serde_json::to_value(&response).unwrap_or_default()),
             )
         }
         Err(e) => (
@@ -683,7 +683,7 @@ pub(crate) async fn store_drop_index(
                     );
                     (
                         StatusCode::OK,
-                        Json(serde_json::to_value(response).expect("json")),
+                        Json(serde_json::to_value(&response).unwrap_or_default()),
                     )
                 }
                 Err(e) => (
@@ -737,7 +737,7 @@ pub(crate) async fn store_index_lookup(
             );
             (
                 StatusCode::OK,
-                Json(serde_json::to_value(response).expect("json")),
+                Json(serde_json::to_value(&response).unwrap_or_default()),
             )
         }
         None => (
@@ -804,7 +804,7 @@ pub(crate) async fn store_add_constraint(
             );
             (
                 StatusCode::CREATED,
-                Json(serde_json::to_value(response).expect("json")),
+                Json(serde_json::to_value(&response).unwrap_or_default()),
             )
         }
         Err(e) => (

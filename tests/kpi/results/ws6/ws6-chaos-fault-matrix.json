@@ -1,59 +1,59 @@
 {
-    "report":  "ws6-chaos-fault-injection-matrix",
-    "status":  "passed",
-    "generated_at_utc":  "2026-04-10T10:20:04.8505800Z",
-    "source_summary":  "tests/kpi/results/ws6/ws6-gate-summary.json",
-    "total_fault_modes":  8,
-    "passed_modes":  8,
-    "failed_modes":  0,
-    "matrix":  [
-                   {
-                       "fault_mode":  "node_loss_and_rejoin_sequence",
-                       "evidence_pack":  "ws6-node-loss-rejoin-sequence",
-                       "status":  "passed",
-                       "artifact":  "tests/kpi/results/ws6/ws6-node-loss-rejoin-smoke.json"
-                   },
-                   {
-                       "fault_mode":  "failover_flapping_under_repeated_handoffs",
-                       "evidence_pack":  "ws6-failover-flap-resistance",
-                       "status":  "passed",
-                       "artifact":  "tests/kpi/results/ws6/ws6-failover-flap-resistance-smoke.json"
-                   },
-                   {
-                       "fault_mode":  "replication_lag_critical_signal_and_reconcile",
-                       "evidence_pack":  "ws6-replication-lag-failure-scenarios",
-                       "status":  "passed",
-                       "artifact":  "tests/kpi/results/ws6/ws6-replication-lag-scenarios-smoke.json"
-                   },
-                   {
-                       "fault_mode":  "multi_node_handoff_matrix",
-                       "evidence_pack":  "ws6-multi-node-handoff-matrix",
-                       "status":  "passed",
-                       "artifact":  "tests/kpi/results/ws6/ws6-handoff-matrix-smoke.json"
-                   },
-                   {
-                       "fault_mode":  "reconcile_latency_envelope",
-                       "evidence_pack":  "ws6-reconcile-latency-envelope",
-                       "status":  "passed",
-                       "artifact":  "tests/kpi/results/ws6/ws6-reconcile-latency-envelope-smoke.json"
-                   },
-                   {
-                       "fault_mode":  "control_plane_leader_churn_and_reconcile",
-                       "evidence_pack":  "ws6-control-plane-chaos-certification",
-                       "status":  "passed",
-                       "artifact":  "tests/kpi/results/ws6/ws6-control-plane-chaos-smoke.json"
-                   },
-                   {
-                       "fault_mode":  "multi_node_cluster_runtime_targeted_handoff_churn",
-                       "evidence_pack":  "ws6-multi-node-cluster-runtime-chaos",
-                       "status":  "passed",
-                       "artifact":  "tests/kpi/results/ws6/ws6-multi-node-cluster-chaos-smoke.json"
-                   },
-                   {
-                       "fault_mode":  "process_isolated_cluster_runtime_failover_churn",
-                       "evidence_pack":  "ws6-process-isolated-cluster-runtime-chaos",
-                       "status":  "passed",
-                       "artifact":  "tests/kpi/results/ws6/ws6-process-isolated-cluster-chaos-smoke.json"
-                   }
-               ]
+  "report": "ws6-chaos-fault-injection-matrix",
+  "status": "failed",
+  "generated_at_utc": "2026-06-24T10:15:53.4688910Z",
+  "source_summary": "tests/kpi/results/ws6/ws6-gate-summary.json",
+  "total_fault_modes": 8,
+  "passed_modes": 7,
+  "failed_modes": 1,
+  "matrix": [
+    {
+      "fault_mode": "node_loss_and_rejoin_sequence",
+      "evidence_pack": "ws6-node-loss-rejoin-sequence",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws6/ws6-node-loss-rejoin-smoke.json"
+    },
+    {
+      "fault_mode": "failover_flapping_under_repeated_handoffs",
+      "evidence_pack": "ws6-failover-flap-resistance",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws6/ws6-failover-flap-resistance-smoke.json"
+    },
+    {
+      "fault_mode": "replication_lag_critical_signal_and_reconcile",
+      "evidence_pack": "ws6-replication-lag-failure-scenarios",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws6/ws6-replication-lag-scenarios-smoke.json"
+    },
+    {
+      "fault_mode": "multi_node_handoff_matrix",
+      "evidence_pack": "ws6-multi-node-handoff-matrix",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws6/ws6-handoff-matrix-smoke.json"
+    },
+    {
+      "fault_mode": "reconcile_latency_envelope",
+      "evidence_pack": "ws6-reconcile-latency-envelope",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws6/ws6-reconcile-latency-envelope-smoke.json"
+    },
+    {
+      "fault_mode": "control_plane_leader_churn_and_reconcile",
+      "evidence_pack": "ws6-control-plane-chaos-certification",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws6/ws6-control-plane-chaos-smoke.json"
+    },
+    {
+      "fault_mode": "multi_node_cluster_runtime_targeted_handoff_churn",
+      "evidence_pack": "ws6-multi-node-cluster-runtime-chaos",
+      "status": "passed",
+      "artifact": "tests/kpi/results/ws6/ws6-multi-node-cluster-chaos-smoke.json"
+    },
+    {
+      "fault_mode": "process_isolated_cluster_runtime_failover_churn",
+      "evidence_pack": "ws6-process-isolated-cluster-runtime-chaos",
+      "status": "failed",
+      "artifact": "tests/kpi/results/ws6/ws6-process-isolated-cluster-chaos-smoke.json"
+    }
+  ]
 }

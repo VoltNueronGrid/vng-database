@@ -2,7 +2,7 @@
   "report": "ws7-gate-trend-comparison",
   "status": "passed",
   "trend_state": "stable",
-  "generated_at_utc": "2026-04-10T03:18:14.7291096Z",
+  "generated_at_utc": "2026-06-24T10:17:37.2917950Z",
   "current_summary": "tests/kpi/results/ws7/ws7-gate-summary.json",
   "prior_summary": "tests/kpi/results/ws7/ws7-gate-summary.previous.json",
   "gate_status": {
@@ -10,9 +10,9 @@
     "after": "passed"
   },
   "duration_ms": {
-    "before": 12205,
-    "after": 12829,
-    "delta": 624
+    "before": 12829,
+    "after": 10482,
+    "delta": -2347
   },
   "pack_changes": [
     {

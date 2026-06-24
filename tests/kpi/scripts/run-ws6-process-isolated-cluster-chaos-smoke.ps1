@@ -45,7 +45,13 @@ function Start-NodeProcess {
   )
 
   $command = 'set VNG_NODE_ID=' + $NodeId + ' && set VNG_CLUSTER_MODE=multi && set VNG_HTTP_BIND=127.0.0.1:' + $Port + ' && set VNG_ADMIN_API_KEY=' + $AdminApiKey + ' && target\debug\voltnuerongridd.exe > "' + $LogPath + '" 2>&1'
-  return Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $command -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
+  if ($IsWindows) {
+    return Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $command -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
+  } else {
+    $env:VNG_NODE_ID = $NodeId; $env:VNG_CLUSTER_MODE = "multi"
+    $env:VNG_HTTP_BIND = "127.0.0.1:$Port"; $env:VNG_ADMIN_API_KEY = $AdminApiKey
+    return Start-Process -FilePath "cargo" -ArgumentList @("run", "-p", "voltnuerongridd") -WorkingDirectory $RepoRoot -PassThru -RedirectStandardOutput $LogPath -RedirectStandardError "$LogPath.err"
+  }
 }
 
 function Stop-NodeProcessTree {

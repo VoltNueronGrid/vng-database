@@ -13418,3 +13418,462 @@ async fn e2e_http_roundtrip_sql_execute() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok", "response status field must be 'ok'");
 }
+
+// ─── R4: DROP DATABASE row purge ─────────────────────────────────────────────
+
+#[test]
+fn r4_drop_database_purges_all_rows() {
+    let state = state_with_key(None);
+    // Seed rows for two databases directly into the row store.
+    {
+        let mut rs = state.row_store.lock().unwrap();
+        let xid = rs.begin_xid();
+        let mut row1 = HashMap::new();
+        row1.insert("id".to_string(), "1".to_string());
+        rs.insert(xid, "dropdb.users:1", row1);
+        let mut row2 = HashMap::new();
+        row2.insert("id".to_string(), "2".to_string());
+        rs.insert(xid, "dropdb.users:2", row2);
+        let mut other = HashMap::new();
+        other.insert("id".to_string(), "1".to_string());
+        rs.insert(xid, "keepdb.items:1", other);
+    }
+    let pre = {
+        let rs = state.row_store.lock().unwrap();
+        let xid = rs.current_xid();
+        rs.scan_at_snapshot(xid).iter().filter(|(k, _)| k.starts_with("dropdb.")).count()
+    };
+    assert_eq!(pre, 2, "two dropdb rows should exist before purge");
+
+    crate::helpers::boot::purge_database_rows("dropdb", &state.row_store, &state.wal_engine);
+
+    let rs = state.row_store.lock().unwrap();
+    let xid = rs.current_xid();
+    let snap = rs.scan_at_snapshot(xid);
+    let dropdb_remaining = snap.iter().filter(|(k, _)| k.starts_with("dropdb.")).count();
+    let keepdb_remaining = snap.iter().filter(|(k, _)| k.starts_with("keepdb.")).count();
+    assert_eq!(dropdb_remaining, 0, "DROP DATABASE must purge all dropdb rows from the row store");
+    assert_eq!(keepdb_remaining, 1, "rows in other databases must be unaffected");
+}
+
+// ─── R5: ROLLBACK data-visibility ────────────────────────────────────────────
+
+#[test]
+fn r5_rollback_insert_rows_not_visible() {
+    // A transaction that INSERTs a row and then ROLLBACKs must leave no trace.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            "INSERT INTO r5_orders (id, status) VALUES (101, 'pending')".to_string(),
+            "ROLLBACK".to_string(),
+        ],
+        isolation_level: None,
+    };
+    rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+        .expect("transaction should succeed");
+
+    // The row must not be visible in the row store after rollback.
+    let rs = state.row_store.lock().unwrap();
+    let xid = rs.current_xid();
+    let snap = rs.scan_at_snapshot(xid);
+    let found = snap.iter().any(|(k, _)| k.contains("r5_orders"));
+    assert!(!found, "INSERTed row must not be visible after ROLLBACK");
+}
+
+#[test]
+fn r5_rollback_update_restores_original_row() {
+    // Pre-insert a row, UPDATE it inside a transaction, ROLLBACK — original must be restored.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+
+    // Seed the original row directly into the row store.
+    let original_key = "r5_items:99".to_string();
+    {
+        let mut rs = state.row_store.lock().unwrap();
+        let xid = rs.begin_xid();
+        let mut original = HashMap::new();
+        original.insert("id".to_string(), "99".to_string());
+        original.insert("price".to_string(), "10".to_string());
+        original.insert("__table".to_string(), "r5_items".to_string());
+        rs.insert(xid, &original_key, original);
+    }
+
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            "UPDATE r5_items SET price = '999' WHERE id = 99".to_string(),
+            "ROLLBACK".to_string(),
+        ],
+        isolation_level: None,
+    };
+    rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+        .expect("transaction should succeed");
+
+    // After ROLLBACK the row should be restored with the original price.
+    let rs = state.row_store.lock().unwrap();
+    let xid = rs.current_xid();
+    let snap = rs.scan_at_snapshot(xid);
+    let row = snap.iter().find(|(k, _)| *k == original_key.as_str());
+    assert!(row.is_some(), "original row must still exist after UPDATE + ROLLBACK");
+    let (_, data) = row.unwrap();
+    assert_eq!(data.get("price").map(|s| s.as_str()), Some("10"),
+        "price must be restored to original '10' after ROLLBACK, not '999'");
+}
+
+// ─── Q1: ALTER TABLE DDL ─────────────────────────────────────────────────────
+
+#[test]
+fn q1_alter_table_add_column_updates_catalog() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    // Create table first.
+    rt.block_on(sql_execute(
+        State(state.clone()),
+        headers.clone(),
+        Json(SqlExecuteRequest {
+            sql_batch: "CREATE TABLE q1_products (id INT, name TEXT)".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("CREATE TABLE");
+
+    // ALTER TABLE ADD COLUMN.
+    let resp = rt.block_on(sql_execute(
+        State(state.clone()),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "ALTER TABLE q1_products ADD COLUMN price FLOAT".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("ALTER TABLE ADD COLUMN");
+    assert_eq!(resp.0, StatusCode::OK, "ALTER TABLE must return 200");
+    assert_eq!(resp.1.status, "ok");
+
+    // alteration_count must be 1.
+    let catalog = state.ddl_catalog.lock().unwrap();
+    let entry = catalog.get("q1_products");
+    assert!(entry.is_some(), "catalog entry must exist");
+    assert_eq!(entry.unwrap().alteration_count, 1, "alteration_count must be 1 after ADD COLUMN");
+}
+
+#[test]
+fn q1_alter_table_drop_column_updates_catalog() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    rt.block_on(sql_execute(
+        State(state.clone()),
+        headers.clone(),
+        Json(SqlExecuteRequest {
+            sql_batch: "CREATE TABLE q1_inventory (id INT, qty INT, notes TEXT)".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("CREATE TABLE");
+
+    let resp = rt.block_on(sql_execute(
+        State(state.clone()),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "ALTER TABLE q1_inventory DROP COLUMN notes".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("ALTER TABLE DROP COLUMN");
+    assert_eq!(resp.0, StatusCode::OK);
+    assert_eq!(resp.1.status, "ok");
+
+    let catalog = state.ddl_catalog.lock().unwrap();
+    let entry = catalog.get("q1_inventory").expect("entry must exist");
+    assert_eq!(entry.alteration_count, 1, "alteration_count must be 1 after DROP COLUMN");
+    // The column should no longer appear in the stored DDL.
+    assert!(
+        !entry.original_statement.to_ascii_lowercase().contains("notes"),
+        "dropped column must not appear in the stored DDL"
+    );
+}
+
+#[test]
+fn q1_alter_table_increments_alteration_count_across_multiple_alters() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    rt.block_on(sql_execute(
+        State(state.clone()),
+        headers.clone(),
+        Json(SqlExecuteRequest {
+            sql_batch: "CREATE TABLE q1_counters (id INT)".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("CREATE TABLE");
+
+    for col in &["col_a INT", "col_b TEXT"] {
+        rt.block_on(sql_execute(
+            State(state.clone()),
+            headers.clone(),
+            Json(SqlExecuteRequest {
+                sql_batch: format!("ALTER TABLE q1_counters ADD COLUMN {col}"),
+                ..Default::default()
+            }),
+        ))
+        .expect("ALTER TABLE");
+    }
+
+    let catalog = state.ddl_catalog.lock().unwrap();
+    let entry = catalog.get("q1_counters").expect("entry must exist");
+    assert_eq!(entry.alteration_count, 2, "two ALTERs must yield alteration_count == 2");
+}
+
+// ─── Q2: GRANT / REVOKE via SQL ──────────────────────────────────────────────
+
+#[test]
+fn q2_grant_role_on_database_populates_db_grants() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    let resp = rt.block_on(sql_execute(
+        State(state.clone()),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "GRANT reader ON DATABASE analytics TO alice".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("GRANT");
+    assert_eq!(resp.0, StatusCode::OK);
+    assert_eq!(resp.1.status, "ok");
+
+    let grants = state.db_grants.lock().unwrap();
+    let roles = grants.get("analytics").expect("db_grants must have analytics entry");
+    assert!(roles.contains("reader"), "GRANT must insert 'reader' role for analytics db");
+}
+
+#[test]
+fn q2_revoke_role_removes_from_db_grants() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    // First GRANT then REVOKE.
+    rt.block_on(sql_execute(
+        State(state.clone()),
+        headers.clone(),
+        Json(SqlExecuteRequest {
+            sql_batch: "GRANT writer ON DATABASE reports TO bob".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("GRANT");
+
+    let resp = rt.block_on(sql_execute(
+        State(state.clone()),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "REVOKE writer FROM bob ON DATABASE reports".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("REVOKE");
+    assert_eq!(resp.0, StatusCode::OK);
+    assert_eq!(resp.1.status, "ok");
+
+    let grants = state.db_grants.lock().unwrap();
+    let roles_opt = grants.get("reports");
+    let still_has = roles_opt.map(|r| r.contains("writer")).unwrap_or(false);
+    assert!(!still_has, "REVOKE must remove 'writer' role from reports db");
+}
+
+// ─── Q3: CALL routing ────────────────────────────────────────────────────────
+
+#[test]
+fn q3_call_insert_rows_inserts_records_in_demo_mode() {
+    std::env::set_var("VNG_DEMO_MODE", "true");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    // Register a minimal DDL entry so insert_rows knows column count.
+    rt.block_on(sql_execute(
+        State(state.clone()),
+        headers.clone(),
+        Json(SqlExecuteRequest {
+            sql_batch: "CREATE TABLE q3_demo (id INT, val TEXT)".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("CREATE TABLE");
+
+    let resp = rt.block_on(sql_execute(
+        State(state.clone()),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "CALL insert_rows('q3_demo', 3)".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("CALL insert_rows");
+    std::env::remove_var("VNG_DEMO_MODE");
+    assert_eq!(resp.0, StatusCode::OK, "CALL insert_rows must return 200");
+    assert_eq!(resp.1.status, "ok", "CALL insert_rows must return status ok");
+
+    // Row store must contain 3 rows for q3_demo.
+    let rs = state.row_store.lock().unwrap();
+    let xid = rs.current_xid();
+    let count = rs.scan_at_snapshot(xid).iter()
+        .filter(|(k, _)| k.contains("q3_demo"))
+        .count();
+    assert_eq!(count, 3, "CALL insert_rows('q3_demo', 3) must insert exactly 3 rows");
+}
+
+#[test]
+fn q3_call_unknown_procedure_returns_error() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    let resp = rt.block_on(sql_execute(
+        State(state.clone()),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "CALL nonexistent_proc()".to_string(),
+            ..Default::default()
+        }),
+    ))
+    .expect("CALL unknown proc should return a response, not an Err");
+    // Must return a non-2xx status or an error status field, not a silent no-op.
+    let is_error = resp.0 == StatusCode::BAD_REQUEST
+        || resp.1.status == "error"
+        || !resp.1.reason.is_empty();
+    assert!(is_error,
+        "CALL to an unknown procedure must return an explicit error, got status={} reason={}",
+        resp.1.status, resp.1.reason);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R2: DataFusion JOIN / subquery / window routing tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// R2: INNER JOIN query is classified as OLAP and routed through DataFusion.
+#[test]
+fn r2_inner_join_routed_as_olap() {
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    let r = rt.block_on(sql_route(
+        State(state),
+        headers,
+        Json(SqlRouteRequest {
+            sql_batch: "SELECT o.id, c.name FROM orders o JOIN customers c ON o.cid = c.id;".to_string(),
+        }),
+    )).expect("sql_route inner join");
+
+    assert_eq!(r.status, "ok", "sql_route should succeed");
+    assert_eq!(r.route_path, "olap", "INNER JOIN must route as olap");
+}
+
+/// R2: LEFT JOIN query is classified as OLAP and dispatched to DataFusion.
+#[test]
+fn r2_left_join_routed_as_olap() {
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    let r = rt.block_on(sql_route(
+        State(state),
+        headers,
+        Json(SqlRouteRequest {
+            sql_batch: "SELECT u.name, r.role FROM users u LEFT JOIN roles r ON u.rid = r.id;".to_string(),
+        }),
+    )).expect("sql_route left join");
+
+    assert_eq!(r.status, "ok", "sql_route should succeed");
+    assert_eq!(r.route_path, "olap", "LEFT JOIN must route as olap");
+}
+
+/// R2: Subquery in WHERE is classified as OLAP and routed through DataFusion.
+#[test]
+fn r2_subquery_in_where_routed_as_olap() {
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    let r = rt.block_on(sql_route(
+        State(state),
+        headers,
+        Json(SqlRouteRequest {
+            sql_batch: "SELECT id FROM orders WHERE cid IN (SELECT id FROM customers WHERE active = '1');".to_string(),
+        }),
+    )).expect("sql_route subquery");
+
+    assert_eq!(r.status, "ok", "sql_route should succeed");
+    assert_eq!(r.route_path, "olap", "subquery must route as olap");
+}
+
+/// R2: Window function query is classified as OLAP and dispatched to DataFusion.
+#[test]
+fn r2_window_function_routed_as_olap_and_executed() {
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    let resp = rt.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM orders;".to_string(),
+            max_rows: Some(100),
+            ..Default::default()
+        }),
+    )).expect("sql_execute window function");
+
+    assert_eq!(resp.0, StatusCode::OK, "window function query should return 200");
+    assert_eq!(resp.1.route_path, "olap", "window function must route as olap");
+    assert!(resp.1.olap.is_some(), "olap field should be populated for OVER() queries");
+}
+
+/// R2: INNER JOIN execute returns OK status and populates the olap field.
+#[test]
+fn r2_inner_join_execute_returns_ok() {
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    // Seed two tables so the JOIN has real data.
+    {
+        let rt2 = tokio::runtime::Runtime::new().expect("runtime2");
+        let _ = rt2.block_on(sql_execute(
+            State(state.clone()),
+            tenant_user_headers("analyst-acme", "acme"),
+            Json(SqlExecuteRequest {
+                sql_batch: "INSERT INTO orders (id, cid, amount) VALUES ('o1', 'c1', '100'); INSERT INTO customers (id, name) VALUES ('c1', 'Alice');".to_string(),
+                ..Default::default()
+            }),
+        ));
+    }
+
+    let resp = rt.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT orders.id, customers.name FROM orders JOIN customers ON orders.cid = customers.id;".to_string(),
+            max_rows: Some(100),
+            ..Default::default()
+        }),
+    )).expect("sql_execute inner join");
+
+    assert_eq!(resp.0, StatusCode::OK, "INNER JOIN execute should return 200");
+    assert_eq!(resp.1.route_path, "olap", "INNER JOIN must take the olap path");
+    assert!(resp.1.olap.is_some(), "olap response field must be set for JOIN queries");
+}

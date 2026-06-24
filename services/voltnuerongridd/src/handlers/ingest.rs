@@ -705,7 +705,7 @@ pub(crate) async fn ingest_csv(
     );
     Ok((
         StatusCode::OK,
-        Json(serde_json::to_value(response).expect("json")),
+        Json(serde_json::to_value(&response).unwrap_or_default()),
     ))
 }
 
@@ -785,7 +785,7 @@ pub(crate) async fn ingest_json(
     );
     Ok((
         StatusCode::OK,
-        Json(serde_json::to_value(response).expect("json")),
+        Json(serde_json::to_value(&response).unwrap_or_default()),
     ))
 }
 
@@ -869,7 +869,7 @@ pub(crate) async fn ingest_parquet(
     );
     Ok((
         StatusCode::OK,
-        Json(serde_json::to_value(response).expect("json")),
+        Json(serde_json::to_value(&response).unwrap_or_default()),
     ))
 }
 
@@ -953,7 +953,7 @@ pub(crate) async fn ingest_excel(
     );
     Ok((
         StatusCode::OK,
-        Json(serde_json::to_value(response).expect("json")),
+        Json(serde_json::to_value(&response).unwrap_or_default()),
     ))
 }
 

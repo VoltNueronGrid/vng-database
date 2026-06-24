@@ -39,7 +39,8 @@ function Invoke-PowerShellScript {
     [string[]]$ArgumentList = @()
   )
 
-  $process = Start-Process -FilePath "powershell.exe" `
+  $exe = if ($IsWindows) { "powershell.exe" } else { "pwsh" }
+  $process = Start-Process -FilePath $exe `
     -ArgumentList (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath) + $ArgumentList) `
     -NoNewWindow `
     -PassThru `

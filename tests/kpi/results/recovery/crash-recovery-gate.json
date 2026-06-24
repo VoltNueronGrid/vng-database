@@ -7,43 +7,53 @@
   "page_level_durability_implemented": true,
   "wal_durability_implemented": true,
   "durability_gap_note": null,
-  "table_name": "crash_test_431db950",
+  "table_name": "crash_test_7d1ec524",
   "base_url": "http://127.0.0.1:8080",
-  "server_managed": false,
+  "server_managed": true,
   "require_row_survival_enforced": false,
   "steps": [
     {
       "step": "server_start",
       "status": "passed",
-      "detail": "Pre-started server is reachable at http://127.0.0.1:8080"
+      "detail": "Server started and healthy (PID=54338)"
     },
     {
       "step": "create_database",
       "status": "passed",
-      "detail": "Database crash_recovery_gate_db created or already exists"
+      "detail": "Database creation returned non-OK (may already exist): Response status code does not indicate success: 400 (Bad Request)."
     },
     {
       "step": "create_table",
       "status": "passed",
-      "detail": "Table crash_test_431db950 created in crash_recovery_gate_db"
+      "detail": "Table crash_test_7d1ec524 created in crash_recovery_gate_db"
     },
     {
       "step": "insert_rows",
       "status": "passed",
-      "detail": "Inserted 3 rows into crash_test_431db950"
+      "detail": "Inserted 3 rows into crash_test_7d1ec524"
     },
     {
       "step": "server_kill",
-      "status": "skipped",
-      "detail": "Server management skipped — cannot verify restart durability"
+      "status": "passed",
+      "detail": "Server PID 54338 killed (crash simulated)"
+    },
+    {
+      "step": "server_restart",
+      "status": "passed",
+      "detail": "Server restarted and healthy (PID=54349)"
     },
     {
       "step": "verify_rows_survived",
       "status": "passed",
       "detail": "3/3 rows present after restart — page-level durability confirmed"
+    },
+    {
+      "step": "server_stop",
+      "status": "passed",
+      "detail": "Server PID 54349 stopped"
     }
   ],
-  "started_at_utc": "2026-06-24T03:48:43.0068270Z",
-  "finished_at_utc": "2026-06-24T03:48:43.0660110Z",
-  "duration_ms": 59
+  "started_at_utc": "2026-06-24T10:17:17.9542720Z",
+  "finished_at_utc": "2026-06-24T10:17:19.1485670Z",
+  "duration_ms": 1194
 }
