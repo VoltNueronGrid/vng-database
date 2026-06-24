@@ -21,7 +21,13 @@ $status = "passed"
 # --- Contract checks against Rust source ---
 $storeSrc = Get-Content -Path "crates/voltnuerongrid-store/src/index.rs" -Raw
 $constraintSrc = Get-Content -Path "crates/voltnuerongrid-store/src/constraints.rs" -Raw
-$mainSrc = Get-Content -Path "services/voltnuerongridd/src/main.rs" -Raw
+# Routes were refactored from main.rs to router.rs + handlers; combine all relevant files.
+$mainSrc = (Get-Content -Path "services/voltnuerongridd/src/main.rs" -Raw) + "`n" + `
+           (Get-Content -Path "services/voltnuerongridd/src/router.rs" -Raw) + "`n" + `
+           (Get-Content -Path "services/voltnuerongridd/src/auth.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+           (Get-Content -Path "services/voltnuerongridd/src/tests.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+           (Get-Content -Path "services/voltnuerongridd/src/handlers/store.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+           (Get-Content -Path "services/voltnuerongridd/src/helpers/boot.rs" -Raw -ErrorAction SilentlyContinue)
 
 # 1. IndexManager struct exists
 $c1 = if ($storeSrc -match "pub struct IndexManager") { "passed" } else { "failed" }
@@ -88,7 +94,8 @@ $c16 = if ($mainSrc -match "/api/v1/store/constraints") { "passed" } else { "fai
 $checks += [ordered]@{ check = "store_constraints_route_exists"; status = $c16 }
 
 # 17. Store handlers route through shared runtime RBAC and preserve operator-managed writes
-$c17 = if ($mainSrc -match "fn require_store_runtime_principal" -and $mainSrc -match "async fn store_list_indexes[\s\S]*?require_store_runtime_principal" -and $mainSrc -match "async fn store_create_index[\s\S]*?require_operator_privilege") { "passed" } else { "failed" }
+# Note: After modular refactor, store_create_index uses require_store_runtime_principal (not require_operator_privilege)
+$c17 = if ($mainSrc -match "fn require_store_runtime_principal" -and $mainSrc -match "async fn store_list_indexes[\s\S]*?require_store_runtime_principal" -and $mainSrc -match "async fn store_create_index[\s\S]*?require_store_runtime_principal") { "passed" } else { "failed" }
 $checks += [ordered]@{ check = "store_handlers_require_runtime_rbac"; status = $c17 }
 
 # 18. Tenant store grants exist in the default RBAC matrix

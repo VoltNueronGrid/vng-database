@@ -862,4 +862,123 @@ mod tests {
         assert!(result.contains("FROM (SELECT order_id, total FROM orders) AS order_summary"));
         assert!(result.contains("WHERE region = 'us'"));
     }
+
+    // ─── Q8: make_row_key / make_table_scan_prefix / db_prefix_key ───────────
+
+    #[test]
+    fn q8_make_row_key_with_db() {
+        assert_eq!(make_row_key("mydb", "orders", "42"), "mydb.orders:42");
+    }
+
+    #[test]
+    fn q8_make_row_key_without_db() {
+        assert_eq!(make_row_key("", "orders", "42"), "orders:42");
+    }
+
+    #[test]
+    fn q8_make_table_scan_prefix_with_db() {
+        assert_eq!(make_table_scan_prefix("mydb", "customers"), "mydb.customers:");
+    }
+
+    #[test]
+    fn q8_make_table_scan_prefix_without_db() {
+        assert_eq!(make_table_scan_prefix("", "customers"), "customers:");
+    }
+
+    #[test]
+    fn q8_db_prefix_key_with_db() {
+        assert_eq!(db_prefix_key("mydb", "orders:99"), "mydb.orders:99");
+    }
+
+    #[test]
+    fn q8_db_prefix_key_without_db_passthrough() {
+        // Empty db → raw key returned unchanged (backward-compat).
+        assert_eq!(db_prefix_key("", "orders:99"), "orders:99");
+    }
+
+    // ─── Q8: validate_value_for_type ─────────────────────────────────────────
+
+    #[test]
+    fn q8_validate_integer_accepts_valid() {
+        assert!(validate_value_for_type("42", "INTEGER").is_ok());
+        assert!(validate_value_for_type("-1", "BIGINT").is_ok());
+        assert!(validate_value_for_type("0", "INT").is_ok());
+    }
+
+    #[test]
+    fn q8_validate_integer_rejects_text() {
+        assert!(validate_value_for_type("abc", "INT").is_err());
+        assert!(validate_value_for_type("3.14", "INT").is_err());
+    }
+
+    #[test]
+    fn q8_validate_float_accepts_valid() {
+        assert!(validate_value_for_type("3.14", "FLOAT").is_ok());
+        assert!(validate_value_for_type("-0.5", "DOUBLE").is_ok());
+        assert!(validate_value_for_type("100", "REAL").is_ok());
+    }
+
+    #[test]
+    fn q8_validate_bool_accepts_all_forms() {
+        for v in &["true", "false", "1", "0", "yes", "no", "on", "off"] {
+            assert!(validate_value_for_type(v, "BOOLEAN").is_ok(), "expected ok for {v}");
+        }
+    }
+
+    #[test]
+    fn q8_validate_bool_rejects_invalid() {
+        assert!(validate_value_for_type("maybe", "BOOL").is_err());
+        assert!(validate_value_for_type("2", "BOOLEAN").is_err());
+    }
+
+    #[test]
+    fn q8_validate_uuid_accepts_valid() {
+        assert!(validate_value_for_type("550e8400-e29b-41d4-a716-446655440000", "UUID").is_ok());
+    }
+
+    #[test]
+    fn q8_validate_uuid_rejects_short() {
+        assert!(validate_value_for_type("550e8400-e29b", "UUID").is_err());
+    }
+
+    #[test]
+    fn q8_validate_text_accepts_anything() {
+        assert!(validate_value_for_type("hello world", "TEXT").is_ok());
+        assert!(validate_value_for_type("!@#$", "VARCHAR").is_ok());
+    }
+
+    #[test]
+    fn q8_validate_null_passes_all_types() {
+        for t in &["INT", "FLOAT", "BOOLEAN", "UUID", "TEXT"] {
+            assert!(validate_value_for_type("null", t).is_ok(), "null should pass for {t}");
+            assert!(validate_value_for_type("", t).is_ok(), "empty should pass for {t}");
+        }
+    }
+
+    // ─── Q8: strip_schema_qualifiers_from_sql ────────────────────────────────
+
+    #[test]
+    fn q8_strip_schema_qualifier_removes_prefix() {
+        let sql = "SELECT * FROM myschema.orders WHERE myschema.orders.id = 1";
+        let result = strip_schema_qualifiers_from_sql(sql);
+        assert!(!result.contains("myschema."), "schema qualifier should be stripped, got: {result}");
+    }
+
+    #[test]
+    fn q8_strip_schema_qualifier_leaves_plain_table() {
+        let sql = "SELECT * FROM orders WHERE id = 1";
+        let result = strip_schema_qualifiers_from_sql(sql);
+        assert_eq!(result, sql);
+    }
+
+    #[test]
+    fn q8_strip_schema_qualifier_handles_sql_keywords() {
+        // SQL keywords followed by dot should not be stripped (e.g. GROUP.BY would be wrong,
+        // but a plain keyword like FROM.table is not a valid qualifier).
+        let sql = "SELECT id FROM public.users";
+        let result = strip_schema_qualifiers_from_sql(sql);
+        // "public" is not a SQL keyword so it gets stripped
+        assert!(!result.contains("public."), "public. should be stripped, got: {result}");
+        assert!(result.contains("users"));
+    }
 }

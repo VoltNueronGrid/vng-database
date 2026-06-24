@@ -5,10 +5,10 @@
   "tenant_id": "acme",
   "admin_user_id": "admin-acme",
   "analyst_user_id": "analyst-acme",
-  "timestamp_utc": "2026-04-10T05:32:30.5078108Z",
+  "timestamp_utc": "2026-06-24T07:10:36.6623610Z",
   "table_name": "tenant/acme/orders",
-  "index_name": "idx_acme_orders_1775799150",
-  "constraint_name": "pk_acme_orders_1775799150",
+  "index_name": "idx_acme_orders_1782285036",
+  "constraint_name": "pk_acme_orders_1782285036",
   "checks": {
     "create_requires_auth_headers": true,
     "analyst_cannot_create_index": true,
@@ -27,7 +27,14 @@
     "status": "ok",
     "indexes": [
       {
-        "name": "idx_acme_orders_1775799150",
+        "name": "idx_acme_audit_1782272947",
+        "table": "tenant/acme/orders",
+        "column": "customer_id",
+        "kind": "BTree",
+        "unique": false
+      },
+      {
+        "name": "idx_acme_orders_1782285036",
         "table": "tenant/acme/orders",
         "column": "customer_id",
         "kind": "BTree",
@@ -36,7 +43,7 @@
     ]
   },
   "lookup_response": {
-    "index_name": "idx_acme_orders_1775799150",
+    "index_name": "idx_acme_orders_1782285036",
     "row_keys": [],
     "status": "ok",
     "value": "C100"
@@ -47,7 +54,7 @@
     "violation": null
   },
   "drop_response": {
-    "dropped": "idx_acme_orders_1775799150",
+    "dropped": "idx_acme_orders_1782285036",
     "status": "dropped"
   }
 }

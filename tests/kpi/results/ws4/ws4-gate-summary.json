@@ -1,9 +1,9 @@
 {
   "gate": "ws4",
   "status": "passed",
-  "started_at_utc": "2026-04-10T05:32:49.5609343Z",
-  "finished_at_utc": "2026-04-10T05:32:51.5603783Z",
-  "duration_ms": 1999,
+  "started_at_utc": "2026-06-24T07:14:48.6292370Z",
+  "finished_at_utc": "2026-06-24T07:14:51.3242920Z",
+  "duration_ms": 2695,
   "packs": [
     {
       "pack": "ws4-ingest-plugin",

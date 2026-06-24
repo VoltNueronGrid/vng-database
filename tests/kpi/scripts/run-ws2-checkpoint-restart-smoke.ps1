@@ -1,5 +1,5 @@
 param(
-  [string]$RepoRoot = "D:/by/polap-db",
+  [string]$RepoRoot = (Get-Location).Path,
   [string]$OutputPath = "tests/kpi/results/ws2/ws2-checkpoint-restart-smoke.json"
 )
 

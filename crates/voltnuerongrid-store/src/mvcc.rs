@@ -2,6 +2,16 @@
 //!
 //! Advances S2-WS2-04 in status-tracker-v2.md from **TODO** → **PARTIAL**.
 //!
+//! # Durability vocabulary (see constitution §Vocabulary)
+//!
+//! This module implements the **in-memory row store** only.  It does NOT
+//! provide **page-level row store durability** — all row data is held in
+//! a `HashMap` and is lost on process exit.  DML statements are logged to
+//! the **WAL** (via `persist_sql_statement` in `helpers/boot.rs`) so that
+//! they can be replayed on restart (**WAL durability** ✅), but the row pages
+//! themselves are not persisted to RocksDB Column Families (**page-level
+//! durability** ❌ — tracked in tasks-v4.md P1).
+//!
 //! Implements the architectural concept of a page-based row store with
 //! version-chain visibility rules.  The current implementation keeps all
 //! data in memory using a fixed page-bucket layout so that the calling

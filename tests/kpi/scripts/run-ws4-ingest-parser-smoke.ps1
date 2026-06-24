@@ -24,7 +24,11 @@ $jsonSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/json.rs" -Raw
 $pqSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/parquet.rs" -Raw
 $xlsxSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/excel.rs" -Raw
 $libSrc = Get-Content -Path "crates/voltnuerongrid-ingest/src/lib.rs" -Raw
-$mainSrc = Get-Content -Path "services/voltnuerongridd/src/main.rs" -Raw
+# Routes refactored from main.rs → router.rs + handlers; combine all relevant files.
+$mainSrc = (Get-Content -Path "services/voltnuerongridd/src/main.rs" -Raw) + "`n" + `
+           (Get-Content -Path "services/voltnuerongridd/src/router.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+           (Get-Content -Path "services/voltnuerongridd/src/tests.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+           (Get-Content -Path "services/voltnuerongridd/src/handlers/ingest.rs" -Raw -ErrorAction SilentlyContinue)
 
 # 1. CsvConnector struct exists
 $c1 = if ($csvSrc -match "pub struct CsvConnector") { "passed" } else { "failed" }

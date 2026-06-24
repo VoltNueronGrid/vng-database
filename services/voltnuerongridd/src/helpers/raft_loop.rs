@@ -467,6 +467,9 @@ async fn fanout_heartbeat(
 /// This function holds at most one lock at a time to avoid deadlocks with the
 /// handler paths that hold `row_store` lock while calling helpers.
 pub(crate) fn apply_committed_entries(state: &AppState) {
+    // Q4: OTEL span for Raft apply loop.
+    let _span = tracing::info_span!("raft.apply_committed_entries").entered();
+
     // Step 1: collect the entries we need to apply (brief lock on raft_state).
     let entries_to_apply: Vec<crate::RaftLogEntry> = {
         let node = state.raft_state.lock().expect("raft apply read lock");
@@ -486,6 +489,9 @@ pub(crate) fn apply_committed_entries(state: &AppState) {
         return;
     }
 
+    let entry_count = entries_to_apply.len();
+    let apply_start = std::time::Instant::now();
+
     // Step 2: apply each command to the row store (holds row_store lock per entry).
     {
         let mut rs = state.row_store.lock().expect("raft apply row_store lock");
@@ -495,6 +501,13 @@ pub(crate) fn apply_committed_entries(state: &AppState) {
         }
         rs.release_write_intents(xid);
     }
+
+    let apply_duration_ms = apply_start.elapsed().as_millis();
+    tracing::debug!(
+        entry_count = entry_count,
+        apply_duration_ms = apply_duration_ms,
+        "raft.apply_committed_entries complete"
+    );
 
     // Step 3: advance last_applied (re-acquire raft_state lock briefly).
     if let Some(last) = entries_to_apply.last() {

@@ -1,4 +1,14 @@
 //! Boot-time WAL replay, durability engine init, RBAC defaults.
+//!
+//! # Durability vocabulary (see constitution §Vocabulary)
+//!
+//! This module implements **WAL durability**: DML SQL text is appended to
+//! the RocksDB-backed WAL (`SqlWalKind::Dml`) and replayed at startup to
+//! rebuild in-memory row state in `PagedRowStore`.
+//!
+//! **Page-level row store durability** (writing row data directly to RocksDB
+//! Column Families so it survives SIGKILL without WAL replay) is NOT yet
+//! implemented — tracked in tasks-v4.md P1.
 use std::sync::{Arc, Mutex};
 use voltnuerongrid_auth::{PrivilegeAction, RbacPrivilegeMatrix, ResourceGrant};
 use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
@@ -16,6 +26,13 @@ pub(crate) fn persist_sql_statement(
     kind: voltnuerongrid_store::SqlWalKind,
     sql: &str,
 ) {
+    // Q4: OTEL trace event for WAL write path.
+    tracing::debug!(
+        target: "vng.wal",
+        operation_type = kind.as_str(),
+        sql_len = sql.len(),
+        "wal.persist_sql_statement"
+    );
     if let Ok(mut wal) = state.wal_engine.lock() {
         let _ = wal.append_sql(kind, sql);
     } else {

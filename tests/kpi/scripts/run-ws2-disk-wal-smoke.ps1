@@ -15,20 +15,23 @@ function Ensure-OutputDir {
 Ensure-OutputDir -PathValue $OutputPath
 
 $start = Get-Date
-$command = "cmd.exe /c cargo test -p voltnuerongrid-store wal_adapter -- --nocapture"
+$command = if ($IsWindows) { "cmd.exe /c cargo test -p voltnuerongrid-store wal_adapter -- --nocapture" } else { "cargo test -p voltnuerongrid-store wal_adapter -- --nocapture" }
 $outputLines = @()
 $exitCode = 1
 
 try {
-  $tempFile = [System.IO.Path]::GetTempFileName()
-  try {
-    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "cargo test -p voltnuerongrid-store wal_adapter -- --nocapture > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
-    $outputLines = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile } else { @() }
-    $exitCode = $process.ExitCode
-  } finally {
-    if (Test-Path -Path $tempFile) {
-      Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+  if ($IsWindows) {
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+      $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "cargo test -p voltnuerongrid-store wal_adapter -- --nocapture > `"$tempFile`" 2>&1" -Wait -PassThru -NoNewWindow
+      $outputLines = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile } else { @() }
+      $exitCode = $process.ExitCode
+    } finally {
+      if (Test-Path -Path $tempFile) { Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue }
     }
+  } else {
+    $outputLines = (& cargo test -p voltnuerongrid-store wal_adapter -- --nocapture 2>&1)
+    $exitCode = $LASTEXITCODE
   }
 } catch {
   $outputLines += $_.Exception.Message

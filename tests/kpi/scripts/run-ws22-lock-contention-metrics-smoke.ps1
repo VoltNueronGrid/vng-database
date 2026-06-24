@@ -37,7 +37,12 @@ try {
   $outputLines = & cargo test -p voltnuerongridd ws22_pessimistic_lock_contention_metrics -- --nocapture 2>&1
   $testExit = $LASTEXITCODE
 
-  $runtimeRaw = Get-Content -Raw -Path "services/voltnuerongridd/src/main.rs"
+  # Routes refactored from main.rs → router.rs + handlers; combine all relevant files.
+  $runtimeRaw = (Get-Content -Raw -Path "services/voltnuerongridd/src/main.rs") + "`n" + `
+                (Get-Content -Raw -Path "services/voltnuerongridd/src/router.rs" -ErrorAction SilentlyContinue) + "`n" + `
+                (Get-Content -Raw -Path "services/voltnuerongridd/src/tests.rs" -ErrorAction SilentlyContinue) + "`n" + `
+                (Get-Content -Raw -Path "services/voltnuerongridd/src/handlers/sql.rs" -ErrorAction SilentlyContinue) + "`n" + `
+                (Get-Content -Raw -Path "services/voltnuerongridd/src/helpers/execution.rs" -ErrorAction SilentlyContinue)
   $contractChecks.metrics_route_present = ($runtimeRaw -match '/api/v1/sql/locks/pessimistic/metrics')
   $contractChecks.metrics_handler_present = ($runtimeRaw -match 'fn sql_pessimistic_lock_metrics\(')
   $contractChecks.metrics_response_struct_present = ($runtimeRaw -match 'struct PessimisticLockContentionMetricsResponse')

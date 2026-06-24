@@ -20,7 +20,14 @@ $status = "passed"
 
 $libSrc      = Get-Content -Path "crates/voltnuerongrid-ingest/src/lib.rs" -Raw
 $chunkedSrc  = Get-Content -Path "crates/voltnuerongrid-ingest/src/chunked_loader.rs" -Raw
-$mainSrc     = Get-Content -Path "services/voltnuerongridd/src/main.rs" -Raw
+# Routes refactored from main.rs → router.rs + handlers; combine all relevant files.
+$mainSrc     = (Get-Content -Path "services/voltnuerongridd/src/main.rs" -Raw) + "`n" + `
+               (Get-Content -Path "services/voltnuerongridd/src/router.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+               (Get-Content -Path "services/voltnuerongridd/src/tests.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+               (Get-Content -Path "services/voltnuerongridd/src/handlers/ingest.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+               (Get-Content -Path "services/voltnuerongridd/src/handlers/admin.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+               (Get-Content -Path "services/voltnuerongridd/src/handlers/catalog.rs" -Raw -ErrorAction SilentlyContinue) + "`n" + `
+               (Get-Content -Path "services/voltnuerongridd/src/handlers/sql.rs" -Raw -ErrorAction SilentlyContinue)
 
 # 1. ChunkedLoader struct exists in the chunked_loader module
 $c1 = if ($chunkedSrc -match "pub struct ChunkedLoader") { "passed" } else { "failed" }

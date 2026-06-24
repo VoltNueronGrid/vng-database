@@ -50,12 +50,19 @@ function Invoke-CargoPack {
 
     $tempFile = [System.IO.Path]::GetTempFileName()
     try {
-      $commandText = "cargo " + (($Arguments | ForEach-Object {
-        if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
-      }) -join " ")
-      $redirectedCommand = "$commandText > `"$tempFile`" 2>&1"
-      $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $redirectedCommand -Wait -PassThru -NoNewWindow
-      $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+      if ($IsWindows) {
+        $commandText = "cargo " + (($Arguments | ForEach-Object {
+          if ($_ -match "\s") { '"' + $_ + '"' } else { $_ }
+        }) -join " ")
+        $redirectedCommand = "$commandText > `"$tempFile`" 2>&1"
+        if ($IsWindows) { $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $redirectedCommand -Wait -PassThru -NoNewWindow } else { $text = (& cargo @Arguments 2>&1) -join "`n" }
+        $text = if (Test-Path -Path $tempFile) { Get-Content -Path $tempFile -Raw } else { "" }
+      } else {
+        # On macOS/Linux: run cargo directly via PowerShell
+        $text = (& cargo @Arguments 2>&1) -join "`n"
+      }
+    } catch {
+      $text = $_.Exception.Message
     } finally {
       if (Test-Path -Path $tempFile) {
         Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue

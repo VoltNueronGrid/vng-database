@@ -45,7 +45,12 @@ try {
   $outputLines = & cargo test -p voltnuerongridd ws22_ -- --test-threads=1 --nocapture 2>&1
   $testExit = $LASTEXITCODE
 
-  $runtimeRaw = Get-Content -Raw -Path "services/voltnuerongridd/src/main.rs"
+  # Routes refactored from main.rs → router.rs + handlers; combine all relevant files.
+  $runtimeRaw = (Get-Content -Raw -Path "services/voltnuerongridd/src/main.rs") + "`n" + `
+                (Get-Content -Raw -Path "services/voltnuerongridd/src/router.rs" -ErrorAction SilentlyContinue) + "`n" + `
+                (Get-Content -Raw -Path "services/voltnuerongridd/src/tests.rs" -ErrorAction SilentlyContinue) + "`n" + `
+                (Get-Content -Raw -Path "services/voltnuerongridd/src/handlers/sql.rs" -ErrorAction SilentlyContinue) + "`n" + `
+                (Get-Content -Raw -Path "services/voltnuerongridd/src/helpers/execution.rs" -ErrorAction SilentlyContinue)
   $contractChecks.acquire_route_present = ($runtimeRaw -match '/api/v1/sql/locks/pessimistic/acquire')
   $contractChecks.release_route_present = ($runtimeRaw -match '/api/v1/sql/locks/pessimistic/release')
   $contractChecks.acquire_logic_present = ($runtimeRaw -match 'fn acquire_pessimistic_lock\(')

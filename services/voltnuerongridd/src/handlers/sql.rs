@@ -2568,6 +2568,12 @@ pub(crate) async fn sql_execute(
                 }
             }
         }
+        // Q4: OTEL trace event for HTAP route decision.
+        tracing::debug!(
+            route_chosen = dominant.as_deref().unwrap_or("none"),
+            statement_count = olap_statements.len(),
+            "htap.route_decision"
+        );
         dominant
     };
 
