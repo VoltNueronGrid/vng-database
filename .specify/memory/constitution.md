@@ -161,4 +161,37 @@ complete. Reviewers MUST block completion when durability, RBAC, tenant isolatio
 secret handling, critical tests, or evidence artifacts are missing. Release readiness
 MUST reconcile tracker statements with current test and gate artifacts.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-22 | **Last Amended**: 2026-06-22
+**Version**: 1.1.0 | **Ratified**: 2026-06-22 | **Last Amended**: 2026-06-24
+
+---
+
+## Vocabulary — Mandatory Terminology (v1.1.0)
+
+The following terms have precise meanings in this repository. Using a term outside
+its defined scope is a constitution violation and must be corrected before a tracker
+entry, gate artifact, or release note is accepted.
+
+| Term | Definition |
+|------|------------|
+| **WAL durability** | DDL events and DML SQL text are persisted to the RocksDB-backed WAL with configurable `VNG_WAL_FSYNC_ON_COMMIT`. On restart, SQL text is replayed to rebuild in-memory row state. ✅ Implemented. |
+| **Page-level row store durability** | Row data is written directly to RocksDB key-value pages (one Column Family per database). A SIGKILL does not lose any acknowledged COMMIT. ❌ Not yet implemented — see tasks-v4.md P1. |
+| **Crash recovery** | All acknowledged committed rows are present and queryable after a process crash and restart, proven by a passing crash-recovery gate artifact. ❌ Not yet implemented — gate at `tests/kpi/results/recovery/crash-recovery-gate.json` expected to fail until P1 complete. |
+| **scaffold** | A non-functional placeholder that compiles but performs no real work (e.g., `voltnuerongrid-failover` crate, `voltnuerongrid-core` crate). |
+| **implementation** | A working feature that may lack some edge cases or production hardening but produces correct observable behavior under the covered scenarios. |
+| **stub** | An empty or minimal placeholder for compilation purposes. Synonym of scaffold. |
+| **validated** | A gate artifact with a current `started_at_utc` timestamp confirms the behavior against the currently deployed codebase. |
+
+## Production-Ready Entry Criteria (v1.1.0)
+
+A requirement, workstream, or feature may be marked **Production Ready** only when ALL
+of the following criteria are met. Any tracker entry marked Production Ready without
+this evidence is a constitution violation (see Principle VII).
+
+1. **Crash recovery gate passes**: The `tests/kpi/results/recovery/crash-recovery-gate.json` artifact shows `status: "passed"` with `rows_survived: true`. This requires page-level row store durability (tasks-v4.md P1) to be complete.
+2. **Security gate passes**: `tests/kpi/results/gates/ci-ws5-gate-summary.json` `status: "passed"` with a `started_at_utc` timestamp within 7 days of the current codebase commit date.
+3. **Performance claim backed by artifact**: Any benchmark, latency, throughput, or concurrency claim cites a reproducible gate artifact (not self-referential calculation). RTO/RPO claims require a defined topology, failure scenario, measurement window, and passing multi-node smoke gate.
+4. **Multi-node smoke passes (for distributed claims)**: `tests/kpi/results/multinode/multinode-smoke.json` `status: "passed"` for any claim involving replication, failover, HA, or zero-data-loss.
+5. **All dependent production prerequisites complete**: No blocking P-series task in tasks-v4.md may be open.
+6. **Gate artifacts are current**: All cited gate artifacts have `started_at_utc` timestamps generated against the current codebase (within 7 days or since the last relevant code change).
+
+For distributed claims: a single-process simulation score does not satisfy criteria 3 or 4. The scope of validation must be explicitly documented in the artifact.

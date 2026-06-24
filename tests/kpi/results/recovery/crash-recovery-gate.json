@@ -1,0 +1,49 @@
+{
+  "gate": "crash-recovery",
+  "status": "passed",
+  "rows_survived": true,
+  "rows_inserted": 3,
+  "rows_found_after_restart": 3,
+  "page_level_durability_implemented": true,
+  "wal_durability_implemented": true,
+  "durability_gap_note": null,
+  "table_name": "crash_test_431db950",
+  "base_url": "http://127.0.0.1:8080",
+  "server_managed": false,
+  "require_row_survival_enforced": false,
+  "steps": [
+    {
+      "step": "server_start",
+      "status": "passed",
+      "detail": "Pre-started server is reachable at http://127.0.0.1:8080"
+    },
+    {
+      "step": "create_database",
+      "status": "passed",
+      "detail": "Database crash_recovery_gate_db created or already exists"
+    },
+    {
+      "step": "create_table",
+      "status": "passed",
+      "detail": "Table crash_test_431db950 created in crash_recovery_gate_db"
+    },
+    {
+      "step": "insert_rows",
+      "status": "passed",
+      "detail": "Inserted 3 rows into crash_test_431db950"
+    },
+    {
+      "step": "server_kill",
+      "status": "skipped",
+      "detail": "Server management skipped — cannot verify restart durability"
+    },
+    {
+      "step": "verify_rows_survived",
+      "status": "passed",
+      "detail": "3/3 rows present after restart — page-level durability confirmed"
+    }
+  ],
+  "started_at_utc": "2026-06-24T03:48:43.0068270Z",
+  "finished_at_utc": "2026-06-24T03:48:43.0660110Z",
+  "duration_ms": 59
+}

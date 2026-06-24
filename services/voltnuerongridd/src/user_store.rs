@@ -110,6 +110,12 @@ impl SessionStore {
         self.sessions.retain(|_, v| v.user_id != user_id);
     }
 
+    /// Remove a single session by its token fingerprint.
+    /// Used by token rotation to invalidate the old token atomically.
+    pub(crate) fn remove_by_fingerprint(&mut self, token_fingerprint: &str) {
+        self.sessions.remove(token_fingerprint);
+    }
+
     /// Return all active (non-expired) session fingerprints for a given user.
     pub(crate) fn sessions_for_user(&self, user_id: &str) -> Vec<String> {
         let now = now_secs();

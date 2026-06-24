@@ -82,6 +82,27 @@ Scripts that call `http://127.0.0.1:8080/...` require `voltnuerongridd` to be ru
 - In CI: wrap in a bash step that starts the server, waits for `/health`, then calls the script, and always kills the server in a `trap cleanup EXIT`
 - Locally: run `cargo run -p voltnuerongridd` in a separate terminal first
 
+## MANDATORY: Pre-Checkin Gate Refresh (Constitution Principle VII)
+
+**Before every code commit** that touches `services/voltnuerongridd/src/auth/`,
+`services/voltnuerongridd/src/handlers/`, `crates/voltnuerongrid-store/`,
+`crates/voltnuerongrid-auth/`, `crates/voltnuerongrid-failover/`, or any Raft/storage path:
+
+1. Run `bash scripts/run-pre-checkin-gates.sh` to refresh WS5 and WS6 gate artifacts with current timestamps.
+2. Stage the updated artifacts: `git add tests/kpi/results/ws5/ws5-gate-summary.json tests/kpi/results/ws6/ws6-gate-summary.json`
+3. Commit them together with the code change.
+
+**Why**: Constitution Principle VII forbids marking any workstream complete without current evidence.
+WS5 and WS6 gate artifacts older than 24 hours relative to a code change are considered stale evidence.
+
+The pre-push hook in `.githooks/pre-push` will warn when artifacts are stale.
+Install it: `git config core.hooksPath .githooks`
+
+Gate artifact freshness requirements:
+- WS5 (`ws5-gate-summary.json`): must have `started_at_utc` within **7 days** of the most recent auth/RBAC/security code change
+- WS6 (`ws6-gate-summary.json`): must have `started_at_utc` within **7 days** of the most recent Raft/failover/storage code change
+- Crash recovery (`crash-recovery-gate.json`): run on every storage-path change; expected `status: "durability_gap_known"` until P1 (durable row store) is complete
+
 ## WS1A legacy numeric evaluation smoke (no HTTP)
 
 - **Script:** `tests/kpi/scripts/run-ws1a-legacy-numeric-eval-smoke.ps1`

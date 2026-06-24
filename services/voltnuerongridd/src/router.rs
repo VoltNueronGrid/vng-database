@@ -20,7 +20,7 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
     use crate::handlers::admin::*;
     use crate::handlers::driver::*;
     use crate::handlers::ingest::*;
-    use crate::handlers::user_mgmt::{admin_list_users, admin_create_user, admin_delete_user, admin_revoke_user_sessions, auth_login};
+    use crate::handlers::user_mgmt::{admin_list_users, admin_create_user, admin_delete_user, admin_revoke_user_sessions, auth_login, auth_token_rotate};
 
     let app = Router::new()
         .route("/health", get(health))
@@ -52,6 +52,7 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         // Tier 3 #3: session token rotation / revoke-all endpoint
         .route("/api/v1/admin/users/:id/sessions", axum::routing::delete(admin_revoke_user_sessions))
         .route("/api/v1/auth/login", post(auth_login))
+        .route("/api/v1/auth/token/rotate", post(auth_token_rotate))
         // Phase 1.3 — first-class database lifecycle.
         .route("/api/v1/admin/databases", get(admin_databases_list).post(admin_databases_create))
         .route("/api/v1/admin/databases/:name", axum::routing::delete(admin_databases_drop))

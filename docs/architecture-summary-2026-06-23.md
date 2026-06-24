@@ -1,10 +1,14 @@
 # VoltNueronGrid DB — Architecture, Constitution & Spec Summary
 
+> **Architecture SSOT** — For delivery progress, gate evidence, and requirement status, see `docs/archive/status_tracker.md`.
+> For open task register (50 tasks), see `docs/tasks-v4.md`. For architecture decisions, see `.specify/memory/architecture.md`.
+> **Last updated:** 2026-06-24
+
 **Date:** 2026-06-23  
 **Branch:** `main`  
-**Artifacts covered:** Constitution v1.0.0 · Scenario View · Logical View · Process View · Development View · Physical View · Architecture Synthesis  
-**Gap documents:** `gaps-may20-2.md` (sessions 16–22) · `gaps-4.md` (session 32)  
-**Test baseline at session 32:** 807 passed (voltnuerongridd), 0 failed
+**Artifacts covered:** Constitution v1.1.0 · Scenario View · Logical View · Process View · Development View · Physical View · Architecture Synthesis  
+**Gap documents:** `gaps-may20-2.md` (sessions 16–22, superseded) · `gaps-4.md` (session 32, implementation-level only)  
+**Test baseline at session 32:** 807 passed · **Current (2026-06-24):** 820 passed (voltnuerongridd), 0 failed
 
 ---
 
@@ -162,7 +166,7 @@ These are the architecture-significant work areas that must be completed before 
 | 4+1 Architecture artifacts | Scenario, Logical, Process, Development, Physical, Synthesis views complete |
 | Constitution v1.0.0 | Seven principles ratified; plan/spec/tasks templates aligned |
 | Gate/KPI scripts | `tests/kpi/scripts/` PowerShell gate framework with JSON artifact output |
-| Test count | 807 tests passing (session 32 baseline) |
+| Test count | 820 tests passing (2026-06-24, +13 post-session 32) |
 
 ---
 

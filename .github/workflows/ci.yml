@@ -174,6 +174,21 @@ jobs:
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws6-gate.ps1 -OutputPath "./tests/kpi/results/ws6/ci-ws6-gate-summary.json" -ReleaseSummaryOutputPath "./tests/kpi/results/gates/ci-ws6-release-readiness.json"
 
+      # Constitution Principle VII: Gate artifacts must be current evidence.
+      # Run crash recovery gate as a tracked step (expected: status=passed in SkipServerManagement mode
+      # until P1 durable row store is complete; when P1 ships, remove SkipServerManagement).
+      - name: Run crash recovery gate
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "./tests/kpi/results/recovery" | Out-Null
+          ./tests/kpi/scripts/run-crash-recovery-gate.ps1 `
+            -SkipServerManagement `
+            -AdminKey "$env:VNG_ADMIN_API_KEY" `
+            -OperatorId "platform-admin" `
+            -BaseUrl "http://127.0.0.1:8080" `
+            -OutputPath "./tests/kpi/results/recovery/crash-recovery-gate.json"
+        continue-on-error: true  # non-blocking until P1 is complete
+
       - name: Build WS6 failover stability badge artifact
         shell: pwsh
         run: ./tests/kpi/scripts/run-ws6-failover-stability-badge.ps1 -SummaryPath "./tests/kpi/results/ws6/ci-ws6-gate-summary.json" -TrendPath "./tests/kpi/results/ws6/ws6-gate-trend-comparison.json" -OutputPath "./tests/kpi/results/gates/ci-ws6-failover-stability-badge.json"

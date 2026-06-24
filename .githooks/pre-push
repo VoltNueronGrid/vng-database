@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# .githooks/pre-push
+#
+# Pre-push hook: warns if WS5/WS6 gate artifacts are stale before pushing.
+# Non-blocking by default — exits 0 so push is never prevented automatically.
+# Set ENFORCE_GATE_FRESHNESS=true to make it blocking.
+#
+# Install: git config core.hooksPath .githooks
+# OR:      cp .githooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+
+set -uo pipefail
+
+MAX_AGE_HOURS=${GATE_MAX_AGE_HOURS:-24}
+ENFORCE=${ENFORCE_GATE_FRESHNESS:-false}
+
+check_age() {
+  local artifact="$1" label="$2" age_hours=9999
+  [[ -f "$artifact" ]] || { echo "  ⚠️  $label: artifact missing ($artifact)"; return 1; }
+  local ts
+  ts=$(python3 -c "import json; d=json.load(open('$artifact')); print(d.get('started_at_utc',''))" 2>/dev/null || echo "")
+  [[ -n "$ts" ]] || { echo "  ⚠️  $label: cannot read started_at_utc"; return 1; }
+  local ep now
+  ep=$(python3 -c "import datetime; print(int(datetime.datetime.fromisoformat('${ts%Z}').replace(tzinfo=datetime.timezone.utc).timestamp()))" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  age_hours=$(( (now - ep) / 3600 ))
+  if (( age_hours > MAX_AGE_HOURS )); then
+    echo "  ⚠️  $label artifact is ${age_hours}h old (threshold: ${MAX_AGE_HOURS}h). Run: bash scripts/run-pre-checkin-gates.sh"
+    return 1
+  fi
+  echo "  ✅ $label artifact is ${age_hours}h old — OK"
+  return 0
+}
+
+stale=0
+check_age "tests/kpi/results/ws5/ws5-gate-summary.json" "WS5" || stale=1
+check_age "tests/kpi/results/ws6/ws6-gate-summary.json" "WS6" || stale=1
+
+if (( stale > 0 )); then
+  echo ""
+  echo "Run 'bash scripts/run-pre-checkin-gates.sh' to refresh gate artifacts before pushing."
+  if [[ "$ENFORCE" == "true" ]]; then
+    echo "Push blocked (ENFORCE_GATE_FRESHNESS=true). Set to 'false' or use git push --no-verify to override."
+    exit 1
+  fi
+fi
+exit 0

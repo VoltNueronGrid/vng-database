@@ -28,7 +28,9 @@
 param(
   [string]$BaseUrl      = "http://127.0.0.1:8080",
   [string]$AdminKey     = "secret",
-  [string]$OutputPath   = "tests/kpi/results/ws6/crash-recovery-smoke.json",
+  [string]$OperatorId   = "platform-admin",
+  [string]$DbName       = "crash_recovery_gate_db",
+  [string]$OutputPath   = "tests/kpi/results/recovery/crash-recovery-gate.json",
   [int]$StartupWaitSec  = 10,
   [int]$RequestTimeoutSec = 15,
   [switch]$RequireRowSurvival,   # Set to enforce hard failure when rows do not survive restart
@@ -64,13 +66,20 @@ function Add-Step {
 
 # ── helper: send SQL via HTTP ──────────────────────────────────────────────────
 function Invoke-SqlHttp {
-  param([string]$Sql)
-  $body = @{ sql = $Sql } | ConvertTo-Json
+  param([string]$Sql, [string]$Db = "")
+  # Server expects sql_batch (not sql) per SqlExecuteRequest struct.
+  $body = @{ sql_batch = $Sql } | ConvertTo-Json
+  $headers = @{
+    "x-vng-admin-key"    = $AdminKey
+    "x-vng-operator-id"  = $OperatorId
+    "Content-Type"       = "application/json"
+  }
+  if ($Db -ne "") { $headers["x-vng-db"] = $Db }
   try {
     $resp = Invoke-RestMethod `
       -Uri     "$BaseUrl/api/v1/sql/execute" `
       -Method  Post `
-      -Headers @{ "x-vng-admin-key" = $AdminKey; "Content-Type" = "application/json" } `
+      -Headers $headers `
       -Body    $body `
       -TimeoutSec $RequestTimeoutSec
     return [pscustomobject]@{ Ok = $true; Body = $resp }
@@ -122,15 +131,26 @@ if (-not $SkipServerManagement) {
   }
 }
 
-# ── step 2: create table + insert rows ────────────────────────────────────────
+# ── step 2: create database + table + insert rows ────────────────────────────
 $tableTag = [System.Guid]::NewGuid().ToString("N").Substring(0, 8)
 $tableName = "crash_test_$tableTag"
 
+# Create the test database first (idempotent — OK if already exists)
+if ($status -eq "passed") {
+  $r = Invoke-SqlHttp -Sql "CREATE DATABASE $DbName"
+  if ($r.Ok) {
+    Add-Step -Name "create_database" -StepStatus "passed" -Detail "Database $DbName created or already exists"
+  } else {
+    # 422/conflict is acceptable if database already exists
+    Add-Step -Name "create_database" -StepStatus "passed" -Detail "Database creation returned non-OK (may already exist): $($r.Error)"
+  }
+}
+
 if ($status -eq "passed") {
   $ddl = "CREATE TABLE $tableName (id INT, value VARCHAR(255))"
-  $r = Invoke-SqlHttp -Sql $ddl
+  $r = Invoke-SqlHttp -Sql $ddl -Db $DbName
   if ($r.Ok) {
-    Add-Step -Name "create_table" -StepStatus "passed" -Detail "Table $tableName created"
+    Add-Step -Name "create_table" -StepStatus "passed" -Detail "Table $tableName created in $DbName"
   } else {
     Add-Step -Name "create_table" -StepStatus "failed" -Detail "DDL failed: $($r.Error)"
     $status = "failed"
@@ -141,7 +161,7 @@ $rowsInserted = 0
 if ($status -eq "passed") {
   foreach ($i in 1..3) {
     $dml = "INSERT INTO $tableName (id, value) VALUES ($i, 'crash_row_$i')"
-    $r = Invoke-SqlHttp -Sql $dml
+    $r = Invoke-SqlHttp -Sql $dml -Db $DbName
     if ($r.Ok) { $rowsInserted++ }
   }
   if ($rowsInserted -eq 3) {
@@ -190,7 +210,7 @@ $rowsSurvived = $false
 $rowsFound    = 0
 
 if ($status -eq "passed" -or $SkipServerManagement) {
-  $q = Invoke-SqlHttp -Sql "SELECT * FROM $tableName"
+  $q = Invoke-SqlHttp -Sql "SELECT * FROM $tableName" -Db $DbName
   if ($q.Ok) {
     # Try to count rows in the response — accommodate various response shapes
     try {

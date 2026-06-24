@@ -415,3 +415,111 @@ pub(crate) async fn auth_login(
         }),
     ))
 }
+
+/// `POST /api/v1/auth/token/rotate` — exchange a valid session token for a fresh
+/// one. The old token is invalidated immediately. Requires the current valid token
+/// in the `Authorization: Bearer <token>` header.
+///
+/// Returns the new token in the same shape as the login response.
+/// Returns 401 if the token is missing, expired, or already invalidated.
+#[tracing::instrument(skip_all, name = "auth.token_rotate")]
+pub(crate) async fn auth_token_rotate(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<(StatusCode, Json<LoginResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    // Extract the current token from Authorization: Bearer <token>
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.trim().to_string());
+
+    let current_token = bearer.ok_or_else(|| (
+        StatusCode::UNAUTHORIZED,
+        Json(AuthErrorResponse {
+            status: "error",
+            reason: "missing_token".to_string(),
+            locale: "en".to_string(),
+            localized_message: "Authorization: Bearer <token> header required".to_string(),
+        }),
+    ))?;
+
+    // Verify the current token is valid and look up the session
+    let (user_id, _expires) = {
+        let signer = match state.session_signer.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("session_signer")),
+        };
+        signer.verify(&current_token).ok_or_else(|| (
+            StatusCode::UNAUTHORIZED,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: "invalid_or_expired_token".to_string(),
+                locale: "en".to_string(),
+                localized_message: "Token is invalid or has expired".to_string(),
+            }),
+        ))?
+    };
+
+    // Find the session entry
+    let old_fingerprint = crate::user_store::SessionSigner::fingerprint(&current_token);
+    let entry = {
+        let sessions = match state.session_store.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("session_store")),
+        };
+        sessions.lookup(&old_fingerprint).cloned()
+    };
+
+    let entry = entry.ok_or_else(|| (
+        StatusCode::UNAUTHORIZED,
+        Json(AuthErrorResponse {
+            status: "error",
+            reason: "session_not_found".to_string(),
+            locale: "en".to_string(),
+            localized_message: "Session has been revoked or does not exist".to_string(),
+        }),
+    ))?;
+
+    // Issue a new token
+    let (new_token, new_expires_at_secs) = {
+        let signer = match state.session_signer.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("session_signer")),
+        };
+        let t = signer.issue(&user_id);
+        let (_, exp) = signer.verify(&t).expect("just-issued token must verify");
+        (t, exp)
+    };
+
+    let new_fingerprint = crate::user_store::SessionSigner::fingerprint(&new_token);
+    let new_entry = crate::user_store::SessionEntry {
+        user_id: entry.user_id.clone(),
+        username: entry.username.clone(),
+        role: entry.role.clone(),
+        tenant_id: entry.tenant_id.clone(),
+        expires_at_secs: new_expires_at_secs,
+    };
+
+    // Atomically: remove old session, insert new session
+    {
+        let mut sessions = match state.session_store.lock() {
+            Ok(g) => g,
+            Err(_) => return Err(lock_poisoned("session_store")),
+        };
+        sessions.remove_by_fingerprint(&old_fingerprint);
+        sessions.insert(new_fingerprint, new_entry);
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(LoginResponse {
+            status: "ok",
+            token: new_token,
+            user_id: entry.user_id,
+            username: entry.username,
+            role: entry.role,
+            expires_at_secs: new_expires_at_secs,
+        }),
+    ))
+}

@@ -1,0 +1,39 @@
+{
+  "gate": "crash-recovery",
+  "status": "failed",
+  "rows_survived": false,
+  "rows_inserted": 0,
+  "rows_found_after_restart": 0,
+  "page_level_durability_implemented": false,
+  "wal_durability_implemented": true,
+  "durability_gap_note": "PagedRowStore remains in-memory. Implement durable row store (feature: durable-row-store) to close this gap.",
+  "table_name": "crash_test_6c33bd20",
+  "base_url": "http://127.0.0.1:8080",
+  "server_managed": false,
+  "require_row_survival_enforced": false,
+  "steps": [
+    {
+      "step": "server_start",
+      "status": "passed",
+      "detail": "Pre-started server is reachable at http://127.0.0.1:8080"
+    },
+    {
+      "step": "create_table",
+      "status": "failed",
+      "detail": "DDL failed: Response status code does not indicate success: 422 (Unprocessable Entity)."
+    },
+    {
+      "step": "server_kill",
+      "status": "skipped",
+      "detail": "Server management skipped — cannot verify restart durability"
+    },
+    {
+      "step": "verify_rows_present",
+      "status": "failed",
+      "detail": "No rows found in crash_test_6c33bd20 after insert — unexpected"
+    }
+  ],
+  "started_at_utc": "2026-06-24T03:32:15.0375350Z",
+  "finished_at_utc": "2026-06-24T03:32:15.1180110Z",
+  "duration_ms": 80
+}

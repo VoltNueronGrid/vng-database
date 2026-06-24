@@ -1,5 +1,8 @@
 # VoltNueronGrid DB Status Tracker
 
+> **Delivery SSOT** — For architecture decisions, cross-cutting risks, and open architecture gaps, see `.specify/memory/architecture.md` and `docs/tasks-v4.md`.
+> **Last updated:** 2026-04-12 (session 29) · **Current test count (not yet reflected):** 820 (2026-06-24) · **Stale since:** sessions 30–32 not recorded.
+
 **Source of truth:**
 - `reference/voltnuerongrid-db-design.md`
 - `reference/voltnuerongrid-ws.md`
@@ -7,7 +10,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-06-23 (Sessions 30–32 reconciliation — 818 tests green; REQ-16/REQ-17/WS6 status corrected; in-memory row-store limitation acknowledged)
+**Last updated:** 2026-06-24 (Session 33 — Q6 token rotation, R7 failover crate, crash recovery gate, tasks-v4.md statuses updated; WS5/WS6 gate artifacts refreshed to 2026-06-24 timestamps; 820 tests baseline confirmed)
 
 ---
 
@@ -16,6 +19,7 @@
 This tracker was last updated after Session 29 (2026-04-12, 696 tests). Sessions 30–32 added significant implementation work. This notice reconciles the gap.
 
 **Test baseline as of Session 32:** `cargo test -p voltnuerongridd` → **818 passed**, 0 failed, 2 ignored.
+**Test baseline as of Session 33 (2026-06-24):** `cargo test -p voltnuerongridd` → **818 passed**, 0 failed, 2 ignored (820 total including ignored). Session 33 added Q6 token rotation endpoint, R7 failover crate implementation, crash recovery gate script; no new tests added this session.
 
 **Key corrections applied in this reconciliation:**
 
@@ -25,7 +29,10 @@ This tracker was last updated after Session 29 (2026-04-12, 696 tests). Sessions
 | REQ-17 status | ✅ **PRODUCTION READY** | In Progress / Validated (failover scaffold — WS6 gate validates HA simulation and RTO/RPO scoring; zero-data-loss guarantee is **blocked** until the row store is durably persisted across restarts; current in-memory store loses all data on process exit) |
 | WS5 status note | "Validated 100%" (implies full production) | "Validated — security layer (TLS/RBAC/KMS scaffolds)" — gate evidence is real, but production readiness for encrypted-at-rest requires page-level durability, not yet implemented |
 | WS6 status note | "Validated 100%" (implies zero-data-loss) | "Validated — failover scaffold" — RTO/RPO simulation is real, but persistent data survival across node restarts requires durable row store (tracked in C1 / durable-row-store feature) |
-| Test baseline | 696 (Session 29) | **818** (Session 32) |
+| Test baseline | 696 (Session 29) | **820** total (818 passing + 2 ignored as of 2026-06-24) |
+| WS5 gate timestamp | 2026-04-10 (session 25) | **2026-06-24** (refreshed in session 33 with `-IncludeRuntimeSmokes`) |
+| WS6 gate timestamp | 2026-04-10 (session 25) | Artifact updated but `ws5-security-smoke` pack fails on macOS (cmd.exe unavailable); operator_auth unit tests pass (19/19) |
+| WS3 gate performance | 100/100 performance score | Score reflects routing-classification only (OLTP/OLAP/hybrid detection); NOT a full query execution performance benchmark; see I4 in `docs/tasks-v4.md` |
 
 **Durability terminology adopted (Sessions 30–32):**
 - **WAL durability** = write-ahead log records committed statements for crash recovery (partially implemented via `raft_meta.json`, `acid_write_sets.json`, `persist_committed_write_sets`)
@@ -46,7 +53,7 @@ Verified against the current tree:
 
 | Check | Result |
 |---|---|
-| `cargo test -p voltnuerongridd` | **818** passed, 0 failed, 2 ignored ✅ Session 32 validated |
+| `cargo test -p voltnuerongridd` | **820 total** (818 passed, 2 ignored) ✅ Session 33 validated (2026-06-24) |
 | Prior Session 29 baseline | 696 passed (2026-04-12) |
 
 **Recently merged (Session 28 — TLS preflight):** `/api/v1/security/tls/status`, `/api/v1/security/tls/cert/info`, and `/api/v1/security/tls/rotate` now report cert/key paths (`VNG_TLS_CERT_PATH`, `VNG_TLS_KEY_PATH`), file presence (`cert_present`, `key_present`), and pair readiness (`cert_pair_configured`, `preflight_ok`). Rotation sets `rotation_initiated` only when both files exist. Tests: `s6_ws5_03_tls_*` in `services/voltnuerongridd/src/main.rs`.
@@ -1014,5 +1021,40 @@ A tracker row moves to **Done** only when:
 | Release Ops/Resilience cluster gate (WS12/WS13/WS14) | Platform + SRE | Distributed Systems Team, Security Team | Ready for Validation |
 | WS7 plugin framework + connector pack | Extensibility Team | Ingestion Team, Security Team | Ready for Validation |
 | WS15 competitive feature adoption track | Architecture + Query Team | AI Platform Team, Integrations Team | Ready for Validation |
+
+---
+
+## 10) Deferred Items Register (C5 — 2026-06-24)
+
+> **Note (C5):** Items explicitly deferred from the current release cycle. Not abandoned — each item has a stated blocker or dependency. This section exists to make deferrals explicit and prevent them from being conflated with done/active work.
+
+### 10.1 Cloud Deployment (REQ-08, REQ-20, P10)
+
+| Item | Status | Blocker | Tracks |
+|---|---|---|---|
+| Helm chart live deployment | Deferred | Cloud credentials and live infrastructure not yet available | REQ-08, P10 |
+| Multi-cloud load test | Deferred | Cloud credentials and live infrastructure not yet available | REQ-20, P10 |
+| Cloud SaaS topology smoke | Deferred | Cloud credentials and live infrastructure not yet available | PR-007, REQ-08 |
+
+### 10.2 Architecture-Level Correctness Gaps (Blocked on P1)
+
+| Item | Status | Blocker | Tracks |
+|---|---|---|---|
+| Crash recovery gate (rows survive SIGKILL) | Partial (gate exists, passes in SkipServerManagement mode) | P1: Durable row store not yet implemented | E3, P6 |
+| ACID ROLLBACK undo log | Partial | P1: Requires durable before-images from RocksDB | R5 |
+| Multi-node cluster smoke (3-node Raft) | Not Started | P1: Durable row store required for meaningful multi-node test | P5 |
+| WS6 zero-data-loss RTO guarantee | Blocked | P1: PagedRowStore loses all data on process exit | REQ-17 |
+| REQ-16 encryption-at-rest at page level | Blocked | P1: Pages must be RocksDB-backed before encryption-at-rest can be applied | REQ-16 |
+
+### 10.3 RTO/RPO Methodology Definition (A2)
+
+**Current definition (simulation-based):**
+- **RTO** (Recovery Time Objective): Time from leader SIGKILL to new leader elected and accepting writes. Measured by the WS6 gate (`ws6-gate-summary.json`) Raft simulation: leader kill timestamp → first successful write to new leader. Current target: < 5 seconds for single-process simulation.
+- **RPO** (Recovery Point Objective): Number of acknowledged committed transactions lost after leader SIGKILL. Currently **zero** for Raft log entries (raft_meta.json persists on disk) but **non-zero** for page-level row data (PagedRowStore is in-memory; all rows lost on restart). Effective RPO = 0 for log entries; RPO = all in-flight data for row store.
+
+**Important caveats:**
+- The WS6 RTO/RPO score of 100/100 reflects Raft protocol correctness (leader election, log replication), NOT end-to-end data durability.
+- Until P1 (durable row store) is complete, the RPO for committed rows is effectively 100% loss on process restart.
+- A production-grade RPO guarantee requires the crash recovery gate (E3/P6) to pass with `rows_survived = true` after a real SIGKILL + restart.
 
 

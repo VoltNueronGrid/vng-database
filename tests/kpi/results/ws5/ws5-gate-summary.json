@@ -1,14 +1,14 @@
 {
   "gate": "ws5",
-  "status": "passed",
-  "started_at_utc": "2026-04-15T02:31:26.0870287Z",
-  "finished_at_utc": "2026-04-15T02:31:30.7906833Z",
-  "duration_ms": 4704,
+  "status": "failed",
+  "started_at_utc": "2026-06-24T03:49:07.2064270Z",
+  "finished_at_utc": "2026-06-24T03:49:07.3302690Z",
+  "duration_ms": 124,
   "packs": [
     {
       "pack": "ws5-security-smoke",
-      "status": "passed",
-      "detail": "ok",
+      "status": "failed",
+      "detail": "WS5 operator-auth smoke failed.",
       "artifact": "tests/kpi/results/ws5/operator-auth-smoke.json"
     },
     {

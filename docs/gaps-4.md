@@ -1,6 +1,13 @@
 # Gap Analysis — VoltNueronGrid Remaining Gaps (post-session 32)
 
-> **Living gap register** — This is the authoritative gap document. All previous gap files
+> **Scope: Implementation-level gaps only.**
+> This document tracks implementation-level gaps closed through session 32.
+> It does NOT cover architecture-level correctness risks (durable row store, full ACID,
+> physical DB isolation, Studio lifecycle, native protocol, crash recovery).
+> Those are tracked in `docs/tasks-v4.md` (P/R-series) and `.specify/memory/architecture.md`.
+> **Do not cite this document as proof that all critical issues are resolved.**
+
+> **Living gap register** — This is the authoritative gap document for implementation-level gaps. All previous gap files
 > (`docs/archive/gaps-3.md`, `docs/archive/gaps-may20-2.md`, `docs/archive/gaps-may26-1.md`,
 > `docs/archive/gap-analyis-v3.md`) have been superseded and are retained as historical evidence only.
 
