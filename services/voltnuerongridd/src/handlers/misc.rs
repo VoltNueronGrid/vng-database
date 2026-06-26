@@ -1692,3 +1692,161 @@ pub(crate) async fn demo_seed(
     ))
 }
 
+// ── GOV-1/GOV-2: Compliance report + Audit webhook ────────────────────────────
+
+#[derive(Serialize)]
+pub(crate) struct ComplianceReportResponse {
+    pub status: &'static str,
+    pub generated_at_unix_ms: u128,
+    pub rbac_role_count: usize,
+    pub audit_event_count: usize,
+    pub encryption_at_rest_enabled: bool,
+    pub tls_enabled: bool,
+    pub constraint_count: usize,
+    pub active_ddl_objects: usize,
+    pub active_operator_count: usize,
+    pub compliance_score: u8,
+    pub findings: Vec<String>,
+}
+
+/// GOV-1: Admin-only compliance status report aggregating RBAC, encryption, audit, and TLS posture.
+pub(crate) async fn compliance_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ComplianceReportResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_privilege(&headers, &state, "compliance", "report", voltnuerongrid_auth::PrivilegeAction::Read)?;
+
+    let rbac_role_count = state.rbac_privilege_matrix.grants_by_role.len();
+    let audit_event_count = {
+        let sink = state.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
+        sink.len()
+    };
+    let constraint_count = {
+        let mgr = state.constraint_manager.lock().unwrap_or_else(|e| e.into_inner());
+        mgr.constraint_count()
+    };
+    let active_ddl_objects = {
+        let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+        cat.active_entries().len()
+    };
+    let active_operator_count = {
+        let um = state.user_store.lock().unwrap_or_else(|e| e.into_inner());
+        um.all().count()
+    };
+
+    let encryption_at_rest_enabled = std::env::var("VNG_KMS_KEY_ID").is_ok()
+        || std::env::var("VNG_ENCRYPTION_KEY").is_ok();
+    let tls_enabled = std::env::var("VNG_TLS_CERT_PATH").is_ok()
+        || std::env::var("VNG_NATIVE_LISTENER_ENABLED")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+
+    let mut findings = Vec::new();
+    let mut score: u8 = 100;
+
+    if rbac_role_count == 0 {
+        findings.push("no_rbac_bindings: no role bindings configured".to_string());
+        score = score.saturating_sub(20);
+    }
+    if !encryption_at_rest_enabled {
+        findings.push("encryption_at_rest_disabled: VNG_KMS_KEY_ID/VNG_ENCRYPTION_KEY not set".to_string());
+        score = score.saturating_sub(25);
+    }
+    if !tls_enabled {
+        findings.push("tls_not_configured: VNG_TLS_CERT_PATH not set and native listener disabled".to_string());
+        score = score.saturating_sub(15);
+    }
+    if state.admin_api_key.is_none() {
+        findings.push("admin_key_missing: VNG_ADMIN_API_KEY not set — server is unprotected".to_string());
+        score = score.saturating_sub(30);
+    }
+    if audit_event_count == 0 {
+        findings.push("no_audit_events: audit log is empty or not configured".to_string());
+        score = score.saturating_sub(10);
+    }
+
+    append_audit_event(&state, AuditEventKind::Security,
+        "operator", "compliance_report", "ok", "");
+
+    Ok((StatusCode::OK, Json(ComplianceReportResponse {
+        status: "ok",
+        generated_at_unix_ms: now_unix_ms_u64() as u128,
+        rbac_role_count,
+        audit_event_count,
+        encryption_at_rest_enabled,
+        tls_enabled,
+        constraint_count,
+        active_ddl_objects,
+        active_operator_count,
+        compliance_score: score,
+        findings,
+    })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AuditWebhookConfigRequest {
+    pub webhook_url: String,
+    pub secret_token: Option<String>,
+    pub last_n_events: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct AuditWebhookResponse {
+    pub status: &'static str,
+    pub delivered: usize,
+    pub reason: String,
+}
+
+/// GOV-2: Export recent audit events to a configured webhook URL.
+pub(crate) async fn audit_export_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AuditWebhookConfigRequest>,
+) -> Result<(StatusCode, Json<AuditWebhookResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_privilege(&headers, &state, "audit", "export", voltnuerongrid_auth::PrivilegeAction::Read)?;
+
+    // Validate URL is not empty and looks like an http/https URL.
+    let url = req.webhook_url.trim().to_string();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err((StatusCode::BAD_REQUEST, Json(AuthErrorResponse {
+            status: "error",
+            reason: "invalid_webhook_url: must be http:// or https://".to_string(),
+            locale: "en".to_string(),
+            localized_message: "Webhook URL must start with http:// or https://".to_string(),
+        })));
+    }
+
+    let n = req.last_n_events.unwrap_or(100).min(10_000);
+    let events: Vec<serde_json::Value> = {
+        let sink = state.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
+        sink.latest(n).into_iter().map(|e| serde_json::to_value(e).unwrap_or_default()).collect()
+    };
+    let delivered = events.len();
+
+    let payload = serde_json::json!({
+        "source": "voltnuerongridd",
+        "event_count": delivered,
+        "events": events,
+    });
+
+    let mut builder = reqwest::Client::new().post(&url).json(&payload);
+    if let Some(token) = &req.secret_token {
+        builder = builder.header("Authorization", format!("Bearer {token}"));
+    }
+    let delivery_result = builder.send().await;
+    let reason = match delivery_result {
+        Ok(resp) if resp.status().is_success() => "delivered".to_string(),
+        Ok(resp) => format!("webhook_returned_{}", resp.status().as_u16()),
+        Err(e) => format!("delivery_failed: {e}"),
+    };
+
+    append_audit_event(&state, AuditEventKind::Security,
+        "operator", "audit_export_webhook", &reason, "");
+
+    Ok((StatusCode::OK, Json(AuditWebhookResponse {
+        status: "ok",
+        delivered,
+        reason,
+    })))
+}
+
+

@@ -1,0 +1,24 @@
+{
+  "gate": "native-protocol-studio-scope-boundary",
+  "status": "passed",
+  "timestamp": "2026-06-26T00:00:00Z",
+  "scope_boundary": "documented",
+  "decision": "Studio uses HTTP exclusively; native TCP is driver-only",
+  "adr_path": "docs/adr/adr-001-native-protocol-studio-scope.md",
+  "physical_view_gap": "closed",
+  "rationale": "Browser security model prevents raw TCP socket connections from browser fetch context",
+  "surfaces": {
+    "studio_browser": "HTTP only",
+    "rust_driver": "HTTP or Native TCP (configurable)",
+    "python_driver": "HTTP or Native TCP (configurable)",
+    "typescript_driver": "HTTP or Native TCP (configurable)",
+    "java_driver": "HTTP or Native TCP (configurable)",
+    "mcp_tools": "HTTP only (JSON-RPC over HTTP/SSE)"
+  },
+  "evidence": {
+    "adr": "docs/adr/adr-001-native-protocol-studio-scope.md",
+    "driver_conformance_gate": "tests/kpi/results/ws10/driver-conformance-gate.json"
+  },
+  "task_id": "C3",
+  "tasks_v4_reference": "docs/tasks-v4.md#c3"
+}

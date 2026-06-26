@@ -42,6 +42,7 @@ pub(crate) fn svc_unavailable_sql_response(reason: &str) -> (StatusCode, Json<Sq
             olap_agg_results: None,
             columns: None,
             rows: None,
+            freshness_lag_ms: None,
         }),
     )
 }

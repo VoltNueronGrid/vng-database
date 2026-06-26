@@ -1446,3 +1446,177 @@ pub(crate) fn export_gate_report(path: &str, evaluation: &SreGateEvaluationRespo
         let _ = fs::write(path, encoded);
     }
 }
+
+// ── AI-3/AI-6: Incident Diagnosis & Evidence ─────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct IncidentDiagnoseRequest {
+    pub failure_type: Option<String>,
+    pub severity: Option<String>,
+    pub node_id: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct IncidentDiagnoseResponse {
+    pub status: &'static str,
+    pub root_cause: String,
+    pub confidence: &'static str,
+    pub recommended_action: String,
+}
+
+/// AI-3: Rules-based incident root cause classification.
+pub(crate) async fn sre_incident_diagnose(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IncidentDiagnoseRequest>,
+) -> Result<(StatusCode, Json<IncidentDiagnoseResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let failure_type = req.failure_type.as_deref().unwrap_or("unknown").to_ascii_lowercase();
+    let severity = req.severity.as_deref().unwrap_or("low").to_ascii_lowercase();
+    let message = req.message.as_deref().unwrap_or("").to_ascii_lowercase();
+
+    let (root_cause, confidence, recommended_action) = match failure_type.as_str() {
+        "network" | "transport" | "connection_timeout" => (
+            "network_partition_or_latency".to_string(),
+            "high",
+            "check_node_connectivity;verify_firewall_rules;restart_transport_listener".to_string(),
+        ),
+        "raft_election" | "leader_election" | "no_leader" => (
+            "quorum_loss_or_split_brain".to_string(),
+            "high",
+            "check_raft_peer_health;verify_quorum_size;restart_minority_nodes".to_string(),
+        ),
+        "disk" | "storage" | "io_error" => (
+            "disk_failure_or_full".to_string(),
+            "high",
+            "check_disk_usage;rotate_logs;run_fsck;expand_storage".to_string(),
+        ),
+        "memory" | "oom" | "allocation" => (
+            "memory_pressure".to_string(),
+            "medium",
+            "check_heap_usage;reduce_cache_size;add_swap".to_string(),
+        ),
+        "sql_execution" | "query_timeout" | "deadlock" => (
+            "query_plan_degradation_or_lock_contention".to_string(),
+            "medium",
+            "run_analyze_on_affected_tables;check_lock_waiters;kill_blocked_queries".to_string(),
+        ),
+        "auth" | "rbac" | "credential" => (
+            "security_policy_violation_or_misconfiguration".to_string(),
+            "high",
+            "rotate_credentials;audit_rbac_grants;check_admin_key_env".to_string(),
+        ),
+        _ => {
+            // Infer from message keywords
+            if message.contains("timeout") || message.contains("timed out") {
+                ("operation_timeout".to_string(), "medium",
+                 "increase_statement_timeout;check_server_load".to_string())
+            } else if message.contains("crash") || message.contains("panic") {
+                ("process_crash_or_panic".to_string(), "high",
+                 "review_panic_log;capture_core_dump;restart_with_backtrace".to_string())
+            } else {
+                ("unknown_failure".to_string(), "low",
+                 "collect_logs;run_sre_reliability_status;escalate".to_string())
+            }
+        }
+    };
+
+    // Escalate confidence if severity is critical
+    let final_confidence = if severity == "critical" && confidence == "medium" { "high" } else { confidence };
+
+    append_audit_event(&state, AuditEventKind::Failover,
+        req.node_id.as_deref().unwrap_or("operator"),
+        "sre_incident_diagnose", "ok", "");
+
+    Ok((StatusCode::OK, Json(IncidentDiagnoseResponse {
+        status: "ok",
+        root_cause,
+        confidence: final_confidence,
+        recommended_action,
+    })))
+}
+
+#[derive(Serialize)]
+pub(crate) struct IncidentEvidenceResponse {
+    pub status: &'static str,
+    pub incident_id: String,
+    pub evidence_path: Option<String>,
+    pub signal_count: usize,
+    pub dr_hook_count: usize,
+    pub action_count: usize,
+    pub summary: String,
+}
+
+/// AI-6: Aggregate failure signals + DR hook + autonomous action records into an incident report.
+pub(crate) async fn sre_incident_evidence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<IncidentEvidenceResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+
+    let signals: Vec<serde_json::Value> = {
+        let sig = state.cluster_failure_signals.lock().unwrap_or_else(|e| e.into_inner());
+        sig.iter().map(|s| json!({
+            "signal_id": s.signal_id, "node_id": s.node_id, "failure_type": s.failure_type,
+            "severity": s.severity, "message": s.message,
+            "observed_unix_ms": s.observed_unix_ms, "resolved": s.resolved,
+        })).collect()
+    };
+    let dr_hooks: Vec<serde_json::Value> = {
+        let hooks = state.dr_hook_records.lock().unwrap_or_else(|e| e.into_inner());
+        hooks.iter().map(|h| json!({
+            "execution_id": h.execution_id, "hook": h.hook,
+            "scope": h.scope, "status": h.status, "details": h.details,
+        })).collect()
+    };
+    let actions: Vec<serde_json::Value> = {
+        let acts = state.action_records.lock().unwrap_or_else(|e| e.into_inner());
+        acts.iter().map(|a| json!({
+            "trace_id": a.trace_id, "action": a.action,
+            "scope": a.scope, "decision": format!("{:?}", a.decision),
+            "occurred_epoch_ms": a.occurred_epoch_ms, "reason": a.reason,
+        })).collect()
+    };
+
+    let incident_id = format!("INC-{}", crate::now_unix_ms());
+    let unresolved_count = signals.iter().filter(|s| s["resolved"] == false).count();
+    let summary = format!(
+        "Incident {incident_id}: {} failure signals ({} unresolved), {} DR hook executions, {} autonomous actions",
+        signals.len(), unresolved_count, dr_hooks.len(), actions.len()
+    );
+
+    let report = json!({
+        "incident_id": incident_id,
+        "generated_at_unix_ms": crate::now_unix_ms(),
+        "signals": signals,
+        "dr_hook_records": dr_hooks,
+        "autonomous_actions": actions,
+        "summary": summary,
+    });
+
+    // Persist incident report to state/incidents/ directory.
+    let evidence_path = {
+        let data_dir = &state.runtime_config.storage.data_dir;
+        let dir = format!("{data_dir}/incidents");
+        let _ = fs::create_dir_all(&dir);
+        let path = format!("{dir}/{incident_id}.json");
+        if let Ok(encoded) = serde_json::to_string_pretty(&report) {
+            let _ = fs::write(&path, encoded);
+            Some(path)
+        } else { None }
+    };
+
+    append_audit_event(&state, AuditEventKind::Failover,
+        "operator", "sre_incident_evidence", "ok", "");
+
+    Ok((StatusCode::OK, Json(IncidentEvidenceResponse {
+        status: "ok",
+        incident_id,
+        evidence_path,
+        signal_count: signals.len(),
+        dr_hook_count: dr_hooks.len(),
+        action_count: actions.len(),
+        summary,
+    })))
+}

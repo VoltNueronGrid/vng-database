@@ -545,6 +545,39 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/mcp/invoke", post(mcp_invoke))
         // Gap #11: dedicated demo seed endpoint (replaces CALL insert_rows SQL shim)
         .route("/api/v1/demo/seed", post(demo_seed))
+        // BR-1/BR-2: Backup and Restore API
+        .route("/api/v1/backup/full", {
+            use crate::handlers::backup::backup_full;
+            post(backup_full)
+        })
+        .route("/api/v1/backup/list", {
+            use crate::handlers::backup::backup_list;
+            get(backup_list)
+        })
+        .route("/api/v1/restore", {
+            use crate::handlers::backup::restore_from_backup;
+            post(restore_from_backup)
+        })
+        // GOV-1: Compliance report
+        .route("/api/v1/compliance/report", {
+            use crate::handlers::misc::compliance_report;
+            get(compliance_report)
+        })
+        // GOV-2: Audit export webhook
+        .route("/api/v1/audit/export/webhook", {
+            use crate::handlers::misc::audit_export_webhook;
+            post(audit_export_webhook)
+        })
+        // AI-3: Incident root-cause diagnosis
+        .route("/api/v1/sre/incident/diagnose", {
+            use crate::handlers::sre::sre_incident_diagnose;
+            post(sre_incident_diagnose)
+        })
+        // AI-6: Incident evidence aggregation
+        .route("/api/v1/sre/incident/evidence", {
+            use crate::handlers::sre::sre_incident_evidence;
+            post(sre_incident_evidence)
+        })
         .with_state(state.clone());
 
     // L-4: Outermost layer — extracts W3C traceparent/tracestate headers from every

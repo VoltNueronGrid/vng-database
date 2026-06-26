@@ -8,7 +8,7 @@
 **Branch:** `main`  
 **Artifacts covered:** Constitution v1.1.0 · Scenario View · Logical View · Process View · Development View · Physical View · Architecture Synthesis  
 **Gap documents:** `gaps-may20-2.md` (sessions 16–22, superseded) · `gaps-4.md` (session 32, implementation-level only)  
-**Test baseline at session 32:** 807 passed · **Current (2026-06-24):** 820 passed (voltnuerongridd), 0 failed
+**Test baseline at session 32:** 807 passed · **Current (2026-06-24):** 851 passed (voltnuerongridd), 0 failed
 
 ---
 
@@ -166,7 +166,22 @@ These are the architecture-significant work areas that must be completed before 
 | 4+1 Architecture artifacts | Scenario, Logical, Process, Development, Physical, Synthesis views complete |
 | Constitution v1.0.0 | Seven principles ratified; plan/spec/tasks templates aligned |
 | Gate/KPI scripts | `tests/kpi/scripts/` PowerShell gate framework with JSON artifact output |
-| Test count | 820 tests passing (2026-06-24, +13 post-session 32) |
+| Test count | 851 tests passing (2026-06-24, +44 post-session 32) |
+| `DROP DATABASE` row/metadata purge | Implemented in `purge_database_rows` — all rows tombstoned; WAL CF dropped (R4, 2026-06-24) |
+| `SELECT legacy fallback — k.contains()` substring bug | Eliminated — DataFusion handles all SELECT shapes; `IN (SELECT)` subqueries route OLAP (R1+R2, 2026-06-24) |
+| UNDO log for multi-statement rollback | `undo_log: Vec<UndoRecord>` in `AcidTxEntry`; ROLLBACK restores before-images (R5, 2026-06-24) |
+| Full isolation level semantics (RC/RR/SERIALIZABLE) | RR snapshot in `read_snapshot_xid`; SERIALIZABLE abort on write-set overlap (R6, 2026-06-24) |
+| JOIN execution via DataFusion for all shapes | All SELECT routes through `execute_select_prefer_parquet`; IN/EXISTS subqueries classified OLAP (R2, 2026-06-24) |
+| `.expect()` panic removal | 9 non-mutex panics fixed in `admin.rs`, `store.rs`, `ingest.rs` (R8, 2026-06-24) |
+| ALTER TABLE DDL | `record_alter()` in catalog; `alteration_count` tracked (Q1, 2026-06-24) |
+| GRANT/REVOKE via SQL syntax | `handle_grant_sql` / `handle_revoke_sql`; `db_grants` map (Q2, 2026-06-24) |
+| `CALL insert_rows` in SQL path | `try_handle_call_insert_rows_demo` under `VNG_DEMO_MODE=true` (Q3, 2026-06-24) |
+| OTEL spans on hot paths | `tracing::info_span!` on `sql_execute`, `ingest_*`, `raft_append`; `htap.route_decision` debug span (Q4, 2026-06-24) |
+| Session token rotation endpoint | `POST /api/v1/auth/token/rotate` — generates new token, invalidates old (Q6, 2026-06-24) |
+| Scratch files / unused import cleanup | Unused imports removed; scratch `.md` files archived (Q7, 2026-06-24) |
+| Unit test coverage for new helpers | 18 new unit tests for session-31–32 helpers (Q8, 2026-06-24) |
+| Native driver conformance gate | `run-driver-conformance-gate.ps1` passes 4/4 packs; `conformance-test-suite.md` created (P9, 2026-06-24) |
+| End-to-end crash recovery gate | `run-crash-recovery-gate.ps1` passes; 3/3 rows survive kill+restart (P6/E3, 2026-06-24) |
 
 ---
 
@@ -174,36 +189,23 @@ These are the architecture-significant work areas that must be completed before 
 
 | Area | Severity | Notes |
 |------|----------|-------|
-| Row store → RocksDB pages (one CF per DB) | 🔴 Critical | XL effort; blocking durability and ACID |
-| UNDO log for multi-statement rollback | 🔴 Critical | Linked to row store overhaul |
-| Per-database RocksDB column-family isolation | 🔴 Critical | Required for hard tenant isolation |
-| `DROP DATABASE` row/metadata purge | 🔴 Critical | Currently only removes catalog entry |
-| Full isolation level semantics (RC/RR/SERIALIZABLE) | 🔴 Critical | Currently parsed but not differentiated |
-| SELECT legacy fallback — `k.contains()` substring bug | 🔴 Critical | Reachable for JOIN/GROUP BY/subquery shapes |
-| Per-database connection semaphore | 🟠 High | `max_connections` field exists but unwired |
-| HTAP route/freshness evidence across query shapes | 🟠 High | Route evidence incomplete |
-| End-to-end crash recovery gate | 🟠 High | No executed recovery artifact |
-| Multi-node cluster smoke test (with durable store) | 🟠 High | Raft is real; backing store is not yet durable |
-| `failover` crate implementation | 🟠 High | Currently a stub |
-| `htap_sync` beyond `InMemoryReplicationTransport` | 🟠 High | Needed for real OLAP freshness sync |
-| Studio connection/database lifecycle fix | 🟠 High | Reported broken; architecture-significant |
-| Full per-database RBAC grant enforcement | 🟠 High | Currently global RBAC |
-| Native driver conformance gate | 🟠 High | Traceability matrix marks as critical gap |
-| Native protocol Studio validation path | 🟠 High | Browser-only test is insufficient |
+| Row store → RocksDB pages (one CF per DB) | 🔴 Critical | XL effort; foundational blocker for durability and ACID group commit (P1) |
+| Per-database RocksDB column-family isolation | 🔴 Critical | Required for hard tenant isolation; depends on P1 (P2) |
+| Full ACID group commit | 🔴 Critical | UNDO + isolation done (R5/R6); WAL batching blocked on P1 durable store (P3) |
+| Per-database connection semaphore | 🟠 High | `max_connections` field exists but unwired; depends on P2 (P2) |
+| HTAP freshness evidence and sync transport | 🟠 High | Routing + DataFusion complete (R2); freshness_lag_ms + transport replacement blocked on P1 (P4) |
+| Multi-node cluster smoke test (with durable store) | 🟠 High | Raft is real; backing store not yet durable; depends on P1 (P5) |
+| `failover` crate — full health-check + leader notification | 🟠 High | Health-check and peer-discovery scaffolded via R7; production-grade implementation pending |
+| `htap_sync` beyond `InMemoryReplicationTransport` | 🟠 High | Needed for real cross-node OLAP freshness sync (R10) |
+| Studio connection/database lifecycle fix | 🟠 High | Reported broken; architecture-significant; requires UI work (P8) |
+| Full per-database RBAC grant enforcement | 🟠 High | Currently global RBAC; depends on P2 CF isolation (R3) |
+| Native protocol Studio validation path | 🟠 High | Browser-only test insufficient; needs Tauri bridge or documented scope (C3) |
 | Driver core contract native parity | 🟠 High | `driver-core-contract-v1.md` is HTTP-only |
-| Security gate artifacts (TLS, KMS, plugin signing) | 🟠 High | Items from security checklist |
-| Cloud deployment smoke/load/failover | 🟡 Medium/Deferred | Draft; README says not tested |
-| `CALL insert_rows` in SQL path | 🟡 Medium | CALL statement routing incomplete |
-| ALTER TABLE DDL | 🟡 Medium | SQL feature gap |
-| GRANT/REVOKE via SQL syntax | 🟡 Medium | Admin-only endpoint today |
-| JOIN execution via DataFusion for all shapes | 🟡 Medium | Some shapes still reach legacy path |
+| Security gate — TLS/KMS rotation, per-DB roles | 🟠 High | WS5/WS7 re-run done; TLS cert rotation + KMS rotation gate + per-DB RBAC still needed (P7) |
+| Cloud deployment smoke/load/failover | 🟡 Medium/Deferred | Draft; README says not tested; blocked on cloud credentials (P10) |
 | Codd's rules completeness | 🟡 Medium | Partial coverage |
-| `.expect()` panic removal | 🟡 Medium | Prod-unsafe unwrap patterns remain |
-| OTEL spans on hot paths | 🟡 Medium | Tracing infrastructure present; spans incomplete |
-| Design token drift (Studio) | 🟡 Medium | UI design consistency |
-| Session token rotation endpoint | 🟢 Low | Feature gap, not safety blocker |
-| Scratch files / unused import cleanup | 🟢 Low | Code hygiene |
-| Missing focused unit tests for new helpers | 🟢 Low | Coverage gaps on newer modules |
+| Design token drift (Studio) | 🟡 Medium | UI design consistency (Q5) |
+| Studio databases connection state machine | 🟡 Medium | Needs explicit Pending/Validating states (R9) |
 
 ---
 
@@ -332,5 +334,5 @@ These are changes to existing code structures required by the architecture — d
 | Development View | `.specify/memory/architecture-development-view.md` | Generated from logical + process views |
 | Physical View | `.specify/memory/architecture-physical-view.md` | Generated from process + development views |
 | Gap analysis (sessions 16–22) | `docs/archive/gaps-may20-2.md` | 24 gaps remaining at session 22 |
-| Gap analysis (session 32) | `docs/gaps-4.md` | 0 critical/high/medium remaining at session 32 |
+| Gap analysis (session 32) | `docs/gaps-4.md` | 0 critical/high/medium **implementation-level** gaps remaining at session 32; architecture-level critical risks remain open (see §3 Pending) |
 | Spec templates | `.specify/templates/` | Aligned to constitution v1.0.0 |

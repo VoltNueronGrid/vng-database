@@ -200,6 +200,10 @@ pub struct RowStoreSyncOrigin {
     next_sequence: u64,
     last_acknowledged_sequence: u64,
     pending: Vec<RowMutation>,
+    /// Epoch-millisecond timestamp of the last mutation appended via `append()`.
+    /// Used to compute OLAP freshness lag: `now_ms - last_mutation_epoch_ms`.
+    /// Zero when no mutations have been appended.
+    last_mutation_epoch_ms: u64,
 }
 
 impl RowStoreSyncOrigin {
@@ -208,6 +212,7 @@ impl RowStoreSyncOrigin {
             next_sequence: 1,
             last_acknowledged_sequence: 0,
             pending: Vec::new(),
+            last_mutation_epoch_ms: 0,
         }
     }
 
@@ -226,8 +231,16 @@ impl RowStoreSyncOrigin {
             op,
         };
         self.next_sequence += 1;
+        // P4: record timestamp for freshness lag computation.
+        self.last_mutation_epoch_ms = crate::now_epoch_millis() as u64;
         self.pending.push(mutation.clone());
         mutation
+    }
+
+    /// P4: Return the epoch-millisecond timestamp of the last mutation appended.
+    /// Returns 0 if no mutations have been appended (no lag measurement possible).
+    pub fn last_mutation_epoch_ms(&self) -> u64 {
+        self.last_mutation_epoch_ms
     }
 
     pub fn export_batch(&self, max_items: usize) -> Vec<RowMutation> {
@@ -272,6 +285,7 @@ impl RowStoreSyncOrigin {
             next_sequence: snapshot.next_sequence,
             last_acknowledged_sequence: snapshot.last_acknowledged_sequence,
             pending: snapshot.pending,
+            last_mutation_epoch_ms: 0,
         }
     }
 

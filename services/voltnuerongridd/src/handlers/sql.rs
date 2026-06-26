@@ -335,6 +335,11 @@ pub(crate) struct SqlExecuteResponse {
     pub(crate) columns: Option<Vec<serde_json::Value>>,
     /// Row data for SELECT results — readable by the UI client.
     pub(crate) rows: Option<Vec<serde_json::Value>>,
+    /// P4: OLAP/hybrid route freshness lag — milliseconds since the last committed
+    /// OLTP mutation was appended to the HTAP sync origin. `Some(0)` means the OLAP
+    /// view is fully up-to-date (in-process store, zero replication lag). `None` means
+    /// the route was OLTP-only or no mutations have been published yet.
+    pub(crate) freshness_lag_ms: Option<u64>,
 }
 
 /// S4-WS3-02: a single result row returned by the physical OLTP executor.
@@ -741,6 +746,27 @@ pub(crate) async fn sql_transaction(
                         // Use extract_all_insert_rows to handle multi-row INSERT correctly.
                         // Each row is individually inserted and individually WAL-persisted.
                         for (raw_k, d, single_sql) in extract_all_insert_rows(stmt) {
+                            let table_name_t = d.get("__table").map(|t| t.as_str()).unwrap_or("").to_string();
+                            // CON-1: Validate constraints before acquiring write intent.
+                            if !table_name_t.is_empty() {
+                                if let Ok(mgr) = state.constraint_manager.lock() {
+                                    for (col, val) in d.iter().filter(|(c, _)| !c.starts_with("__")) {
+                                        if let Err(violation) = mgr.validate(&table_name_t, col, Some(val.as_str())) {
+                                            drop(mgr);
+                                            rs.release_write_intents(xid);
+                                            return Err((
+                                                StatusCode::CONFLICT,
+                                                Json(crate::AuthErrorResponse {
+                                                    status: "error",
+                                                    reason: format!("constraint_violation: {violation}"),
+                                                    locale: "en".to_string(),
+                                                    localized_message: format!("Constraint violation in transaction INSERT into '{table_name_t}': {violation}"),
+                                                }),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
                             let k = db_prefix_key(&db, &raw_k);
                             // Gap #3 + M-2: record before-image for ROLLBACK support, falling
                             // back to RocksDB if the row is not in the in-memory store yet.
@@ -748,7 +774,15 @@ pub(crate) async fn sql_transaction(
                             record_undo(&state.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
-                            rs.insert(xid, &k, d);
+                            rs.insert(xid, &k, d.clone());
+                            // CON-1: Record committed values for PK/UNIQUE tracking.
+                            if !table_name_t.is_empty() {
+                                if let Ok(mut mgr) = state.constraint_manager.lock() {
+                                    for (col, val) in d.iter().filter(|(c, _)| !c.starts_with("__")) {
+                                        mgr.record_committed_value(&table_name_t, col, val);
+                                    }
+                                }
+                            }
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
                         }
                     } else if upper.starts_with("DELETE") {
@@ -1490,6 +1524,7 @@ pub(crate) async fn sql_execute(
                 olap_agg_results: None,
                 columns: if cols.is_empty() { None } else { Some(cols) },
                 rows: if rows.is_empty() { None } else { Some(rows) },
+                freshness_lag_ms: None,
             }),
         ));
     }
@@ -1544,6 +1579,7 @@ pub(crate) async fn sql_execute(
                     olap_agg_results: None,
                     columns: None,
                     rows: None,
+                    freshness_lag_ms: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -1585,6 +1621,7 @@ pub(crate) async fn sql_execute(
                 olap_agg_results: None,
                 columns: None,
                 rows: None,
+                freshness_lag_ms: None,
             }),
         ));
         release_sql_data_plane_connection(&state, &connection_id);
@@ -1595,12 +1632,18 @@ pub(crate) async fn sql_execute(
     // M-8 Rule 6: Snapshot the DDL catalog once so we can resolve view definitions
     // without holding the lock across the entire dispatch loop.
     // ISSUE-05: Also snapshot catalog-registered UDFs for inline substitution.
-    let (view_catalog_snapshot, udf_catalog_snapshot): (Vec<(String, String)>, Vec<crate::helpers::udf::CatalogUdfEntry>) = {
+    // MV-1: Also snapshot materialized view names so SELECT FROM matview can be intercepted.
+    let (view_catalog_snapshot, udf_catalog_snapshot, matview_names): (Vec<(String, String)>, Vec<crate::helpers::udf::CatalogUdfEntry>, std::collections::HashSet<String>) = {
         match state.ddl_catalog.lock() {
             Ok(cat) => {
+                // Only regular (non-materialized) views are expanded inline.
+                // Materialized views are served from the __matview: snapshot prefix.
+                let matviews: std::collections::HashSet<String> = cat.active_entries()
+                    .into_iter().filter(|e| e.object_kind == "materialized_view")
+                    .map(|e| e.object_name.to_ascii_lowercase()).collect();
                 let views = cat.active_entries()
                     .into_iter()
-                    .filter(|e| e.object_kind == "view" || e.object_kind == "materialized_view")
+                    .filter(|e| e.object_kind == "view")
                     .map(|e| (e.object_name.to_ascii_lowercase(), e.original_statement.clone()))
                     .collect();
                 let udfs = cat.list_active_functions()
@@ -1611,15 +1654,144 @@ pub(crate) async fn sql_execute(
                         ddl: e.original_statement.clone(),
                     })
                     .collect();
-                (views, udfs)
+                (views, udfs, matviews)
             }
-            Err(_) => (Vec::new(), Vec::new()),
+            Err(_) => (Vec::new(), Vec::new(), std::collections::HashSet::new()),
         }
     };
 
     let mut transaction_statements = Vec::new();
     let mut olap_statements = Vec::new();
     for statement in parsed {
+        let upper = statement.raw.trim_start().to_ascii_uppercase();
+
+        // MV-1: REFRESH MATERIALIZED VIEW — execute defining SELECT and store snapshot.
+        if upper.starts_with("REFRESH MATERIALIZED VIEW ") {
+            let raw_name = upper.trim_start_matches("REFRESH MATERIALIZED VIEW ")
+                .trim().trim_end_matches(';').to_ascii_lowercase();
+            let view_name = raw_name.as_str();
+            let defining_sql: Option<String> = {
+                let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                cat.get(view_name).filter(|e| e.object_kind == "materialized_view").map(|e| {
+                    let stmt = &e.original_statement;
+                    // Extract SELECT query after " AS " (case-insensitive)
+                    let upper_stmt = stmt.to_ascii_uppercase();
+                    if let Some(pos) = upper_stmt.find(" AS ") {
+                        stmt[pos + 4..].trim().to_string()
+                    } else { stmt.clone() }
+                })
+            };
+            if let Some(select_sql) = defining_sql {
+                // Execute the SELECT against current row_store.
+                let snapshot = {
+                    let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                    let xid = rs.current_xid();
+                    let rocksdb_rows = if let Ok(wal) = state.wal_engine.lock() {
+                        if wal.persists_rows() { Some(wal.scan_rows_for_db(&db, xid)) } else { None }
+                    } else { None };
+                    let idx_mgr = state.index_manager.lock().unwrap_or_else(|e| e.into_inner());
+                    crate::helpers::execution::execute_oltp_select(
+                        &[select_sql.clone()], &rs, 100_000, &db, Some(xid), rocksdb_rows, Some(&idx_mgr),
+                    )
+                };
+                // Clear existing matview snapshot prefix and write new rows.
+                let matview_prefix = format!("__matview:{view_name}:");
+                let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                let xid = rs.begin_xid();
+                // Remove old matview rows
+                let old_keys: Vec<String> = rs.scan_at_snapshot(xid)
+                    .into_iter().filter(|(k, _)| k.starts_with(&matview_prefix))
+                    .map(|(k, _)| k.to_string()).collect();
+                for k in old_keys { rs.delete(xid, &k); }
+                // Insert new snapshot rows
+                for (i, row) in snapshot.iter().enumerate() {
+                    let k = format!("{matview_prefix}{i}");
+                    let mut data = row.data.clone();
+                    data.insert("__table".to_string(), view_name.to_string());
+                    rs.insert(xid, &k, data);
+                }
+                drop(rs);
+                release_sql_data_plane_connection(&state, &connection_id);
+                return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                    status: "ok".to_string(),
+                    route_path: "materialized_view_refresh".to_string(),
+                    reason: format!("REFRESH MATERIALIZED VIEW '{view_name}': {} rows materialized", snapshot.len()),
+                    transaction: None, olap: None, rejected_statement_count: 0,
+                    udf_results: None, udf_guardrail_status: None,
+                    udf_function_catalog: Vec::new(), udf_guard_policies: Vec::new(),
+                    udf_execution_plan: Vec::new(), legacy_agg_results: None,
+                    planner_path: None, oltp_rows: None, olap_agg_results: None,
+                    columns: None, rows: None,
+                    freshness_lag_ms: None,
+                })));
+            } else {
+                release_sql_data_plane_connection(&state, &connection_id);
+                return Err((StatusCode::NOT_FOUND, Json(crate::AuthErrorResponse {
+                    status: "error",
+                    reason: format!("materialized_view_not_found: '{view_name}'"),
+                    locale: "en".to_string(),
+                    localized_message: format!("Materialized view '{view_name}' not found in catalog"),
+                })));
+            }
+        }
+
+        // AI-4: ANALYZE <table> — collect column statistics.
+        if upper.starts_with("ANALYZE ") {
+            let table_name = upper.trim_start_matches("ANALYZE ")
+                .trim().trim_end_matches(';').to_ascii_lowercase();
+            let rows: Vec<(String, std::collections::HashMap<String, String>)> = {
+                let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                let xid = rs.current_xid();
+                let prefix = if db.is_empty() { format!("{table_name}:") } else { format!("{db}.{table_name}:") };
+                rs.scan_at_snapshot(xid).into_iter()
+                    .filter(|(k, _)| k.starts_with(&prefix) || k.starts_with(&format!("{table_name}:")))
+                    .map(|(k, v)| (k.to_string(), v.clone())).collect()
+            };
+            let row_count = rows.len();
+            let mut col_stats: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+            // Compute per-column min/max/distinct/null_count
+            let mut col_data: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            for (_, row) in &rows {
+                for (col, val) in row {
+                    if col.starts_with("__") { continue; }
+                    col_data.entry(col.clone()).or_default().push(val.clone());
+                }
+            }
+            for (col, vals) in &col_data {
+                let distinct: std::collections::HashSet<_> = vals.iter().collect();
+                let null_count = vals.iter().filter(|v| v.is_empty() || v.as_str() == "null" || v.as_str() == "NULL").count();
+                let mut sorted = vals.clone(); sorted.sort();
+                let min = sorted.first().cloned().unwrap_or_default();
+                let max = sorted.last().cloned().unwrap_or_default();
+                col_stats.insert(col.clone(), serde_json::json!({
+                    "distinct_count": distinct.len(),
+                    "null_count": null_count,
+                    "min": min,
+                    "max": max,
+                    "sample_count": vals.len(),
+                }));
+            }
+            let stats_json = serde_json::json!({
+                "table": table_name,
+                "row_count": row_count,
+                "columns": col_stats,
+            });
+            release_sql_data_plane_connection(&state, &connection_id);
+            return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                status: "ok".to_string(),
+                route_path: "analyze".to_string(),
+                reason: serde_json::to_string(&stats_json).unwrap_or_default(),
+                transaction: None, olap: None, rejected_statement_count: 0,
+                udf_results: None, udf_guardrail_status: None,
+                udf_function_catalog: Vec::new(), udf_guard_policies: Vec::new(),
+                udf_execution_plan: Vec::new(), legacy_agg_results: None,
+                planner_path: None, oltp_rows: None, olap_agg_results: None,
+                columns: Some(col_stats.keys().map(|k| serde_json::Value::String(k.clone())).collect()),
+                rows: None,
+                freshness_lag_ms: None,
+            })));
+        }
+
         let analysis = SqlAnalyzer::analyze_statement(&statement.raw);
         if analysis.kind == SqlStatementKind::Select {
             // M-8 Rule 6: If the SELECT targets a registered view, expand it to the
@@ -1687,6 +1859,7 @@ pub(crate) async fn sql_execute(
                     olap_agg_results: None,
                     columns: None,
                     rows: None,
+                    freshness_lag_ms: None,
                 }),
             ));
             release_sql_data_plane_connection(&state, &connection_id);
@@ -1824,6 +1997,7 @@ pub(crate) async fn sql_execute(
                             olap_agg_results: None,
                             columns: None,
                             rows: None,
+                            freshness_lag_ms: None,
                         }),
                     ));
                     release_sql_data_plane_connection(&state, &connection_id);
@@ -1909,6 +2083,7 @@ pub(crate) async fn sql_execute(
                         olap_agg_results: None,
                         columns: None,
                         rows: None,
+                        freshness_lag_ms: None,
                     })));
                 }
             }
@@ -1974,6 +2149,7 @@ pub(crate) async fn sql_execute(
                                 legacy_agg_results: None, planner_path: None,
                                 oltp_rows: None, olap_agg_results: None,
                                 columns: None, rows: None,
+                                freshness_lag_ms: None,
                             }),
                         ));
                     }
@@ -2039,6 +2215,25 @@ pub(crate) async fn sql_execute(
                                         }),
                                     ));
                                 }
+                                // CON-1: Validate constraints (PK/UNIQUE/NOT NULL) before writing.
+                                if let Ok(mgr) = state.constraint_manager.lock() {
+                                    for (col, val) in d.iter().filter(|(c, _)| !c.starts_with("__")) {
+                                        if let Err(violation) = mgr.validate(table_name, col, Some(val.as_str())) {
+                                            drop(mgr);
+                                            rs.release_write_intents(xid);
+                                            release_sql_data_plane_connection(&state, &connection_id);
+                                            return Err((
+                                                StatusCode::CONFLICT,
+                                                Json(crate::AuthErrorResponse {
+                                                    status: "error",
+                                                    reason: format!("constraint_violation: {violation}"),
+                                                    locale: "en".to_string(),
+                                                    localized_message: format!("Constraint violation on INSERT into '{table_name}': {violation}"),
+                                                }),
+                                            ));
+                                        }
+                                    }
+                                }
                             }
                             let k = db_prefix_key(&db, &raw_k);
                             // Gap #3 + M-2: record before-image for ROLLBACK support.
@@ -2053,6 +2248,14 @@ pub(crate) async fn sql_execute(
                             let _ = rs.begin_write_intent(xid, &k);
                             { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d.clone());
+                            // CON-1: Record committed values for PK/UNIQUE tracking after successful insert.
+                            if !table_name.is_empty() {
+                                if let Ok(mut mgr) = state.constraint_manager.lock() {
+                                    for (col, val) in d.iter().filter(|(c, _)| !c.starts_with("__")) {
+                                        mgr.record_committed_value(table_name, col, val);
+                                    }
+                                }
+                            }
                             // ISSUE-03: fire AFTER INSERT triggers.
                             fire_dml_triggers(&state, table_name, "public", &TriggerEvent::AfterInsert, None, Some(&d));
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, &single_sql);
@@ -2406,6 +2609,7 @@ pub(crate) async fn sql_execute(
                             olap_agg_results: None,
                             columns: None,
                             rows: None,
+                            freshness_lag_ms: None,
                         }),
                     ));
                 }
@@ -2426,6 +2630,22 @@ pub(crate) async fn sql_execute(
         let mut table_rows: std::collections::HashMap<String, Vec<(String, voltnuerongrid_store::mvcc::RowData)>> =
             std::collections::HashMap::new();
         for name in &table_names {
+            // MV-1: If the table name is a materialized view, serve rows from the
+            // __matview:<name>: snapshot prefix instead of scanning normal table rows.
+            if matview_names.contains(name.as_str()) {
+                let matview_prefix = format!("__matview:{name}:");
+                let matview_rows: Vec<_> = all_rows.iter()
+                    .filter(|(k, _)| k.starts_with(&matview_prefix))
+                    .map(|(k, v)| {
+                        // Strip the __matview:name: prefix to expose clean row keys.
+                        let short_key = k.strip_prefix(&matview_prefix)
+                            .map(|s| format!("{name}:{s}"))
+                            .unwrap_or_else(|| k.clone());
+                        (short_key, v.clone())
+                    }).collect();
+                table_rows.insert(name.clone(), matview_rows);
+                continue;
+            }
             let prefix = format!("{name}:");
             let filtered: Vec<_> = all_rows
                 .iter()
@@ -2912,6 +3132,22 @@ pub(crate) async fn sql_execute(
         olap_agg_results,
         columns: result_columns,
         rows: result_rows,
+        // P4: Compute OLAP freshness lag — milliseconds since the last committed
+        // OLTP mutation was appended to the HTAP sync origin.
+        freshness_lag_ms: if matches!(decision.payload.path, crate::QueryPath::Olap | crate::QueryPath::Hybrid) {
+            if let Ok(origin) = state.sync_origin.lock() {
+                let last_ms = origin.last_mutation_epoch_ms();
+                if last_ms > 0 {
+                    Some((now_unix_ms() as u64).saturating_sub(last_ms))
+                } else {
+                    Some(0)
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        },
     };
     append_runtime_audit_event(
         &state,

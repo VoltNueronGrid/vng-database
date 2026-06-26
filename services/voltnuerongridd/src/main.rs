@@ -72,6 +72,7 @@ use handlers::sre::*;
 #[allow(unused_imports)] use handlers::rows::*;
 #[allow(unused_imports)] use handlers::raft::*;
 use handlers::misc::*;
+#[allow(unused_imports)] use handlers::backup::*;
 use router::build_router;
 #[allow(unused_imports)] use helpers::time::*;
 #[allow(unused_imports)] use helpers::env_helpers::*;
@@ -1651,7 +1652,20 @@ async fn main() {
             if row_cap > 0 {
                 rs.set_max_rows_cap(row_cap);
             }
-            replay_dml_into(&mut rs, &wal_engine);
+            // P1 fix: skip DML SQL text replay into PagedRowStore when RocksDB
+            // is the durability engine (persists_rows() == true). When RocksDB
+            // is active, rows are written via store_row() on every DML commit
+            // and read via scan_rows_for_db() on every SELECT — re-executing
+            // WAL SQL text would double-populate the in-memory cache and waste
+            // RAM. Only replay DML into PagedRowStore when using the in-memory
+            // durability engine (persists_rows() == false).
+            let use_rocksdb = {
+                let guard = wal_engine.lock().expect("wal_engine lock for boot persists_rows");
+                guard.persists_rows()
+            };
+            if !use_rocksdb {
+                replay_dml_into(&mut rs, &wal_engine);
+            }
             rs
         })),
         model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
@@ -2168,6 +2182,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
         olap_agg_results: None,
         columns: None,
         rows: None,
+        freshness_lag_ms: None,
     }))))
 }
 

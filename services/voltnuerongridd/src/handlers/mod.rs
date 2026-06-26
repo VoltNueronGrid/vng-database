@@ -14,3 +14,4 @@ pub(crate) mod rows;
 pub(crate) mod raft;
 pub(crate) mod misc;
 pub(crate) mod user_mgmt;
+pub(crate) mod backup;
