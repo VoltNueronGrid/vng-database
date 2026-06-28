@@ -1,0 +1,95 @@
+{
+  "base_url": "http://127.0.0.1:8080",
+  "note": "P4 HTAP freshness gate: verifies RaftPiggybackTransport pull endpoint (GET /api/v1/htap/pull) and force-sync. End-to-end multi-node freshness window proof pending P1 + P5.",
+  "status": "passed",
+  "gate": "p4-htap-freshness",
+  "timestamp": "2026-06-28T08:49:58.3330400+05:30",
+  "packs": [
+    {
+      "name": "health",
+      "status": "passed",
+      "checks": [
+        {
+          "name": "health-ok",
+          "passed": true,
+          "got": "{\"status\":\"ok\",\"node_id\":\"node-1\",\"cluster_mode\":\"single\"}"
+        }
+      ]
+    },
+    {
+      "name": "oltp-write-syncs-origin",
+      "status": "passed",
+      "checks": [
+        {
+          "name": "ddl-ok",
+          "passed": true,
+          "got": "{\"status\":\"ok\",\"route_path\":\"hybrid\",\"reason\":\"mixed transactional and analytical workload\",\"transaction\":{\"status\":\"committed\",\"transaction_id\":\"tx-8\",\"statements_executed\":1,\"requires_transaction\":true,\"touches_catalog\":true,\"rejected_statement_count\":0,\"elapsed_ms\":0},\"olap\":null,\"rejected_statement_count\":0,\"udf_results\":null,\"udf_guardrail_status\":\"passed\",\"udf_function_catalog\":[{\"name\":\"udf_rust\",\"language\":\"rust\",\"deterministic\":true,\"status\":\"enabled\"},{\"name\":\"udf_js\",\"language\":\"javascript\",\"deterministic\":false,\"status\":\"enabled\"},{\"name\":\"udf_python\",\"language\":\"python\",\"deterministic\":false,\"status\":\"enabled\"}],\"udf_guard_policies\":[{\"language\":\"rust\",\"blocked_tokens\":\"unsafe std::process process::\",\"max_input_bytes\":256},{\"language\":\"javascript\",\"blocked_tokens\":\"eval( function( child_process\",\"max_input_bytes\":256},{\"language\":\"python\",\"blocked_tokens\":\"import os subprocess exec(\",\"max_input_bytes\":256}],\"udf_execution_plan\":[{\"statement\":\"CREATE TABLE p4_htap_1227843764 (id TEXT, val TEXT)\",\"route_path\":\"oltp\",\"udf_invocations\":\"\"}],\"legacy_agg_results\":null,\"planner_path\":null,\"oltp_rows\":null,\"olap_agg_results\":null,\"columns\":null,\"rows\":null,\"freshness_lag_ms\":21500}"
+        },
+        {
+          "name": "dml-begin-commit-ok",
+          "passed": true,
+          "got": "{\"status\":\"committed\",\"transaction_id\":\"tx-9\",\"statements_executed\":4,\"requires_transaction\":true,\"touches_catalog\":false,\"rejected_statement_count\":0,\"elapsed_ms\":0}"
+        }
+      ]
+    },
+    {
+      "name": "htap-pull-returns-mutations",
+      "status": "passed",
+      "checks": [
+        {
+          "name": "pull-status-ok",
+          "passed": true,
+          "got": "{\"status\":\"ok\",\"since\":0,\"mutations\":[{\"op\":\"insert\",\"payload_json\":\"INSERT INTO p4_htap_1227843764 (id,val) VALUES ('r1','v1')\",\"primary_key\":\"p4_htap_1227843764:r1\",\"sequence\":3,\"table\":\"row_store\"},{\"op\":\"insert\",\"payload_json\":\"INSERT INTO p4_htap_1227843764 (id,val) VALUES ('r2','v2')\",\"primary_key\":\"p4_htap_1227843764:r2\",\"sequence\":4,\"table\":\"row_store\"}],\"count\":2,\"last_sequence\":4,\"freshness_lag_ms\":2}"
+        },
+        {
+          "name": "mutations-returned",
+          "passed": true,
+          "got": "count=2"
+        },
+        {
+          "name": "freshness-lag-present",
+          "passed": true,
+          "got": "freshness_lag_ms=2"
+        }
+      ]
+    },
+    {
+      "name": "htap-lag-endpoint",
+      "status": "passed",
+      "checks": [
+        {
+          "name": "lag-status-ok",
+          "passed": true,
+          "got": "{\"status\":\"ok\",\"sync_origin_pending\":2,\"olap_row_count\":2,\"estimated_lag_mutations\":0}"
+        }
+      ]
+    },
+    {
+      "name": "htap-force-sync",
+      "status": "passed",
+      "checks": [
+        {
+          "name": "sync-status-ok",
+          "passed": true,
+          "got": "{\"status\":\"ok\",\"mutations_applied\":2,\"olap_row_count_after\":4}"
+        },
+        {
+          "name": "mutations-applied-gt0",
+          "passed": true,
+          "got": "applied=2"
+        }
+      ]
+    },
+    {
+      "name": "olap-scan-freshness",
+      "status": "passed",
+      "checks": [
+        {
+          "name": "olap-scan-ok",
+          "passed": true,
+          "got": "{\"status\":\"ok\",\"row_count\":4,\"rows\":[{\"key\":\"p4_htap_657243657:r1\",\"data\":\"@{payload=INSERT INTO p4_htap_657243657 (id,val) VALUES ('r1','v1')}\"},{\"key\":\"p4_htap_1227843764:r1\",\"data\":\"@{payload=INSERT INTO p4_htap_1227843764 (id,val) VALUES ('r1','v1')}\"},{\"key\":\"p4_htap_657243657:r2\",\"data\":\"@{payload=INSERT INTO p4_htap_657243657 (id,val) VALUES ('r2','v2')}\"},{\"key\":\"p4_htap_1227843764:r2\",\"data\":\"@{payload=INSERT INTO p4_htap_1227843764 (id,val) VALUES ('r2','v2')}\"}]}"
+        }
+      ]
+    }
+  ]
+}
