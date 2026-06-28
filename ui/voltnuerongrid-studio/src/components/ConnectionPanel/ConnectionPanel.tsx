@@ -12,13 +12,14 @@ type TestState = "idle" | "testing" | "ok" | "fail" | "warn";
 export function ConnectionPanel() {
   const closeConnectionPanel = useUiStore((s) => s.closeConnectionPanel);
   const editingId = useUiStore((s) => s.editingConnectionId);
-  const setActive = useConnectionStore((s) => s.setActive);
   const setScreen = useUiStore((s) => s.setScreen);
 
   const connections = useConnectionStore((s) => s.connections);
   const addConnection = useConnectionStore((s) => s.addConnection);
   const updateConnection = useConnectionStore((s) => s.updateConnection);
   const setResolvedKey = useConnectionStore((s) => s.setResolvedKey);
+  // P8/R9: use validateConnection to drive the lifecycle state machine.
+  const validateConnection = useConnectionStore((s) => s.validateConnection);
 
   const existing = editingId ? connections.find((c) => c.id === editingId) : null;
 
@@ -142,31 +143,9 @@ export function ConnectionPanel() {
     if (validationErr) { setError(validationErr); return; }
     setError(null);
 
-    if (form.protocol === "http" && form.mode === "admin") {
-      const client = new StudioApiClient({
-        baseUrl: form.baseUrl,
-        adminApiKey: adminKey,
-        operatorId: form.operatorId,
-      });
-      try {
-        await verifyHttpConnection(client);
-        // Auto-create the target database when the connection specifies one.
-        // This ensures fresh connections get an isolated namespace immediately.
-        const dbName = form.database?.trim();
-        if (dbName) {
-          try {
-            await client.createDatabase({ name: dbName, if_not_exists: true });
-          } catch (_) {
-            // Non-fatal: database may already exist or server may not support it yet
-          }
-        }
-      } catch (e) {
-        setError(`Admin authentication failed: ${String(e)}`);
-        setActiveTab("auth");
-        return;
-      }
-    }
-
+    // P8: Persist the connection first, then drive the lifecycle state machine via
+    // validateConnection(). This ensures the workspace/SQL editor never opens without
+    // a successful runtime database validation.
     if (existing) {
       updateConnection(form.id, { ...form, adminKey: form.mode === "admin" ? adminKey : undefined });
     } else {
@@ -179,9 +158,12 @@ export function ConnectionPanel() {
       setResolvedKey(form.id, adminKey);
     }
 
-    setActive(form.id);
+    // P8/R9: Transition to main screen then validate. The lifecycle state machine
+    // will gate workspace rendering until validation succeeds.
     setScreen("main");
     closeConnectionPanel();
+    // validateConnection sets activeId, drives lifecycleState → active | awaiting_db_choice | error.
+    await validateConnection(form.id);
   }
 
   const testStatusClass =

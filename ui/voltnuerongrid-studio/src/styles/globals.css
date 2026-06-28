@@ -55,8 +55,8 @@
   --statusbar-h:   26px;
   --right-panel-w: 260px; /* extension over design (right-panel feature) */
 
-  /* Shape — design uses `--radius-*`; we keep `--r-*` as legacy aliases
-     so existing component code (~15 references) continues to compile. */
+  /* Shape — canonical design tokens; `--r-*` aliases kept for
+     external consumers or embedded snippets that have not yet migrated. */
   --radius-sm: 4px;
   --radius-md: 7px;
   --radius-lg: 10px;
@@ -150,7 +150,7 @@ html, body, #root {
 .logo-icon {
   width: 22px; height: 22px;
   background: linear-gradient(135deg, var(--brand-cyan), var(--brand-purple));
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   display: flex; align-items: center; justify-content: center;
   font-weight: 900; font-size: 11px; color: white;
   flex-shrink: 0;
@@ -184,7 +184,7 @@ html, body, #root {
 }
 .titlebar-btn {
   width: 28px; height: 26px;
-  background: transparent; border: none; border-radius: var(--r-sm);
+  background: transparent; border: none; border-radius: var(--radius-sm);
   color: var(--text-3); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   font-size: 13px;
@@ -230,7 +230,7 @@ html, body, #root {
 }
 .activity-btn {
   flex: 1; height: 26px;
-  background: transparent; border: none; border-radius: var(--r-sm);
+  background: transparent; border: none; border-radius: var(--radius-sm);
   color: var(--text-3); cursor: pointer;
   font-size: 11px; font-weight: 600;
   transition: background .12s, color .12s;
@@ -255,7 +255,7 @@ html, body, #root {
 .conn-add-btn {
   width: 20px; height: 20px;
   background: transparent; border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm); color: var(--text-2); cursor: pointer;
+  border-radius: var(--radius-sm); color: var(--text-2); cursor: pointer;
   display: flex; align-items: center; justify-content: center; font-size: 14px;
   line-height: 1;
   transition: background .12s, border-color .12s, color .12s;
@@ -324,7 +324,7 @@ html, body, #root {
   padding: 3px 8px 3px 0;
   cursor: pointer;
   transition: background .1s;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   min-height: 22px;
 }
 .tree-node:hover { background: var(--bg-hover); }
@@ -401,7 +401,7 @@ html, body, #root {
   display: flex; align-items: center; gap: 6px;
   padding: 0 8px 0 10px;
   background: var(--bg-2); border: 1px solid transparent;
-  border-bottom: none; border-radius: var(--r-sm) var(--r-sm) 0 0;
+  border-bottom: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   cursor: pointer; transition: background .12s;
   position: relative; flex-shrink: 0;
 }
@@ -415,7 +415,7 @@ html, body, #root {
   content: '';
   position: absolute; top: 0; left: 0; right: 0; height: 2px;
   background: var(--brand-cyan);
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 .tab-icon { font-size: 11px; flex-shrink: 0; }
 .tab-label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
@@ -433,7 +433,7 @@ html, body, #root {
 .tab-new-btn {
   height: 26px; width: 26px; margin-bottom: 4px; margin-left: 4px; flex-shrink: 0;
   background: transparent; border: 1px solid var(--border);
-  border-radius: var(--r-sm); color: var(--text-3);
+  border-radius: var(--radius-sm); color: var(--text-3);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   font-size: 14px; line-height: 1;
   transition: border-color .12s, color .12s, background .12s;
@@ -457,7 +457,7 @@ html, body, #root {
 .btn {
   height: 26px; padding: 0 10px;
   background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm); color: var(--text-1);
+  border-radius: var(--radius-sm); color: var(--text-1);
   cursor: pointer; display: flex; align-items: center; gap: 5px;
   font-size: 12px; white-space: nowrap;
   transition: background .12s, border-color .12s;
@@ -475,7 +475,7 @@ html, body, #root {
 .toolbar-select {
   height: 26px; padding: 0 8px;
   background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm); color: var(--text-1);
+  border-radius: var(--radius-sm); color: var(--text-1);
   font-size: 11px; cursor: pointer;
   appearance: none; -webkit-appearance: none; outline: none;
   transition: border-color .12s;
@@ -524,7 +524,7 @@ html, body, #root {
   flex-shrink: 0;
 }
 .results-tab-btn {
-  height: 24px; padding: 0 10px; border-radius: var(--r-sm);
+  height: 24px; padding: 0 10px; border-radius: var(--radius-sm);
   font-size: 11px; font-weight: 500; cursor: pointer;
   background: transparent; border: none; color: var(--text-3);
   transition: background .1s, color .1s;
@@ -604,7 +604,7 @@ html, body, #root {
 }
 .detail-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .detail-stat {
-  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 7px 9px;
 }
 .detail-stat .ds-val { font-size: 16px; font-weight: 700; color: var(--text-1); line-height: 1.1; }
@@ -615,7 +615,7 @@ html, body, #root {
 .col-list { display: flex; flex-direction: column; gap: 1px; }
 .col-row {
   display: flex; align-items: center; gap: 5px;
-  padding: 4px 6px; border-radius: var(--r-sm);
+  padding: 4px 6px; border-radius: var(--radius-sm);
   transition: background .1s; cursor: pointer;
 }
 .col-row:hover { background: var(--bg-3); }
@@ -631,7 +631,7 @@ html, body, #root {
 .conn-panel {
   width: 560px;
   background: var(--bg-2); border: 1px solid var(--border-strong);
-  border-radius: var(--r-lg);
+  border-radius: var(--radius-lg);
   box-shadow: 0 24px 80px #00000099, 0 0 0 1px #ffffff06;
   overflow: hidden;
 }
@@ -673,7 +673,7 @@ html, body, #root {
 .form-input {
   height: 32px; padding: 0 10px;
   background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm); color: var(--text-1);
+  border-radius: var(--radius-sm); color: var(--text-1);
   font-size: 12.5px; outline: none;
   transition: border-color .12s, box-shadow .12s;
 }
@@ -683,7 +683,7 @@ html, body, #root {
 .form-select {
   height: 32px; padding: 0 8px;
   background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm); color: var(--text-1); font-size: 12px;
+  border-radius: var(--radius-sm); color: var(--text-1); font-size: 12px;
   appearance: none; -webkit-appearance: none; cursor: pointer;
   outline: none; transition: border-color .12s;
 }
@@ -691,7 +691,7 @@ html, body, #root {
 
 .mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .mode-card {
-  padding: 8px 10px; border-radius: var(--r-sm);
+  padding: 8px 10px; border-radius: var(--radius-sm);
   border: 1px solid var(--border); background: var(--bg-3);
   cursor: pointer; transition: border-color .15s, background .15s;
   text-align: left;
@@ -716,7 +716,7 @@ html, body, #root {
 .protocol-toggle { display: flex; gap: 8px; }
 .protocol-btn {
   flex: 1; display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; border-radius: var(--r-sm);
+  padding: 8px 12px; border-radius: var(--radius-sm);
   border: 1.5px solid var(--border); background: var(--bg-3);
   cursor: pointer; text-align: left; transition: border-color .12s, background .12s;
 }
@@ -727,7 +727,7 @@ html, body, #root {
 .protocol-btn .proto-desc  { font-size: 10px; color: var(--text-3); display: block; }
 
 .btn-wide {
-  flex: 1; height: 32px; border-radius: var(--r-sm);
+  flex: 1; height: 32px; border-radius: var(--radius-sm);
   font-size: 12.5px; font-weight: 600; cursor: pointer; border: none;
   transition: filter .12s; outline: none;
 }
@@ -777,7 +777,7 @@ html, body, #root {
 
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .kpi-card {
-  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md);
   padding: 14px 16px;
 }
 .kpi-val   { font-size: 24px; font-weight: 700; line-height: 1; }
@@ -789,7 +789,7 @@ html, body, #root {
 
 .node-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .node-card {
-  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md);
   padding: 12px 14px; display: flex; gap: 10px;
 }
 .node-status-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
@@ -812,7 +812,7 @@ html, body, #root {
 .audit-list { display: flex; flex-direction: column; gap: 2px; }
 .audit-row {
   display: flex; align-items: center; gap: 8px;
-  padding: 5px 10px; border-radius: var(--r-sm);
+  padding: 5px 10px; border-radius: var(--radius-sm);
   background: var(--bg-2); border: 1px solid var(--border);
   font-size: 11px; cursor: pointer; transition: background .1s;
 }
@@ -854,7 +854,7 @@ html, body, #root {
 .welcome-card {
   width: 150px; padding: 16px;
   background: var(--bg-2); border: 1px solid var(--border);
-  border-radius: var(--r-md); cursor: pointer;
+  border-radius: var(--radius-md); cursor: pointer;
   transition: border-color .15s, background .15s, transform .15s;
   text-align: center;
 }
@@ -870,7 +870,7 @@ html, body, #root {
 .recent-item {
   display: flex; align-items: center; gap: 8px;
   background: var(--bg-2); border: 1px solid var(--border);
-  border-radius: var(--r-md); padding: 9px 14px;
+  border-radius: var(--radius-md); padding: 9px 14px;
   cursor: pointer; transition: border-color .15s, background .15s;
 }
 .recent-item:hover { border-color: var(--brand-cyan); background: var(--bg-3); }
@@ -892,7 +892,7 @@ html, body, #root {
 .ctx-menu {
   position: fixed; z-index: 2000;
   background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 32px #00000055, 0 0 0 1px #ffffff06;
   min-width: 200px; max-width: 260px;
   padding: 4px; overflow: hidden;
@@ -917,7 +917,7 @@ html, body, #root {
 }
 .ctx-menu-item {
   display: flex; align-items: center; gap: 6px;
-  padding: 5px 8px; border-radius: var(--r-sm);
+  padding: 5px 8px; border-radius: var(--radius-sm);
   cursor: pointer; font-size: 12.5px; color: var(--text-1);
   transition: background .08s; position: relative;
 }
@@ -937,7 +937,7 @@ html, body, #root {
 .theme-menu {
   position: absolute; top: calc(100% + 4px); right: 0;
   background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 24px #00000044;
   padding: 4px; min-width: 130px; z-index: 500;
   animation: ctx-in .1s ease;
@@ -945,7 +945,7 @@ html, body, #root {
 .theme-menu button {
   display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 6px 10px;
-  background: transparent; border: none; border-radius: var(--r-sm);
+  background: transparent; border: none; border-radius: var(--radius-sm);
   color: var(--text-1); font-size: 12.5px; cursor: pointer;
   transition: background .1s;
 }
@@ -1036,7 +1036,7 @@ html, body, #root {
 .settings-panel {
   width: 520px; max-height: 80vh;
   background: var(--bg-2); border: 1px solid var(--border-strong);
-  border-radius: var(--r-lg);
+  border-radius: var(--radius-lg);
   box-shadow: 0 24px 80px #00000099, 0 0 0 1px #ffffff06;
   display: flex; flex-direction: column; overflow: hidden;
 }
@@ -1087,7 +1087,7 @@ html, body, #root {
 .settings-select {
   height: 30px; padding: 0 8px; min-width: 200px;
   background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm); color: var(--text-1); font-size: 12px;
+  border-radius: var(--radius-sm); color: var(--text-1); font-size: 12px;
   cursor: pointer;
 }
 .settings-select:focus { outline: 2px solid var(--brand-cyan); outline-offset: 1px; }
@@ -1095,7 +1095,7 @@ html, body, #root {
 .settings-input {
   height: 30px; padding: 0 8px; width: 100px;
   background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm); color: var(--text-1); font-size: 12px;
+  border-radius: var(--radius-sm); color: var(--text-1); font-size: 12px;
   text-align: right;
 }
 .settings-input:focus { outline: 2px solid var(--brand-cyan); outline-offset: 1px; }

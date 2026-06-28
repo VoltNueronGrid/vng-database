@@ -1,12 +1,30 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { SchemaRegistry, SchemaDatabase } from "@/api/studio-client";
+import { StudioApiClient } from "@/api/studio-client";
 
 export type ConnectionMode = "admin" | "operator" | "tenant";
 export type ServerType = "voltnuerongrid" | "postgresql" | "mysql" | "other";
 export type RuntimeTarget = "local" | "docker" | "cloud" | "custom";
 export type HealthState = "unverified" | "ok" | "degraded" | "error";
 export type ConnectionProtocol = "http" | "native";
+
+/**
+ * R9: Lifecycle state machine for a connection.
+ *
+ *  idle              — no active connection attempt
+ *  validating        — health + database reachability check in progress
+ *  awaiting_db_choice — server is reachable but the target database was not found;
+ *                       user must choose an existing DB or create a new one
+ *  active            — connection validated and scoped to a known database
+ *  error             — connection or authentication failed
+ */
+export type ConnectionLifecycleState =
+  | "idle"
+  | "validating"
+  | "awaiting_db_choice"
+  | "active"
+  | "error";
 
 /** Default ports per protocol */
 export const PROTOCOL_DEFAULT_PORTS: Record<ConnectionProtocol, number> = {
@@ -70,6 +88,10 @@ interface ConnectionState {
   activeId: string | null;
   schema: SchemaRegistry | null;
 
+  // R9: connection lifecycle state — drives App-level rendering gates.
+  lifecycleState: ConnectionLifecycleState;
+  lifecycleError: string | null;
+
   // runtime-only (not persisted): resolved admin keys loaded from keychain
   resolvedKeys: Record<string, string>;
 
@@ -80,6 +102,13 @@ interface ConnectionState {
   setHealth(id: string, h: ConnectionHealth): void;
   setSchema(s: SchemaRegistry | null): void;
   setResolvedKey(id: string, key: string): void;
+
+  // R9: validate an existing connection by id before activating it.
+  // Sets lifecycleState through idle → validating → awaiting_db_choice | active | error.
+  validateConnection(id: string): Promise<void>;
+
+  // R9: called from DatabaseChoiceModal when user picks / creates a DB.
+  confirmDatabase(dbName: string): void;
 
   getActive(): ConnectionSettings | null;
   getActiveKey(): string | undefined;
@@ -94,6 +123,8 @@ export const useConnectionStore = create<ConnectionState>()(
       activeId: null,
       schema: null,
       resolvedKeys: {},
+      lifecycleState: "idle" as ConnectionLifecycleState,
+      lifecycleError: null,
 
       addConnection(s) {
         set((state) => ({ connections: [...state.connections, s] }));
@@ -115,7 +146,7 @@ export const useConnectionStore = create<ConnectionState>()(
       },
 
       setActive(id) {
-        set({ activeId: id, schema: null });
+        set({ activeId: id, schema: null, lifecycleState: "idle", lifecycleError: null });
         if (id) {
           set((state) => ({
             connections: state.connections.map((c) =>
@@ -137,6 +168,77 @@ export const useConnectionStore = create<ConnectionState>()(
         set((state) => ({
           resolvedKeys: { ...state.resolvedKeys, [id]: key },
         }));
+      },
+
+      async validateConnection(id) {
+        const { connections, resolvedKeys } = get();
+        const conn = connections.find((c) => c.id === id);
+        if (!conn) {
+          set({ lifecycleState: "error", lifecycleError: "Connection not found" });
+          return;
+        }
+
+        set({ lifecycleState: "validating", lifecycleError: null, activeId: id });
+
+        const adminKey = resolvedKeys[id] ?? conn.adminKey;
+        const client = new StudioApiClient({
+          baseUrl: conn.baseUrl,
+          adminApiKey: conn.mode === "admin" ? adminKey : undefined,
+          operatorId: conn.operatorId,
+          tenantId: conn.tenantId,
+          userId: conn.userId,
+          database: conn.database,
+        });
+
+        try {
+          // Step 1: verify server is reachable.
+          await client.health();
+
+          // Step 2: if a target database is configured, verify it exists.
+          const targetDb = conn.database?.trim();
+          if (targetDb && conn.mode === "admin") {
+            const listed = await client.listDatabases();
+            const exists = listed.databases.some(
+              (d) => d.name.toLowerCase() === targetDb.toLowerCase()
+            );
+            if (!exists) {
+              // Server reachable but database not found — prompt user to choose.
+              set({ lifecycleState: "awaiting_db_choice", lifecycleError: null });
+              return;
+            }
+          }
+
+          // Validation passed — activate.
+          set({
+            lifecycleState: "active",
+            lifecycleError: null,
+            connections: connections.map((c) =>
+              c.id === id ? { ...c, lastUsed: Date.now() } : c
+            ),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const isAuth = msg.includes("401") || msg.includes("403") || msg.toLowerCase().includes("unauthorized");
+          set({
+            lifecycleState: "error",
+            lifecycleError: isAuth
+              ? `Authentication failed (${msg}). Check your credentials in Connection Settings.`
+              : `Could not reach server: ${msg}`,
+          });
+        }
+      },
+
+      confirmDatabase(dbName) {
+        // User has picked / created a database — patch the active connection and activate.
+        const { activeId, connections } = get();
+        if (!activeId) return;
+        set({
+          lifecycleState: "active",
+          lifecycleError: null,
+          connections: connections.map((c) =>
+            c.id === activeId ? { ...c, database: dbName, lastUsed: Date.now() } : c
+          ),
+        });
       },
 
       getActive() {

@@ -13877,3 +13877,233 @@ fn r2_inner_join_execute_returns_ok() {
     assert_eq!(resp.1.route_path, "olap", "INNER JOIN must take the olap path");
     assert!(resp.1.olap.is_some(), "olap response field must be set for JOIN queries");
 }
+
+// ─── R3: Per-Database RBAC Scope ──────────────────────────────────────────────
+
+/// R3: A tenant user with an explicit grant on db-a is denied access to db-b.
+/// This proves cross-database isolation at the RBAC layer.
+#[test]
+fn r3_per_db_rbac_denies_cross_db_access() {
+    let state = state_with_key(None);
+    // Grant "tenant_analyst" role access to "db-a" only.
+    {
+        let mut grants = state.db_grants.lock().expect("db_grants");
+        grants.entry("db-a".to_string()).or_default().insert("tenant_analyst".to_string());
+    }
+
+    let mut headers = tenant_user_headers("analyst-acme", "acme");
+    // Attempt to access "db-b" — no grant exists for this database.
+    headers.insert("x-vng-database", HeaderValue::from_static("db-b"));
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let result = rt.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            ..Default::default()
+        }),
+    ));
+
+    match result {
+        Err((status, _)) => assert_eq!(status, StatusCode::FORBIDDEN, "tenant user must be denied access to database without a grant"),
+        Ok(_) => panic!("expected 403 FORBIDDEN when accessing database without a grant"),
+    }
+}
+
+/// R3: A tenant user with an explicit grant on db-a can query db-a.
+#[test]
+fn r3_per_db_rbac_allows_granted_database_access() {
+    let state = state_with_key(None);
+    // Grant "tenant_analyst" role access to "db-a".
+    {
+        let mut grants = state.db_grants.lock().expect("db_grants");
+        grants.entry("db-a".to_string()).or_default().insert("tenant_analyst".to_string());
+    }
+
+    let mut headers = tenant_user_headers("analyst-acme", "acme");
+    headers.insert("x-vng-database", HeaderValue::from_static("db-a"));
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let resp = rt.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            ..Default::default()
+        }),
+    )).expect("sql_execute should succeed for granted database");
+
+    assert_eq!(resp.0, StatusCode::OK, "tenant user with grant on db-a should get 200");
+}
+
+/// R3: Admin key holder bypasses db_grants check — always allowed.
+#[test]
+fn r3_admin_key_bypasses_db_grants_check() {
+    let state = state_with_key(Some("secret"));
+    // db_grants is empty — DBA operator should still be allowed.
+    let mut headers = operator_headers("secret", "platform-admin");
+    headers.insert("x-vng-database", HeaderValue::from_static("any-db"));
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let resp = rt.block_on(sql_execute(
+        State(state),
+        headers,
+        Json(SqlExecuteRequest {
+            sql_batch: "SELECT 1".to_string(),
+            ..Default::default()
+        }),
+    )).expect("DBA operator should always be allowed regardless of db_grants");
+
+    assert_eq!(resp.0, StatusCode::OK, "DBA operator bypasses per-DB grant check");
+}
+
+/// R3: SQL GRANT statement adds the role to db_grants.
+#[test]
+fn r3_sql_grant_syntax_adds_db_grants() {
+    let state = state_with_key(Some("secret"));
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let resp = rt.block_on(sql_execute(
+        State(state.clone()),
+        operator_headers("secret", "platform-admin"),
+        Json(SqlExecuteRequest {
+            sql_batch: "GRANT tenant_analyst ON DATABASE db-test TO user1".to_string(),
+            ..Default::default()
+        }),
+    )).expect("GRANT statement should execute without error");
+
+    assert_eq!(resp.0, StatusCode::OK, "GRANT statement should return 200");
+
+    // Verify the grant was persisted in-memory.
+    let grants = state.db_grants.lock().expect("db_grants");
+    let roles = grants.get("db-test").expect("db-test should have a grants entry after GRANT");
+    assert!(roles.contains("tenant_analyst"), "tenant_analyst role must be in db-test grants after GRANT");
+}
+
+/// R3: SQL REVOKE statement removes the role from db_grants.
+#[test]
+fn r3_sql_revoke_syntax_removes_db_grants() {
+    let state = state_with_key(Some("secret"));
+
+    // Pre-seed the grant.
+    {
+        let mut grants = state.db_grants.lock().expect("db_grants");
+        grants.entry("db-test".to_string()).or_default().insert("tenant_analyst".to_string());
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let resp = rt.block_on(sql_execute(
+        State(state.clone()),
+        operator_headers("secret", "platform-admin"),
+        Json(SqlExecuteRequest {
+            sql_batch: "REVOKE tenant_analyst FROM user1 ON DATABASE db-test".to_string(),
+            ..Default::default()
+        }),
+    )).expect("REVOKE statement should execute without error");
+
+    assert_eq!(resp.0, StatusCode::OK, "REVOKE statement should return 200");
+
+    // Verify the grant was removed.
+    let grants = state.db_grants.lock().expect("db_grants");
+    let roles_empty = grants
+        .get("db-test")
+        .map(|s| !s.contains("tenant_analyst"))
+        .unwrap_or(true);
+    assert!(roles_empty, "tenant_analyst must be removed from db-test grants after REVOKE");
+}
+
+/// R3: Grant endpoint (POST /api/v1/admin/databases/:name/grants) updates db_grants.
+#[test]
+fn r3_grant_endpoint_updates_db_grants() {
+    let state = state_with_key(Some("secret"));
+
+    // Pre-register the database in the catalog so the endpoint finds it.
+    {
+        let mut catalog = state.database_catalog.lock().expect("catalog");
+        let _ = catalog.create("grantdb", 0, None, None);
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let resp = rt.block_on(admin_db_grant_add(
+        State(state.clone()),
+        admin_headers("secret"),
+        Path("grantdb".to_string()),
+        Json(AdminDbGrantRequest { role: "tenant_analyst".to_string() }),
+    )).expect("grant endpoint should succeed");
+
+    assert_eq!(resp.0, StatusCode::OK, "grant endpoint should return 200");
+    assert!(resp.1.granted_roles.contains(&"tenant_analyst".to_string()), "response should list tenant_analyst");
+
+    // Confirm the grant is reflected in db_grants.
+    let grants = state.db_grants.lock().expect("db_grants");
+    let has_role = grants
+        .get("grantdb")
+        .map(|s| s.contains("tenant_analyst"))
+        .unwrap_or(false);
+    assert!(has_role, "grant endpoint must persist role in db_grants");
+}
+
+/// R3: Revoke endpoint (DELETE /api/v1/admin/databases/:name/grants/:role) removes from db_grants.
+#[test]
+fn r3_revoke_endpoint_removes_db_grants() {
+    let state = state_with_key(Some("secret"));
+
+    // Pre-seed state.
+    {
+        let mut grants = state.db_grants.lock().expect("db_grants");
+        grants.entry("revoke-db".to_string()).or_default().insert("tenant_analyst".to_string());
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let resp = rt.block_on(admin_db_grant_revoke(
+        State(state.clone()),
+        admin_headers("secret"),
+        Path(("revoke-db".to_string(), "tenant_analyst".to_string())),
+    )).expect("revoke endpoint should succeed");
+
+    assert_eq!(resp.0, StatusCode::OK, "revoke endpoint should return 200");
+
+    // Confirm the grant was removed from db_grants.
+    let grants = state.db_grants.lock().expect("db_grants");
+    let still_has_role = grants
+        .get("revoke-db")
+        .map(|s| s.contains("tenant_analyst"))
+        .unwrap_or(false);
+    assert!(!still_has_role, "revoke endpoint must remove role from db_grants");
+}
+
+/// R3: User with grant on db-a cannot access db-b even if both share the same state.
+#[test]
+fn r3_cross_db_isolation_separate_grants() {
+    let state = state_with_key(None);
+    // Grant access to "warehouse" only.
+    {
+        let mut grants = state.db_grants.lock().expect("db_grants");
+        grants.entry("warehouse".to_string()).or_default().insert("tenant_analyst".to_string());
+        grants.entry("finance".to_string()).or_default().insert("tenant_admin".to_string());
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    // analyst-acme has role tenant_analyst → can access warehouse.
+    let mut h1 = tenant_user_headers("analyst-acme", "acme");
+    h1.insert("x-vng-database", HeaderValue::from_static("warehouse"));
+    let r1 = rt.block_on(sql_execute(
+        State(state.clone()), h1,
+        Json(SqlExecuteRequest { sql_batch: "SELECT 1".to_string(), ..Default::default() }),
+    )).expect("analyst should access warehouse");
+    assert_eq!(r1.0, StatusCode::OK);
+
+    // analyst-acme has role tenant_analyst → cannot access finance (only tenant_admin can).
+    let mut h2 = tenant_user_headers("analyst-acme", "acme");
+    h2.insert("x-vng-database", HeaderValue::from_static("finance"));
+    let r2 = rt.block_on(sql_execute(
+        State(state.clone()), h2,
+        Json(SqlExecuteRequest { sql_batch: "SELECT 1".to_string(), ..Default::default() }),
+    ));
+    match r2 {
+        Err((status, _)) => assert_eq!(status, StatusCode::FORBIDDEN),
+        Ok(_) => panic!("analyst must be denied access to finance database"),
+    }
+}
