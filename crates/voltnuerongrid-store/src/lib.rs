@@ -354,6 +354,20 @@ pub trait DurabilityEngine: Send {
     fn max_row_xid(&self) -> u64 {
         0
     }
+
+    /// P3 group commit: write N SQL entries in one atomic batch with ONE fsync.
+    /// Default impl calls `append_sql` per entry (no batching — correct for in-memory engines).
+    /// RocksDB engine overrides this to combine all entries in one WriteBatch + one fsync.
+    fn append_sql_batch(&mut self, entries: &[(SqlWalKind, &str)]) -> Vec<u64> {
+        entries.iter().map(|(kind, sql)| self.append_sql(*kind, sql)).collect()
+    }
+
+    /// P3 group commit: return the total number of fsync calls issued by this engine.
+    /// Used by tests to verify group commit reduces fsync count.
+    /// Default returns 0 (in-memory engine never fsyncs).
+    fn fsync_count(&self) -> u64 {
+        0
+    }
 }
 
 impl DurabilityEngine for InMemoryDurabilityEngine {
@@ -519,6 +533,16 @@ impl BoxedDurabilityEngine {
     /// P1: Return the highest XID ever written to durable row storage.
     pub fn max_row_xid(&self) -> u64 {
         self.inner.max_row_xid()
+    }
+
+    /// P3 group commit: write multiple SQL entries in one batch (one fsync).
+    pub fn append_sql_batch(&mut self, entries: &[(SqlWalKind, &str)]) -> Vec<u64> {
+        self.inner.append_sql_batch(entries)
+    }
+
+    /// P3 group commit: return total fsync count for test validation.
+    pub fn fsync_count(&self) -> u64 {
+        self.inner.fsync_count()
     }
 }
 

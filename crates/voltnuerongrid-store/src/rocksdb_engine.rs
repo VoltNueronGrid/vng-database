@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch, WriteOptions};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
     now_epoch_millis, CheckpointManifest, DurabilityConfig, DurabilityEngine, SqlWalKind,
@@ -143,6 +144,11 @@ pub struct RocksDbDurabilityEngine {
     /// Safe because the only writer is `append_mutation(&mut self)`.
     wal_tail: Vec<WalRecord>,
     wal_tail_cap: usize,
+    /// P3 group commit: counts the number of fsyncs actually issued.
+    /// Incremented by `append_sql`, `append_mutation`, and `append_sql_batch`
+    /// whenever `sync_writes && wal_enabled` is true. Lets unit tests verify
+    /// that one `append_sql_batch(N entries)` issues 1 fsync not N.
+    fsync_count: AtomicU64,
 }
 
 struct HotState {
@@ -242,6 +248,7 @@ impl RocksDbDurabilityEngine {
             path: path.as_ref().to_path_buf(),
             wal_tail,
             wal_tail_cap: DEFAULT_WAL_TAIL_CAP,
+            fsync_count: AtomicU64::new(0),
             state: Mutex::new(HotState {
                 sequence: latest_sequence,
                 checkpoint_count,
@@ -337,6 +344,9 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
             // Surface to the caller via panic; the service supervisor is
             // expected to catch and restart.
             panic!("rocksdb write failed on append_mutation: {e}");
+        }
+        if self.sync_writes && self.config.wal_enabled {
+            self.fsync_count.fetch_add(1, Ordering::Relaxed);
         }
 
         // Update hot state.
@@ -462,6 +472,9 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
         wo.set_sync(self.sync_writes && self.config.wal_enabled);
         if let Err(e) = self.db.write_opt(batch, &wo) {
             panic!("rocksdb write failed on append_sql: {e}");
+        }
+        if self.sync_writes && self.config.wal_enabled {
+            self.fsync_count.fetch_add(1, Ordering::Relaxed);
         }
         seq
     }
@@ -760,6 +773,51 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
 
     fn max_row_xid(&self) -> u64 {
         self.state.lock().expect("rocksdb engine state mutex").max_row_xid
+    }
+
+    /// P3 group commit: write N SQL entries in ONE WriteBatch with ONE fsync.
+    /// This is the core of group commit — callers that want to commit a
+    /// multi-statement transaction batch all their SQL entries here and pay
+    /// only 1 fsync instead of 1 per statement.
+    fn append_sql_batch(&mut self, entries: &[(SqlWalKind, &str)]) -> Vec<u64> {
+        if entries.is_empty() {
+            return Vec::new();
+        }
+
+        let cf_sql = self.db.cf_handle(CF_SQL).expect("sql CF missing — engine improperly opened");
+        let cf_meta = self.db.cf_handle(CF_META).expect("meta CF missing — engine improperly opened");
+
+        let mut state = self.state.lock().expect("rocksdb engine state mutex");
+        let mut batch = WriteBatch::default();
+        let mut seqs = Vec::with_capacity(entries.len());
+
+        for (kind, sql) in entries {
+            let seq = match kind {
+                SqlWalKind::Ddl => { state.sql_ddl_sequence += 1; state.sql_ddl_sequence }
+                SqlWalKind::Dml => { state.sql_dml_sequence += 1; state.sql_dml_sequence }
+            };
+            batch.put_cf(&cf_sql, sql_key(*kind, seq), sql.as_bytes());
+            seqs.push(seq);
+        }
+        // Persist only the final per-kind counters — one entry per kind present.
+        batch.put_cf(&cf_meta, sql_kind_seq_meta_key(SqlWalKind::Ddl), encode_u64(state.sql_ddl_sequence));
+        batch.put_cf(&cf_meta, sql_kind_seq_meta_key(SqlWalKind::Dml), encode_u64(state.sql_dml_sequence));
+        drop(state);
+
+        // ONE fsync for the entire batch — this is group commit.
+        let mut wo = WriteOptions::default();
+        wo.set_sync(self.sync_writes && self.config.wal_enabled);
+        if let Err(e) = self.db.write_opt(batch, &wo) {
+            panic!("rocksdb group commit write failed: {e}");
+        }
+        if self.sync_writes && self.config.wal_enabled {
+            self.fsync_count.fetch_add(1, Ordering::Relaxed);
+        }
+        seqs
+    }
+
+    fn fsync_count(&self) -> u64 {
+        self.fsync_count.load(Ordering::Relaxed)
     }
 
     fn scan_rows_for_db(
