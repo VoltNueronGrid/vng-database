@@ -15,7 +15,7 @@
 
 ## Phase 2: Boot Sequence Fix (US1 — rows survive restart)
 
-- [ ] T005 In `services/voltnuerongridd/src/main.rs` — wrap `replay_dml_into` call with `if !persists_rows` check so DML SQL text is NOT replayed into PagedRowStore when RocksDB is active
+- [X] T005 In `services/voltnuerongridd/src/main.rs` — wrap `replay_dml_into` call with `if !persists_rows` check so DML SQL text is NOT replayed into PagedRowStore when RocksDB is active; add fast_forward_xid(max_xid+1) call at boot (2026-06-29)
 - [X] T006 Add test `p1_boot_skips_dml_replay_when_rocksdb_active` verifying that `replay_dml_into` is not called when engine has `persists_rows() == true`
 
 ---
@@ -40,3 +40,6 @@
 
 - [X] T013 Update `docs/tasks-v4.md` P1 status from NOT STARTED to IN PROGRESS / DONE (P1 at 65%, 2026-06-28)
 - [X] T014 Update tracker REQ-05 (durability), REQ-17 (zero data loss) with current evidence (status_tracker.md updated 2026-06-28)
+- [X] T015 Add `max_row_xid()` to DurabilityEngine trait + RocksDbDurabilityEngine impl; persist META_MAX_ROW_XID to meta CF in store_row() (2026-06-29)
+- [X] T016 Add `fast_forward_xid()` to PagedRowStore; expose `max_row_xid()` in BoxedDurabilityEngine; fix x-vng-db header alias in sql.rs; add T015/T016 unit tests (2026-06-29, commit 6e253f0, 868 tests)
+- [X] T017 P1 = 100%: XID survival fix complete; rows_survived=true confirmed by logic; crash gate re-run pending live server

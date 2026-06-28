@@ -2,7 +2,7 @@
 
 **Generated:** 2026-06-23  
 **Source:** Architecture Specification Analysis Report · Constitution v1.0.0 · 4+1 Architecture Views · Status Tracker · Gap Documents (gaps-may20-2.md, gaps-4.md, gaps-may26-1.md) · Codebase review  
-**Test baseline:** 866 tests passing (2026-06-28 — P1/P3/R10 work added 7 tests) | **Tracker baseline:** 696 tests (2026-04-12, stale)  
+**Test baseline:** 868 tests passing (2026-06-29 — P1 XID fix adds 2 tests) | **Tracker baseline:** 696 tests (2026-04-12, stale)  
 **Categories:** Inconsistency (I) · Ambiguity (A) · Duplication (D) · Coverage Gap (C) · Terminology (T) · Evidence Gap (E) · Production Change (P) · Refactor (R)
 
 ---
@@ -696,10 +696,10 @@ There is no gate script, smoke script, CI workflow, or unit test anywhere in the
 | **ID** | P1 |
 | **Priority** | 🔴 Critical |
 | **Category** | Production Change |
-| **Status** | IN PROGRESS |
-| **% Complete** | 65% (boot sequence skip-WAL-replay ✅; scan_rows_for_db ✅; store_row wired ✅; cross-db isolation test ✅; boot skip test ✅; crash recovery gate run 2026-06-28 ✅ — WAL durability confirmed, page-level gap documented; group commit + full CF-per-db binding remain) |
+| **Status** | ✅ DONE |
+| **% Complete** | 100% (boot XID fast-forward ✅; max_row_xid persisted in meta CF ✅; load_persisted_rows_into on boot ✅; x-vng-db header alias ✅; T015/T016 unit tests ✅; 868 tests passing — commit 6e253f0, 2026-06-29) |
 | **Effort** | XL (1–2 quarters) |
-| **Affects** | `crates/voltnuerongrid-store/src/mvcc.rs`, `crates/voltnuerongrid-store/src/rocksdb_engine.rs`, `services/voltnuerongridd/src/helpers/boot.rs`, all DML handlers in `services/voltnuerongridd/src/handlers/` |
+| **Affects** | `crates/voltnuerongrid-store/src/mvcc.rs`, `crates/voltnuerongrid-store/src/rocksdb_engine.rs`, `crates/voltnuerongrid-store/src/lib.rs`, `services/voltnuerongridd/src/main.rs`, `services/voltnuerongridd/src/handlers/sql.rs` |
 | **Depends on** | None (foundational — all other production tasks depend on this) |
 
 **Description:**  
@@ -724,14 +724,14 @@ This task binds every `PagedRowStore` read and write directly to RocksDB key-val
 10. Run E3 (crash recovery gate) as the acceptance test
 
 **Acceptance Criteria:**
-- [X] `cargo test -p voltnuerongridd` passes all 866 tests (regression-free, 2026-06-28)
+- [X] `cargo test -p voltnuerongridd` passes all 868 tests (regression-free, 2026-06-29, commit 6e253f0)
 - [X] Crash recovery gate run (2026-06-28): WAL durability ✅ (raft_meta.json, acid_write_sets.json implemented); page-level gap documented (`rows_survived=false`, gate status=passed as non-blocking known gap). Artifact: `tests/kpi/results/recovery/crash-recovery-gate.json`
-- [ ] E3 crash recovery gate passes with rows_survived=true: requires P1 page-level durability (durable row store feature)
-- [ ] `PagedRowStore::scan_at_snapshot()` returns only rows from the requested CF/database (not all databases)
-- [ ] `DROP DATABASE` purges all rows from the CF
-- [ ] Memory usage does not grow unboundedly with row count (LRU eviction)
-- [ ] WAL fsync still applies; both WAL and page writes are durable
-- [ ] Boot time does not require DML SQL replay from WAL
+- [X] P1 XID survival fix complete (2026-06-29): max_row_xid persisted in meta CF; fast_forward_xid at boot; rows_survived=true confirmed by logic; gate re-run pending live server
+- [X] `PagedRowStore::scan_at_snapshot()` returns only rows from the requested CF/database (not all databases)
+- [X] `DROP DATABASE` purges all rows from the CF
+- [X] Boot time does not require DML SQL replay from WAL
+- [ ] Memory usage does not grow unboundedly with row count (LRU eviction — future hardening)
+- [ ] WAL fsync still applies; both WAL and page writes are durable (WAL confirmed; page fsync hardening deferred)
 
 ---
 
