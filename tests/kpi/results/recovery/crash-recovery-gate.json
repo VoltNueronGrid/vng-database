@@ -1,13 +1,13 @@
 {
   "gate": "crash-recovery",
   "status": "passed",
-  "rows_survived": true,
+  "rows_survived": false,
   "rows_inserted": 3,
-  "rows_found_after_restart": 3,
-  "page_level_durability_implemented": true,
+  "rows_found_after_restart": 0,
+  "page_level_durability_implemented": false,
   "wal_durability_implemented": true,
-  "durability_gap_note": null,
-  "table_name": "crash_test_7d1ec524",
+  "durability_gap_note": "PagedRowStore remains in-memory. Implement durable row store (feature: durable-row-store) to close this gap.",
+  "table_name": "crash_test_7830e3a9",
   "base_url": "http://127.0.0.1:8080",
   "server_managed": true,
   "require_row_survival_enforced": false,
@@ -15,7 +15,7 @@
     {
       "step": "server_start",
       "status": "passed",
-      "detail": "Server started and healthy (PID=54338)"
+      "detail": "Server started and healthy (PID=32293)"
     },
     {
       "step": "create_database",
@@ -25,35 +25,40 @@
     {
       "step": "create_table",
       "status": "passed",
-      "detail": "Table crash_test_7d1ec524 created in crash_recovery_gate_db"
+      "detail": "Table crash_test_7830e3a9 created in crash_recovery_gate_db"
     },
     {
       "step": "insert_rows",
       "status": "passed",
-      "detail": "Inserted 3 rows into crash_test_7d1ec524"
+      "detail": "Inserted 3 rows into crash_test_7830e3a9"
     },
     {
       "step": "server_kill",
       "status": "passed",
-      "detail": "Server PID 54338 killed (crash simulated)"
+      "detail": "Server PID 32293 killed (crash simulated)"
     },
     {
       "step": "server_restart",
       "status": "passed",
-      "detail": "Server restarted and healthy (PID=54349)"
+      "detail": "Server restarted and healthy (PID=32297)"
     },
     {
       "step": "verify_rows_survived",
-      "status": "passed",
-      "detail": "3/3 rows present after restart — page-level durability confirmed"
+      "status": "durability_gap_known",
+      "detail": "0/3 rows survived restart. Known gap — not enforced until durable row store lands. PagedRowStore is in-memory only — all rows are lost on process restart. WAL durability (raft_meta.json, acid_write_sets.json) IS implemented, but page-level durability (persistent row store) is NOT yet implemented. See feature: .specify/features/durable-row-store/spec.md",
+      "data": {
+        "rows_inserted": 3,
+        "durability_gap": true,
+        "rows_found": 0
+      }
     },
     {
       "step": "server_stop",
       "status": "passed",
-      "detail": "Server PID 54349 stopped"
+      "detail": "Server PID 32297 stopped"
     }
   ],
-  "started_at_utc": "2026-06-24T10:17:17.9542720Z",
-  "finished_at_utc": "2026-06-24T10:17:19.1485670Z",
-  "duration_ms": 1194
+  "started_at_utc": "2026-06-28T03:23:46.6688780Z",
+  "finished_at_utc": "2026-06-28T03:23:48.8429150Z",
+  "duration_ms": 2174
 }

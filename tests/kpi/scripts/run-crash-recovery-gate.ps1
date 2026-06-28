@@ -31,6 +31,7 @@ param(
   [string]$OperatorId   = "platform-admin",
   [string]$DbName       = "crash_recovery_gate_db",
   [string]$OutputPath   = "tests/kpi/results/recovery/crash-recovery-gate.json",
+  [string]$BinaryPath   = "",             # Pre-built binary path; falls back to 'cargo run' if empty
   [int]$StartupWaitSec  = 10,
   [int]$RequestTimeoutSec = 15,
   [switch]$RequireRowSurvival,   # Set to enforce hard failure when rows do not survive restart
@@ -106,12 +107,23 @@ $start = Get-Date
 
 if (-not $SkipServerManagement) {
   Write-Host "[CRASH-RECOVERY] Starting server..."
-  $proc = Start-Process `
-    -FilePath "cargo" `
-    -ArgumentList "run", "-p", "voltnuerongridd" `
-    -PassThru `
-    -RedirectStandardOutput ([System.IO.Path]::GetTempFileName()) `
-    -RedirectStandardError  ([System.IO.Path]::GetTempFileName())
+  $envVars = @{ VNG_ADMIN_API_KEY = $AdminKey; VNG_NATIVE_LISTENER_ENABLED = "false"; VNG_HTTP_BIND = "127.0.0.1:8080" }
+  if ($BinaryPath -ne "" -and (Test-Path $BinaryPath)) {
+    # Use pre-built binary for fast start
+    $proc = Start-Process `
+      -FilePath $BinaryPath `
+      -PassThru `
+      -RedirectStandardOutput ([System.IO.Path]::GetTempFileName()) `
+      -RedirectStandardError  ([System.IO.Path]::GetTempFileName()) `
+      -Environment $envVars
+  } else {
+    $proc = Start-Process `
+      -FilePath "cargo" `
+      -ArgumentList "run", "-p", "voltnuerongridd" `
+      -PassThru `
+      -RedirectStandardOutput ([System.IO.Path]::GetTempFileName()) `
+      -RedirectStandardError  ([System.IO.Path]::GetTempFileName())
+  }
   $serverPid = $proc.Id
   $ready = Wait-ServerReady -WaitSec $StartupWaitSec
   if ($ready) {
@@ -189,12 +201,21 @@ if ($status -eq "passed" -and -not $SkipServerManagement -and $null -ne $serverP
 # ── step 4: restart server ────────────────────────────────────────────────────
 if ($status -eq "passed" -and -not $SkipServerManagement) {
   Write-Host "[CRASH-RECOVERY] Restarting server..."
-  $proc2 = Start-Process `
-    -FilePath "cargo" `
-    -ArgumentList "run", "-p", "voltnuerongridd" `
-    -PassThru `
-    -RedirectStandardOutput ([System.IO.Path]::GetTempFileName()) `
-    -RedirectStandardError  ([System.IO.Path]::GetTempFileName())
+  if ($BinaryPath -ne "" -and (Test-Path $BinaryPath)) {
+    $proc2 = Start-Process `
+      -FilePath $BinaryPath `
+      -PassThru `
+      -RedirectStandardOutput ([System.IO.Path]::GetTempFileName()) `
+      -RedirectStandardError  ([System.IO.Path]::GetTempFileName()) `
+      -Environment $envVars
+  } else {
+    $proc2 = Start-Process `
+      -FilePath "cargo" `
+      -ArgumentList "run", "-p", "voltnuerongridd" `
+      -PassThru `
+      -RedirectStandardOutput ([System.IO.Path]::GetTempFileName()) `
+      -RedirectStandardError  ([System.IO.Path]::GetTempFileName())
+  }
   $serverPid = $proc2.Id
   $ready2 = Wait-ServerReady -WaitSec $StartupWaitSec
   if ($ready2) {

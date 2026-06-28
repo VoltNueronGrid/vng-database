@@ -10,7 +10,7 @@
 
 **Purpose:** Track end-to-end execution and governance closure for all requirements, epics, and hardening items.
 
-**Last updated:** 2026-06-24 (Session 33 — Q6 token rotation, R7 failover crate, crash recovery gate, tasks-v4.md statuses updated; WS5/WS6 gate artifacts refreshed to 2026-06-24 timestamps; 820 tests baseline confirmed)
+**Last updated:** 2026-06-28 (Session 34+ — P1/P3/R10/P4/P5/P7/E1 progress; 7 new tests added; RaftPiggybackTransport + GET /api/v1/htap/pull endpoint; P4 HTAP freshness gate PASSED; P5 3-node smoke started; P7 security checklist artifact; 866 tests baseline confirmed)
 
 ---
 
@@ -21,6 +21,11 @@ This tracker was last updated after Session 29 (2026-04-12, 696 tests). Sessions
 **Test baseline as of Session 32:** `cargo test -p voltnuerongridd` → **818 passed**, 0 failed, 2 ignored.
 **Test baseline as of Session 33 (2026-06-24):** `cargo test -p voltnuerongridd` → **818 passed**, 0 failed, 2 ignored (820 total including ignored). Session 33 added Q6 token rotation endpoint, R7 failover crate implementation, crash recovery gate script; no new tests added this session.
 **Test baseline as of Session 34 (2026-06-24):** `cargo test -p voltnuerongridd` → **836 passed**, 0 failed, 2 ignored (838 total including ignored). Session 34 added 18 Q8 unit tests (sql_parse helpers: make_row_key, make_table_scan_prefix, db_prefix_key, validate_value_for_type, strip_schema_qualifiers_from_sql, bool/uuid/null validation); added Q4 OTEL spans to Raft apply loop and HTAP routing decision.
+**Test baseline as of Session 35+ (2026-06-28):** `cargo test -p voltnuerongridd` → **866 passed**, 0 failed, 2 ignored (868 total). Session added 7 new tests (P1 boot skips DML replay, P1 cross-DB scan isolation, P3 rollback/conflict/repeatable-read, R10 HTAP transport/AppState). New implementations: `RaftPiggybackTransport`, `GET /api/v1/htap/pull`, P4 HTAP freshness gate PASSED, P7 security checklist artifact, P5 3-node start.
+
+**P4 HTAP Freshness Gate (2026-06-28):** PASSED — End-to-end chain verified: OLTP DML (BEGIN/COMMIT) → 2 mutations in `RowStoreSyncOrigin` → `GET /api/v1/htap/pull?since=0` returns both (freshness_lag_ms=4ms) → `POST /api/v1/store/htap/sync` drains → OLAP scan returns 2 rows. Artifact: `tests/kpi/results/ws3/p4-htap-freshness-gate.json`.
+
+**P7 Security Checklist (2026-06-28):** `tests/kpi/results/ws5/p7-security-checklist-2026-06-28.json` created — 9 security checks all passed.
 
 **Key corrections applied in this reconciliation:**
 
@@ -30,7 +35,7 @@ This tracker was last updated after Session 29 (2026-04-12, 696 tests). Sessions
 | REQ-17 status | ✅ **PRODUCTION READY** | In Progress / Validated (failover scaffold — WS6 gate validates HA simulation and RTO/RPO scoring; zero-data-loss guarantee is **blocked** until the row store is durably persisted across restarts; current in-memory store loses all data on process exit) |
 | WS5 status note | "Validated 100%" (implies full production) | "Validated — security layer (TLS/RBAC/KMS scaffolds)" — gate evidence is real, but production readiness for encrypted-at-rest requires page-level durability, not yet implemented |
 | WS6 status note | "Validated 100%" (implies zero-data-loss) | "Validated — failover scaffold" — RTO/RPO simulation is real, but persistent data survival across node restarts requires durable row store (tracked in C1 / durable-row-store feature) |
-| Test baseline | 696 (Session 29) | **838** total (836 passing + 2 ignored as of Session 34, 2026-06-24) |
+| Test baseline | 696 (Session 29) | **868** total (866 passing + 2 ignored as of Session 35+, 2026-06-28) |
 | WS5 gate timestamp | 2026-04-10 (session 25) | **2026-06-24** (refreshed in session 33 with `-IncludeRuntimeSmokes`) |
 | WS6 gate timestamp | 2026-04-10 (session 25) | Artifact updated but `ws5-security-smoke` pack fails on macOS (cmd.exe unavailable); operator_auth unit tests pass (19/19) |
 | WS3 gate performance | 100/100 performance score | Score reflects routing-classification only (OLTP/OLAP/hybrid detection); NOT a full query execution performance benchmark; see I4 in `docs/tasks-v4.md` |
