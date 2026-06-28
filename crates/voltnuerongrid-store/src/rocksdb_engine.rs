@@ -74,6 +74,10 @@ const META_LATEST_CHECKPOINT_ENTRY_COUNT: &[u8] = b"latest_checkpoint_entry_coun
 // `append_sql` keeps incrementing across reopens.
 const META_SQL_DDL_SEQUENCE: &[u8] = b"sql_ddl_sequence";
 const META_SQL_DML_SEQUENCE: &[u8] = b"sql_dml_sequence";
+// P1: highest XID ever written to row storage. Restored on boot so
+// PagedRowStore.next_xid can be fast-forwarded past all persisted rows,
+// preventing MVCC snapshot scans from filtering them out.
+const META_MAX_ROW_XID: &[u8]     = b"max_row_xid";
 
 /// Single-byte tag for SqlWalKind in CF_SQL keys. Stable wire format.
 const SQL_KIND_DDL: u8 = b'd';
@@ -149,6 +153,9 @@ struct HotState {
     /// Phase 2.1 — last assigned sequence per SqlWalKind.
     sql_ddl_sequence: u64,
     sql_dml_sequence: u64,
+    /// P1: highest XID written to any per-DB CF row entry. Persisted to
+    /// META_MAX_ROW_XID so PagedRowStore can be fast-forwarded on boot.
+    max_row_xid: u64,
 }
 
 impl RocksDbDurabilityEngine {
@@ -215,6 +222,12 @@ impl RocksDbDurabilityEngine {
             None => 0,
         };
 
+        // P1: restore max XID so boot can fast-forward PagedRowStore.
+        let max_row_xid = match db.get_cf(&cf_meta, META_MAX_ROW_XID)? {
+            Some(b) => decode_u64(&b).unwrap_or(0),
+            None => 0,
+        };
+
         // Hydrate the wal_tail ring with the last DEFAULT_WAL_TAIL_CAP records.
         let wal_tail = read_recent_wal_records(&db, DEFAULT_WAL_TAIL_CAP)?;
 
@@ -235,6 +248,7 @@ impl RocksDbDurabilityEngine {
                 wal_since_checkpoint,
                 sql_ddl_sequence,
                 sql_dml_sequence,
+                max_row_xid,
             }),
         })
     }
@@ -579,10 +593,30 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
         let mut batch = WriteBatch::default();
         batch.put_cf(&cf_db, &key, &value);
 
+        // P1: persist max_row_xid so PagedRowStore can be fast-forwarded on boot.
+        // Only write when xid exceeds the current persisted maximum.
+        let needs_max_xid_update = {
+            let state = self.state.lock().expect("rocksdb engine state mutex");
+            xid > state.max_row_xid
+        };
+        if needs_max_xid_update {
+            if let Some(cf_meta) = self.db.cf_handle(CF_META) {
+                batch.put_cf(&cf_meta, META_MAX_ROW_XID, encode_u64(xid));
+            }
+        }
+
         let mut wo = WriteOptions::default();
         wo.set_sync(self.sync_writes && self.config.wal_enabled);
         if let Err(e) = self.db.write_opt(batch, &wo) {
             tracing_or_eprintln(format!("store_row write failed: {e}"));
+        }
+
+        // Update hot state after successful write.
+        if needs_max_xid_update {
+            let mut state = self.state.lock().expect("rocksdb engine state mutex");
+            if xid > state.max_row_xid {
+                state.max_row_xid = xid;
+            }
         }
     }
 
@@ -722,6 +756,10 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
 
     fn persists_rows(&self) -> bool {
         true
+    }
+
+    fn max_row_xid(&self) -> u64 {
+        self.state.lock().expect("rocksdb engine state mutex").max_row_xid
     }
 
     fn scan_rows_for_db(

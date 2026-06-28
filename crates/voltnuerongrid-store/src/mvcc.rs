@@ -372,6 +372,20 @@ impl PagedRowStore {
             .collect()
     }
 
+    /// P1: Advance `next_xid` to at least `min_xid`.
+    ///
+    /// Called at boot when RocksDB is the durability engine to restore the
+    /// XID counter to a value higher than any XID persisted in a previous
+    /// session.  Without this, `current_xid()` returns 0 after restart and
+    /// `scan_rows_for_db` filters out all persisted rows (xid > 0 > snapshot).
+    ///
+    /// Safe to call with any value: it is a no-op when `next_xid >= min_xid`.
+    pub fn fast_forward_xid(&mut self, min_xid: Xid) {
+        if min_xid > self.next_xid {
+            self.next_xid = min_xid;
+        }
+    }
+
     /// Replace all rows atomically with the given snapshot data.
     ///
     /// Clears every existing page (resetting to a single empty page) and

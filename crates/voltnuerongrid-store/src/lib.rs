@@ -346,6 +346,14 @@ pub trait DurabilityEngine: Send {
     /// Called by DROP DATABASE to physically remove all on-disk rows for `db`.
     /// No-op for engines that don't support per-DB CFs (default impl).
     fn drop_db_column_family(&mut self, _db: &str) {}
+
+    /// P1: Return the highest XID ever written to durable row storage.
+    /// Used at boot to fast-forward `PagedRowStore.next_xid` past any rows
+    /// persisted in a previous session, so MVCC snapshot scans see them.
+    /// Returns 0 when no rows have been persisted (default / in-memory engines).
+    fn max_row_xid(&self) -> u64 {
+        0
+    }
 }
 
 impl DurabilityEngine for InMemoryDurabilityEngine {
@@ -506,6 +514,11 @@ impl BoxedDurabilityEngine {
     /// Drop the per-DB column family (C-2). No-op for in-memory engine.
     pub fn drop_db_column_family(&mut self, db: &str) {
         self.inner.drop_db_column_family(db);
+    }
+
+    /// P1: Return the highest XID ever written to durable row storage.
+    pub fn max_row_xid(&self) -> u64 {
+        self.inner.max_row_xid()
     }
 }
 

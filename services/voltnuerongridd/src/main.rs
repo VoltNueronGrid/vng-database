@@ -1659,11 +1659,17 @@ async fn main() {
             // WAL SQL text would double-populate the in-memory cache and waste
             // RAM. Only replay DML into PagedRowStore when using the in-memory
             // durability engine (persists_rows() == false).
-            let use_rocksdb = {
+            let (use_rocksdb, max_xid) = {
                 let guard = wal_engine.lock().expect("wal_engine lock for boot persists_rows");
-                guard.persists_rows()
+                (guard.persists_rows(), guard.max_row_xid())
             };
-            if !use_rocksdb {
+            if use_rocksdb {
+                // P1: fast-forward XID counter past any rows persisted in the
+                // previous session.  Without this, current_xid() = 0 after
+                // restart and scan_rows_for_db would filter out all rows with
+                // xid > 0, making them invisible to SELECT queries.
+                rs.fast_forward_xid(max_xid + 1);
+            } else {
                 replay_dml_into(&mut rs, &wal_engine);
             }
             rs
@@ -1734,29 +1740,27 @@ async fn main() {
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
 
-    // C-1: Skip boot-time row replay into PagedRowStore when RocksDB is the
-    // durability engine — rows live in RocksDB directly and execute functions
-    // read from it via scan_rows_for_db / scan_persisted_rows.  Loading them
-    // into PagedRowStore would waste RAM and cause stale reads after restarts.
+    // P1: On boot, load persisted rows from the durability engine into
+    // PagedRowStore as a warm read-through cache.
     //
-    // When the in-memory engine is active (persists_rows() == false) we still
-    // replay DML WAL SQL text files into PagedRowStore so the session behaves
-    // identically to previous releases.
+    // - RocksDB engine (persists_rows() == true): call load_persisted_rows_into
+    //   to populate PagedRowStore with rows from per-DB CFs.  The XID counter
+    //   was already fast-forwarded above so MVCC snapshot scans are correct.
+    //   This also enables SERIALIZABLE conflict detection to work across restarts.
+    //
+    // - In-memory engine (persists_rows() == false): load from legacy WAL text
+    //   files (scan_persisted_rows scans the in-memory accumulated record set).
     {
         let persists_rows = state.wal_engine
             .lock()
             .expect("wal_engine lock for boot persists_rows check")
             .persists_rows();
-        if !persists_rows {
-            // In-memory engine only: replay rows from DML WAL text files.
-            helpers::boot::load_persisted_rows_into(&state.row_store, &state.wal_engine);
+        // Both paths call load_persisted_rows_into — for RocksDB it reads from
+        // per-DB CFs; for in-memory it reads the accumulated legacy records.
+        helpers::boot::load_persisted_rows_into(&state.row_store, &state.wal_engine);
+        if persists_rows {
+            tracing::info!(target: "vng.durability", "P1: warm row cache loaded from RocksDB per-DB CFs");
         }
-        // When persists_rows() == true (RocksDB), rows live in RocksDB directly.
-        // execute functions read from RocksDB via scan_rows_for_db — no replay needed.
-        // TODO(C-1): MVCC conflict detection (serializable isolation) reads from
-        // PagedRowStore::scan_at_snapshot, so after boot it only sees rows written
-        // in the current session.  For full correctness with RocksDB-primary reads,
-        // conflict detection should also consult RocksDB.  Track as a future gap.
     }
 
     // M-3: Restore committed serializable write-sets from the previous process run.

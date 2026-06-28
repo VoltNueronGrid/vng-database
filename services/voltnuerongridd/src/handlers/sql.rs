@@ -503,8 +503,10 @@ pub(crate) async fn sql_transaction(
     let requested_isolation_level = tx_context.payload.isolation_level;
     let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/transaction")?;
     // Gap #2: database scope for this transaction (prefix all row keys).
+    // Accept both x-vng-database and x-vng-db (alias used by gate scripts).
     let db: String = headers
         .get("x-vng-database")
+        .or_else(|| headers.get("x-vng-db"))
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
@@ -1194,9 +1196,11 @@ pub(crate) async fn sql_execute(
     )?;
 
     // Extract x-vng-database header for database-scoped query execution.
+    // Also accept x-vng-db as an alias (used by gate scripts and drivers).
     // When present, all DDL/DML/SELECT operations are scoped to this database.
     let active_database: Option<String> = headers
         .get("x-vng-database")
+        .or_else(|| headers.get("x-vng-db"))
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
