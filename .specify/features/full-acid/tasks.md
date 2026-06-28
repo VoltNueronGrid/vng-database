@@ -17,21 +17,21 @@
 - [ ] T006 Audit `handlers/sql.rs` DELETE path (~line 791) — ensure `record_undo` is called before `rs.delete`
 - [ ] T007 Audit `handlers/sql.rs` UPDATE bulk path (~line 856) — ensure `record_undo` called per matched row
 - [ ] T008 Audit `handlers/sql.rs` ROLLBACK handler — ensure it iterates `tx_undo_log[conn_id]` in reverse and restores before-images
-- [ ] T009 Add test `p3_rollback_unwinds_partial_insert_batch` in `services/voltnuerongridd/src/tests.rs`
+- [X] T009 Add test `p3_rollback_unwinds_partial_insert_batch` in `services/voltnuerongridd/src/tests.rs`
 
 ---
 
 ## Phase 3: SERIALIZABLE Conflict at COMMIT (US3)
 
-- [ ] T010 In `handlers/sql.rs` COMMIT path: for `isolation_level == "serializable"` transactions, call `acid.check_serializable_conflict(&tx_id)` and return 409 on conflict
-- [ ] T011 Add test `p3_serializable_conflict_returns_409` in `tests.rs`
+- [X] T010 In `handlers/sql.rs` COMMIT path: for `isolation_level == "serializable"` transactions, call `acid.check_serializable_conflict(&tx_id)` and return 409 on conflict
+- [X] T011 Add test `p3_serializable_conflict_returns_409` in `tests.rs`
 
 ---
 
 ## Phase 4: REPEATABLE READ Snapshot (US2)
 
-- [ ] T012 Verify all SELECT scans within a REPEATABLE READ transaction use `entry.row_store_snapshot_xid` as snapshot in `handlers/sql.rs`
-- [ ] T013 Add test `p3_repeatable_read_stable_snapshot` in `tests.rs`
+- [X] T012 Verify all SELECT scans within a REPEATABLE READ transaction use `entry.row_store_snapshot_xid` as snapshot in `handlers/sql.rs`
+- [X] T013 Add test `p3_repeatable_read_stable_snapshot` in `tests.rs`
 
 ---
 

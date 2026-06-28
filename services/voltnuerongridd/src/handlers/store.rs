@@ -1328,3 +1328,115 @@ pub(crate) async fn htap_force_sync(
         olap_row_count_after,
     })))
 }
+
+// ─── R10: Raft-piggyback HTAP pull endpoint ───────────────────────────────────
+//
+// This endpoint implements the server side of the `RaftPiggybackTransport` pull
+// protocol.  An OLAP replica calls:
+//
+//   GET /api/v1/htap/pull?since=<last_applied_sequence>&node_id=<replica_id>
+//
+// The leader returns all mutations in `sync_origin` whose sequence is greater
+// than `since`, up to `max_items` (default 1000).  Replicas apply the batch
+// and advance their local `last_applied_sequence`.
+//
+// Auth: requires a valid cluster token (`Authorization: Bearer <VNG_CLUSTER_TOKEN>`)
+// or admin key so that only trusted cluster members can pull the mutation log.
+
+#[derive(serde::Deserialize)]
+pub(crate) struct HtapPullQuery {
+    pub(crate) since: Option<u64>,
+    pub(crate) node_id: Option<String>,
+    pub(crate) max_items: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct HtapPullResponse {
+    pub(crate) status: &'static str,
+    pub(crate) since: u64,
+    pub(crate) mutations: Vec<serde_json::Value>,
+    pub(crate) count: usize,
+    pub(crate) last_sequence: u64,
+    pub(crate) freshness_lag_ms: Option<u64>,
+}
+
+/// R10: Pull pending HTAP mutations from the leader's sync origin since a given
+/// sequence number.  Returns a JSON array of mutations ready for the caller to
+/// apply to its local OLAP replica.
+pub(crate) async fn htap_pull_sync(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<HtapPullQuery>,
+) -> Result<(StatusCode, Json<HtapPullResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    // Auth: accept admin key OR cluster token so OLAP replicas can call this.
+    let cluster_token_ok = state.cluster_token.as_ref().as_ref().map_or(true, |expected| {
+        if expected.is_empty() {
+            return true;
+        }
+        headers.get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|t| t == expected.as_str())
+            .unwrap_or(false)
+    });
+    let admin_key_ok = state.admin_api_key.as_ref().map_or(true, |expected| {
+        headers.get("x-vng-admin-key")
+            .and_then(|v| v.to_str().ok())
+            .map(|k| k == expected.as_str())
+            .unwrap_or(false)
+    });
+    if !cluster_token_ok && !admin_key_ok {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(AuthErrorResponse {
+                status: "unauthorized",
+                reason: "missing_credentials".to_string(),
+                locale: "en".to_string(),
+                localized_message: "cluster token or admin key required".to_string(),
+            }),
+        ));
+    }
+
+    let since = params.since.unwrap_or(0);
+    let max_items = params.max_items.unwrap_or(1000).min(10_000);
+
+    let (mutations_raw, freshness_lag_ms) = {
+        let origin = state.sync_origin.lock().expect("sync_origin lock htap_pull");
+        let batch = origin.export_since(since, max_items);
+        let lag = if origin.last_mutation_epoch_ms() > 0 {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            Some(now_ms.saturating_sub(origin.last_mutation_epoch_ms()))
+        } else {
+            None
+        };
+        (batch, lag)
+    };
+
+    let last_sequence = mutations_raw.last().map(|m| m.sequence).unwrap_or(since);
+    let count = mutations_raw.len();
+    let mutations: Vec<serde_json::Value> = mutations_raw.iter().map(|m| {
+        serde_json::json!({
+            "sequence": m.sequence,
+            "table": m.table,
+            "primary_key": m.primary_key,
+            "payload_json": m.payload_json,
+            "op": match m.op {
+                MutationOp::Insert => "insert",
+                MutationOp::Update => "update",
+                MutationOp::Delete => "delete",
+            },
+        })
+    }).collect();
+
+    Ok((StatusCode::OK, Json(HtapPullResponse {
+        status: "ok",
+        since,
+        mutations,
+        count,
+        last_sequence,
+        freshness_lag_ms,
+    })))
+}

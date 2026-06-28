@@ -154,6 +154,8 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/store/htap/status", get(htap_status))
         // S11-WS1-11: HTAP OLAP store statistics
         .route("/api/v1/store/htap/stats", get(htap_stats))
+        // R10: Raft-piggyback HTAP pull endpoint (network-capable transport for OLAP replicas)
+        .route("/api/v1/htap/pull", get(htap_pull_sync))
         // S9-WS8A-02: Audit export (all buffered events + file-backed status)
         .route("/api/v1/audit/export", get(audit_export))
         // S9-WS8A-02: Audit purge — flush in-memory audit sink

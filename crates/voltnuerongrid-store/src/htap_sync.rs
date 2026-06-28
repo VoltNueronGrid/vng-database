@@ -344,6 +344,97 @@ impl RowStoreSyncOrigin {
     }
 }
 
+// ─── R10: Raft-piggyback HTAP replication transport ───────────────────────────
+//
+// This transport replaces the purely in-memory `InMemoryReplicationTransport`
+// with a persistent, pull-based design where:
+//
+// 1. The OLTP leader appends every committed DML mutation to `RowStoreSyncOrigin`
+//    (already wired in sql.rs and raft_loop.rs).
+// 2. A pull endpoint (`GET /api/v1/htap/sync?since=<seq>`) exposes pending
+//    mutations so that OLAP nodes — or any peer — can catch up by polling the
+//    leader's sync origin.
+// 3. `RaftPiggybackTransport` wraps the pull-side state: each OLAP node tracks
+//    its `last_applied_sequence` and calls `export_since` on the origin to
+//    receive the delta batch.
+//
+// This design piggybacks on the existing Raft cluster's HTTP infrastructure
+// (reqwest on the client side, axum on the server side) without requiring a
+// separate replication channel. It is network-capable: OLAP replicas on
+// different processes or hosts can pull from the leader's sync endpoint.
+
+/// R10: Per-node state for the Raft-piggyback HTAP pull transport.
+/// Each OLAP replica holds one instance to track how far it has replayed.
+#[derive(Debug, Clone)]
+pub struct RaftPiggybackTransport {
+    /// Stable node identifier for this replica.
+    pub node_id: String,
+    /// URL of the OLTP leader's HTAP sync endpoint, e.g.
+    /// `"http://leader:8080/api/v1/htap/sync"`.
+    /// `None` in single-node / test deployments (no network call needed).
+    pub leader_sync_url: Option<String>,
+    /// Sequence number of the last mutation successfully applied by this replica.
+    pub last_applied_sequence: u64,
+    /// Optional bearer token for authenticating pull requests to the leader.
+    pub cluster_token: Option<String>,
+}
+
+impl RaftPiggybackTransport {
+    /// Create a new transport for an OLAP replica.
+    ///
+    /// * `node_id`         — stable identifier for this replica node.
+    /// * `leader_sync_url` — full URL of the leader HTAP sync endpoint, or
+    ///                        `None` to run in single-node / in-process mode.
+    /// * `cluster_token`   — optional bearer token from `VNG_CLUSTER_TOKEN`.
+    pub fn new(
+        node_id: impl Into<String>,
+        leader_sync_url: Option<String>,
+        cluster_token: Option<String>,
+    ) -> Self {
+        Self {
+            node_id: node_id.into(),
+            leader_sync_url,
+            last_applied_sequence: 0,
+            cluster_token,
+        }
+    }
+
+    /// Pull a batch of mutations from the leader's sync origin.
+    ///
+    /// In single-node mode (`leader_sync_url == None`) the caller must supply
+    /// the local `origin` directly, which avoids a network round-trip.
+    /// In multi-node mode the caller uses HTTP (see the `htap` handler).
+    pub fn pull_from_origin<'a>(
+        &mut self,
+        origin: &'a RowStoreSyncOrigin,
+        max_items: usize,
+    ) -> Vec<RowMutation> {
+        let batch = origin.export_since(self.last_applied_sequence, max_items);
+        if let Some(last) = batch.last() {
+            self.last_applied_sequence = last.sequence;
+        }
+        batch
+    }
+
+    /// Apply a batch of mutations received from the leader (network path).
+    /// Updates `last_applied_sequence` on success.
+    pub fn apply_batch(&mut self, batch: &[RowMutation]) {
+        if let Some(last) = batch.last() {
+            self.last_applied_sequence = self.last_applied_sequence.max(last.sequence);
+        }
+    }
+
+    /// Build the HTTP pull URL for this transport including the `since` query
+    /// parameter, ready to be fetched by the caller via `reqwest` or similar.
+    ///
+    /// Returns `None` in single-node deployments where no network call is needed.
+    pub fn build_pull_url(&self) -> Option<String> {
+        self.leader_sync_url.as_ref().map(|base| {
+            format!("{}?since={}&node_id={}", base, self.last_applied_sequence, self.node_id)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

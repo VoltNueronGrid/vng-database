@@ -16,7 +16,7 @@
 ## Phase 2: Boot Sequence Fix (US1 — rows survive restart)
 
 - [ ] T005 In `services/voltnuerongridd/src/main.rs` — wrap `replay_dml_into` call with `if !persists_rows` check so DML SQL text is NOT replayed into PagedRowStore when RocksDB is active
-- [ ] T006 Add test `p1_boot_skips_dml_replay_when_rocksdb_active` verifying that `replay_dml_into` is not called when engine has `persists_rows() == true`
+- [X] T006 Add test `p1_boot_skips_dml_replay_when_rocksdb_active` verifying that `replay_dml_into` is not called when engine has `persists_rows() == true`
 
 ---
 
@@ -32,7 +32,7 @@
 
 - [X] T010 `ensure_db_cf` creates per-DB CF on first INSERT to that database
 - [X] T011 `scan_rows_for_db(db, xid)` scans only the requested database's CF
-- [ ] T012 Add test: rows from `db_a` never appear in `scan_rows_for_db("db_b", ...)` result
+- [X] T012 Add test: rows from `db_a` never appear in `scan_rows_for_db("db_b", ...)` result
 
 ---
 
