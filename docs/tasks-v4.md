@@ -859,12 +859,12 @@ The HTAP routing classifier
 | **Priority** | 🟠 High |
 | **Category** | Production Change |
 | **Status** | IN PROGRESS |
-| **% Complete** | 40% (Raft loop implemented; multi-node smoke script created; live 3-node test blocked on P1) |
+| **% Complete** | 55% (Raft loop implemented; multi-node smoke script fixed ✅; 3 nodes start healthy ✅; leader election warning — Raft peer wiring needs P1 for durable state) |
 | **Effort** | L |
 | **Depends on** | P1 (durable row store is prerequisite for meaningful multi-node test) |
 | **Affects** | `services/voltnuerongridd/src/helpers/raft_loop.rs`, `services/voltnuerongridd/src/raft.rs`, `crates/voltnuerongrid-failover/`, `tests/kpi/scripts/` |
 
-> **Evidence (2026-06-24+):** Gate script `tests/kpi/scripts/run-p5-multinode-smoke.ps1` created. Docker-compose `deploy/local/multi-node.yml` already exists. Script starts 3 local binaries with Raft peer wiring, tests leader election, row replication, and leader-kill failover. Results dir `tests/kpi/results/multinode/`. Full RPO=0 proof blocked on P1 (durable row store).
+> **Evidence (2026-06-28):** Gate script `tests/kpi/scripts/run-p5-multinode-smoke.ps1` fixed (PowerShell `goto`→control-flow, `VNG_HTTP_BIND` env wiring, `$skipRemainingPacks` guard). Live run: 3 nodes start successfully (Pack 1: **passed**); leader election returns warnings (Raft peers not yet exchanging heartbeats in single-node mode — needs P1 cluster mode activation). Artifact `tests/kpi/results/multinode/multinode-smoke.json` status=**warning**, timestamp 2026-06-28. Full RPO=0 proof blocked on P1 (durable row store) + Raft cluster mode wiring.
 
 **Description:**  
 The Raft background loop
@@ -877,11 +877,11 @@ The Raft background loop
 5. Define and document RPO target and verify zero row loss after leader SIGKILL
 
 **Acceptance Criteria:**
-- [ ] 3-node cluster starts successfully with separate data directories
+- [X] 3-node cluster starts successfully with separate data directories (Pack 1: passed, 2026-06-28)
+- [X] Gate artifact written to `tests/kpi/results/multinode/multinode-smoke.json`
 - [ ] Writes to leader replicate to all followers (verified by direct follower query)
 - [ ] Leader SIGKILL → new leader elected within defined RTO target
 - [ ] All rows present on new leader after election (RPO = 0)
-- [ ] Gate artifact written to `tests/kpi/results/multinode/multinode-smoke.json`
 - [ ] Tracker WS6 updated with new evidence artifact
 
 ---

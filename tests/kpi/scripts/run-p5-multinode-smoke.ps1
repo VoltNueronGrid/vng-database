@@ -21,6 +21,7 @@ if (-not (Test-Path $ResultsDir)) { New-Item -ItemType Directory -Force -Path $R
 $packs = @()
 $Procs  = @()
 $tmpDirs = @()
+$skipRemainingPacks = $false
 
 function Stop-Cluster {
     foreach ($proc in $Procs) {
@@ -77,12 +78,12 @@ for ($i = 1; $i -le 3; $i++) {
         VNG_RAFT_PEERS                 = $peers
         VNG_DATA_DIR                   = $tdir
         VNG_NATIVE_LISTENER_ENABLED    = "false"
+        VNG_HTTP_BIND                  = "127.0.0.1:$port"
         RUST_LOG                       = "warn"
     }
     $envBlock = ($env_vars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join " "
 
     $proc = Start-Process -FilePath $BinaryPath `
-        -ArgumentList "--http-port $port" `
         -WorkingDirectory $tdir `
         -PassThru `
         -NoNewWindow `
@@ -113,10 +114,12 @@ $packs += $p
 if ($healthyCount -lt 2) {
     Stop-Cluster
     Write-Warning "Fewer than 2 nodes responded; cluster not viable"
-    goto done
+    $p.status = "failed"
+    $skipRemainingPacks = $true
 }
 
 # ── Pack 2: Leader election ───────────────────────────────────────────────────
+if (-not $skipRemainingPacks) {
 Start-Sleep -Milliseconds $ElectionWaitMs
 $p = @{ name = "leader-elected"; status = "pending"; checks = @() }
 $leaderPort = $null
@@ -190,7 +193,7 @@ if ($null -ne $leaderPort) {
 }
 $packs += $p
 
-:done
+} # end if -not skipRemainingPacks (packs 2-4)
 
 Stop-Cluster
 

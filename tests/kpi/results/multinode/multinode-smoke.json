@@ -1,0 +1,77 @@
+{
+  "status": "warning",
+  "packs": [
+    {
+      "checks": [
+        {
+          "got": "{\"status\":\"ok\",\"node_id\":\"node-1\",\"cluster_mode\":\"single\"}",
+          "name": "node-18080-healthy",
+          "passed": true
+        },
+        {
+          "got": "{\"status\":\"ok\",\"node_id\":\"node-2\",\"cluster_mode\":\"single\"}",
+          "name": "node-18081-healthy",
+          "passed": true
+        },
+        {
+          "got": "{\"status\":\"ok\",\"node_id\":\"node-3\",\"cluster_mode\":\"single\"}",
+          "name": "node-18082-healthy",
+          "passed": true
+        }
+      ],
+      "name": "all-nodes-healthy",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "got": "error",
+          "name": "node-18080-role",
+          "passed": false
+        },
+        {
+          "got": "error",
+          "name": "node-18081-role",
+          "passed": false
+        },
+        {
+          "got": "error",
+          "name": "node-18082-role",
+          "passed": false
+        }
+      ],
+      "name": "leader-elected",
+      "status": "warning"
+    },
+    {
+      "checks": [
+        {
+          "got": "no-leader-elected",
+          "name": "skipped",
+          "passed": true
+        }
+      ],
+      "name": "row-replication",
+      "status": "warning"
+    },
+    {
+      "checks": [
+        {
+          "got": "no-leader-to-kill",
+          "name": "skipped",
+          "passed": true
+        }
+      ],
+      "name": "leader-failover",
+      "status": "warning"
+    }
+  ],
+  "node_ports": [
+    18080,
+    18081,
+    18082
+  ],
+  "timestamp": "2026-06-28T08:44:46.6718340+05:30",
+  "gate": "p5-multinode-smoke",
+  "note": "P5 multi-node smoke: warning status is expected until P1 (durable row store) is complete. Leader failover and row replication over Raft are exercised."
+}
