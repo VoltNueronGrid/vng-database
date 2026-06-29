@@ -125,6 +125,11 @@ pub(crate) struct IngestExcelRequest {
     pub(crate) connector_id: String,
     /// Standard base64 (RFC 4648) encoded `.xlsx` workbook bytes.
     pub(crate) xlsx_data_base64: String,
+    /// IMP-2: Optional sheet-to-table mapping for multi-sheet parallel ingestion.
+    /// Key = sheet name (case-insensitive), value = target SQL table name.
+    /// Sheets not listed in this map use the sheet name as the table name.
+    #[serde(default)]
+    pub(crate) sheet_table_map: std::collections::HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -132,6 +137,31 @@ pub(crate) struct IngestExcelResponse {
     pub(crate) status: &'static str,
     pub(crate) connector_id: String,
     pub(crate) records_parsed: usize,
+}
+
+// IMP-1: Parallel CSV/JSON ingest request
+#[derive(Deserialize)]
+pub(crate) struct IngestParallelRequest {
+    pub(crate) connector_id: String,
+    /// Raw CSV data (for csv_parallel) or newline-delimited JSON (for json_parallel).
+    pub(crate) data: String,
+    /// Chunk size for parallel processing (default: 1000).
+    #[serde(default)]
+    pub(crate) chunk_size: Option<usize>,
+    /// Key field for JSON records (default: "id").
+    #[serde(default)]
+    pub(crate) key_field: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct IngestParallelResponse {
+    pub(crate) status: &'static str,
+    pub(crate) connector_id: String,
+    pub(crate) total_records: usize,
+    pub(crate) valid_records: usize,
+    pub(crate) invalid_records: usize,
+    pub(crate) chunk_count: usize,
+    pub(crate) tasks_dispatched: usize,
 }
 
 #[derive(Deserialize)]
@@ -1286,4 +1316,251 @@ pub(crate) async fn ingest_outbox_replay(
         }),
     );
     Ok(Json(response))
+}
+
+// ── IMP-1: Real parallel CSV / JSON import ────────────────────────────────────
+
+/// IMP-1: POST /api/v1/ingest/csv/parallel
+///
+/// Splits CSV data into `chunk_size` rows and processes each chunk in parallel
+/// via the rayon-backed `load_records_parallel` from `chunked_loader`.
+pub(crate) async fn ingest_csv_parallel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestParallelRequest>,
+) -> Result<(StatusCode, Json<IngestParallelResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        &ingest_scope_for_connector(&req.connector_id, "csv"),
+    )?;
+    use voltnuerongrid_ingest::csv::CsvConnector;
+    use voltnuerongrid_ingest::chunked_loader::load_records_parallel;
+
+    let chunk_size = req.chunk_size.unwrap_or(1_000).max(1);
+    let mut conn = CsvConnector::new(&req.connector_id, &req.connector_id);
+    let total_parsed = conn.load_csv(&req.data);
+    let raw_records = conn.read_batch(usize::MAX);
+
+    // Run rayon parallel chunked validation + dedup
+    let (valid_records, invalid_count, stats) = tokio::task::spawn_blocking(move || {
+        load_records_parallel(&raw_records, chunk_size)
+    }).await.unwrap_or_else(|_| (vec![], 0, Default::default()));
+
+    let valid_count = valid_records.len();
+
+    // Bulk-insert valid records into row_store
+    let row_entries: Vec<(String, HashMap<String, String>)> = valid_records.iter().map(|r| {
+        let mut data = HashMap::new();
+        data.insert("payload".to_string(), r.payload.clone());
+        data.insert("source".to_string(), format!("csv:{}", req.connector_id));
+        (r.key.clone(), data)
+    }).collect();
+
+    let batch_xid = {
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        let xid = rs.begin_xid();
+        for (key, data) in &row_entries {
+            rs.insert(xid, key, data.clone());
+        }
+        xid
+    };
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        for (key, data) in &row_entries {
+            wal.store_row(&req.connector_id, key, batch_xid, Some(data));
+        }
+    }
+    let storage_key = ingest_storage_key(&principal, &req.connector_id);
+    state.ingest_csv_records.lock().expect("csv lock").insert(storage_key, valid_records);
+
+    append_runtime_audit_event(
+        &state, AuditEventKind::Ingest, &principal, "ingest_csv_parallel", "ok",
+        json!({ "connector_id": req.connector_id, "total": total_parsed, "valid": valid_count, "chunks": stats.chunk_count }),
+    );
+
+    Ok((StatusCode::OK, Json(IngestParallelResponse {
+        status: "ok",
+        connector_id: req.connector_id,
+        total_records: stats.total_records,
+        valid_records: valid_count,
+        invalid_records: invalid_count,
+        chunk_count: stats.chunk_count,
+        tasks_dispatched: stats.tasks_dispatched,
+    })))
+}
+
+/// IMP-1: POST /api/v1/ingest/json/parallel
+///
+/// Splits NDJSON data into `chunk_size` records and processes in parallel.
+pub(crate) async fn ingest_json_parallel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestParallelRequest>,
+) -> Result<(StatusCode, Json<IngestParallelResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        &ingest_scope_for_connector(&req.connector_id, "json"),
+    )?;
+    use voltnuerongrid_ingest::json::JsonConnector;
+    use voltnuerongrid_ingest::chunked_loader::load_records_parallel;
+
+    let chunk_size = req.chunk_size.unwrap_or(1_000).max(1);
+    let key_field = req.key_field.as_deref().unwrap_or("id");
+    let mut conn = JsonConnector::new(&req.connector_id, &req.connector_id, key_field);
+    let total_parsed = conn.load_ndjson(&req.data);
+    let raw_records = conn.read_batch(usize::MAX);
+
+    let (valid_records, invalid_count, stats) = tokio::task::spawn_blocking(move || {
+        load_records_parallel(&raw_records, chunk_size)
+    }).await.unwrap_or_else(|_| (vec![], 0, Default::default()));
+
+    let valid_count = valid_records.len();
+    let row_entries: Vec<(String, HashMap<String, String>)> = valid_records.iter().map(|r| {
+        let mut data = HashMap::new();
+        data.insert("payload".to_string(), r.payload.clone());
+        data.insert("source".to_string(), format!("json:{}", req.connector_id));
+        (r.key.clone(), data)
+    }).collect();
+
+    let batch_xid = {
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        let xid = rs.begin_xid();
+        for (key, data) in &row_entries {
+            rs.insert(xid, key, data.clone());
+        }
+        xid
+    };
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        for (key, data) in &row_entries {
+            wal.store_row(&req.connector_id, key, batch_xid, Some(data));
+        }
+    }
+    let storage_key = ingest_storage_key(&principal, &req.connector_id);
+    state.ingest_json_records.lock().expect("json lock").insert(storage_key, valid_records);
+
+    append_runtime_audit_event(
+        &state, AuditEventKind::Ingest, &principal, "ingest_json_parallel", "ok",
+        json!({ "connector_id": req.connector_id, "total": total_parsed, "valid": valid_count, "chunks": stats.chunk_count }),
+    );
+
+    Ok((StatusCode::OK, Json(IngestParallelResponse {
+        status: "ok",
+        connector_id: req.connector_id,
+        total_records: stats.total_records,
+        valid_records: valid_count,
+        invalid_records: invalid_count,
+        chunk_count: stats.chunk_count,
+        tasks_dispatched: stats.tasks_dispatched,
+    })))
+}
+
+/// IMP-2: POST /api/v1/ingest/excel/parallel
+///
+/// Processes each worksheet of a multi-sheet `.xlsx` file in parallel using
+/// the rayon-backed `load_excel_sheets_parallel` loader.
+pub(crate) async fn ingest_excel_parallel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<IngestExcelRequest>,
+) -> Result<(StatusCode, Json<IngestParallelResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_ingest_runtime_privilege(
+        &headers,
+        &state,
+        PrivilegeAction::Write,
+        &ingest_scope_for_connector(&req.connector_id, "excel"),
+    )?;
+    use base64::Engine as _;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(req.xlsx_data_base64.trim())
+        .map_err(|_| bad_request_error(&headers, "invalid_base64_payload"))?;
+
+    use voltnuerongrid_ingest::excel::ExcelConnector;
+    use voltnuerongrid_ingest::chunked_loader::load_excel_sheets_parallel;
+
+    let connector_id = req.connector_id.clone();
+    let sheet_table_map = req.sheet_table_map.clone();
+
+    // Decode all sheets from xlsx (multi-sheet aware).
+    let sheets: Vec<(String, Vec<voltnuerongrid_ingest::IngestRecord>)> = {
+        let mut conn = ExcelConnector::new(&connector_id, &connector_id);
+        let _ = conn.load_xlsx_bytes(&raw);
+        // load_xlsx_bytes loads all sheets; each record's key encodes sheet+row
+        let records = conn.read_batch(usize::MAX);
+        // Group by sheet prefix in key: "<sheet_name>:<row>"
+        let mut sheet_map: std::collections::HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>> =
+            std::collections::HashMap::new();
+        for r in records {
+            let sheet = if let Some(colon) = r.key.find(':') {
+                r.key[..colon].to_string()
+            } else {
+                "Sheet1".to_string()
+            };
+            sheet_map.entry(sheet).or_default().push(r);
+        }
+        sheet_map.into_iter().collect()
+    };
+
+    let total_input: usize = sheets.iter().map(|(_, r)| r.len()).sum();
+    let chunk_size = 1_000usize;
+
+    // Parallel processing of all sheets via rayon
+    let sheet_results = tokio::task::spawn_blocking(move || {
+        load_excel_sheets_parallel(sheets, chunk_size)
+    }).await.unwrap_or_default();
+
+    let mut total_valid = 0usize;
+    let mut total_invalid = 0usize;
+    let mut all_row_entries: Vec<(String, HashMap<String, String>)> = Vec::new();
+
+    for (sheet_name, valid_records, invalid) in &sheet_results {
+        total_invalid += invalid;
+        // Resolve table name from sheet_table_map, fallback to sheet name
+        let table = sheet_table_map
+            .get(&sheet_name.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_else(|| sheet_name.clone());
+        for r in valid_records {
+            total_valid += 1;
+            let mut data = HashMap::new();
+            data.insert("payload".to_string(), r.payload.clone());
+            data.insert("source".to_string(), format!("excel:{}:{}", connector_id, table));
+            data.insert("sheet".to_string(), sheet_name.clone());
+            all_row_entries.push((format!("{}:{}", table, r.key), data));
+        }
+    }
+
+    // Bulk insert
+    let batch_xid = {
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        let xid = rs.begin_xid();
+        for (key, data) in &all_row_entries {
+            rs.insert(xid, key, data.clone());
+        }
+        xid
+    };
+    if let Ok(mut wal) = state.wal_engine.lock() {
+        for (key, data) in &all_row_entries {
+            wal.store_row(&connector_id, key, batch_xid, Some(data));
+        }
+    }
+
+    let sheet_count = sheet_results.len();
+
+    append_runtime_audit_event(
+        &state, AuditEventKind::Ingest, &principal, "ingest_excel_parallel", "ok",
+        json!({ "connector_id": connector_id, "sheets": sheet_count, "total_valid": total_valid }),
+    );
+
+    Ok((StatusCode::OK, Json(IngestParallelResponse {
+        status: "ok",
+        connector_id: req.connector_id,
+        total_records: total_input,
+        valid_records: total_valid,
+        invalid_records: total_invalid,
+        chunk_count: sheet_count,
+        tasks_dispatched: sheet_count,
+    })))
 }

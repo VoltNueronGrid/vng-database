@@ -508,6 +508,20 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/ingest/parquet", post(ingest_parquet))
         .route("/api/v1/ingest/excel", post(ingest_excel))
         .route("/api/v1/ingest/chunked", post(ingest_chunked))
+        // IMP-1: Real parallel CSV/JSON import (rayon-backed)
+        .route("/api/v1/ingest/csv/parallel", {
+            use crate::handlers::ingest::ingest_csv_parallel;
+            post(ingest_csv_parallel)
+        })
+        .route("/api/v1/ingest/json/parallel", {
+            use crate::handlers::ingest::ingest_json_parallel;
+            post(ingest_json_parallel)
+        })
+        // IMP-2: Multi-sheet parallel Excel import
+        .route("/api/v1/ingest/excel/parallel", {
+            use crate::handlers::ingest::ingest_excel_parallel;
+            post(ingest_excel_parallel)
+        })
         .route("/api/v1/ingest/status", get(ingest_status))
         // S5-WS4-03: ingest schema registry
         .route("/api/v1/ingest/schema", get(ingest_schema_registry))
@@ -547,10 +561,18 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/mcp/invoke", post(mcp_invoke))
         // Gap #11: dedicated demo seed endpoint (replaces CALL insert_rows SQL shim)
         .route("/api/v1/demo/seed", post(demo_seed))
-        // BR-1/BR-2: Backup and Restore API
+        // BR-1/BR-2/BR-3: Backup, Restore, and Verification API
         .route("/api/v1/backup/full", {
             use crate::handlers::backup::backup_full;
             post(backup_full)
+        })
+        .route("/api/v1/backup/incremental", {
+            use crate::handlers::backup::backup_incremental;
+            post(backup_incremental)
+        })
+        .route("/api/v1/backup/verify", {
+            use crate::handlers::backup::backup_verify;
+            post(backup_verify)
         })
         .route("/api/v1/backup/list", {
             use crate::handlers::backup::backup_list;
@@ -559,6 +581,19 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/restore", {
             use crate::handlers::backup::restore_from_backup;
             post(restore_from_backup)
+        })
+        // SCALE-1: Horizontal autoscale controller
+        .route("/api/v1/autoscale/status", {
+            use crate::handlers::autoscale::autoscale_status;
+            get(autoscale_status)
+        })
+        .route("/api/v1/autoscale/policy", {
+            use crate::handlers::autoscale::autoscale_set_policy;
+            post(autoscale_set_policy)
+        })
+        .route("/api/v1/autoscale/tick", {
+            use crate::handlers::autoscale::autoscale_tick;
+            post(autoscale_tick)
         })
         // UDF-1/2/3: WASM, JavaScript, and Python user-defined function runtime
         .route("/api/v1/udf/register", {

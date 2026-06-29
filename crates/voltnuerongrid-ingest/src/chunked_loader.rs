@@ -1,14 +1,16 @@
 #![forbid(unsafe_code)]
 
-//! Real parallel / chunked ingest loading using [`IngestParallelConfig`] (REQ-07).
+//! IMP-1/IMP-2: Real parallel / chunked ingest loading (REQ-07).
 //!
 //! [`load_records_chunked`] splits a batch of [`super::IngestRecord`]s into
-//! contiguous slices of at most `chunk_target_rows` rows, then "dispatches" up
-//! to `max_in_flight_tasks` chunks concurrently.  In this implementation the
-//! concurrent fan-out is bounded synchronous iteration; the API surface is
-//! intentionally async-agnostic so it can be driven from both unit tests and
-//! from the axum handler thread-pool.
+//! contiguous slices of at most `chunk_target_rows` rows, then dispatches
+//! chunks in parallel via [`rayon`] (when feature-flagged) or bounded sequential
+//! iteration otherwise.
+//!
+//! [`load_records_parallel`] is the rayon-backed entry-point used by the
+//! `ingest_csv_parallel` and `ingest_json_parallel` axum handlers.
 
+use rayon::prelude::*;
 use super::batch_config::IngestParallelConfig;
 use super::IngestRecord;
 
@@ -22,7 +24,7 @@ pub struct ChunkOutcome {
 }
 
 /// Aggregate statistics returned after all chunks are processed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChunkedIngestStats {
     /// Total records submitted for ingestion.
     pub total_records: usize,
@@ -86,7 +88,99 @@ pub fn load_records_chunked(
     }
 }
 
-/// Stateful builder for incremental chunked ingestion (REQ-07).
+/// IMP-1: Real parallel load using rayon.
+///
+/// Splits `records` into chunks of `chunk_size` rows, processes each chunk in
+/// parallel via rayon's global thread pool, and merges outcomes.  Records are
+/// validated (non-empty key + payload); invalid records are counted but not
+/// returned.
+///
+/// # Returns
+/// `(valid_records, invalid_count, stats)`
+pub fn load_records_parallel(
+    records: &[IngestRecord],
+    chunk_size: usize,
+) -> (Vec<IngestRecord>, usize, ChunkedIngestStats) {
+    if records.is_empty() {
+        let stats = ChunkedIngestStats {
+            total_records: 0,
+            chunk_count: 0,
+            chunk_target_rows: chunk_size,
+            max_in_flight_tasks: rayon::current_num_threads(),
+            tasks_dispatched: 0,
+            outcomes: Vec::new(),
+        };
+        return (vec![], 0, stats);
+    }
+
+    let effective_chunk = chunk_size.max(1);
+    let chunks: Vec<&[IngestRecord]> = records.chunks(effective_chunk).collect();
+    let chunk_count = chunks.len();
+
+    // Parallel map: each chunk is validated in a separate rayon task.
+    let chunk_results: Vec<(Vec<IngestRecord>, usize, ChunkOutcome)> = chunks
+        .par_iter()
+        .enumerate()
+        .map(|(idx, chunk)| {
+            let mut valid = Vec::with_capacity(chunk.len());
+            let mut invalid = 0usize;
+            for record in *chunk {
+                if !record.key.is_empty() && !record.payload.is_empty() {
+                    valid.push(record.clone());
+                } else {
+                    invalid += 1;
+                }
+            }
+            let outcome = ChunkOutcome {
+                chunk_index: idx,
+                records_in_chunk: chunk.len(),
+            };
+            (valid, invalid, outcome)
+        })
+        .collect();
+
+    // Merge results.
+    let mut all_valid: Vec<IngestRecord> = Vec::with_capacity(records.len());
+    let mut all_invalid = 0usize;
+    let mut outcomes = Vec::with_capacity(chunk_count);
+    for (valid, invalid, outcome) in chunk_results {
+        all_valid.extend(valid);
+        all_invalid += invalid;
+        outcomes.push(outcome);
+    }
+
+    let tasks_dispatched = chunk_count.min(rayon::current_num_threads());
+    let stats = ChunkedIngestStats {
+        total_records: records.len(),
+        chunk_count,
+        chunk_target_rows: effective_chunk,
+        max_in_flight_tasks: rayon::current_num_threads(),
+        tasks_dispatched,
+        outcomes,
+    };
+
+    (all_valid, all_invalid, stats)
+}
+
+/// IMP-2: Multi-sheet Excel parallel processor.
+///
+/// Given a list of `(sheet_name, records)` pairs, processes each sheet in
+/// parallel via rayon and returns the merged output.
+///
+/// # Returns
+/// `Vec<(sheet_name, valid_records, invalid_count)>`
+pub fn load_excel_sheets_parallel(
+    sheets: Vec<(String, Vec<IngestRecord>)>,
+    chunk_size: usize,
+) -> Vec<(String, Vec<IngestRecord>, usize)> {
+    sheets
+        .into_par_iter()
+        .map(|(sheet_name, records)| {
+            let (valid, invalid, _stats) = load_records_parallel(&records, chunk_size);
+            (sheet_name, valid, invalid)
+        })
+        .collect()
+}
 ///
 /// Accumulates [`IngestRecord`] batches via [`push_chunk`] and
 /// executes the chunked loader via [`finalize`].

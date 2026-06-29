@@ -18,3 +18,5 @@ pub(crate) mod backup;
 pub(crate) mod udf;
 // PLUG-4: plugin marketplace
 pub(crate) mod plugins;
+// SCALE-1: horizontal autoscale controller
+pub(crate) mod autoscale;

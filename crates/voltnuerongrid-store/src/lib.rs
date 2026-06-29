@@ -16,6 +16,7 @@ pub mod triggers;
 // S7-003: trigger emitters
 pub mod trigger_emitter;
 pub mod wal_adapter;
+pub mod storage_client;
 use wal_adapter::{WalAdapter, WalAdapterError};
 
 pub use triggers::{

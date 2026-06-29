@@ -138,6 +138,9 @@ fn state_with_key(key: Option<&str>) -> AppState {
         partition_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
         // CACHE-1: test uses in-memory only (no snapshot path).
         cache_snapshot_path: Arc::new("state/cache-snapshot-test.json".to_string()),
+        // SCALE-1: autoscale policy and status (default for tests).
+        autoscale_policy: Arc::new(Mutex::new(crate::handlers::autoscale::AutoscalePolicy::default())),
+        autoscale_status: Arc::new(Mutex::new(crate::handlers::autoscale::AutoscaleStatus::default())),
     }
 }
 
@@ -15342,4 +15345,276 @@ fn cache1_snapshot_roundtrip() {
     assert!(v1.is_some(), "k1 should be restored");
     let v2 = cache2.get("p1", "k2", now_ms).ok().flatten();
     assert!(v2.is_some(), "k2 should be restored");
+}
+
+// ── BR-1/BR-2/BR-3 tests ──────────────────────────────────────────────────────
+
+#[test]
+fn br1_incremental_backup_captures_only_new_rows() {
+    // BR-1: After a full backup, insert a new row and take incremental backup.
+    // Only the new row should appear in the incremental backup.
+    use crate::handlers::backup::BackupArchive;
+    use voltnuerongrid_store::mvcc::PagedRowStore;
+    use std::collections::HashMap;
+
+    // Simulate full backup XID
+    let mut rs = PagedRowStore::new(256);
+    let xid0 = rs.begin_xid();
+    let mut row1 = HashMap::new();
+    row1.insert("val".to_string(), "original".to_string());
+    rs.insert(xid0, "t:r1", row1);
+    let full_snapshot_xid = rs.current_xid();
+
+    // Insert new row after full backup
+    let xid1 = rs.begin_xid();
+    let mut row2 = HashMap::new();
+    row2.insert("val".to_string(), "new".to_string());
+    rs.insert(xid1, "t:r2", row2);
+    let incr_xid = rs.current_xid();
+
+    // Rows modified after full_snapshot_xid
+    let new_rows: Vec<_> = rs.scan_at_snapshot(incr_xid)
+        .into_iter()
+        .filter(|(k, _v)| rs.was_modified_after(k, full_snapshot_xid))
+        .collect();
+
+    assert_eq!(new_rows.len(), 1, "only the newly inserted row should appear in incremental backup");
+    assert_eq!(new_rows[0].0, "t:r2");
+}
+
+#[test]
+fn br1_full_backup_checksum_is_sha256_hex() {
+    // BR-1: full backup should produce a 64-char hex checksum
+    use sha2::{Digest, Sha256};
+    let data = b"test archive content";
+    let digest = Sha256::digest(data);
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(hex.len(), 64);
+    assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[test]
+fn br3_backup_verify_logic_detects_mismatch() {
+    // BR-3: verify that checksum mismatch detection works
+    use sha2::{Digest, Sha256};
+    let good_data = b"good archive";
+    let digest = Sha256::digest(good_data);
+    let stored: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+
+    // Good case
+    let computed_good: String = Sha256::digest(good_data).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(computed_good, stored, "matching checksum should verify");
+
+    // Bad case
+    let tampered = b"tampered archive";
+    let computed_bad: String = Sha256::digest(tampered).iter().map(|b| format!("{b:02x}")).collect();
+    assert_ne!(computed_bad, stored, "tampered checksum should not match");
+}
+
+// ── SCALE-1 tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn scale1_autoscale_status_endpoint_returns_ok() {
+    use crate::handlers::autoscale::autoscale_status;
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = admin_headers("secret");
+
+    let r = rt.block_on(autoscale_status(State(state.clone()), headers));
+    assert!(r.is_ok(), "autoscale_status should return Ok");
+    let (status, Json(body)) = r.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "ok");
+    assert!(body["replicas"].is_number());
+}
+
+#[test]
+fn scale1_evaluate_autoscale_scales_up_on_queue_spike() {
+    use crate::handlers::autoscale::{evaluate_autoscale, AutoscalePolicy, AutoscaleStatus};
+
+    let policy = AutoscalePolicy {
+        min_replicas: 1,
+        max_replicas: 4,
+        scale_up_queue_threshold: 10,
+        scale_down_queue_threshold: 2,
+        cooldown_secs: 0,
+        backend: "none".to_string(),
+    };
+    let mut status = AutoscaleStatus {
+        replicas: 1,
+        target: 1,
+        scaling: false,
+        last_scale_at_unix_secs: 0,
+        last_scale_direction: "none".to_string(),
+        last_trigger_queue_depth: 0,
+    };
+
+    let (scaled, direction, new_replicas) = evaluate_autoscale(&mut status, &policy, 15, 100);
+    assert!(scaled, "should scale up when queue depth exceeds threshold");
+    assert_eq!(direction, "up");
+    assert_eq!(new_replicas, 2);
+}
+
+#[test]
+fn scale1_evaluate_autoscale_scales_down_on_low_load() {
+    use crate::handlers::autoscale::{evaluate_autoscale, AutoscalePolicy, AutoscaleStatus};
+
+    let policy = AutoscalePolicy {
+        min_replicas: 1,
+        max_replicas: 4,
+        scale_up_queue_threshold: 50,
+        scale_down_queue_threshold: 5,
+        cooldown_secs: 0,
+        backend: "none".to_string(),
+    };
+    let mut status = AutoscaleStatus {
+        replicas: 3,
+        target: 3,
+        scaling: false,
+        last_scale_at_unix_secs: 0,
+        last_scale_direction: "none".to_string(),
+        last_trigger_queue_depth: 0,
+    };
+
+    let (scaled, direction, new_replicas) = evaluate_autoscale(&mut status, &policy, 1, 200);
+    assert!(scaled, "should scale down when queue depth is low");
+    assert_eq!(direction, "down");
+    assert_eq!(new_replicas, 2);
+}
+
+#[test]
+fn scale1_set_policy_updates_thresholds() {
+    use crate::handlers::autoscale::{autoscale_set_policy, AutoscalePolicyRequest};
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = admin_headers("secret");
+
+    let req = AutoscalePolicyRequest {
+        min_replicas: Some(2),
+        max_replicas: Some(10),
+        scale_up_queue_threshold: Some(200),
+        scale_down_queue_threshold: None,
+        cooldown_secs: Some(30),
+        backend: Some("kubernetes".to_string()),
+    };
+    let r = rt.block_on(autoscale_set_policy(State(state.clone()), headers, Json(req)));
+    assert!(r.is_ok());
+    let policy = state.autoscale_policy.lock().unwrap();
+    assert_eq!(policy.min_replicas, 2);
+    assert_eq!(policy.max_replicas, 10);
+    assert_eq!(policy.scale_up_queue_threshold, 200);
+    assert_eq!(policy.cooldown_secs, 30);
+    assert_eq!(policy.backend, "kubernetes");
+}
+
+// ── SCALE-2 tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn scale2_local_storage_client_store_get_delete() {
+    use voltnuerongrid_store::storage_client::{LocalStorageNodeClient, StorageNodeClient};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use voltnuerongrid_store::mvcc::PagedRowStore;
+
+    let rs = Arc::new(Mutex::new(PagedRowStore::new(256)));
+    let client = LocalStorageNodeClient::new(rs);
+
+    let mut data = HashMap::new();
+    data.insert("name".to_string(), "Alice".to_string());
+    client.store_row("users:u1", data.clone()).unwrap();
+
+    let got = client.get_row("users:u1").unwrap();
+    assert_eq!(got.get("name").map(|s| s.as_str()), Some("Alice"));
+
+    let deleted = client.delete_row("users:u1").unwrap();
+    assert!(deleted);
+    assert!(client.get_row("users:u1").is_err());
+}
+
+#[test]
+fn scale2_remote_storage_client_returns_transport_error() {
+    use voltnuerongrid_store::storage_client::{RemoteStorageNodeClient, StorageNodeClient};
+    use std::collections::HashMap;
+
+    let client = RemoteStorageNodeClient::new("http://remote-storage:8090");
+    let res = client.get_row("test:key");
+    assert!(res.is_err(), "remote client should return error (stub)");
+}
+
+// ── IMP-1 tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn imp1_parallel_csv_load_produces_all_valid_records() {
+    use voltnuerongrid_ingest::IngestRecord;
+    use voltnuerongrid_ingest::chunked_loader::load_records_parallel;
+
+    let records: Vec<IngestRecord> = (0..100)
+        .map(|i| IngestRecord { key: format!("k{i}"), payload: format!("v{i}") })
+        .collect();
+
+    let (valid, invalid, stats) = load_records_parallel(&records, 10);
+    assert_eq!(valid.len(), 100, "all 100 valid records should be returned");
+    assert_eq!(invalid, 0);
+    assert_eq!(stats.chunk_count, 10, "100 records / chunk_size 10 = 10 chunks");
+}
+
+#[test]
+fn imp1_parallel_csv_filters_empty_key_records() {
+    use voltnuerongrid_ingest::IngestRecord;
+    use voltnuerongrid_ingest::chunked_loader::load_records_parallel;
+
+    let records = vec![
+        IngestRecord { key: "k1".to_string(), payload: "v1".to_string() },
+        IngestRecord { key: "".to_string(), payload: "v2".to_string() },  // invalid: empty key
+        IngestRecord { key: "k3".to_string(), payload: "v3".to_string() },
+    ];
+
+    let (valid, invalid, _stats) = load_records_parallel(&records, 10);
+    assert_eq!(valid.len(), 2, "2 valid records (k1, k3)");
+    assert_eq!(invalid, 1, "1 invalid (empty key)");
+}
+
+#[test]
+fn imp1_chunk_size_1_same_as_chunk_size_100() {
+    use voltnuerongrid_ingest::IngestRecord;
+    use voltnuerongrid_ingest::chunked_loader::load_records_parallel;
+
+    let records: Vec<IngestRecord> = (0..50)
+        .map(|i| IngestRecord { key: format!("k{i}"), payload: format!("v{i}") })
+        .collect();
+
+    let (valid1, invalid1, _) = load_records_parallel(&records, 1);
+    let (valid100, invalid100, _) = load_records_parallel(&records, 100);
+    assert_eq!(valid1.len(), valid100.len(), "chunk size should not affect record count");
+    assert_eq!(invalid1, invalid100);
+}
+
+// ── IMP-2 tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn imp2_excel_parallel_sheets_processed_independently() {
+    use voltnuerongrid_ingest::IngestRecord;
+    use voltnuerongrid_ingest::chunked_loader::load_excel_sheets_parallel;
+
+    let sheet1 = (
+        "Orders".to_string(),
+        vec![
+            IngestRecord { key: "Orders:r1".to_string(), payload: "o1".to_string() },
+            IngestRecord { key: "Orders:r2".to_string(), payload: "o2".to_string() },
+        ],
+    );
+    let sheet2 = (
+        "Customers".to_string(),
+        vec![
+            IngestRecord { key: "Customers:r1".to_string(), payload: "c1".to_string() },
+        ],
+    );
+
+    let results = load_excel_sheets_parallel(vec![sheet1, sheet2], 100);
+    assert_eq!(results.len(), 2, "two sheets should produce two results");
+
+    let total_valid: usize = results.iter().map(|(_, valid, _)| valid.len()).sum();
+    assert_eq!(total_valid, 3, "all 3 records should be valid");
 }

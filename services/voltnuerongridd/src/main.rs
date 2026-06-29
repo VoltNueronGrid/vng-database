@@ -726,6 +726,9 @@ pub(crate) struct AppState {
     pub(crate) partition_registry: Arc<Mutex<HashMap<String, String>>>,
     // CACHE-1: path to the on-disk cache snapshot file (loaded at boot, saved on SET/DEL).
     pub(crate) cache_snapshot_path: Arc<String>,
+    // SCALE-1: autoscale policy + current status (in-memory; no external orchestrator required).
+    pub(crate) autoscale_policy: Arc<Mutex<handlers::autoscale::AutoscalePolicy>>,
+    pub(crate) autoscale_status: Arc<Mutex<handlers::autoscale::AutoscaleStatus>>,
 }
 
 #[derive(Clone, Default)]
@@ -1766,6 +1769,9 @@ async fn main() {
             std::env::var("VNG_CACHE_SNAPSHOT_PATH")
                 .unwrap_or_else(|_| "state/cache-snapshot.json".to_string())
         ),
+        // SCALE-1: autoscale policy and current status.
+        autoscale_policy: Arc::new(Mutex::new(handlers::autoscale::AutoscalePolicy::default())),
+        autoscale_status: Arc::new(Mutex::new(handlers::autoscale::AutoscaleStatus::default())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
