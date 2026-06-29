@@ -43,12 +43,24 @@ function Invoke-VngRequest {
     }
 }
 
-# ── Check binary exists ───────────────────────────────────────────────────────
+# ── Check binary exists (respects CARGO_TARGET_DIR / ~/.cargo/config.toml) ───
 if (-not (Test-Path $BinaryPath)) {
-    Write-Warning "Binary not found: $BinaryPath — building debug binary..."
+    Write-Warning "Binary not found at default path: $BinaryPath"
+    Write-Warning "Building debug binary and discovering actual output path..."
     Push-Location "$PSScriptRoot/../../.."
-    cargo build -p voltnuerongridd 2>&1 | Out-Null
+    # Capture JSON build output to find the real executable path
+    $buildJson = cargo build --bin voltnuerongridd --message-format=json 2>$null
     Pop-Location
+    $resolved = $buildJson | ForEach-Object {
+        try {
+            $obj = $_ | ConvertFrom-Json
+            if ($obj.reason -eq "compiler-artifact" -and $obj.executable) { $obj.executable }
+        } catch {}
+    } | Where-Object { $_ } | Select-Object -Last 1
+    if ($resolved -and (Test-Path $resolved)) {
+        Write-Host "Resolved binary via cargo JSON: $resolved"
+        $BinaryPath = $resolved
+    }
 }
 if (-not (Test-Path $BinaryPath)) {
     $artifact = @{
@@ -64,10 +76,17 @@ if (-not (Test-Path $BinaryPath)) {
 }
 
 # ── Start 3 nodes ─────────────────────────────────────────────────────────────
-$peers = "http://127.0.0.1:$Node1Port,http://127.0.0.1:$Node2Port,http://127.0.0.1:$Node3Port"
+# Build per-node peer lists that EXCLUDE the node itself (a node must not
+# include its own URL in VNG_RAFT_PEERS, otherwise it heartbeats itself and
+# calls become_follower(), causing the leader to step down immediately).
+$allPorts = @($Node1Port,$Node2Port,$Node3Port)
 
 for ($i = 1; $i -le 3; $i++) {
-    $port  = @($Node1Port,$Node2Port,$Node3Port)[$i - 1]
+    $port  = $allPorts[$i - 1]
+    # Peer URLs = all 3 minus this node's own URL
+    $otherPorts = $allPorts | Where-Object { $_ -ne $port }
+    $peerUrls   = ($otherPorts | ForEach-Object { "http://127.0.0.1:$_" }) -join ","
+
     $tdir  = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "vng-node$i-$(Get-Random)")
     New-Item -ItemType Directory -Path $tdir | Out-Null
     $tmpDirs += $tdir
@@ -75,13 +94,14 @@ for ($i = 1; $i -le 3; $i++) {
     $env_vars = @{
         VNG_ADMIN_API_KEY              = $AdminKey
         VNG_NODE_ID                    = "node-$i"
-        VNG_RAFT_PEERS                 = $peers
+        VNG_RAFT_PEERS                 = $peerUrls
+        VNG_CLUSTER_TOKEN              = "p5-gate-cluster-secret"
+        VNG_CLUSTER_MODE               = "cluster"
         VNG_DATA_DIR                   = $tdir
         VNG_NATIVE_LISTENER_ENABLED    = "false"
         VNG_HTTP_BIND                  = "127.0.0.1:$port"
         RUST_LOG                       = "warn"
     }
-    $envBlock = ($env_vars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join " "
 
     $proc = Start-Process -FilePath $BinaryPath `
         -WorkingDirectory $tdir `
@@ -126,9 +146,9 @@ $leaderPort = $null
 foreach ($port in @($Node1Port,$Node2Port,$Node3Port)) {
     try {
         $r = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/cluster/raft/status" `
-            -Headers @{ "x-vng-admin-key" = $AdminKey } -ErrorAction Stop
-        if ($r.role -eq "Leader") { $leaderPort = $port }
-        $p.checks += @{ name = "node-$port-role"; passed = $true; got = $r.role }
+            -Headers @{ "x-vng-admin-key" = $AdminKey; "x-vng-operator-id" = "admin" } -ErrorAction Stop
+        if ($r.raft.role -eq "Leader") { $leaderPort = $port }
+        $p.checks += @{ name = "node-$port-role"; passed = $true; got = $r.raft.role }
     } catch {
         $p.checks += @{ name = "node-$port-role"; passed = $false; got = "error" }
     }
@@ -139,7 +159,7 @@ $packs += $p
 # ── Pack 3: Write rows to leader, verify replication ─────────────────────────
 $p = @{ name = "row-replication"; status = "pending"; checks = @() }
 if ($null -ne $leaderPort) {
-    $headers = @{ "x-vng-admin-key" = $AdminKey; "Content-Type" = "application/json" }
+    $headers = @{ "x-vng-admin-key" = $AdminKey; "x-vng-operator-id" = "admin"; "Content-Type" = "application/json" }
     $tableUniq = "p5_$(Get-Random)"
     # Create table
     $ddl = @{ sql_batch = "CREATE TABLE $tableUniq (id TEXT, val TEXT)" } | ConvertTo-Json
@@ -179,9 +199,9 @@ if ($null -ne $leaderPort) {
     foreach ($port in @($Node1Port,$Node2Port,$Node3Port) | Where-Object { $_ -ne $leaderPort }) {
         try {
             $r = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/cluster/raft/status" `
-                -Headers @{ "x-vng-admin-key" = $AdminKey } -ErrorAction Stop
-            if ($r.role -eq "Leader") { $newLeader = $port }
-            $p.checks += @{ name = "node-$port-after-kill"; passed = $true; got = $r.role }
+                -Headers @{ "x-vng-admin-key" = $AdminKey; "x-vng-operator-id" = "admin" } -ErrorAction Stop
+            if ($r.raft.role -eq "Leader") { $newLeader = $port }
+            $p.checks += @{ name = "node-$port-after-kill"; passed = $true; got = $r.raft.role }
         } catch {
             $p.checks += @{ name = "node-$port-after-kill"; passed = $false; got = "unreachable" }
         }

@@ -1,77 +1,82 @@
 {
-  "status": "warning",
+  "timestamp": "2026-06-29T13:11:30.8312080+05:30",
+  "gate": "p5-multinode-smoke",
   "packs": [
     {
+      "name": "all-nodes-healthy",
       "checks": [
         {
-          "got": "{\"status\":\"ok\",\"node_id\":\"node-1\",\"cluster_mode\":\"single\"}",
+          "got": "{\"status\":\"ok\",\"node_id\":\"node-1\",\"cluster_mode\":\"cluster\"}",
           "name": "node-18080-healthy",
           "passed": true
         },
         {
-          "got": "{\"status\":\"ok\",\"node_id\":\"node-2\",\"cluster_mode\":\"single\"}",
+          "got": "{\"status\":\"ok\",\"node_id\":\"node-2\",\"cluster_mode\":\"cluster\"}",
           "name": "node-18081-healthy",
           "passed": true
         },
         {
-          "got": "{\"status\":\"ok\",\"node_id\":\"node-3\",\"cluster_mode\":\"single\"}",
+          "got": "{\"status\":\"ok\",\"node_id\":\"node-3\",\"cluster_mode\":\"cluster\"}",
           "name": "node-18082-healthy",
           "passed": true
         }
       ],
-      "name": "all-nodes-healthy",
       "status": "passed"
     },
     {
-      "checks": [
-        {
-          "got": "error",
-          "name": "node-18080-role",
-          "passed": false
-        },
-        {
-          "got": "error",
-          "name": "node-18081-role",
-          "passed": false
-        },
-        {
-          "got": "error",
-          "name": "node-18082-role",
-          "passed": false
-        }
-      ],
       "name": "leader-elected",
-      "status": "warning"
-    },
-    {
       "checks": [
         {
-          "got": "no-leader-elected",
-          "name": "skipped",
+          "got": "follower",
+          "name": "node-18080-role",
+          "passed": true
+        },
+        {
+          "got": "follower",
+          "name": "node-18081-role",
+          "passed": true
+        },
+        {
+          "got": "leader",
+          "name": "node-18082-role",
           "passed": true
         }
       ],
+      "status": "passed"
+    },
+    {
       "name": "row-replication",
-      "status": "warning"
-    },
-    {
       "checks": [
         {
-          "got": "no-leader-to-kill",
-          "name": "skipped",
+          "got": "rows=5",
+          "name": "rows-on-follower",
           "passed": true
         }
       ],
+      "status": "passed"
+    },
+    {
       "name": "leader-failover",
-      "status": "warning"
+      "checks": [
+        {
+          "got": "follower",
+          "name": "node-18080-after-kill",
+          "passed": true
+        },
+        {
+          "got": "leader",
+          "name": "node-18081-after-kill",
+          "passed": true
+        }
+      ],
+      "status": "passed"
     }
   ],
+  "note": "P5 multi-node smoke: warning status is expected until P1 (durable row store) is complete. Leader failover and row replication over Raft are exercised.",
+  "status": "passed",
   "node_ports": [
     18080,
     18081,
     18082
-  ],
-  "timestamp": "2026-06-28T08:44:46.6718340+05:30",
-  "gate": "p5-multinode-smoke",
-  "note": "P5 multi-node smoke: warning status is expected until P1 (durable row store) is complete. Leader failover and row replication over Raft are exercised."
+  ]
 }
