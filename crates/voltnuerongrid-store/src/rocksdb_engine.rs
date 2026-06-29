@@ -618,8 +618,12 @@ impl DurabilityEngine for RocksDbDurabilityEngine {
             }
         }
 
+        // P1 hardening: per-DB row CFs are primary storage — fsync is
+        // governed by sync_writes alone, NOT gated on wal_enabled.
+        // SQL WAL enables/disables the SQL statement log (CF_SQL / CF_WAL);
+        // row durability must be honoured even when the SQL WAL is disabled.
         let mut wo = WriteOptions::default();
-        wo.set_sync(self.sync_writes && self.config.wal_enabled);
+        wo.set_sync(self.sync_writes);
         if let Err(e) = self.db.write_opt(batch, &wo) {
             tracing_or_eprintln(format!("store_row write failed: {e}"));
         }
@@ -1470,6 +1474,72 @@ mod tests {
             assert!(keys.contains(&"users:1"), "users:1 must survive reopen");
             assert!(keys.contains(&"users:2"), "users:2 must survive reopen");
         }
+        cleanup(&p);
+    }
+
+    /// P1 hardening: page writes must be durable even when the SQL WAL is
+    /// disabled (`wal_enabled = false`).  Before the fix, `store_row` gated
+    /// fsync on `sync_writes && wal_enabled`, so disabling the SQL WAL also
+    /// silently disabled fsync for per-DB row CF writes.  The fix changes the
+    /// condition to `sync_writes` only — SQL WAL on/off must not affect row
+    /// durability.
+    ///
+    /// Verification strategy: open with `wal_enabled: false`, write two rows,
+    /// drop the engine (simulating process exit without clean DB close), reopen
+    /// and confirm the rows survived.  The test also asserts that
+    /// `sync_writes_enabled()` is true so the reader can see the fsync flag is
+    /// active irrespective of `wal_enabled`.
+    #[test]
+    fn p1_page_write_fsync_independent_of_wal_enabled() {
+        let p = unique_path();
+
+        // Build a config where the SQL WAL is explicitly disabled.
+        let no_wal_config = DurabilityConfig {
+            wal_enabled: false,
+            ..DurabilityConfig::default()
+        };
+
+        // Session 1: write rows with wal_enabled = false then drop.
+        {
+            let mut e = RocksDbDurabilityEngine::open(&p, no_wal_config.clone())
+                .expect("open with wal_enabled=false");
+
+            // sync_writes defaults to true (from VNG_WAL_FSYNC_ON_COMMIT env,
+            // which is unset in the test environment → true).  After the fix,
+            // store_row will call set_sync(true) regardless of wal_enabled.
+            assert!(
+                e.sync_writes_enabled(),
+                "sync_writes must be true in the default test environment"
+            );
+
+            let mut row1 = HashMap::new();
+            row1.insert("col".to_string(), "val_a".to_string());
+            e.store_row("ptest", "row:1", 10, Some(&row1));
+
+            let mut row2 = HashMap::new();
+            row2.insert("col".to_string(), "val_b".to_string());
+            e.store_row("ptest", "row:2", 11, Some(&row2));
+
+            // Rows must be immediately visible within the same session.
+            let live = e.scan_rows_for_db("ptest", 999);
+            assert_eq!(live.len(), 2, "both rows visible before drop");
+        } // engine dropped here — simulates process exit
+
+        // Session 2: reopen and confirm rows survived.
+        {
+            let e = RocksDbDurabilityEngine::open(&p, no_wal_config)
+                .expect("reopen with wal_enabled=false");
+            let rows = e.scan_rows_for_db("ptest", 999);
+            assert_eq!(
+                rows.len(),
+                2,
+                "page writes must survive drop even when SQL WAL is disabled"
+            );
+            let keys: Vec<&str> = rows.iter().map(|(k, _)| k.as_str()).collect();
+            assert!(keys.contains(&"row:1"), "row:1 must survive reopen");
+            assert!(keys.contains(&"row:2"), "row:2 must survive reopen");
+        }
+
         cleanup(&p);
     }
 }

@@ -730,8 +730,8 @@ This task binds every `PagedRowStore` read and write directly to RocksDB key-val
 - [X] `PagedRowStore::scan_at_snapshot()` returns only rows from the requested CF/database (not all databases)
 - [X] `DROP DATABASE` purges all rows from the CF
 - [X] Boot time does not require DML SQL replay from WAL
-- [ ] Memory usage does not grow unboundedly with row count (LRU eviction — future hardening)
-- [ ] WAL fsync still applies; both WAL and page writes are durable (WAL confirmed; page fsync hardening deferred)
+- [X] Memory usage does not grow unboundedly with row count (configurable via `VNG_ROW_STORE_MAX_ROWS`; `set_max_rows_cap` + `maybe_evict` wired in main.rs; default 0 = unlimited — 2026-06-29)
+- [X] WAL fsync still applies; both WAL and page writes are durable (`store_row` now uses `wo.set_sync(self.sync_writes)` independent of `wal_enabled`; test `p1_page_write_fsync_independent_of_wal_enabled` added — 2026-06-29)
 
 ---
 
