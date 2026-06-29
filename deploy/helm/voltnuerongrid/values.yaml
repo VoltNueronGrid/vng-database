@@ -5,6 +5,12 @@ image:
   tag: dev
   pullPolicy: IfNotPresent
 
+# adminApiKey is loaded from a Kubernetes Secret named 'voltnuerongrid-admin'.
+# Create it with: kubectl create secret generic voltnuerongrid-admin --from-literal=api-key=<KEY>
+adminApiKey:
+  secretName: voltnuerongrid-admin
+  secretKey: api-key
+
 service:
   type: ClusterIP
   httpPort: 8080
@@ -24,6 +30,24 @@ persistence:
   enabled: true
   size: 20Gi
   storageClassName: ""
+
+# readinessProbe: HTTP GET /health must return 200 before traffic is routed.
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+
+# livenessProbe: restart pod if /health fails for 3 consecutive checks.
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  failureThreshold: 5
 
 env:
   VNG_CLUSTER_MODE: multi

@@ -15618,3 +15618,211 @@ fn imp2_excel_parallel_sheets_processed_independently() {
     let total_valid: usize = results.iter().map(|(_, valid, _)| valid.len()).sum();
     assert_eq!(total_valid, 3, "all 3 records should be valid");
 }
+
+// ── CONN-1 tests (FTP connector) ──────────────────────────────────────────────
+
+#[test]
+fn conn1_parse_pasv_response_correct_port() {
+    use voltnuerongrid_ingest::connectors::ftp::parse_pasv_response;
+    // port = 19*256 + 200 = 5064
+    let result = parse_pasv_response("227 Entering Passive Mode (127,0,0,1,19,200).");
+    assert_eq!(result, Some(("127.0.0.1".to_string(), 19 * 256 + 200)));
+}
+
+#[test]
+fn conn1_ftp_connector_descriptor_ftp_id() {
+    use voltnuerongrid_ingest::connectors::ftp::{FtpConnector, FtpConnectorConfig};
+    let cfg = FtpConnectorConfig::new("ftp.example.com", 21, "user", "pass", "/");
+    let conn = FtpConnector::new(cfg);
+    assert_eq!(conn.descriptor().id, "ftp");
+}
+
+#[test]
+fn conn1_ftp_connector_descriptor_ftps_id() {
+    use voltnuerongrid_ingest::connectors::ftp::{FtpConnector, FtpConnectorConfig};
+    let mut cfg = FtpConnectorConfig::new("ftp.example.com", 21, "user", "pass", "/");
+    cfg.tls_enabled = true;
+    let conn = FtpConnector::new(cfg);
+    assert_eq!(conn.descriptor().id, "ftps");
+}
+
+// ── CONN-5 tests (WebDAV connector) ──────────────────────────────────────────
+
+#[test]
+fn conn5_parse_propfind_hrefs_finds_files() {
+    use voltnuerongrid_ingest::connectors::webdav::parse_propfind_hrefs;
+    let xml = r#"<multistatus xmlns="DAV:">
+      <response><href>/dav/file.csv</href></response>
+      <response><href>/dav/</href></response>
+    </multistatus>"#;
+    let hrefs = parse_propfind_hrefs(xml);
+    assert!(hrefs.contains(&"/dav/file.csv".to_string()));
+}
+
+#[test]
+fn conn5_base64_encode_canonical() {
+    use voltnuerongrid_ingest::connectors::webdav::base64_encode;
+    // "user:pass" → "dXNlcjpwYXNz" per RFC 4648
+    assert_eq!(base64_encode(b"user:pass"), "dXNlcjpwYXNz");
+}
+
+#[test]
+fn conn5_webdav_connector_descriptor() {
+    use voltnuerongrid_ingest::connectors::webdav::{WebDavConfig, WebDavConnector};
+    use voltnuerongrid_ingest::IngestionConnector;
+    let cfg = WebDavConfig::new("https://dav.example.com/");
+    let conn = WebDavConnector::new(cfg);
+    assert_eq!(conn.descriptor().id, "webdav");
+}
+
+// ── CONN-6 tests (Kafka connector) ───────────────────────────────────────────
+
+#[test]
+fn conn6_parse_kafka_records_key_and_value() {
+    use voltnuerongrid_ingest::connectors::kafka::parse_kafka_records;
+    let json = r#"[{"topic":"t","partition":0,"offset":1,"key":"k1","value":"v1"}]"#;
+    let records = parse_kafka_records(json);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].key, Some("k1".to_string()));
+    assert_eq!(records[0].value, "v1");
+}
+
+#[test]
+fn conn6_kafka_connector_broker_kind() {
+    use voltnuerongrid_ingest::connectors::kafka::{KafkaConnector, KafkaConnectorConfig};
+    use voltnuerongrid_ingest::EventBusBrokerClient;
+    let cfg = KafkaConnectorConfig::new("http://localhost:8082", "g1", "t1");
+    let conn = KafkaConnector::new(cfg);
+    assert_eq!(conn.broker_kind(), "kafka");
+}
+
+#[test]
+fn conn6_kafka_connector_empty_event_store() {
+    use voltnuerongrid_ingest::connectors::kafka::{KafkaConnector, KafkaConnectorConfig};
+    use voltnuerongrid_ingest::EventBusBrokerClient;
+    let cfg = KafkaConnectorConfig::new("http://localhost:8082", "g1", "t1");
+    let conn = KafkaConnector::new(cfg);
+    assert_eq!(conn.total_events(), 0);
+    assert!(conn.last_event_id_for_stream("orders").is_none());
+}
+
+// ── GOV-1 tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn gov1_compliance_report_returns_ok() {
+    use crate::handlers::misc::compliance_report;
+    use crate::handlers::misc::ComplianceReportQuery;
+    use axum::extract::Query;
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let query = Query(ComplianceReportQuery { format: None });
+
+    let r = rt.block_on(compliance_report(State(state), headers, query));
+    assert!(r.is_ok(), "compliance_report should return Ok");
+}
+
+#[test]
+fn gov1_compliance_report_html_format() {
+    use crate::handlers::misc::compliance_report;
+    use crate::handlers::misc::ComplianceReportQuery;
+    use axum::extract::Query;
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let query = Query(ComplianceReportQuery { format: Some("html".to_string()) });
+
+    let r = rt.block_on(compliance_report(State(state), headers, query));
+    assert!(r.is_ok());
+    let resp = r.unwrap();
+    let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("");
+    assert!(ct.contains("text/html"), "content-type should be text/html, got: {ct}");
+}
+
+#[test]
+fn gov1_unix_secs_to_ymd_epoch() {
+    use crate::handlers::misc::unix_secs_to_ymd;
+    // 2024-06-29 = some specific number, test known dates
+    let (y, m, d) = unix_secs_to_ymd(0);
+    assert_eq!((y, m, d), (1970, 1, 1));
+}
+
+#[test]
+fn gov1_unix_secs_to_ymd_leap_year() {
+    use crate::handlers::misc::unix_secs_to_ymd;
+    // 2000-03-01 = 951868800 secs (= 11017 days × 86400)
+    let (y, mo, d) = unix_secs_to_ymd(951868800);
+    assert_eq!(y, 2000);
+    assert_eq!(mo, 3);
+    assert_eq!(d, 1);
+}
+
+// ── GOV-2 tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn gov2_format_cef_line_structure() {
+    use crate::handlers::misc::format_cef_line;
+    use voltnuerongrid_audit::{AuditEvent, AuditEventKind};
+
+    let event = AuditEvent {
+        event_id: 1,
+        occurred_epoch_ms: 1_700_000_000_000,
+        actor: "admin".to_string(),
+        action: "sql_execute".to_string(),
+        kind: AuditEventKind::Sql,
+        outcome: "ok".to_string(),
+        details_json: "{}".to_string(),
+        chain_hash: "abc123".to_string(),
+    };
+    let cef = format_cef_line(&event);
+    assert!(cef.starts_with("CEF:0|VoltNueronGrid|VNG-DB|1.0|"), "CEF header wrong: {cef}");
+    assert!(cef.contains("src=admin"), "missing src field");
+    assert!(cef.contains("outcome=ok"), "missing outcome field");
+    assert!(cef.contains("1700000000000"), "missing timestamp");
+}
+
+#[test]
+fn gov2_format_cef_line_escapes_equals() {
+    use crate::handlers::misc::format_cef_line;
+    use voltnuerongrid_audit::{AuditEvent, AuditEventKind};
+
+    let event = AuditEvent {
+        event_id: 2,
+        occurred_epoch_ms: 1_000,
+        actor: "user=admin".to_string(),
+        action: "login".to_string(),
+        kind: AuditEventKind::Security,
+        outcome: "ok".to_string(),
+        details_json: "{}".to_string(),
+        chain_hash: "def456".to_string(),
+    };
+    let cef = format_cef_line(&event);
+    assert!(cef.contains("src=user\\=admin"), "equals should be escaped: {cef}");
+}
+
+#[test]
+fn gov2_syslog_udp_send_no_host_is_noop() {
+    use crate::handlers::misc::syslog_udp_send;
+    // Without VNG_SIEM_SYSLOG_HOST set, should complete without error.
+    std::env::remove_var("VNG_SIEM_SYSLOG_HOST");
+    syslog_udp_send(&["CEF:0|VNG|test|1.0|Sql|login|5|src=admin outcome=ok rt=1000".to_string()]);
+}
+
+#[test]
+fn gov2_audit_export_cef_endpoint_returns_text() {
+    use crate::handlers::misc::{audit_export_cef, CefExportQuery};
+    use axum::extract::Query;
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let query = Query(CefExportQuery { start: None, end: None, sink: None });
+
+    let r = rt.block_on(audit_export_cef(State(state), headers, query));
+    assert!(r.is_ok(), "audit_export_cef should return Ok");
+    let resp = r.unwrap();
+    let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("");
+    assert!(ct.contains("text/plain"), "content-type should be text/plain, got: {ct}");
+}

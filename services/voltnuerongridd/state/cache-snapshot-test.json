@@ -1,8 +1,8 @@
 {
-  "gs": {
-    "counter": {
-      "expires_at_ms": 1782742397189,
-      "value": 42
+  "ttl-part": {
+    "temp-key": {
+      "expires_at_ms": 1782744746164,
+      "value": "ephemeral"
     }
   }
 }

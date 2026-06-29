@@ -639,6 +639,11 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
             use crate::handlers::misc::audit_export_webhook;
             post(audit_export_webhook)
         })
+        // GOV-2: CEF / SIEM export (start/end epoch_ms query params, ?sink=syslog)
+        .route("/api/v1/audit/export/cef", {
+            use crate::handlers::misc::audit_export_cef;
+            get(audit_export_cef)
+        })
         // AI-3: Incident root-cause diagnosis
         .route("/api/v1/sre/incident/diagnose", {
             use crate::handlers::sre::sre_incident_diagnose;

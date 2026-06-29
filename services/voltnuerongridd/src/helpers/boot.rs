@@ -444,6 +444,24 @@ pub(crate) fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                 ],
             },
         );
+        // GOV-1: compliance report
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "compliance".to_string(),
+                scopes: vec!["*".to_string()],
+                actions: vec![PrivilegeAction::Read],
+            },
+        );
+        // GOV-2: audit CEF / syslog export
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "audit".to_string(),
+                scopes: vec!["*".to_string()],
+                actions: vec![PrivilegeAction::Read, PrivilegeAction::Execute],
+            },
+        );
     }
 
     for role in ["tenant_analyst", "tenant_admin"] {

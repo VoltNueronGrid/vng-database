@@ -1780,11 +1780,19 @@ pub(crate) struct ComplianceReportResponse {
     pub findings: Vec<String>,
 }
 
-/// GOV-1: Admin-only compliance status report aggregating RBAC, encryption, audit, and TLS posture.
+/// Query parameters for compliance_report — supports `?format=html`.
+#[derive(Deserialize, Default)]
+pub(crate) struct ComplianceReportQuery {
+    pub format: Option<String>,
+}
+
+/// GOV-1: Admin-only compliance status report. Supports JSON (default) and HTML
+/// (`?format=html`). Persists JSON snapshot to `state/compliance/`.
 pub(crate) async fn compliance_report(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<(StatusCode, Json<ComplianceReportResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    Query(query): Query<ComplianceReportQuery>,
+) -> Result<axum::response::Response, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_privilege(&headers, &state, "compliance", "report", voltnuerongrid_auth::PrivilegeAction::Read)?;
 
     let rbac_role_count = state.rbac_privilege_matrix.grants_by_role.len();
@@ -1835,12 +1843,10 @@ pub(crate) async fn compliance_report(
         score = score.saturating_sub(10);
     }
 
-    append_audit_event(&state, AuditEventKind::Security,
-        "operator", "compliance_report", "ok", "");
-
-    Ok((StatusCode::OK, Json(ComplianceReportResponse {
+    let generated_at_unix_ms = now_unix_ms_u64() as u128;
+    let report = ComplianceReportResponse {
         status: "ok",
-        generated_at_unix_ms: now_unix_ms_u64() as u128,
+        generated_at_unix_ms,
         rbac_role_count,
         audit_event_count,
         encryption_at_rest_enabled,
@@ -1849,8 +1855,122 @@ pub(crate) async fn compliance_report(
         active_ddl_objects,
         active_operator_count,
         compliance_score: score,
-        findings,
-    })))
+        findings: findings.clone(),
+    };
+
+    // Persist JSON snapshot to state/compliance/
+    persist_compliance_report(&report);
+
+    append_audit_event(&state, AuditEventKind::Security,
+        "operator", "compliance_report", "ok", "");
+
+    let want_html = query.format.as_deref().map(|f| f.eq_ignore_ascii_case("html")).unwrap_or(false);
+    if want_html {
+        let html = build_compliance_html(&report);
+        use axum::response::IntoResponse;
+        Ok((
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            html,
+        ).into_response())
+    } else {
+        use axum::response::IntoResponse;
+        Ok((StatusCode::OK, Json(report)).into_response())
+    }
+}
+
+/// Persist a compliance report snapshot as JSON.
+fn persist_compliance_report(report: &ComplianceReportResponse) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Format as YYYY-MM-DD using simple arithmetic (no chrono dep).
+    let (y, mo, d) = unix_secs_to_ymd(secs);
+    let dir = "state/compliance";
+    if std::fs::create_dir_all(dir).is_ok() {
+        let path = format!("{dir}/report-{y:04}-{mo:02}-{d:02}.json");
+        if let Ok(json) = serde_json::to_string_pretty(report) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+}
+
+/// Convert Unix timestamp (secs) to (year, month, day) — no external dep.
+pub(crate) fn unix_secs_to_ymd(secs: u64) -> (u32, u32, u32) {
+    // Days since 1970-01-01
+    let days = (secs / 86400) as u32;
+    let mut y = 1970u32;
+    let mut remaining = days;
+    loop {
+        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+        if remaining < days_in_year { break; }
+        remaining -= days_in_year;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_days = [31u32, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut mo = 1u32;
+    for &md in &month_days {
+        if remaining < md { break; }
+        remaining -= md;
+        mo += 1;
+    }
+    (y, mo, remaining + 1)
+}
+
+/// Build an HTML compliance report.
+fn build_compliance_html(r: &ComplianceReportResponse) -> String {
+    let enc = if r.encryption_at_rest_enabled { "✓ Enabled" } else { "✗ Disabled" };
+    let tls = if r.tls_enabled { "✓ Enabled" } else { "✗ Disabled" };
+    let findings_html = if r.findings.is_empty() {
+        "<li>No findings — all checks passed.</li>".to_string()
+    } else {
+        r.findings.iter().map(|f| format!("<li>{f}</li>")).collect::<Vec<_>>().join("\n")
+    };
+    format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>VoltNueronGrid Compliance Report</title>
+<style>body{{font-family:sans-serif;max-width:900px;margin:2rem auto}}
+h1{{color:#1a1a2e}}table{{border-collapse:collapse;width:100%}}
+th,td{{border:1px solid #ddd;padding:8px;text-align:left}}
+th{{background:#f4f4f4}}.score{{font-size:2rem;color:{score_color}}}</style>
+</head>
+<body>
+<h1>VoltNueronGrid Compliance Report</h1>
+<p>Generated: <code>{generated_at_unix_ms}</code></p>
+<p class="score">Score: {score}/100</p>
+<h2>Access Control</h2>
+<table><tr><th>Metric</th><th>Value</th></tr>
+<tr><td>RBAC Role Bindings</td><td>{rbac_role_count}</td></tr>
+<tr><td>Active Operators</td><td>{active_operator_count}</td></tr>
+</table>
+<h2>Data Protection</h2>
+<table><tr><th>Feature</th><th>Status</th></tr>
+<tr><td>Encryption at Rest</td><td>{enc}</td></tr>
+<tr><td>TLS / Native Listener</td><td>{tls}</td></tr>
+</table>
+<h2>Audit Trail</h2>
+<table><tr><th>Metric</th><th>Value</th></tr>
+<tr><td>Audit Events</td><td>{audit_event_count}</td></tr>
+<tr><td>DDL Objects</td><td>{active_ddl_objects}</td></tr>
+<tr><td>Constraint Rules</td><td>{constraint_count}</td></tr>
+</table>
+<h2>Findings</h2><ul>{findings_html}</ul>
+</body></html>"#,
+        score_color = if r.compliance_score >= 80 { "#2ecc71" } else if r.compliance_score >= 50 { "#f39c12" } else { "#e74c3c" },
+        generated_at_unix_ms = r.generated_at_unix_ms,
+        score = r.compliance_score,
+        rbac_role_count = r.rbac_role_count,
+        active_operator_count = r.active_operator_count,
+        enc = enc,
+        tls = tls,
+        audit_event_count = r.audit_event_count,
+        active_ddl_objects = r.active_ddl_objects,
+        constraint_count = r.constraint_count,
+        findings_html = findings_html,
+    )
 }
 
 #[derive(Deserialize)]
@@ -1920,4 +2040,109 @@ pub(crate) async fn audit_export_webhook(
     })))
 }
 
+// ── GOV-2: CEF (Common Event Format) export + Syslog UDP ─────────────────────
+
+/// Query parameters for CEF export: `?start=<epoch_ms>&end=<epoch_ms>`
+#[derive(Deserialize, Default)]
+pub(crate) struct CefExportQuery {
+    pub start: Option<u64>,
+    pub end: Option<u64>,
+    /// If "syslog", also send over UDP to VNG_SIEM_SYSLOG_HOST:VNG_SIEM_SYSLOG_PORT.
+    pub sink: Option<String>,
+}
+
+/// Format a single audit event as a CEF line.
+/// CEF:0|Vendor|Product|Version|SignatureId|Name|Severity|Extension
+pub(crate) fn format_cef_line(event: &voltnuerongrid_audit::AuditEvent) -> String {
+    // Map audit kind to CEF severity (0–10)
+    let severity = match event.kind {
+        voltnuerongrid_audit::AuditEventKind::Security => 8,
+        voltnuerongrid_audit::AuditEventKind::Ingest => 5,
+        voltnuerongrid_audit::AuditEventKind::Sql => 6,
+        voltnuerongrid_audit::AuditEventKind::Failover => 9,
+        voltnuerongrid_audit::AuditEventKind::Autonomous => 4,
+        voltnuerongrid_audit::AuditEventKind::Storage => 5,
+    };
+    let kind_str = format!("{:?}", event.kind);
+    // CEF extension values: escape = as \= and space as \s
+    let actor = event.actor.replace('=', "\\=").replace(' ', "\\s");
+    let action = event.action.replace('=', "\\=").replace(' ', "\\s");
+    let outcome = event.outcome.replace('=', "\\=").replace(' ', "\\s");
+    let details = event.details_json.replace('=', "\\=").replace(' ', "\\s");
+    format!(
+        "CEF:0|VoltNueronGrid|VNG-DB|1.0|{kind}|{action_name}|{sev}|src={actor} outcome={outcome} cs1={details} rt={ts}",
+        kind = kind_str,
+        action_name = action,
+        sev = severity,
+        actor = actor,
+        outcome = outcome,
+        details = details,
+        ts = event.occurred_epoch_ms,
+    )
+}
+
+/// GOV-2: Export audit events in CEF (Common Event Format) over HTTP.
+/// Optionally sends over syslog UDP when `?sink=syslog` is set.
+pub(crate) async fn audit_export_cef(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<CefExportQuery>,
+) -> Result<axum::response::Response, (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_privilege(&headers, &state, "audit", "export", voltnuerongrid_auth::PrivilegeAction::Read)?;
+
+    let events: Vec<voltnuerongrid_audit::AuditEvent> = {
+        let sink = state.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
+        sink.all().to_vec()
+    };
+
+    let filtered: Vec<_> = events
+        .into_iter()
+        .filter(|e| {
+            let ts = e.occurred_epoch_ms as u64;
+            if let Some(start) = query.start { if ts < start { return false; } }
+            if let Some(end) = query.end { if ts > end { return false; } }
+            true
+        })
+        .collect();
+
+    let cef_lines: Vec<String> = filtered.iter().map(format_cef_line).collect();
+    let body = cef_lines.join("\n");
+
+    // Optionally send to syslog UDP
+    if query.sink.as_deref() == Some("syslog") {
+        syslog_udp_send(&cef_lines);
+    }
+
+    append_audit_event(&state, AuditEventKind::Security,
+        "operator", "audit_export_cef", "ok", "");
+
+    use axum::response::IntoResponse;
+    Ok((
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        body,
+    ).into_response())
+}
+
+/// Send CEF lines to a syslog UDP endpoint.
+/// Reads VNG_SIEM_SYSLOG_HOST and VNG_SIEM_SYSLOG_PORT (default 514).
+pub(crate) fn syslog_udp_send(lines: &[String]) {
+    let host = match std::env::var("VNG_SIEM_SYSLOG_HOST") {
+        Ok(h) => h,
+        Err(_) => return, // No syslog configured
+    };
+    let port: u16 = std::env::var("VNG_SIEM_SYSLOG_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(514);
+    let target = format!("{host}:{port}");
+    // Priority = Facility.LOCAL0 (16) * 8 + Severity.NOTICE (5) = 133
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        for line in lines {
+            // RFC 3164 syslog format: <PRI>TIMESTAMP HOSTNAME TAG: MSG
+            let msg = format!("<133>VNG-DB: {line}");
+            let _ = socket.send_to(msg.as_bytes(), &target);
+        }
+    }
+}
 

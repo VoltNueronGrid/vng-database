@@ -4,7 +4,7 @@ metadata:
   name: voltnuerongrid
 spec:
   serviceName: voltnuerongrid-headless
-  replicas: 3
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       app: voltnuerongrid
@@ -15,43 +15,47 @@ spec:
     spec:
       containers:
         - name: voltnuerongridd
-          image: ghcr.io/voltnuerongrid/voltnuerongridd:dev
-          imagePullPolicy: IfNotPresent
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.service.httpPort }}
             - name: sql
-              containerPort: 5432
+              containerPort: {{ .Values.service.sqlPort }}
             - name: cache
-              containerPort: 6380
+              containerPort: {{ .Values.service.cachePort }}
             - name: gossip
-              containerPort: 7000
+              containerPort: {{ .Values.service.gossipPort }}
           env:
             - name: VNG_NODE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: VNG_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.adminApiKey.secretName }}
+                  key: {{ .Values.adminApiKey.secretKey }}
             - name: VNG_CLUSTER_MODE
               value: "multi"
             - name: VNG_HTTP_BIND
-              value: "0.0.0.0:8080"
+              value: "0.0.0.0:{{ .Values.service.httpPort }}"
             - name: VNG_SQL_BIND
-              value: "0.0.0.0:5432"
+              value: "0.0.0.0:{{ .Values.service.sqlPort }}"
             - name: VNG_GOSSIP_BIND
-              value: "0.0.0.0:7000"
+              value: "0.0.0.0:{{ .Values.service.gossipPort }}"
             - name: VNG_DATA_DIR
               value: "/var/lib/voltnuerongrid"
             - name: VNG_CONFIG_FILE
               value: "/etc/voltnuerongrid/config.yaml"
             - name: VNG_SEEDS
-              value: "voltnuerongrid-0.voltnuerongrid-headless:7000,voltnuerongrid-1.voltnuerongrid-headless:7000,voltnuerongrid-2.voltnuerongrid-headless:7000"
+              value: "voltnuerongrid-0.voltnuerongrid-headless:{{ .Values.service.gossipPort }},voltnuerongrid-1.voltnuerongrid-headless:{{ .Values.service.gossipPort }},voltnuerongrid-2.voltnuerongrid-headless:{{ .Values.service.gossipPort }}"
           resources:
-            requests:
-              cpu: "500m"
-              memory: "1Gi"
-            limits:
-              cpu: "2"
-              memory: "4Gi"
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/voltnuerongrid
@@ -66,6 +70,10 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.storageClassName }}
+        storageClassName: {{ .Values.persistence.storageClassName }}
+        {{- end }}
         resources:
           requests:
-            storage: 20Gi
+            storage: {{ .Values.persistence.size }}
+
