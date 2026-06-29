@@ -16,3 +16,5 @@ pub(crate) mod misc;
 pub(crate) mod user_mgmt;
 pub(crate) mod backup;
 pub(crate) mod udf;
+// PLUG-4: plugin marketplace
+pub(crate) mod plugins;

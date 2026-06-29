@@ -573,6 +573,27 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
             use crate::handlers::udf::udf_call_handler;
             post(udf_call_handler)
         })
+        // PLUG-4: Versioned plugin marketplace
+        .route("/api/v1/plugins/install", {
+            use crate::handlers::plugins::plugin_install_handler;
+            post(plugin_install_handler)
+        })
+        .route("/api/v1/plugins/upgrade", {
+            use crate::handlers::plugins::plugin_upgrade_handler;
+            post(plugin_upgrade_handler)
+        })
+        .route("/api/v1/plugins/downgrade", {
+            use crate::handlers::plugins::plugin_downgrade_handler;
+            post(plugin_downgrade_handler)
+        })
+        .route("/api/v1/plugins/{id}", {
+            use crate::handlers::plugins::plugin_uninstall_handler;
+            axum::routing::delete(plugin_uninstall_handler)
+        })
+        .route("/api/v1/plugins/list", {
+            use crate::handlers::plugins::plugin_list_handler;
+            get(plugin_list_handler)
+        })
         // GOV-1: Compliance report
         .route("/api/v1/compliance/report", {
             use crate::handlers::misc::compliance_report;

@@ -53,6 +53,8 @@ hmac = "0.12"
 wasmi = "0.36"
 # UDF-2: real JavaScript execution (pure-Rust ES2021 engine, no ICU bundle).
 boa_engine = { version = "0.19", default-features = false, features = ["annex-b"] }
+# PLUG-3: Geospatial R-tree index (pure Rust, no C dependencies).
+rstar = "0.12"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 
@@ -64,3 +66,5 @@ arrow-array = { version = "53", default-features = false }
 arrow-schema = { version = "53", default-features = false }
 rust_xlsxwriter = "0.79"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tower = { version = "0.4", features = ["util"] }
+http-body-util = "0.1"

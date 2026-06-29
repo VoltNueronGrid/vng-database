@@ -74,6 +74,7 @@ use handlers::sre::*;
 use handlers::misc::*;
 #[allow(unused_imports)] use handlers::backup::*;
 #[allow(unused_imports)] use handlers::udf::*;
+#[allow(unused_imports)] use handlers::plugins::*;
 use router::build_router;
 #[allow(unused_imports)] use helpers::time::*;
 #[allow(unused_imports)] use helpers::env_helpers::*;
@@ -712,6 +713,14 @@ pub(crate) struct AppState {
     /// The emitter (LoggingTriggerEmitter by default) is swappable for testing.
     pub(crate) trigger_registry: Arc<Mutex<TriggerRegistry>>,
     pub(crate) trigger_emitter: Arc<dyn TriggerEmitter>,
+    // PLUG-1: flat-scan cosine-similarity vector index.
+    pub(crate) vector_index: Arc<Mutex<helpers::vector::VectorIndex>>,
+    // PLUG-2: in-memory inverted full-text search index.
+    pub(crate) fts_index: Arc<Mutex<helpers::fts::FtsIndex>>,
+    // PLUG-3: R-tree geospatial index.
+    pub(crate) geo_index: Arc<Mutex<helpers::geo::GeoIndex>>,
+    // PLUG-4: versioned plugin marketplace registry.
+    pub(crate) plugin_registry: Arc<Mutex<helpers::plugins::PluginRegistry>>,
 }
 
 #[derive(Clone, Default)]
@@ -1741,6 +1750,10 @@ async fn main() {
         // ISSUE-03: trigger registry + emitter.
         trigger_registry: Arc::new(Mutex::new(TriggerRegistry::new())),
         trigger_emitter: Arc::new(LoggingTriggerEmitter),
+        vector_index: Arc::new(Mutex::new(helpers::vector::VectorIndex::new())),
+        fts_index: Arc::new(Mutex::new(helpers::fts::FtsIndex::new())),
+        geo_index: Arc::new(Mutex::new(helpers::geo::GeoIndex::new())),
+        plugin_registry: Arc::new(Mutex::new(helpers::plugins::PluginRegistry::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));

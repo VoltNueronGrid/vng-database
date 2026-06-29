@@ -20,7 +20,7 @@ use crate::{NativeCommandKind, NativeFrameType};
 use crate::{CommandDispatcher, CanonicalCommandName, CanonicalError, TransportKind};
 use crate::{RedisCacheCommandRequest, RedisCacheCommandResponse};
 use crate::{CanonicalCommandEnvelope, CanonicalSuccess, ConnectorHealthEntry, ConnectorHealthResponse};
-use crate::{FulltextSearchRequest, FulltextSearchResponse, FulltextNotEnabledError};
+use crate::{FulltextSearchRequest, FulltextSearchResponse};
 use crate::{OlapQueryRequest, OlapQueryResponse};
 use crate::{DumpExportQuery, DumpExportResponse, ObjectHistoryQuery, ObjectHistoryResponse};
 use crate::auth::{require_operator_auth, require_operator_privilege, require_cluster_failover_privilege};
@@ -1515,28 +1515,32 @@ pub(crate) async fn search_fulltext(
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
 
-    let enabled = env::var("VNG_FTS_ENABLED")
-        .unwrap_or_default()
-        .trim()
-        .eq_ignore_ascii_case("true");
+    let limit = req.limit.unwrap_or(10).min(100) as usize;
+    let table = req.table.unwrap_or_default();
+    let query = req.query;
 
-    if !enabled {
-        let body = serde_json::to_value(FulltextNotEnabledError {
-            error: "full-text search not enabled".to_string(),
-            enable_with: "VNG_FTS_ENABLED=true".to_string(),
+    // PLUG-2: Real full-text search using the in-memory FtsIndex.
+    // If the table is empty string, search across all tables (not scoped).
+    let hits_raw = state
+        .fts_index
+        .lock()
+        .expect("fts_index lock")
+        .search(&table, &query, limit);
+
+    let hits: Vec<serde_json::Value> = hits_raw
+        .into_iter()
+        .map(|(row_key, score)| {
+            json!({
+                "row_key": row_key,
+                "score": score,
+            })
         })
-        .unwrap_or(json!({"error": "full-text search not enabled"}));
-        return Ok((StatusCode::NOT_IMPLEMENTED, Json(body)));
-    }
+        .collect();
 
-    let _limit = req.limit.unwrap_or(10).min(100);
-    let _table = req.table.unwrap_or_default();
-    let _query = req.query;
-
-    // Stub: real FTS will be implemented in a future sprint.
+    let total = hits.len();
     let body = serde_json::to_value(FulltextSearchResponse {
-        hits: vec![],
-        total: 0,
+        hits,
+        total,
     })
     .unwrap_or(json!({}));
 

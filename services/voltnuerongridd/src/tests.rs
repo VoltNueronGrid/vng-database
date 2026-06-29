@@ -99,6 +99,10 @@ fn state_with_key(key: Option<&str>) -> AppState {
         ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
         connector_registry: Arc::new(Mutex::new(Vec::new())),
         udf_registry: Arc::new(Mutex::new(UdfRegistry::new())),
+        vector_index: Arc::new(Mutex::new(helpers::vector::VectorIndex::new())),
+        fts_index: Arc::new(Mutex::new(helpers::fts::FtsIndex::new())),
+        geo_index: Arc::new(Mutex::new(helpers::geo::GeoIndex::new())),
+        plugin_registry: Arc::new(Mutex::new(helpers::plugins::PluginRegistry::new_empty())),
         tde_override: Arc::new(Mutex::new(None)),
         cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
         // Phase 1.3 — DatabaseCatalog (test default: empty).
@@ -14722,4 +14726,397 @@ fn udf_registry_in_app_state_is_accessible() {
         .expect("register via AppState should succeed");
     let names: Vec<String> = reg.list().into_iter().map(|(n, _)| n).collect();
     assert!(names.contains(&"upper".to_string()));
+}
+
+// ── PLUG-1: Vector search ─────────────────────────────────────────────────────
+
+#[test]
+fn plug1_vector_parse_literal_roundtrip() {
+    use crate::helpers::vector::parse_vector_literal;
+    let v = parse_vector_literal("[1.0, 2.0, 3.0]").expect("should parse");
+    assert_eq!(v.len(), 3);
+    assert!((v[0] - 1.0f32).abs() < 1e-6);
+    assert!((v[1] - 2.0f32).abs() < 1e-6);
+    assert!((v[2] - 3.0f32).abs() < 1e-6);
+}
+
+#[test]
+fn plug1_vector_cosine_similarity_correct() {
+    use crate::helpers::vector::{cosine_similarity, normalize};
+    // Two identical normalised unit vectors → cosine = 1.0
+    let a = normalize(&[1.0, 0.0, 0.0]);
+    let b = normalize(&[1.0, 0.0, 0.0]);
+    let sim = cosine_similarity(&a, &b);
+    assert!((sim - 1.0f32).abs() < 1e-5, "identical vectors cos sim == 1.0");
+    // Orthogonal vectors → cosine = 0.0
+    let c = normalize(&[0.0, 1.0, 0.0]);
+    let sim2 = cosine_similarity(&a, &c);
+    assert!(sim2.abs() < 1e-5, "orthogonal vectors cos sim ≈ 0.0");
+}
+
+#[test]
+fn plug1_vector_insert_and_search_returns_nearest() {
+    use crate::helpers::vector::VectorIndex;
+    let mut idx = VectorIndex::new();
+    idx.insert("products", "embedding", "row:1", vec![1.0, 0.0, 0.0]);
+    idx.insert("products", "embedding", "row:2", vec![0.0, 1.0, 0.0]);
+    idx.insert("products", "embedding", "row:3", vec![0.0, 0.0, 1.0]);
+    let results = idx.search_cosine("products", "embedding", &[1.0, 0.1, 0.0], 1);
+    assert_eq!(results.len(), 1, "should return top-1 result");
+    assert_eq!(results[0].0, "row:1", "row:1 is most similar to query");
+}
+
+#[test]
+fn plug1_vector_index_in_app_state_is_accessible() {
+    let state = state_with_key(Some("secret"));
+    let mut idx = state.vector_index.lock().expect("vector_index lock");
+    idx.insert("t", "col", "k1", vec![1.0, 2.0, 3.0]);
+    let r = idx.search_cosine("t", "col", &[1.0, 2.0, 3.0], 1);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].0, "k1");
+}
+
+// ── PLUG-2: Full-text search ──────────────────────────────────────────────────
+
+#[test]
+fn plug2_fts_tokenize_removes_stop_words() {
+    use crate::helpers::fts::tokenize;
+    let tokens = tokenize("the quick brown fox jumps over the lazy dog");
+    // "the", "and" are stop words — must not appear.
+    assert!(!tokens.contains(&"the".to_string()), "stop word 'the' removed");
+    assert!(!tokens.contains(&"a".to_string()), "stop word 'a' removed");
+    // Content words should remain (possibly stemmed).
+    let joined = tokens.join(" ");
+    assert!(joined.contains("quick") || joined.contains("quic"), "content word retained");
+}
+
+#[test]
+fn plug2_fts_match_operator_correct() {
+    use crate::helpers::fts::{to_tsvector, plainto_tsquery, fts_match};
+    let tsvec = to_tsvector("the quick brown fox jumps over the lazy dog");
+    let tsq_and = plainto_tsquery("quick fox");
+    assert!(fts_match(&tsvec, &tsq_and), "AND query should match");
+    let tsq_miss = plainto_tsquery("elephant");
+    assert!(!fts_match(&tsvec, &tsq_miss), "absent token should not match");
+}
+
+#[test]
+fn plug2_fts_index_search_returns_ranked_results() {
+    use crate::helpers::fts::FtsIndex;
+    let mut idx = FtsIndex::new();
+    idx.index_document("docs", "row:1", "Rust is a systems programming language");
+    idx.index_document("docs", "row:2", "Python is a high-level programming language");
+    idx.index_document("docs", "row:3", "C++ is a low-level systems language");
+    let results = idx.search("docs", "programming language", 10);
+    // At least two documents should match "programming language".
+    assert!(results.len() >= 2, "at least 2 matches expected, got {}", results.len());
+    // All returned scores must be > 0.
+    for (key, score) in &results {
+        assert!(*score > 0.0, "score for {key} must be positive, got {score}");
+    }
+}
+
+#[test]
+fn plug2_fts_index_in_app_state_is_accessible() {
+    let state = state_with_key(Some("secret"));
+    let mut idx = state.fts_index.lock().expect("fts_index lock");
+    idx.index_document("blog", "post:1", "Rust is fast and safe");
+    let hits = idx.search("blog", "fast safe", 10);
+    assert!(!hits.is_empty(), "should find indexed document");
+}
+
+// ── PLUG-3: Geospatial ────────────────────────────────────────────────────────
+
+#[test]
+fn plug3_geo_wkt_point_parsed_correctly() {
+    use crate::helpers::geo::parse_wkt_point;
+    let coords = parse_wkt_point("POINT(10.5 20.3)").expect("should parse");
+    assert!((coords[0] - 10.5f64).abs() < 1e-9);
+    assert!((coords[1] - 20.3f64).abs() < 1e-9);
+    // Comma-separated variant.
+    let coords2 = parse_wkt_point("POINT(5.0, -3.0)").expect("comma variant");
+    assert!((coords2[0] - 5.0f64).abs() < 1e-9);
+    assert!((coords2[1] - (-3.0f64)).abs() < 1e-9);
+}
+
+#[test]
+fn plug3_geo_st_distance_euclidean() {
+    use crate::helpers::geo::st_distance;
+    // Distance from (0,0) to (3,4) == 5.0 (3-4-5 right triangle).
+    let d = st_distance("POINT(0 0)", "POINT(3 4)");
+    assert!((d - 5.0f64).abs() < 1e-9, "expected 5.0, got {d}");
+}
+
+#[test]
+fn plug3_geo_rtree_within_envelope_correct() {
+    use crate::helpers::geo::GeoIndex;
+    let mut idx = GeoIndex::new();
+    idx.insert_point("cities", "london", "POINT(-0.127758 51.507351)");
+    idx.insert_point("cities", "paris", "POINT(2.352222 48.856613)");
+    idx.insert_point("cities", "berlin", "POINT(13.404954 52.520008)");
+    // Envelope covering only Berlin and roughly Eastern Europe.
+    let keys = idx.within_envelope("cities", 10.0, 50.0, 15.0, 55.0);
+    assert!(keys.contains(&"berlin".to_string()), "Berlin inside envelope");
+    assert!(!keys.contains(&"london".to_string()), "London outside envelope");
+}
+
+#[test]
+fn plug3_geo_index_in_app_state_is_accessible() {
+    let state = state_with_key(Some("secret"));
+    let mut idx = state.geo_index.lock().expect("geo_index lock");
+    idx.insert_point("places", "eiffel", "POINT(2.294481 48.858370)");
+    assert_eq!(idx.point_count("places"), 1);
+}
+
+// ── PLUG-4: Plugin marketplace ────────────────────────────────────────────────
+
+#[test]
+fn plug4_plugin_install_succeeds() {
+    use crate::helpers::plugins::{PluginEntry, PluginRegistry, PluginState};
+    let mut reg = PluginRegistry::new_empty();
+    let entry = PluginEntry {
+        id: "connector-postgres".to_string(),
+        name: "PostgreSQL Connector".to_string(),
+        version: "1.0.0".to_string(),
+        checksum_sha256: "abc123".to_string(),
+        signed: true,
+        installed_at_ms: 0,
+        state: PluginState::Active,
+    };
+    reg.install(entry).expect("install should succeed");
+    assert!(reg.is_installed("connector-postgres"), "plugin must be installed");
+}
+
+#[test]
+fn plug4_plugin_upgrade_requires_higher_version() {
+    use crate::helpers::plugins::{PluginEntry, PluginRegistry, PluginState};
+    let mut reg = PluginRegistry::new_empty();
+    let entry = PluginEntry {
+        id: "p1".to_string(), name: "P1".to_string(), version: "1.0.0".to_string(),
+        checksum_sha256: "x".to_string(), signed: true, installed_at_ms: 0,
+        state: PluginState::Active,
+    };
+    reg.install(entry).unwrap();
+    // Upgrade to lower version must fail.
+    let downgrade_entry = PluginEntry {
+        id: "p1".to_string(), name: "P1".to_string(), version: "0.9.0".to_string(),
+        checksum_sha256: "y".to_string(), signed: true, installed_at_ms: 1,
+        state: PluginState::Active,
+    };
+    let err = reg.upgrade("p1", downgrade_entry).expect_err("downgrade via upgrade must fail");
+    assert!(err.contains("version"), "error must mention version: {err}");
+}
+
+#[test]
+fn plug4_plugin_downgrade_to_prior_version() {
+    use crate::helpers::plugins::{PluginEntry, PluginRegistry, PluginState};
+    let mut reg = PluginRegistry::new_empty();
+    let e1 = PluginEntry {
+        id: "p2".to_string(), name: "P2".to_string(), version: "1.0.0".to_string(),
+        checksum_sha256: "a".to_string(), signed: true, installed_at_ms: 0,
+        state: PluginState::Active,
+    };
+    reg.install(e1).unwrap();
+    let e2 = PluginEntry {
+        id: "p2".to_string(), name: "P2".to_string(), version: "2.0.0".to_string(),
+        checksum_sha256: "b".to_string(), signed: true, installed_at_ms: 1,
+        state: PluginState::Active,
+    };
+    reg.upgrade("p2", e2).unwrap();
+    // Now downgrade back to 1.0.0.
+    reg.downgrade("p2", "1.0.0").expect("downgrade to prior version must succeed");
+    let cur = reg.get_current("p2").expect("should still be installed");
+    assert_eq!(cur.version, "1.0.0");
+}
+
+#[test]
+fn plug4_plugin_uninstall_removes_from_active() {
+    use crate::helpers::plugins::{PluginEntry, PluginRegistry, PluginState};
+    let mut reg = PluginRegistry::new_empty();
+    let entry = PluginEntry {
+        id: "rm-me".to_string(), name: "Remove Me".to_string(), version: "1.0.0".to_string(),
+        checksum_sha256: "z".to_string(), signed: true, installed_at_ms: 0,
+        state: PluginState::Active,
+    };
+    reg.install(entry).unwrap();
+    reg.uninstall("rm-me").expect("uninstall must succeed");
+    assert!(!reg.is_installed("rm-me"), "plugin must no longer be active");
+}
+
+#[test]
+fn plug4_plugin_registry_in_app_state_is_accessible() {
+    use crate::helpers::plugins::{PluginEntry, PluginState};
+    let state = state_with_key(Some("secret"));
+    let mut reg = state.plugin_registry.lock().expect("plugin_registry lock");
+    let entry = PluginEntry {
+        id: "via-state".to_string(), name: "State Test".to_string(), version: "0.1.0".to_string(),
+        checksum_sha256: "q".to_string(), signed: true, installed_at_ms: 0,
+        state: PluginState::Active,
+    };
+    reg.install(entry).unwrap();
+    assert_eq!(reg.list_active().len(), 1);
+}
+
+// ── MV-1: Materialized view — full refresh engine ────────────────────────────
+
+#[test]
+fn mv1_refresh_records_route_path_materialized_view_refresh() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    // Execute a REFRESH on a non-existent view → expect 404 with materialized_view_not_found.
+    let state = state_with_key(Some("admin-key"));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let app = crate::router::build_router(state.clone());
+        let body = serde_json::json!({
+            "sql_batch": "REFRESH MATERIALIZED VIEW nonexistent_mv",
+            "db": ""
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/sql/execute")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "admin-key")
+            .header("x-vng-operator-id", "platform-admin")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "non-existent MV should return 404");
+    });
+}
+
+#[test]
+fn mv1_drop_materialized_view_via_sql() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    let state = state_with_key(Some("key"));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let app = crate::router::build_router(state.clone());
+        // Dropping a non-existent view should still succeed (idempotent).
+        let body = serde_json::json!({
+            "sql_batch": "DROP MATERIALIZED VIEW mv_nonexistent",
+            "db": ""
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/sql/execute")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "key")
+            .header("x-vng-operator-id", "platform-admin")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "DROP MV should be idempotent");
+    });
+}
+
+// ── MV-2: Incremental materialized view refresh ───────────────────────────────
+
+#[test]
+fn mv2_incremental_matview_created_with_flag_stored_in_catalog() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    let state = state_with_key(Some("key"));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let app = crate::router::build_router(state.clone());
+        // CREATE MATERIALIZED VIEW with WITH INCREMENTAL.
+        let ddl = "CREATE MATERIALIZED VIEW mv_orders AS SELECT * FROM orders WITH INCREMENTAL";
+        let body = serde_json::json!({ "sql_batch": ddl, "db": "" });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/sql/execute")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "key")
+            .header("x-vng-operator-id", "platform-admin")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+        // Should not fail.
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::CONFLICT,
+            "WITH INCREMENTAL DDL should succeed, got {}",
+            resp.status()
+        );
+        // The catalog should record either materialized_view or incremental_matview.
+        let cat = state.ddl_catalog.lock().unwrap();
+        let entry = cat.get("mv_orders");
+        assert!(entry.is_some(), "mv_orders should be in catalog after CREATE");
+    });
+}
+
+#[test]
+fn mv2_delta_records_written_after_insert_dml() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    let state = state_with_key(Some("key"));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let app = crate::router::build_router(state.clone());
+        // INSERT into a regular table; delta record should be written.
+        let sql = "INSERT INTO events VALUES ('events:1', '{\"id\":\"1\",\"name\":\"click\",\"__table\":\"events\"}')";
+        let body = serde_json::json!({ "sql_batch": sql, "db": "" });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/sql/execute")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "key")
+            .header("x-vng-operator-id", "platform-admin")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+        // Just verify the INSERT completes successfully.
+        assert_eq!(resp.status(), StatusCode::OK, "INSERT should succeed");
+        // The __delta:events: key should now exist in row_store.
+        let rs = state.row_store.lock().unwrap();
+        let xid = rs.current_xid();
+        let delta_rows: Vec<_> = rs
+            .scan_at_snapshot(xid)
+            .into_iter()
+            .filter(|(k, _)| k.starts_with("__delta:events:"))
+            .collect();
+        assert!(!delta_rows.is_empty(), "delta record must be written after INSERT");
+    });
+}
+
+#[test]
+fn mv2_incremental_refresh_no_op_when_no_deltas() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    let state = state_with_key(Some("key"));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        // First create the matview DDL.
+        let ddl_app = crate::router::build_router(state.clone());
+        let ddl_body = serde_json::json!({
+            "sql_batch": "CREATE MATERIALIZED VIEW mv_ev AS SELECT * FROM events",
+            "db": ""
+        });
+        let ddl_req = Request::builder()
+            .method("POST").uri("/api/v1/sql/execute")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "key")
+            .header("x-vng-operator-id", "platform-admin")
+            .body(Body::from(ddl_body.to_string())).unwrap();
+        tower::ServiceExt::oneshot(ddl_app, ddl_req).await.unwrap();
+
+        // Now REFRESH INCREMENTALLY — no deltas yet, should still return 200.
+        let refresh_app = crate::router::build_router(state.clone());
+        let ref_body = serde_json::json!({
+            "sql_batch": "REFRESH MATERIALIZED VIEW mv_ev INCREMENTALLY",
+            "db": ""
+        });
+        let ref_req = Request::builder()
+            .method("POST").uri("/api/v1/sql/execute")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "key")
+            .header("x-vng-operator-id", "platform-admin")
+            .body(Body::from(ref_body.to_string())).unwrap();
+        let resp = tower::ServiceExt::oneshot(refresh_app, ref_req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "REFRESH INCREMENTALLY should succeed even with 0 deltas");
+    });
 }

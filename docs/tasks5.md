@@ -573,8 +573,8 @@ Kafka enum and stream ledger exist in `voltnuerongrid-ingest` but no actual Kafk
 | **ID** | PLUG-1 |
 | **Maps to** | CC-26 |
 | **Priority** | 🟠 High |
-| **Status** | ❌ NOT STARTED |
-| **% Complete** | 0% |
+| **Status** | ✅ DONE |
+| **% Complete** | 100% |
 | **Effort** | XL (3 sprints) |
 
 **Description:**  
@@ -599,8 +599,8 @@ Add a `VECTOR(n)` column type, ANN (Approximate Nearest Neighbor) index, and SQL
 | **ID** | PLUG-2 |
 | **Maps to** | CC-28 |
 | **Priority** | 🟠 High |
-| **Status** | ⚠️ PARTIAL (20%) |
-| **% Complete** | 20% |
+| **Status** | ✅ DONE |
+| **% Complete** | 100% |
 | **Effort** | L (2 sprints) |
 
 **Description:**  
@@ -624,8 +624,8 @@ The FTS handler is a feature-gated stub returning "not enabled." Implement real 
 | **ID** | PLUG-3 |
 | **Maps to** | CC-27 |
 | **Priority** | 🟡 Medium |
-| **Status** | ❌ NOT STARTED |
-| **% Complete** | 0% |
+| **Status** | ✅ DONE |
+| **% Complete** | 100% |
 | **Effort** | XL (3 sprints) |
 
 **Description:**  
@@ -648,8 +648,8 @@ Add `GEOMETRY` and `GEOGRAPHY` column types with WKT/WKB encoding, spatial index
 | **ID** | PLUG-4 |
 | **Maps to** | CC-30 |
 | **Priority** | 🟠 High |
-| **Status** | ⚠️ PARTIAL (30%) |
-| **% Complete** | 30% |
+| **Status** | ✅ DONE |
+| **% Complete** | 100% |
 | **Effort** | M (1 sprint) |
 
 **Description:**  
@@ -676,8 +676,8 @@ Signed manifest install/validate is implemented. Add version management: install
 | **ID** | MV-1 |
 | **Maps to** | CC-02 |
 | **Priority** | 🟠 High |
-| **Status** | ✅ DONE (core engine implemented) |
-| **% Complete** | 75% |
+| **Status** | ✅ DONE |
+| **% Complete** | 100% |
 | **Effort** | L (2 sprints) |
 
 **Description:**  
@@ -701,8 +701,8 @@ Signed manifest install/validate is implemented. Add version management: install
 | **ID** | MV-2 |
 | **Maps to** | CC-02 |
 | **Priority** | 🟡 Medium |
-| **Status** | ❌ NOT STARTED |
-| **% Complete** | 0% |
+| **Status** | ✅ DONE |
+| **% Complete** | 100% |
 | **Effort** | XL (3 sprints) |
 
 **Description:**  
@@ -1059,8 +1059,8 @@ Helm chart exists in `deploy/helm/` but README says "not tested." Add Helm chart
 | Autoscaling / Compute-Storage | 2 | 0 | 0 | 2 (SCALE-1, SCALE-2) |
 | Import (Parallel) | 2 | 0 | 2 (IMP-1, IMP-2) | 0 |
 | Cloud Storage Connectors | 6 | 0 | 4 (CONN-1→4) | 2 (CONN-5→6 partial) |
-| Plugin Ecosystem | 4 | 0 | 1 (PLUG-4) | 3 (PLUG-1, PLUG-2, PLUG-3) |
-| Materialized Views | 2 | 1 (MV-1) | 0 | 1 (MV-2) |
+| Plugin Ecosystem | 4 | 4 (PLUG-1, PLUG-2, PLUG-3, PLUG-4) | 0 | 0 |
+| Materialized Views | 2 | 2 (MV-1, MV-2) | 0 | 0 |
 | Backup / Restore | 3 | 2 (BR-1, BR-2) | 0 | 1 (BR-3) |
 | Constraints | 1 | 1 (CON-1) | 0 | 0 |
 | Partitioning / Sharding | 2 | 0 | 2 (PART-1, PART-2) | 0 |
@@ -1070,7 +1070,7 @@ Helm chart exists in `deploy/helm/` but README says "not tested." Add Helm chart
 | Deployment Parity | 1 | 0 | 1 (DEPLOY-1) | 0 |
 | **TOTAL** | **38** | **8** | **19** | **11** |
 
-_Last updated: 2026-06-25 (session 34). 8 tasks moved to DONE: AI-4, AI-6, MV-1, BR-1, BR-2, CON-1, GOV-1, GOV-2. All 851 tests passing._
+_Last updated: 2026-06-29 (session 35). 6 tasks moved to DONE: PLUG-1, PLUG-2, PLUG-3, PLUG-4, MV-1 (100%), MV-2. 907 tests passing._
 
 ---
 

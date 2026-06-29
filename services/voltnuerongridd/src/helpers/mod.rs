@@ -11,3 +11,8 @@ pub(crate) mod raft_loop;
 pub(crate) mod information_schema;
 pub(crate) mod parquet_flush;
 pub(crate) mod stored_proc;
+// PLUG-1/2/3/4: plugin ecosystem helpers
+pub(crate) mod vector;
+pub(crate) mod fts;
+pub(crate) mod geo;
+pub(crate) mod plugins;

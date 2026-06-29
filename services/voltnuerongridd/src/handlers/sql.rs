@@ -1591,6 +1591,187 @@ pub(crate) async fn sql_execute(
         }
     };
 
+    // MV-1/MV-2 early intercept: handle matview-specific statements that the
+    // dispatcher classifies as Unknown (REFRESH, DROP MATERIALIZED VIEW).
+    // Must come BEFORE the QueryPath::Unknown bail-out below.
+    {
+        let sql_upper = req.sql_batch.trim().to_ascii_uppercase();
+        if sql_upper.starts_with("DROP MATERIALIZED VIEW ")
+            || sql_upper.starts_with("REFRESH MATERIALIZED VIEW ")
+        {
+            // Re-inject as DDL by forwarding to the statement loop
+            // via a synthetic parsed list. We fall through to the
+            // for-statement loop below by temporarily overriding the decision
+            // path — do so by NOT returning here; just let fall-through happen.
+            // The statement loop handles these intercepts first.
+            let mut synthetic_parsed = parsed.clone();
+            if synthetic_parsed.is_empty() {
+                synthetic_parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
+            }
+            for stmt in synthetic_parsed {
+                let upper = stmt.raw.trim_start().to_ascii_uppercase();
+                if upper.starts_with("DROP MATERIALIZED VIEW ") {
+                    let view_name = upper
+                        .trim_start_matches("DROP MATERIALIZED VIEW ")
+                        .trim()
+                        .trim_end_matches(';')
+                        .to_ascii_lowercase();
+                    {
+                        let mut cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                        cat.record_drop("", "", &view_name);
+                    }
+                    let matview_prefix = format!("__matview:{view_name}:");
+                    let delta_prefix = format!("__delta:{view_name}:");
+                    let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                    let xid = rs.begin_xid();
+                    let old_keys: Vec<String> = rs.scan_at_snapshot(xid)
+                        .into_iter().filter(|(k, _)| k.starts_with(&matview_prefix) || k.starts_with(&delta_prefix))
+                        .map(|(k, _)| k.to_string()).collect();
+                    for k in old_keys { rs.delete(xid, &k); }
+                    drop(rs);
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                        status: "ok".to_string(),
+                        route_path: "materialized_view_drop".to_string(),
+                        reason: format!("DROP MATERIALIZED VIEW '{view_name}': removed"),
+                        transaction: None, olap: None, rejected_statement_count: 0,
+                        udf_results: None, udf_guardrail_status: None,
+                        udf_function_catalog: vec![], udf_guard_policies: vec![],
+                        udf_execution_plan: vec![], legacy_agg_results: None,
+                        planner_path: None, oltp_rows: None, olap_agg_results: None,
+                        columns: None, rows: None, freshness_lag_ms: None,
+                    })));
+                }
+                if upper.starts_with("REFRESH MATERIALIZED VIEW ") {
+                    let tail = upper
+                        .trim_start_matches("REFRESH MATERIALIZED VIEW ")
+                        .trim()
+                        .trim_end_matches(';');
+                    let (view_name, is_concurrent, is_incremental) =
+                        if let Some(n) = tail.strip_suffix(" CONCURRENTLY") {
+                            (n.trim().to_ascii_lowercase(), true, false)
+                        } else if let Some(n) = tail.strip_suffix(" INCREMENTALLY") {
+                            (n.trim().to_ascii_lowercase(), false, true)
+                        } else {
+                            (tail.to_ascii_lowercase(), false, false)
+                        };
+                    let defining_sql: Option<(String, String)> = {
+                        let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                        cat.get(&view_name)
+                            .filter(|e| e.object_kind == "materialized_view" || e.object_kind == "incremental_matview")
+                            .map(|e| {
+                                let stmt = &e.original_statement;
+                                let upper_stmt = stmt.to_ascii_uppercase();
+                                let select = if let Some(pos) = upper_stmt.find(" AS ") {
+                                    stmt[pos + 4..].trim().to_string()
+                                } else { stmt.clone() };
+                                let base_table = upper_stmt.find(" FROM ")
+                                    .and_then(|p| {
+                                        let tail = &stmt[p + 6..];
+                                        let end = tail.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(tail.len());
+                                        Some(tail[..end].trim().to_ascii_lowercase())
+                                    }).unwrap_or_default();
+                                (select, base_table)
+                            })
+                    };
+                    match defining_sql {
+                        None => {
+                            release_sql_data_plane_connection(&state, &connection_id);
+                            return Err((StatusCode::NOT_FOUND, Json(crate::AuthErrorResponse {
+                                status: "error",
+                                reason: format!("materialized_view_not_found: '{view_name}'"),
+                                locale: "en".to_string(),
+                                localized_message: format!("Materialized view '{view_name}' not found"),
+                            })));
+                        }
+                        Some((select_sql, base_table)) => {
+                            if is_incremental {
+                                let delta_prefix = format!("__delta:{base_table}:");
+                                let matview_prefix = format!("__matview:{view_name}:");
+                                let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                                let xid = rs.begin_xid();
+                                let deltas: Vec<(String, std::collections::HashMap<String, String>)> = rs
+                                    .scan_at_snapshot(xid).into_iter()
+                                    .filter(|(k, _)| k.starts_with(&delta_prefix))
+                                    .map(|(k, v)| (k.to_string(), v.clone())).collect();
+                                let mut applied = 0usize;
+                                for (delta_key, delta_data) in &deltas {
+                                    let op = delta_data.get("__delta_op").map(|s| s.as_str()).unwrap_or("INSERT");
+                                    let row_key = delta_data.get("__delta_row_key").cloned().unwrap_or_default();
+                                    let snap_key = format!("{matview_prefix}{row_key}");
+                                    match op {
+                                        "DELETE" => { rs.delete(xid, &snap_key); }
+                                        _ => {
+                                            let mut data = delta_data.clone();
+                                            data.remove("__delta_op"); data.remove("__delta_row_key");
+                                            data.insert("__table".to_string(), view_name.clone());
+                                            rs.insert(xid, &snap_key, data);
+                                        }
+                                    }
+                                    rs.delete(xid, delta_key);
+                                    applied += 1;
+                                }
+                                drop(rs);
+                                release_sql_data_plane_connection(&state, &connection_id);
+                                return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                                    status: "ok".to_string(),
+                                    route_path: "materialized_view_refresh_incremental".to_string(),
+                                    reason: format!("REFRESH MATERIALIZED VIEW '{view_name}' INCREMENTALLY: {applied} deltas applied"),
+                                    transaction: None, olap: None, rejected_statement_count: 0,
+                                    udf_results: None, udf_guardrail_status: None,
+                                    udf_function_catalog: vec![], udf_guard_policies: vec![],
+                                    udf_execution_plan: vec![], legacy_agg_results: None,
+                                    planner_path: None, oltp_rows: None, olap_agg_results: None,
+                                    columns: None, rows: None, freshness_lag_ms: None,
+                                })));
+                            }
+                            // Full refresh (default or CONCURRENTLY).
+                            let snapshot = {
+                                let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                                let xid = rs.current_xid();
+                                let rocksdb_rows = if let Ok(wal) = state.wal_engine.lock() {
+                                    if wal.persists_rows() { Some(wal.scan_rows_for_db(&db, xid)) } else { None }
+                                } else { None };
+                                let idx_mgr = state.index_manager.lock().unwrap_or_else(|e| e.into_inner());
+                                crate::helpers::execution::execute_oltp_select(
+                                    &[select_sql.clone()], &rs, 100_000, &db, Some(xid), rocksdb_rows, Some(&idx_mgr),
+                                )
+                            };
+                            let matview_prefix = format!("__matview:{view_name}:");
+                            let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                            let xid = rs.begin_xid();
+                            let old_keys: Vec<String> = rs.scan_at_snapshot(xid)
+                                .into_iter().filter(|(k, _)| k.starts_with(&matview_prefix))
+                                .map(|(k, _)| k.to_string()).collect();
+                            for k in old_keys { rs.delete(xid, &k); }
+                            let row_count = snapshot.len();
+                            for (i, row) in snapshot.iter().enumerate() {
+                                let k = format!("{matview_prefix}{i}");
+                                let mut data = row.data.clone();
+                                data.insert("__table".to_string(), view_name.clone());
+                                rs.insert(xid, &k, data);
+                            }
+                            drop(rs);
+                            let mode = if is_concurrent { "concurrently" } else { "full" };
+                            release_sql_data_plane_connection(&state, &connection_id);
+                            return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                                status: "ok".to_string(),
+                                route_path: "materialized_view_refresh".to_string(),
+                                reason: format!("REFRESH MATERIALIZED VIEW '{view_name}' ({mode}): {row_count} rows materialized"),
+                                transaction: None, olap: None, rejected_statement_count: 0,
+                                udf_results: None, udf_guardrail_status: None,
+                                udf_function_catalog: vec![], udf_guard_policies: vec![],
+                                udf_execution_plan: vec![], legacy_agg_results: None,
+                                planner_path: None, oltp_rows: None, olap_agg_results: None,
+                                columns: None, rows: None, freshness_lag_ms: None,
+                            })));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if matches!(decision.payload.path, QueryPath::Unknown) {
         append_runtime_audit_event(
             &state,
@@ -1669,23 +1850,149 @@ pub(crate) async fn sql_execute(
     for statement in parsed {
         let upper = statement.raw.trim_start().to_ascii_uppercase();
 
-        // MV-1: REFRESH MATERIALIZED VIEW — execute defining SELECT and store snapshot.
-        if upper.starts_with("REFRESH MATERIALIZED VIEW ") {
-            let raw_name = upper.trim_start_matches("REFRESH MATERIALIZED VIEW ")
-                .trim().trim_end_matches(';').to_ascii_lowercase();
-            let view_name = raw_name.as_str();
-            let defining_sql: Option<String> = {
-                let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
-                cat.get(view_name).filter(|e| e.object_kind == "materialized_view").map(|e| {
-                    let stmt = &e.original_statement;
-                    // Extract SELECT query after " AS " (case-insensitive)
-                    let upper_stmt = stmt.to_ascii_uppercase();
-                    if let Some(pos) = upper_stmt.find(" AS ") {
-                        stmt[pos + 4..].trim().to_string()
-                    } else { stmt.clone() }
-                })
+        // MV-1 completion: DROP MATERIALIZED VIEW
+        if upper.starts_with("DROP MATERIALIZED VIEW ") {
+            let view_name = upper
+                .trim_start_matches("DROP MATERIALIZED VIEW ")
+                .trim()
+                .trim_end_matches(';')
+                .to_ascii_lowercase();
+            {
+                let mut cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                cat.record_drop("", "", &view_name);
             };
-            if let Some(select_sql) = defining_sql {
+            // Clear the cached snapshot rows.
+            let matview_prefix = format!("__matview:{view_name}:");
+            let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+            let xid = rs.begin_xid();
+            let old_keys: Vec<String> = rs
+                .scan_at_snapshot(xid)
+                .into_iter()
+                .filter(|(k, _)| k.starts_with(&matview_prefix))
+                .map(|(k, _)| k.to_string())
+                .collect();
+            for k in old_keys {
+                rs.delete(xid, &k);
+            }
+            // Also clear any delta rows.
+            let delta_prefix = format!("__delta:{view_name}:");
+            let delta_keys: Vec<String> = rs
+                .scan_at_snapshot(xid)
+                .into_iter()
+                .filter(|(k, _)| k.starts_with(&delta_prefix))
+                .map(|(k, _)| k.to_string())
+                .collect();
+            for k in delta_keys {
+                rs.delete(xid, &k);
+            }
+            drop(rs);
+            release_sql_data_plane_connection(&state, &connection_id);
+            let reason = format!("DROP MATERIALIZED VIEW '{view_name}': removed");
+            return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                status: "ok".to_string(),
+                route_path: "materialized_view_drop".to_string(),
+                reason,
+                transaction: None, olap: None, rejected_statement_count: 0,
+                udf_results: None, udf_guardrail_status: None,
+                udf_function_catalog: Vec::new(), udf_guard_policies: Vec::new(),
+                udf_execution_plan: Vec::new(), legacy_agg_results: None,
+                planner_path: None, oltp_rows: None, olap_agg_results: None,
+                columns: None, rows: None, freshness_lag_ms: None,
+            })));
+        }
+
+        // MV-1: REFRESH MATERIALIZED VIEW — execute defining SELECT and store snapshot.
+        // Supports: REFRESH MATERIALIZED VIEW name
+        //           REFRESH MATERIALIZED VIEW name CONCURRENTLY
+        //           REFRESH MATERIALIZED VIEW name INCREMENTALLY  (MV-2)
+        if upper.starts_with("REFRESH MATERIALIZED VIEW ") {
+            let tail = upper
+                .trim_start_matches("REFRESH MATERIALIZED VIEW ")
+                .trim()
+                .trim_end_matches(';');
+            let (view_name_upper, is_concurrent, is_incremental) =
+                if let Some(n) = tail.strip_suffix(" CONCURRENTLY") {
+                    (n.trim().to_ascii_lowercase(), true, false)
+                } else if let Some(n) = tail.strip_suffix(" INCREMENTALLY") {
+                    (n.trim().to_ascii_lowercase(), false, true)
+                } else {
+                    (tail.to_ascii_lowercase(), false, false)
+                };
+            let view_name = view_name_upper.as_str();
+            let defining_sql: Option<(String, String)> = {
+                let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                cat.get(view_name)
+                    .filter(|e| e.object_kind == "materialized_view")
+                    .map(|e| {
+                        let stmt = &e.original_statement;
+                        let upper_stmt = stmt.to_ascii_uppercase();
+                        // Extract the SELECT portion after " AS "
+                        let select = if let Some(pos) = upper_stmt.find(" AS ") {
+                            stmt[pos + 4..].trim().to_string()
+                        } else {
+                            stmt.clone()
+                        };
+                        // Heuristic: extract the primary base table from "FROM <table>"
+                        let base_table = upper_stmt
+                            .find(" FROM ")
+                            .and_then(|p| {
+                                let tail = &stmt[p + 6..];
+                                let end = tail.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(tail.len());
+                                Some(tail[..end].trim().to_ascii_lowercase())
+                            })
+                            .unwrap_or_default();
+                        (select, base_table)
+                    })
+            };
+            if let Some((select_sql, base_table)) = defining_sql {
+                if is_incremental {
+                    // MV-2: apply only the rows from the __delta:<base_table>: prefix.
+                    let delta_prefix = format!("__delta:{base_table}:");
+                    let matview_prefix = format!("__matview:{view_name}:");
+                    let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                    let xid = rs.begin_xid();
+                    // Collect and clear deltas.
+                    let deltas: Vec<(String, std::collections::HashMap<String, String>)> = rs
+                        .scan_at_snapshot(xid)
+                        .into_iter()
+                        .filter(|(k, _)| k.starts_with(&delta_prefix))
+                        .map(|(k, v)| (k.to_string(), v.clone()))
+                        .collect();
+                    let mut applied = 0usize;
+                    for (delta_key, delta_data) in &deltas {
+                        let op = delta_data.get("__delta_op").map(|s| s.as_str()).unwrap_or("INSERT");
+                        let row_key = delta_data.get("__delta_row_key").cloned().unwrap_or_default();
+                        let snap_key = format!("{matview_prefix}{row_key}");
+                        match op {
+                            "DELETE" => { rs.delete(xid, &snap_key); }
+                            _ => {
+                                // INSERT or UPDATE: upsert into snapshot
+                                let mut data = delta_data.clone();
+                                data.remove("__delta_op");
+                                data.remove("__delta_row_key");
+                                data.insert("__table".to_string(), view_name.to_string());
+                                rs.insert(xid, &snap_key, data);
+                            }
+                        }
+                        rs.delete(xid, delta_key);
+                        applied += 1;
+                    }
+                    drop(rs);
+                    release_sql_data_plane_connection(&state, &connection_id);
+                    return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                        status: "ok".to_string(),
+                        route_path: "materialized_view_refresh_incremental".to_string(),
+                        reason: format!("REFRESH MATERIALIZED VIEW '{view_name}' INCREMENTALLY: {applied} deltas applied"),
+                        transaction: None, olap: None, rejected_statement_count: 0,
+                        udf_results: None, udf_guardrail_status: None,
+                        udf_function_catalog: Vec::new(), udf_guard_policies: Vec::new(),
+                        udf_execution_plan: Vec::new(), legacy_agg_results: None,
+                        planner_path: None, oltp_rows: None, olap_agg_results: None,
+                        columns: None, rows: None, freshness_lag_ms: None,
+                    })));
+                }
+
+                // Full refresh (default or CONCURRENTLY).
                 // Execute the SELECT against current row_store.
                 let snapshot = {
                     let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
@@ -1698,28 +2005,69 @@ pub(crate) async fn sql_execute(
                         &[select_sql.clone()], &rs, 100_000, &db, Some(xid), rocksdb_rows, Some(&idx_mgr),
                     )
                 };
-                // Clear existing matview snapshot prefix and write new rows.
+                // For CONCURRENTLY, write to a shadow prefix first, then swap.
+                // For regular refresh, write directly.
+                let write_prefix = if is_concurrent {
+                    format!("__matview_shadow:{view_name}:")
+                } else {
+                    format!("__matview:{view_name}:")
+                };
                 let matview_prefix = format!("__matview:{view_name}:");
                 let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
                 let xid = rs.begin_xid();
-                // Remove old matview rows
-                let old_keys: Vec<String> = rs.scan_at_snapshot(xid)
-                    .into_iter().filter(|(k, _)| k.starts_with(&matview_prefix))
-                    .map(|(k, _)| k.to_string()).collect();
+                // Remove old rows at write target.
+                let old_keys: Vec<String> = rs
+                    .scan_at_snapshot(xid)
+                    .into_iter()
+                    .filter(|(k, _)| k.starts_with(&write_prefix))
+                    .map(|(k, _)| k.to_string())
+                    .collect();
                 for k in old_keys { rs.delete(xid, &k); }
-                // Insert new snapshot rows
+                // Insert new snapshot rows.
+                let row_count = snapshot.len();
                 for (i, row) in snapshot.iter().enumerate() {
-                    let k = format!("{matview_prefix}{i}");
+                    let k = format!("{write_prefix}{i}");
                     let mut data = row.data.clone();
                     data.insert("__table".to_string(), view_name.to_string());
                     rs.insert(xid, &k, data);
                 }
+                // CONCURRENTLY: atomically swap shadow → live prefix.
+                if is_concurrent {
+                    let shadow_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
+                        .scan_at_snapshot(xid)
+                        .into_iter()
+                        .filter(|(k, _)| k.starts_with(&write_prefix))
+                        .map(|(k, v)| (k.to_string(), v.clone()))
+                        .collect();
+                    // Remove old live rows.
+                    let live_keys: Vec<String> = rs
+                        .scan_at_snapshot(xid)
+                        .into_iter()
+                        .filter(|(k, _)| k.starts_with(&matview_prefix))
+                        .map(|(k, _)| k.to_string())
+                        .collect();
+                    for k in live_keys { rs.delete(xid, &k); }
+                    // Write shadow rows to live prefix.
+                    for (i, (_, data)) in shadow_rows.iter().enumerate() {
+                        let k = format!("{matview_prefix}{i}");
+                        rs.insert(xid, &k, data.clone());
+                    }
+                    // Clear shadow.
+                    let shd_keys: Vec<String> = rs
+                        .scan_at_snapshot(xid)
+                        .into_iter()
+                        .filter(|(k, _)| k.starts_with(&write_prefix))
+                        .map(|(k, _)| k.to_string())
+                        .collect();
+                    for k in shd_keys { rs.delete(xid, &k); }
+                }
                 drop(rs);
+                let mode = if is_concurrent { "concurrently" } else { "full" };
                 release_sql_data_plane_connection(&state, &connection_id);
                 return Ok((StatusCode::OK, Json(SqlExecuteResponse {
                     status: "ok".to_string(),
                     route_path: "materialized_view_refresh".to_string(),
-                    reason: format!("REFRESH MATERIALIZED VIEW '{view_name}': {} rows materialized", snapshot.len()),
+                    reason: format!("REFRESH MATERIALIZED VIEW '{view_name}' ({mode}): {row_count} rows materialized"),
                     transaction: None, olap: None, rejected_statement_count: 0,
                     udf_results: None, udf_guardrail_status: None,
                     udf_function_catalog: Vec::new(), udf_guard_policies: Vec::new(),
@@ -1917,6 +2265,29 @@ pub(crate) async fn sql_execute(
                             } else {
                                 // Persist to WAL so this DDL survives a restart.
                                 persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
+                                // MV-1: If this is CREATE MATERIALIZED VIEW ... WITH DATA,
+                                //        immediately record the initial-population intent.
+                                //        The actual SELECT will run after the DDL loop when the
+                                //        catalog is released (avoids double-locking row_store).
+                                // MV-2: WITH INCREMENTAL → object_kind override stored in catalog.
+                                if info.object_kind == "materialized_view" {
+                                    let upper_stmt = stmt.to_ascii_uppercase();
+                                    if upper_stmt.contains("WITH INCREMENTAL") {
+                                        // Re-record as incremental_matview kind so REFRESH
+                                        // INCREMENTALLY can distinguish at query time.
+                                        catalog.record_create(
+                                            "incremental_matview",
+                                            &info.database_name,
+                                            &info.schema_name,
+                                            &info.object_name,
+                                            stmt,
+                                            now_ms,
+                                            true, // replace ok
+                                        );
+                                    }
+                                    // WITH DATA initial population is deferred to the
+                                    // post-DDL section below (needs row_store lock separately).
+                                }
                             }
                         }
                         "drop" => {
@@ -1938,6 +2309,65 @@ pub(crate) async fn sql_execute(
                 let lower = stmt.trim().to_ascii_lowercase();
                 if lower.starts_with("create index ") || lower.starts_with("create unique index ") {
                     handle_create_index_ddl(&state, stmt, &db);
+                }
+            }
+            // MV-1: Initial population for CREATE MATERIALIZED VIEW ... WITH DATA (not NO DATA).
+            // Run after releasing the catalog lock to avoid holding two locks simultaneously.
+            for stmt in &ddl_snapshot {
+                let upper = stmt.trim_start().to_ascii_uppercase();
+                if upper.starts_with("CREATE MATERIALIZED VIEW ")
+                    && upper.contains(" WITH DATA")
+                    && !upper.contains("WITH NO DATA")
+                {
+                    // Extract view name and defining SELECT.
+                    let after_create = upper.trim_start_matches("CREATE MATERIALIZED VIEW ").trim();
+                    let view_name = after_create
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    let select_sql = if let Some(pos) = stmt.to_ascii_uppercase().find(" AS ") {
+                        stmt[pos + 4..]
+                            .trim()
+                            .trim_end_matches(|c: char| c == ';' || c.is_whitespace())
+                            // Strip trailing WITH DATA / WITH INCREMENTAL suffixes.
+                            .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_')
+                            .to_string()
+                    } else {
+                        String::new()
+                    };
+                    // Strip "WITH DATA" suffix from the select SQL if it leaked through.
+                    let select_clean = {
+                        let u = select_sql.to_ascii_uppercase();
+                        let trimmed = u
+                            .trim_end_matches("WITH DATA")
+                            .trim_end_matches("WITH INCREMENTAL")
+                            .trim_end();
+                        select_sql[..trimmed.len().min(select_sql.len())].trim().to_string()
+                    };
+                    if !view_name.is_empty() && !select_clean.is_empty() {
+                        let snapshot = {
+                            let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                            let xid = rs.current_xid();
+                            let rocksdb_rows = if let Ok(wal) = state.wal_engine.lock() {
+                                if wal.persists_rows() { Some(wal.scan_rows_for_db(&db, xid)) } else { None }
+                            } else { None };
+                            let idx_mgr = state.index_manager.lock().unwrap_or_else(|e| e.into_inner());
+                            crate::helpers::execution::execute_oltp_select(
+                                &[select_clean.clone()], &rs, 100_000, &db, Some(xid), rocksdb_rows, Some(&idx_mgr),
+                            )
+                        };
+                        let matview_prefix = format!("__matview:{view_name}:");
+                        let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                        let xid = rs.begin_xid();
+                        for (i, row) in snapshot.iter().enumerate() {
+                            let k = format!("{matview_prefix}{i}");
+                            let mut data = row.data.clone();
+                            data.insert("__table".to_string(), view_name.clone());
+                            rs.insert(xid, &k, data);
+                        }
+                        drop(rs);
+                    }
                 }
             }
             catalog = match state.ddl_catalog.lock() {
@@ -2252,6 +2682,14 @@ pub(crate) async fn sql_execute(
                             let _ = rs.begin_write_intent(xid, &k);
                             { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d.clone());
+                            // MV-2: Write delta record for incremental matview tracking.
+                            if !table_name.is_empty() && !raw_k.starts_with("__") {
+                                let delta_key = format!("__delta:{}:{}", table_name, raw_k);
+                                let mut delta_data = d.clone();
+                                delta_data.insert("__delta_op".to_string(), "INSERT".to_string());
+                                delta_data.insert("__delta_row_key".to_string(), raw_k.clone());
+                                rs.insert(xid, &delta_key, delta_data);
+                            }
                             // CON-1: Record committed values for PK/UNIQUE tracking after successful insert.
                             if !table_name.is_empty() {
                                 if let Ok(mut mgr) = state.constraint_manager.lock() {
@@ -2444,6 +2882,14 @@ pub(crate) async fn sql_execute(
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
                             { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
+                            // MV-2: Write delta record for incremental matview tracking.
+                            if !del_table.is_empty() && !raw_k.starts_with("__") {
+                                let delta_key = format!("__delta:{}:{}", del_table, raw_k);
+                                let mut delta_data = std::collections::HashMap::new();
+                                delta_data.insert("__delta_op".to_string(), "DELETE".to_string());
+                                delta_data.insert("__delta_row_key".to_string(), raw_k.clone());
+                                rs.insert(xid, &delta_key, delta_data);
+                            }
                             // ISSUE-03: fire AFTER DELETE triggers.
                             fire_dml_triggers(&state, del_table, "public", &TriggerEvent::AfterDelete, before.as_ref(), None);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
