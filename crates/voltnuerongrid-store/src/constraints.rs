@@ -18,6 +18,10 @@ pub struct ConstraintDescriptor {
     pub table: String,
     pub column: String,
     pub kind: ConstraintKind,
+    /// For `ForeignKey` constraints: the referenced parent table.
+    pub ref_table: Option<String>,
+    /// For `ForeignKey` constraints: the referenced column in the parent table.
+    pub ref_column: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +38,12 @@ pub enum ConstraintViolation {
         constraint: String,
         column: String,
     },
+    ForeignKeyViolation {
+        constraint: String,
+        value: String,
+        ref_table: String,
+        ref_column: String,
+    },
     ConstraintAlreadyExists(String),
     ConstraintNotFound(String),
 }
@@ -49,6 +59,9 @@ impl std::fmt::Display for ConstraintViolation {
             }
             Self::NotNullViolation { constraint, column } => {
                 write!(f, "not-null constraint '{constraint}' on column '{column}'")
+            }
+            Self::ForeignKeyViolation { constraint, value, ref_table, ref_column } => {
+                write!(f, "foreign key '{constraint}' violation: value '{value}' not found in '{ref_table}.{ref_column}'")
             }
             Self::ConstraintAlreadyExists(name) => {
                 write!(f, "constraint '{name}' already exists")
@@ -201,6 +214,19 @@ impl ConstraintManager {
     pub fn constraint_count(&self) -> usize {
         self.constraints.len()
     }
+
+    /// Returns all FK constraints for `(table, column)` with their referenced table+column.
+    pub fn list_fk_refs(&self, table: &str, column: &str) -> Vec<(String, String, String)> {
+        self.constraints
+            .values()
+            .filter(|d| d.kind == ConstraintKind::ForeignKey && d.table == table && d.column == column)
+            .filter_map(|d| {
+                let ref_t = d.ref_table.as_ref()?;
+                let ref_c = d.ref_column.as_ref()?;
+                Some((d.name.clone(), ref_t.clone(), ref_c.clone()))
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -213,6 +239,8 @@ mod tests {
             table: "users".to_string(),
             column: "id".to_string(),
             kind: ConstraintKind::PrimaryKey,
+            ref_table: None,
+            ref_column: None,
         }
     }
 
@@ -222,6 +250,8 @@ mod tests {
             table: "users".to_string(),
             column: "email".to_string(),
             kind: ConstraintKind::Unique,
+            ref_table: None,
+            ref_column: None,
         }
     }
 
@@ -231,6 +261,8 @@ mod tests {
             table: "users".to_string(),
             column: "name".to_string(),
             kind: ConstraintKind::NotNull,
+            ref_table: None,
+            ref_column: None,
         }
     }
 

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"
+                 xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Id="VoltNueronGrid.VS.Extension" Version="0.1.0" Language="en-US"
+              Publisher="VoltNueronGrid"/>
+    <DisplayName>VoltNueronGrid Tools for Visual Studio</DisplayName>
+    <Description xml:space="preserve">
+      VoltNueronGrid HTAP database integration for Visual Studio 2022+.
+      Includes SQL editor, schema browser, connection wizard, and query plan inspector.
+    </Description>
+    <Tags>database,sql,htap,voltnuerongrid</Tags>
+    <ProjectType>Web</ProjectType>
+    <License>LICENSE.txt</License>
+    <Icon>Resources\vng-icon.png</Icon>
+    <PreviewImage>Resources\vng-preview.png</PreviewImage>
+  </Metadata>
+  <Installation InstalledByMsi="false" AllUsers="false" SystemComponent="false" Scope="PerUser">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)"/>
+    <InstallationTarget Id="Microsoft.VisualStudio.Professional" Version="[17.0, 18.0)"/>
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 18.0)"/>
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP" DisplayName=".NET Framework" Version="[4.7.2,)"
+                d:Source="Manual" />
+  </Dependencies>
+  <Prerequisites>
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,18.0)"
+                  DisplayName="Visual Studio core shell editor"/>
+  </Prerequisites>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%"
+           Path="|%CurrentProject%;PkgdefProjectOutputGroup|"/>
+    <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="Project" d:ProjectName="%CurrentProject%"
+           Path="|%CurrentProject%|"/>
+  </Assets>
+</PackageManifest>

@@ -40,6 +40,22 @@ pub(crate) fn build_http_envelope<TPayload>(
     }
 }
 
+/// Extract the partition column from `CREATE TABLE ... PARTITION BY RANGE(col)`.
+/// Input `upper_sql` must be already upper-cased.
+/// Returns `None` if the statement does not contain `PARTITION BY RANGE`.
+pub(crate) fn extract_partition_column(upper_sql: &str) -> Option<String> {
+    let tag = "PARTITION BY RANGE";
+    let start = upper_sql.find(tag)?;
+    let after = upper_sql[start + tag.len()..].trim();
+    // Expect `(col_name)` next
+    let inner = after.strip_prefix('(')?.split(')').next()?;
+    let col = inner.trim();
+    if col.is_empty() {
+        None
+    } else {
+        Some(col.to_ascii_lowercase())
+    }
+}
 
 /// Extract the storage key for a DELETE statement.
 ///

@@ -1,0 +1,13 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: VoltNueronGrid Tools for Eclipse
+Bundle-SymbolicName: com.voltnuerongrid.eclipse;singleton:=true
+Bundle-Version: 0.1.0.qualifier
+Bundle-Activator: com.voltnuerongrid.eclipse.Activator
+Bundle-Vendor: VoltNueronGrid
+Require-Bundle: org.eclipse.ui,
+ org.eclipse.core.runtime,
+ org.eclipse.jface,
+ org.eclipse.swt
+Bundle-RequiredExecutionEnvironment: JavaSE-17
+Export-Package: com.voltnuerongrid.eclipse

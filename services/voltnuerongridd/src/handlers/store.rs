@@ -340,6 +340,10 @@ pub(crate) struct AddConstraintRequest {
     pub(crate) table: String,
     pub(crate) column: String,
     pub(crate) kind: String,
+    #[serde(default)]
+    pub(crate) ref_table: Option<String>,
+    #[serde(default)]
+    pub(crate) ref_column: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -777,6 +781,8 @@ pub(crate) async fn store_add_constraint(
         table: req.table.clone(),
         column: req.column.clone(),
         kind,
+        ref_table: req.ref_table.clone(),
+        ref_column: req.ref_column.clone(),
     };
     let mut mgr = state.constraint_manager.lock().expect("constraint lock");
     Ok(match mgr.add_constraint(descriptor) {

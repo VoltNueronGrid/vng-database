@@ -636,6 +636,38 @@ pub(crate) async fn failover_simulate(
 
 
 // REQ-27: Redis-compat cache command handler -----------------------------------
+
+/// CACHE-1: Persist the distributed cache to the snapshot file.
+/// Non-fatal: logs a warning but does not abort on I/O failure.
+pub(crate) fn persist_cache_snapshot(state: &AppState) {
+    if let Ok(cache) = state.distributed_cache.lock() {
+        let json = cache.snapshot_to_json();
+        let path = state.cache_snapshot_path.as_ref();
+        if let Some(dir) = std::path::Path::new(path).parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(data) = serde_json::to_string_pretty(&json) {
+            if let Err(e) = std::fs::write(path, data) {
+                tracing::warn!("cache_snapshot write failed: {e}");
+            }
+        }
+    }
+}
+
+/// CACHE-1: Load the distributed cache from the snapshot file on startup.
+pub(crate) fn load_cache_snapshot(state: &AppState) {
+    let path = state.cache_snapshot_path.as_ref();
+    if let Ok(data) = std::fs::read_to_string(path) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+            let now_ms = now_unix_ms_u64();
+            if let Ok(mut cache) = state.distributed_cache.lock() {
+                cache.restore_from_json(&json, now_ms);
+                tracing::info!("cache_snapshot loaded from {path}");
+            }
+        }
+    }
+}
+
 pub(crate) async fn cache_redis_command(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -697,6 +729,10 @@ pub(crate) async fn cache_redis_command(
             let value = req.value.clone().unwrap_or(serde_json::Value::Null);
             let result = state.distributed_cache.lock().expect("cache manager lock")
                 .set(partition_id, key, value, req.ttl_ms, now_ms);
+            // CACHE-1: Persist cache to disk after mutation.
+            if result.is_ok() {
+                persist_cache_snapshot(&state);
+            }
             RedisCacheCommandResponse {
                 status: if result.is_ok() { "ok" } else { "error" },
                 cmd: cmd.clone(),
@@ -713,16 +749,20 @@ pub(crate) async fn cache_redis_command(
             let result = state.distributed_cache.lock().expect("cache manager lock")
                 .invalidate(partition_id, key);
             match result {
-                Ok(removed) => RedisCacheCommandResponse {
-                    status: "ok",
-                    cmd: cmd.clone(),
-                    value: None,
-                    exists: None,
-                    removed: Some(removed),
-                    flushed_count: None,
-                    keys: None,
-                    error: None,
-                },
+                Ok(removed) => {
+                    // CACHE-1: Persist after DEL.
+                    persist_cache_snapshot(&state);
+                    RedisCacheCommandResponse {
+                        status: "ok",
+                        cmd: cmd.clone(),
+                        value: None,
+                        exists: None,
+                        removed: Some(removed),
+                        flushed_count: None,
+                        keys: None,
+                        error: None,
+                    }
+                }
                 Err(e) => RedisCacheCommandResponse {
                     status: "error",
                     cmd: cmd.clone(),
@@ -1114,6 +1154,33 @@ pub(crate) async fn cache_redis_command(
             };
             RedisCacheCommandResponse {
                 status: "ok", cmd: cmd.clone(), value: Some(serde_json::json!(card)),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // CACHE-1: SUBSCRIBE key — simple stub (long-poll not yet wired; SSE transport pending)
+        "SUBSCRIBE" => {
+            let key = req.key.as_deref().unwrap_or("");
+            RedisCacheCommandResponse {
+                status: "ok",
+                cmd: cmd.clone(),
+                value: Some(serde_json::json!({ "channel": key, "subscribed": true, "message": null })),
+                exists: None, removed: None, flushed_count: None, keys: None, error: None,
+            }
+        }
+        // CACHE-1: PUBLISH key value — store value and signal subscribers (stub).
+        "PUBLISH" => {
+            let key = req.key.clone().unwrap_or_default();
+            let value = req.value.clone().unwrap_or(serde_json::Value::Null);
+            // Persist the published value under the channel key so subscribers can poll.
+            let result = state.distributed_cache.lock().expect("cache manager lock")
+                .set(partition_id, format!("__pub:{key}"), value, Some(60_000), now_ms);
+            if result.is_ok() {
+                persist_cache_snapshot(&state);
+            }
+            RedisCacheCommandResponse {
+                status: "ok",
+                cmd: cmd.clone(),
+                value: Some(serde_json::json!(1)), // subscriber count stub
                 exists: None, removed: None, flushed_count: None, keys: None, error: None,
             }
         }

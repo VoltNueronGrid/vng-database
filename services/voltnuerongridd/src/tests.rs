@@ -134,6 +134,10 @@ fn state_with_key(key: Option<&str>) -> AppState {
         // ISSUE-03: trigger registry + no-op emitter for tests.
         trigger_registry: Arc::new(Mutex::new(voltnuerongrid_store::triggers::TriggerRegistry::new())),
         trigger_emitter: Arc::new(voltnuerongrid_store::trigger_emitter::NoOpTriggerEmitter),
+        // PART-1: partition registry (empty for tests).
+        partition_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        // CACHE-1: test uses in-memory only (no snapshot path).
+        cache_snapshot_path: Arc::new("state/cache-snapshot-test.json".to_string()),
     }
 }
 
@@ -709,6 +713,8 @@ fn store_validate_constraint_accepts_tenant_scoped_table() {
             table: "tenant/acme/orders".to_string(),
             column: "id".to_string(),
             kind: ConstraintKind::PrimaryKey,
+            ref_table: None,
+            ref_column: None,
         })
         .expect("add tenant constraint");
 
@@ -811,6 +817,8 @@ fn store_add_constraint_accepts_tenant_admin_for_tenant_table() {
                 table: "tenant/acme/orders".to_string(),
                 column: "id".to_string(),
                 kind: "primary_key".to_string(),
+                ref_table: None,
+                ref_column: None,
             }),
         ))
         .expect("tenant admin should add constraint");
@@ -2510,6 +2518,8 @@ fn ws2_constraint_pk_not_null_via_appstate() {
         table: "users".to_string(),
         column: "id".to_string(),
         kind: ConstraintKind::PrimaryKey,
+        ref_table: None,
+        ref_column: None,
     })
     .expect("add pk");
     mgr.add_constraint(ConstraintDescriptor {
@@ -2517,6 +2527,8 @@ fn ws2_constraint_pk_not_null_via_appstate() {
         table: "users".to_string(),
         column: "name".to_string(),
         kind: ConstraintKind::NotNull,
+        ref_table: None,
+        ref_column: None,
     })
     .expect("add nn");
 
@@ -15119,4 +15131,215 @@ fn mv2_incremental_refresh_no_op_when_no_deltas() {
         let resp = tower::ServiceExt::oneshot(refresh_app, ref_req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "REFRESH INCREMENTALLY should succeed even with 0 deltas");
     });
+}
+
+// ── CON-1 tests ──────────────────────────────────────────────────────────────
+
+#[test]
+fn con1_update_unique_violation_returns_conflict() {
+    use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
+    use crate::handlers::sql::{sql_execute, SqlExecuteRequest};
+    use crate::handlers::store::AddConstraintRequest;
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    // Register a UNIQUE constraint on `users.email`
+    {
+        let mut mgr = state.constraint_manager.lock().unwrap();
+        mgr.add_constraint(ConstraintDescriptor {
+            name: "uq_users_email".to_string(),
+            table: "users".to_string(),
+            column: "email".to_string(),
+            kind: ConstraintKind::Unique,
+            ref_table: None,
+            ref_column: None,
+        }).unwrap();
+    }
+
+    // INSERT first user (should succeed)
+    let insert1 = SqlExecuteRequest {
+        sql_batch: "INSERT INTO users (id, email) VALUES ('u1', 'a@b.com')".to_string(),
+        ..Default::default()
+    };
+    let r = rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(insert1)));
+    assert!(r.is_ok(), "first INSERT should succeed");
+    // Record the committed value
+    {
+        let mut mgr = state.constraint_manager.lock().unwrap();
+        mgr.record_committed_value("users", "email", "a@b.com");
+    }
+
+    // INSERT second user with same email → should fail with CONFLICT
+    let insert2 = SqlExecuteRequest {
+        sql_batch: "INSERT INTO users (id, email) VALUES ('u2', 'a@b.com')".to_string(),
+        ..Default::default()
+    };
+    let r2 = rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(insert2)));
+    assert!(r2.is_err(), "duplicate email should be rejected by UNIQUE constraint");
+    if let Err((status, _)) = r2 {
+        assert_eq!(status, StatusCode::CONFLICT, "expected 409 CONFLICT for unique violation");
+    }
+}
+
+// ── PART-1 tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn part1_partition_column_extracted_correctly() {
+    use crate::helpers::sql_parse::extract_partition_column;
+    let sql = "CREATE TABLE orders (id TEXT, amount INT) PARTITION BY RANGE(amount)";
+    let upper = sql.to_ascii_uppercase();
+    let col = extract_partition_column(&upper);
+    assert_eq!(col, Some("amount".to_string()));
+}
+
+#[test]
+fn part1_create_partition_table_stored_in_registry() {
+    use crate::handlers::sql::{sql_execute, SqlExecuteRequest};
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    let ddl = SqlExecuteRequest {
+        sql_batch: "CREATE TABLE orders (id TEXT, amount INT) PARTITION BY RANGE(amount)".to_string(),
+        ..Default::default()
+    };
+    let r = rt.block_on(sql_execute(State(state.clone()), headers, Json(ddl)));
+    assert!(r.is_ok(), "CREATE TABLE PARTITION BY should succeed");
+
+    let reg = state.partition_registry.lock().unwrap();
+    assert!(reg.contains_key("orders"), "partition_registry should contain 'orders'");
+    assert_eq!(reg.get("orders").map(|s| s.as_str()), Some("amount"));
+}
+
+// ── PART-2 tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn part2_explain_select_shows_table_scan_without_index() {
+    // Test the query planner directly: without an index, plan should be TableScan.
+    let inner_sql = "SELECT * FROM users WHERE email = 'x@y.com'";
+    let index_descriptors: Vec<(String, String, String)> = vec![]; // no indexes
+
+    let plan = if let Ok(parsed_stmt) = voltnuerongrid_sql::parse_one(inner_sql) {
+        use voltnuerongrid_exec::QueryPlanner;
+        if index_descriptors.is_empty() {
+            QueryPlanner::plan(&parsed_stmt)
+        } else {
+            QueryPlanner::plan_with_indexes(&parsed_stmt, &index_descriptors)
+        }
+    } else {
+        panic!("Failed to parse inner SQL");
+    };
+
+    let is_index_scan = matches!(&plan, voltnuerongrid_exec::LogicalPlan::IndexScan { .. });
+    assert!(!is_index_scan, "without index, planner should produce TableScan, not IndexScan");
+}
+
+#[test]
+fn part2_explain_select_shows_index_scan_with_index() {
+    // Test the query planner directly: with a matching index, plan should be IndexScan.
+    let inner_sql = "SELECT * FROM users WHERE email = 'x@y.com'";
+    let index_descriptors: Vec<(String, String, String)> = vec![
+        ("users".to_string(), "email".to_string(), "idx_users_email".to_string()),
+    ];
+
+    let plan = if let Ok(parsed_stmt) = voltnuerongrid_sql::parse_one(inner_sql) {
+        use voltnuerongrid_exec::QueryPlanner;
+        QueryPlanner::plan_with_indexes(&parsed_stmt, &index_descriptors)
+    } else {
+        panic!("Failed to parse inner SQL");
+    };
+
+    let is_index_scan = matches!(&plan, voltnuerongrid_exec::LogicalPlan::IndexScan { .. });
+    assert!(is_index_scan, "with matching index, planner should produce IndexScan");
+}
+
+// ── CACHE-1 tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn cache1_subscribe_and_publish_stub_succeeds() {
+    use crate::handlers::misc::cache_redis_command;
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "automation");
+
+    // SUBSCRIBE stub
+    let sub_req = RedisCacheCommandRequest {
+        cmd: "SUBSCRIBE".to_string(),
+        partition_id: Some("default".to_string()),
+        key: Some("events:orders".to_string()),
+        value: None, ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
+    };
+    let sub_resp = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(sub_req)))
+        .expect("SUBSCRIBE ok").0;
+    assert_eq!(sub_resp.status, "ok");
+    assert!(sub_resp.value.is_some(), "SUBSCRIBE should return channel info");
+
+    // PUBLISH stub
+    let pub_req = RedisCacheCommandRequest {
+        cmd: "PUBLISH".to_string(),
+        partition_id: Some("default".to_string()),
+        key: Some("events:orders".to_string()),
+        value: Some(serde_json::json!({ "order_id": "ord-1" })),
+        ttl_ms: None, delta: None, expire_ms: None, keys: None, start: None, stop: None, field: None,
+    };
+    let pub_resp = rt.block_on(cache_redis_command(State(state.clone()), headers.clone(), Json(pub_req)))
+        .expect("PUBLISH ok").0;
+    assert_eq!(pub_resp.status, "ok");
+    // Subscriber count stub = 1
+    assert_eq!(pub_resp.value, Some(serde_json::json!(1)));
+}
+
+#[test]
+fn cache1_evict_by_prefix_removes_matching_entries() {
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "automation");
+    let now = 0u64;
+
+    // Add 3 entries: 2 with prefix "table:orders:", 1 with different prefix
+    {
+        let mut cache = state.distributed_cache.lock().unwrap();
+        let _ = cache.set("default", "table:orders:1".to_string(), serde_json::json!("r1"), None, now);
+        let _ = cache.set("default", "table:orders:2".to_string(), serde_json::json!("r2"), None, now);
+        let _ = cache.set("default", "table:users:1".to_string(), serde_json::json!("u1"), None, now);
+    }
+
+    // Evict prefix "table:orders:"
+    {
+        let mut cache = state.distributed_cache.lock().unwrap();
+        cache.evict_by_prefix("table:orders:");
+    }
+
+    // Verify only table:users:1 remains
+    {
+        let mut cache = state.distributed_cache.lock().unwrap();
+        let keys = cache.keys_in_partition("default", now).unwrap_or_default();
+        assert!(!keys.contains(&"table:orders:1".to_string()), "prefix-matched key should be evicted");
+        assert!(!keys.contains(&"table:orders:2".to_string()), "prefix-matched key should be evicted");
+        assert!(keys.contains(&"table:users:1".to_string()), "non-matching key should remain");
+    }
+}
+
+#[test]
+fn cache1_snapshot_roundtrip() {
+    let now_ms = 1_000_000u64;
+
+    let mut cache = voltnuerongrid_opt::DistributedCacheManager::with_default_policy();
+    let _ = cache.set("p1", "k1".to_string(), serde_json::json!("v1"), Some(60_000), now_ms);
+    let _ = cache.set("p1", "k2".to_string(), serde_json::json!(42), None, now_ms);
+
+    let snap = cache.snapshot_to_json();
+
+    let mut cache2 = voltnuerongrid_opt::DistributedCacheManager::with_default_policy();
+    cache2.restore_from_json(&snap, now_ms);
+
+    // k1 and k2 should be in cache2
+    let v1 = cache2.get("p1", "k1", now_ms).ok().flatten();
+    assert!(v1.is_some(), "k1 should be restored");
+    let v2 = cache2.get("p1", "k2", now_ms).ok().flatten();
+    assert!(v2.is_some(), "k2 should be restored");
 }

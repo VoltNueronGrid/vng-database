@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+
+  <extension point="org.eclipse.ui.views">
+    <category id="com.voltnuerongrid.eclipse.category"
+              name="VoltNueronGrid"/>
+    <view id="com.voltnuerongrid.eclipse.views.ConnectionView"
+          name="VoltNueronGrid Connection"
+          category="com.voltnuerongrid.eclipse.category"
+          class="com.voltnuerongrid.eclipse.views.ConnectionView"
+          icon="icons/vng-16.png"
+          allowMultiple="false"/>
+    <view id="com.voltnuerongrid.eclipse.views.SchemaView"
+          name="VoltNueronGrid Schema"
+          category="com.voltnuerongrid.eclipse.category"
+          class="com.voltnuerongrid.eclipse.views.SchemaView"
+          icon="icons/vng-16.png"
+          allowMultiple="false"/>
+    <view id="com.voltnuerongrid.eclipse.views.QueryResultView"
+          name="VoltNueronGrid Query Results"
+          category="com.voltnuerongrid.eclipse.category"
+          class="com.voltnuerongrid.eclipse.views.QueryResultView"
+          icon="icons/vng-16.png"
+          allowMultiple="false"/>
+  </extension>
+
+  <extension point="org.eclipse.ui.actionSets">
+    <actionSet id="com.voltnuerongrid.eclipse.actionSet"
+               label="VoltNueronGrid"
+               visible="true">
+      <action id="com.voltnuerongrid.eclipse.actions.ExecuteSql"
+              label="Execute SQL"
+              tooltip="Execute selected SQL via VoltNueronGrid"
+              class="com.voltnuerongrid.eclipse.actions.ExecuteSqlAction"
+              menubarPath="additions"/>
+      <action id="com.voltnuerongrid.eclipse.actions.OpenConnection"
+              label="New VoltNueronGrid Connection…"
+              class="com.voltnuerongrid.eclipse.actions.OpenConnectionAction"
+              menubarPath="additions"/>
+    </actionSet>
+  </extension>
+
+  <extension point="org.eclipse.ui.preferencePages">
+    <page id="com.voltnuerongrid.eclipse.preferences.ConnectionPreferences"
+          name="VoltNueronGrid"
+          class="com.voltnuerongrid.eclipse.connection.VngPreferencePage"/>
+  </extension>
+
+</plugin>

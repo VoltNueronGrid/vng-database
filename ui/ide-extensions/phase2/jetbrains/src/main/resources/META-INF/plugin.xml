@@ -1,0 +1,44 @@
+<idea-plugin>
+  <id>com.voltnuerongrid.jetbrains</id>
+  <name>VoltNueronGrid Tools for JetBrains</name>
+  <version>0.1.0</version>
+  <vendor email="support@voltnuerongrid.io" url="https://voltnuerongrid.io">VoltNueronGrid</vendor>
+
+  <description><![CDATA[
+    VoltNueronGrid database plugin for JetBrains IDEs.<br/>
+    Features: SQL editor, schema browser, connection wizard, autonomous action authorizer.
+  ]]></description>
+
+  <change-notes><![CDATA[
+    <b>0.1.0</b> — Initial release: connection wizard, schema browser, SQL editor, result tool window.
+  ]]></change-notes>
+
+  <idea-version since-build="241" until-build="251.*"/>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.database</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow id="VoltNueronGrid" secondary="true" anchor="right"
+                factoryClass="com.voltnuerongrid.jetbrains.ui.VngToolWindowFactory"
+                icon="/icons/vng-13.svg"/>
+    <applicationService
+        serviceInterface="com.voltnuerongrid.jetbrains.settings.VngConnectionSettings"
+        serviceImplementation="com.voltnuerongrid.jetbrains.settings.VngConnectionSettingsImpl"/>
+    <applicationConfigurable
+        instance="com.voltnuerongrid.jetbrains.settings.VngSettingsConfigurable"
+        displayName="VoltNueronGrid"/>
+  </extensions>
+
+  <actions>
+    <group id="VngActionGroup" text="VoltNueronGrid" popup="true">
+      <action id="VngExecuteSql" class="com.voltnuerongrid.jetbrains.actions.ExecuteSqlAction"
+              text="Execute SQL" description="Execute selected SQL via VoltNueronGrid"/>
+      <action id="VngBrowseSchema" class="com.voltnuerongrid.jetbrains.actions.BrowseSchemaAction"
+              text="Browse Schema" description="Open VoltNueronGrid schema browser"/>
+      <action id="VngOpenConnection" class="com.voltnuerongrid.jetbrains.actions.OpenConnectionAction"
+              text="New Connection…" description="Open VoltNueronGrid connection wizard"/>
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+    </group>
+  </actions>
+</idea-plugin>

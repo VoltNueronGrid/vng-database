@@ -22,7 +22,7 @@ use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_gua
 use crate::{route_path_name, try_handle_call_insert_rows_demo};
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
 use crate::helpers::sql_parse::{extract_bulk_update_target, extract_bulk_delete_target};
-use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix, validate_row_against_ddl};
+use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix, validate_row_against_ddl, extract_partition_column};
 use crate::{persist_sql_statement};
 use crate::auth::{require_sql_runtime_principal, locale_from_headers};
 use crate::audit_helpers::append_runtime_audit_event;
@@ -1813,6 +1813,62 @@ pub(crate) async fn sql_execute(
         return response;
     }
 
+    // PART-2: EXPLAIN SELECT intercept — show index plan before statement dispatch.
+    {
+        let sql_upper = req.sql_batch.trim().to_ascii_uppercase();
+        if sql_upper.starts_with("EXPLAIN ") {
+            let inner_sql = req.sql_batch.trim()["EXPLAIN ".len()..].trim();
+            let index_descriptors: Vec<(String, String, String)> = state.index_manager
+                .lock()
+                .ok()
+                .map(|mgr| {
+                    mgr.list_indexes()
+                        .into_iter()
+                        .map(|d| (d.table.clone(), d.column.clone(), d.name.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let plan_desc = if let Ok(parsed_stmt) = voltnuerongrid_sql::parse_one(inner_sql) {
+                use voltnuerongrid_exec::QueryPlanner;
+                let plan = if index_descriptors.is_empty() {
+                    QueryPlanner::plan(&parsed_stmt)
+                } else {
+                    QueryPlanner::plan_with_indexes(&parsed_stmt, &index_descriptors)
+                };
+                // Describe the plan node chosen
+                match &plan {
+                    voltnuerongrid_exec::LogicalPlan::IndexScan { table, indexed_column, index_name, .. } => {
+                        format!("IndexScan({index_name}) on {table}.{indexed_column}")
+                    }
+                    voltnuerongrid_exec::LogicalPlan::Scan { table, filter, .. } => {
+                        if let Some(f) = filter {
+                            format!("TableScan on {table} with filter: {f}")
+                        } else {
+                            format!("TableScan on {table}")
+                        }
+                    }
+                    other => format!("{other:?}"),
+                }
+            } else {
+                "TableScan (could not parse inner query)".to_string()
+            };
+            let udf_function_catalog = udf_function_catalog_contract();
+            let udf_guard_policies = udf_guard_policy_contract();
+            release_sql_data_plane_connection(&state, &connection_id);
+            return Ok((StatusCode::OK, Json(SqlExecuteResponse {
+                status: "ok".to_string(),
+                route_path: "explain".to_string(),
+                reason: plan_desc,
+                transaction: None, olap: None, rejected_statement_count: 0,
+                udf_results: None, udf_guardrail_status: None,
+                udf_function_catalog, udf_guard_policies,
+                udf_execution_plan: vec![], legacy_agg_results: None,
+                planner_path: Some("explain".to_string()), oltp_rows: None,
+                olap_agg_results: None, columns: None, rows: None, freshness_lag_ms: None,
+            })));
+        }
+    }
+
     // ── Statement dispatch ───────────────────────────────────────────────────
     // M-8 Rule 6: Snapshot the DDL catalog once so we can resolve view definitions
     // without holding the lock across the entire dispatch loop.
@@ -2293,6 +2349,17 @@ pub(crate) async fn sql_execute(
                         "drop" => {
                             catalog.record_drop(&info.database_name, &info.schema_name, &info.object_name);
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, stmt);
+                            // CACHE-1: DDL-trigger-driven cache invalidation on DROP TABLE.
+                            if info.object_kind == "table" && !info.object_name.is_empty() {
+                                let prefix = format!("table:{}:", info.object_name);
+                                if let Ok(mut cache) = state.distributed_cache.lock() {
+                                    cache.evict_by_prefix(&prefix);
+                                }
+                                // Also remove from partition registry (PART-1).
+                                if let Ok(mut reg) = state.partition_registry.lock() {
+                                    reg.remove(&info.object_name);
+                                }
+                            }
                         }
                         "alter" => {
                             catalog.record_alter(&info.database_name, &info.schema_name, &info.object_name, stmt, now_ms);
@@ -2309,6 +2376,27 @@ pub(crate) async fn sql_execute(
                 let lower = stmt.trim().to_ascii_lowercase();
                 if lower.starts_with("create index ") || lower.starts_with("create unique index ") {
                     handle_create_index_ddl(&state, stmt, &db);
+                }
+            }
+            // PART-1: Register partition tables for PARTITION BY RANGE(col) DDL.
+            for stmt in &ddl_snapshot {
+                let upper = stmt.trim_start().to_ascii_uppercase();
+                if upper.starts_with("CREATE TABLE ") && upper.contains("PARTITION BY RANGE") {
+                    if let Some(part_col) = extract_partition_column(&upper) {
+                        // Extract table name (second token after CREATE TABLE)
+                        let table_name = upper
+                            .trim_start_matches("CREATE TABLE ")
+                            .split_whitespace()
+                            .next()
+                            .map(|t| t.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'))
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        if !table_name.is_empty() {
+                            if let Ok(mut reg) = state.partition_registry.lock() {
+                                reg.insert(table_name, part_col);
+                            }
+                        }
+                    }
                 }
             }
             // MV-1: Initial population for CREATE MATERIALIZED VIEW ... WITH DATA (not NO DATA).
@@ -2770,6 +2858,30 @@ pub(crate) async fn sql_execute(
                                         let before = rs.read_latest(&matched_k).cloned();
                                         let mut updated = existing;
                                         updated.insert(set_col.clone(), set_val.clone());
+                                        // CON-1: Validate constraints on bulk UPDATE.
+                                        if let Ok(mgr) = state.constraint_manager.lock() {
+                                            let mut violation_found: Option<String> = None;
+                                            for (col, val) in updated.iter().filter(|(c, _)| !c.starts_with("__")) {
+                                                if let Err(v) = mgr.validate(&tbl, col, Some(val.as_str())) {
+                                                    violation_found = Some(v.to_string());
+                                                    break;
+                                                }
+                                            }
+                                            drop(mgr);
+                                            if let Some(msg) = violation_found {
+                                                rs.release_write_intents(xid);
+                                                release_sql_data_plane_connection(&state, &connection_id);
+                                                return Err((
+                                                    StatusCode::CONFLICT,
+                                                    Json(crate::AuthErrorResponse {
+                                                        status: "error",
+                                                        reason: format!("constraint_violation: {msg}"),
+                                                        locale: "en".to_string(),
+                                                        localized_message: format!("Constraint violation on bulk UPDATE '{tbl}': {msg}"),
+                                                    }),
+                                                ));
+                                            }
+                                        }
                                         record_undo(&state.tx_undo_log, &connection_id, &matched_k, before.clone());
                                         let _ = rs.begin_write_intent(xid, &matched_k);
                                         let raw_k_stripped = if db_prefix_str.is_empty() {
@@ -2796,6 +2908,27 @@ pub(crate) async fn sql_execute(
                                     merged.insert(col.clone(), val.clone());
                                 }
                                 let table_name_upd = d.get("__table").map(|s| s.as_str()).unwrap_or("");
+                                // CON-1: Validate constraints on UPDATE (merged row values).
+                                if !table_name_upd.is_empty() {
+                                    if let Ok(mgr) = state.constraint_manager.lock() {
+                                        for (col, val) in merged.iter().filter(|(c, _)| !c.starts_with("__")) {
+                                            if let Err(violation) = mgr.validate(table_name_upd, col, Some(val.as_str())) {
+                                                drop(mgr);
+                                                rs.release_write_intents(xid);
+                                                release_sql_data_plane_connection(&state, &connection_id);
+                                                return Err((
+                                                    StatusCode::CONFLICT,
+                                                    Json(crate::AuthErrorResponse {
+                                                        status: "error",
+                                                        reason: format!("constraint_violation: {violation}"),
+                                                        locale: "en".to_string(),
+                                                        localized_message: format!("Constraint violation on UPDATE '{table_name_upd}': {violation}"),
+                                                    }),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
                                 record_undo(&state.tx_undo_log, &connection_id, &k, before.clone());
                                 let _ = rs.begin_write_intent(xid, &k);
                                 { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&merged)); }

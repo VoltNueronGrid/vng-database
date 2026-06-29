@@ -721,6 +721,11 @@ pub(crate) struct AppState {
     pub(crate) geo_index: Arc<Mutex<helpers::geo::GeoIndex>>,
     // PLUG-4: versioned plugin marketplace registry.
     pub(crate) plugin_registry: Arc<Mutex<helpers::plugins::PluginRegistry>>,
+    // PART-1: partition registry — maps table_name → partition column.
+    // Populated on `CREATE TABLE ... PARTITION BY RANGE(col)`.
+    pub(crate) partition_registry: Arc<Mutex<HashMap<String, String>>>,
+    // CACHE-1: path to the on-disk cache snapshot file (loaded at boot, saved on SET/DEL).
+    pub(crate) cache_snapshot_path: Arc<String>,
 }
 
 #[derive(Clone, Default)]
@@ -1754,9 +1759,19 @@ async fn main() {
         fts_index: Arc::new(Mutex::new(helpers::fts::FtsIndex::new())),
         geo_index: Arc::new(Mutex::new(helpers::geo::GeoIndex::new())),
         plugin_registry: Arc::new(Mutex::new(helpers::plugins::PluginRegistry::new())),
+        // PART-1: partition registry (table → partition column).
+        partition_registry: Arc::new(Mutex::new(HashMap::new())),
+        // CACHE-1: on-disk cache snapshot path.
+        cache_snapshot_path: Arc::new(
+            std::env::var("VNG_CACHE_SNAPSHOT_PATH")
+                .unwrap_or_else(|_| "state/cache-snapshot.json".to_string())
+        ),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
+
+    // CACHE-1: Restore distributed cache from on-disk snapshot (if available).
+    crate::handlers::misc::load_cache_snapshot(&state);
 
     // P1: On boot, load persisted rows from the durability engine into
     // PagedRowStore as a warm read-through cache.

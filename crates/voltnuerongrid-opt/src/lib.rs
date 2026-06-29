@@ -385,6 +385,19 @@ impl CachePartition {
             last_rebalance_ms: self.last_rebalance_ms,
         }
     }
+
+    /// Export entries for persistence (CACHE-1). Returns (key, value, expires_at_ms) tuples.
+    pub fn snapshot_entries(&self) -> Vec<(String, serde_json::Value, Option<u64>)> {
+        self.entries.iter().map(|(k, e)| {
+            let expires_at = e.ttl_ms.map(|ttl| e.created_at_ms + ttl);
+            (k.clone(), e.value.clone(), expires_at)
+        }).collect()
+    }
+
+    /// Remove all entries matching a key prefix (CACHE-1 DDL invalidation).
+    pub fn evict_by_prefix(&mut self, prefix: &str) {
+        self.entries.retain(|k, _| !k.starts_with(prefix));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +546,55 @@ impl DistributedCacheManager {
     ) -> Result<f64, CacheError> {
         let partition = self.ensure_partition(partition_id);
         partition.increment(key, delta, ttl_ms, now_ms)
+    }
+
+    /// Serialize all partition entries to a JSON value for persistence (CACHE-1).
+    /// Format: `{ "partition_id": { "key": { "value": …, "expires_at_ms": … } } }`
+    pub fn snapshot_to_json(&self) -> serde_json::Value {
+        let mut out = serde_json::Map::new();
+        for (pid, partition) in &self.partitions {
+            let mut part_map = serde_json::Map::new();
+            for (key, value, expires_at) in partition.snapshot_entries() {
+                let mut e = serde_json::Map::new();
+                e.insert("value".to_string(), value);
+                if let Some(exp) = expires_at {
+                    e.insert("expires_at_ms".to_string(), serde_json::json!(exp));
+                }
+                part_map.insert(key, serde_json::Value::Object(e));
+            }
+            out.insert(pid.clone(), serde_json::Value::Object(part_map));
+        }
+        serde_json::Value::Object(out)
+    }
+
+    /// Restore entries from a previously serialised snapshot (CACHE-1).
+    /// Only loads entries that have not yet expired (compared against `now_ms`).
+    pub fn restore_from_json(&mut self, data: &serde_json::Value, now_ms: u64) {
+        if let Some(obj) = data.as_object() {
+            for (pid, part_val) in obj {
+                if let Some(part_obj) = part_val.as_object() {
+                    for (key, entry_val) in part_obj {
+                        let value = entry_val.get("value").cloned().unwrap_or(serde_json::Value::Null);
+                        let expires_at_ms = entry_val.get("expires_at_ms").and_then(|v| v.as_u64());
+                        // Skip expired entries.
+                        if let Some(exp) = expires_at_ms {
+                            if exp <= now_ms {
+                                continue;
+                            }
+                        }
+                        let ttl_ms = expires_at_ms.map(|exp| exp.saturating_sub(now_ms));
+                        let _ = self.set(pid, key.clone(), value, ttl_ms, now_ms);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Evict all cache entries whose key starts with `prefix` (CACHE-1 DDL invalidation).
+    pub fn evict_by_prefix(&mut self, prefix: &str) {
+        for partition in self.partitions.values_mut() {
+            partition.evict_by_prefix(prefix);
+        }
     }
 }
 
