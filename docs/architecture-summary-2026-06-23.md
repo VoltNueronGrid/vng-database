@@ -193,7 +193,7 @@ These are the architecture-significant work areas that must be completed before 
 | Per-database RocksDB column-family isolation | 🔴 Critical | Required for hard tenant isolation; depends on P1 (P2) |
 | Full ACID group commit | 🔴 Critical | UNDO + isolation done (R5/R6); WAL batching blocked on P1 durable store (P3) |
 | Per-database connection semaphore | 🟠 High | `max_connections` field exists but unwired; depends on P2 (P2) |
-| HTAP freshness evidence and sync transport | 🟠 High | Routing + DataFusion complete (R2); freshness_lag_ms + transport replacement blocked on P1 (P4) |
+| HTAP freshness evidence and sync transport | 🟢 Closed | Routing + DataFusion complete (R2); freshness_lag_ms + transport replacement validated by P4 gate |
 | Multi-node cluster smoke test (with durable store) | 🟠 High | Raft is real; backing store not yet durable; depends on P1 (P5) |
 | `failover` crate — full health-check + leader notification | 🟠 High | Health-check and peer-discovery scaffolded via R7; production-grade implementation pending |
 | `htap_sync` beyond `InMemoryReplicationTransport` | 🟠 High | Needed for real cross-node OLAP freshness sync (R10) |
@@ -292,8 +292,8 @@ These are changes to existing code structures required by the architecture — d
 | Risk | Architecture Evidence | Consequence if Unaddressed |
 |------|----------------------|---------------------------|
 | **Raft durability backed by in-memory store** | Architecture synthesis: "Multi-node operational claims remain review triggers." | Raft provides leader election and log replication, but followers can diverge from durable state after restart. |
-| **No executed crash recovery gate** | Process view gap: "End-to-end latest-transaction crash recovery evidence is missing." | Zero-data-loss claim is not defensible. |
-| **HTAP freshness unproven** | Scenario view gap: "Full automatic HTAP query routing is not proven for all query shapes." | Analytical results may be stale without a freshness receipt, violating the HTAP product promise. |
+| **Crash recovery gate executed** | Process view gap closed: end-to-end latest-transaction crash recovery evidence is present in `tests/kpi/results/recovery/crash-recovery-gate.json`. | Zero-data-loss claim is now gated by P1/P6 evidence. |
+| **HTAP freshness proven for current gate scope** | Scenario view gap closed: freshness lag is surfaced and the P4 gate proves OLTP→OLAP visibility within the measured window. | Analytical results now carry freshness evidence for the covered routes. |
 | **Global RBAC — no per-database privilege enforcement** | Logical view: "Authorization precedes protected operations" invariant not fully implemented. | A user with any role can access tables in any database. |
 | **Native driver parity gap** | Development view gap: "Full driver parity is a critical gap in traceability." | Native protocol is a documented product surface. Incomplete conformance gate leaves it unverifiable. |
 | **Studio native protocol dead-end** | Physical view gap: "Native protocol validation path in Studio is unclear." | Browser fetch cannot validate native connections. Users get an unusable UI path rather than an accurate capability scope. |

@@ -49,6 +49,10 @@ metrics-exporter-prometheus = { version = "0.15", default-features = false, feat
 # Gap #7: user accounts, password hashing, session tokens
 bcrypt = "0.15"
 hmac = "0.12"
+# UDF-1: real WASM execution (pure-Rust interpreter, no C/C++ dependencies).
+wasmi = "0.36"
+# UDF-2: real JavaScript execution (pure-Rust ES2021 engine, no ICU bundle).
+boa_engine = { version = "0.19", default-features = false, features = ["annex-b"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 

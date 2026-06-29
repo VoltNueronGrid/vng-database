@@ -73,6 +73,7 @@ use handlers::sre::*;
 #[allow(unused_imports)] use handlers::raft::*;
 use handlers::misc::*;
 #[allow(unused_imports)] use handlers::backup::*;
+#[allow(unused_imports)] use handlers::udf::*;
 use router::build_router;
 #[allow(unused_imports)] use helpers::time::*;
 #[allow(unused_imports)] use helpers::env_helpers::*;
@@ -107,6 +108,7 @@ pub(crate) use helpers::execution::{
 pub(crate) use helpers::udf::{
     execute_udf_runtime_scaffold, udf_function_catalog_contract,
     udf_guard_policy_contract, build_udf_execution_plan,
+    UdfRegistry,
 };
 // cluster
 pub(crate) use helpers::cluster::{
@@ -654,6 +656,8 @@ pub(crate) struct AppState {
     pub(crate) ai_rate_window_starts: Arc<Mutex<HashMap<String, u64>>>,
     /// S5-E4A-01: Connector SDK runtime registry.
     pub(crate) connector_registry: Arc<Mutex<Vec<ConnectorPlugin>>>,
+    /// UDF runtime: registered WASM/JS/Python user-defined functions.
+    pub(crate) udf_registry: Arc<Mutex<UdfRegistry>>,
     /// S6-WS5-04: TDE runtime toggle override.
     pub(crate) tde_override: Arc<Mutex<Option<bool>>>,
     /// S10-WS15-02: Per-table CDC cursor positions (table_name → last consumed sequence).
@@ -1691,6 +1695,7 @@ async fn main() {
         broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
         ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
         connector_registry: Arc::new(Mutex::new(Vec::new())),
+        udf_registry: Arc::new(Mutex::new(UdfRegistry::new())),
         tde_override: Arc::new(Mutex::new(None)),
         cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
         // Phase 1.3 — first-class DatabaseCatalog. Restored from WAL at boot

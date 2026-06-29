@@ -560,6 +560,19 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
             use crate::handlers::backup::restore_from_backup;
             post(restore_from_backup)
         })
+        // UDF-1/2/3: WASM, JavaScript, and Python user-defined function runtime
+        .route("/api/v1/udf/register", {
+            use crate::handlers::udf::udf_register_handler;
+            post(udf_register_handler)
+        })
+        .route("/api/v1/udf/list", {
+            use crate::handlers::udf::udf_list_handler;
+            get(udf_list_handler)
+        })
+        .route("/api/v1/udf/call", {
+            use crate::handlers::udf::udf_call_handler;
+            post(udf_call_handler)
+        })
         // GOV-1: Compliance report
         .route("/api/v1/compliance/report", {
             use crate::handlers::misc::compliance_report;
