@@ -583,6 +583,18 @@ pub(crate) fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
         );
     }
 
+    // AI-3: Self-heal orchestrator — Execute grant for self-heal run endpoint.
+    for role in [OperatorRole::Dba, OperatorRole::AiOperator] {
+        matrix.grant_role(
+            role.as_str(),
+            ResourceGrant {
+                resource: "autonomous.guardrails".to_string(),
+                scopes: vec!["autonomous/*".to_string()],
+                actions: vec![PrivilegeAction::Execute],
+            },
+        );
+    }
+
     for role in [OperatorRole::Dba, OperatorRole::Security] {
         matrix.grant_role(
             role.as_str(),
@@ -629,6 +641,7 @@ pub(crate) fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                 scopes: vec![
                     "security/kms".to_string(),
                     "security/kms/outage".to_string(),
+                    "security/kms/rotate".to_string(),
                     "security/tls/status".to_string(),
                     "security/tls/rotate".to_string(),
                     "security/tde/status".to_string(),
@@ -698,6 +711,38 @@ pub(crate) fn default_rbac_privilege_matrix() -> RbacPrivilegeMatrix {
                 actions: vec![PrivilegeAction::Read],
             },
         );
+    }
+
+    // AI-1: Chat-to-SQL — DBA and AiOperator can execute chat queries.
+    for role in [OperatorRole::Dba, OperatorRole::AiOperator] {
+        matrix.grant_role(role.as_str(), ResourceGrant {
+            resource: "ai.chat".to_string(),
+            scopes: vec!["*".to_string()],
+            actions: vec![PrivilegeAction::Execute],
+        });
+    }
+
+    // AI-2: Ingest/export AI assistant — DBA and AiOperator can execute.
+    for role in [OperatorRole::Dba, OperatorRole::AiOperator] {
+        matrix.grant_role(role.as_str(), ResourceGrant {
+            resource: "ai.ingest".to_string(),
+            scopes: vec!["*".to_string()],
+            actions: vec![PrivilegeAction::Execute],
+        });
+        matrix.grant_role(role.as_str(), ResourceGrant {
+            resource: "ai.export".to_string(),
+            scopes: vec!["*".to_string()],
+            actions: vec![PrivilegeAction::Execute],
+        });
+    }
+
+    // AI-4: Self-tune advisor — DBA can read recommendations and apply them.
+    for role in [OperatorRole::Dba, OperatorRole::AiOperator] {
+        matrix.grant_role(role.as_str(), ResourceGrant {
+            resource: "ai.tune".to_string(),
+            scopes: vec!["*".to_string()],
+            actions: vec![PrivilegeAction::Read, PrivilegeAction::Execute],
+        });
     }
 
     matrix

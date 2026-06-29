@@ -567,6 +567,57 @@ pub(crate) struct ClusterNodeRuntime {
     pub(crate) last_heartbeat_ms: u64,
 }
 
+// ─── AI-3: Self-Heal rate-limiter state ──────────────────────────────────────
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct SelfHealCounters {
+    pub(crate) actions_this_hour: u64,
+    pub(crate) window_start_ms: u64,
+    pub(crate) max_per_hour: u64,
+}
+
+// ─── AI-4: Slow-query ring-buffer entry and tune recommendation ───────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SlowQueryEntry {
+    pub(crate) query: String,
+    pub(crate) duration_ms: u64,
+    pub(crate) table_name: Option<String>,
+    pub(crate) timestamp_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TuneRecommendation {
+    pub(crate) action: String,
+    pub(crate) table: Option<String>,
+    pub(crate) column: Option<String>,
+    pub(crate) reason: String,
+    pub(crate) estimated_speedup: Option<f64>,
+}
+
+// ─── AI-5: DEK version record for KMS key rotation ───────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DekVersion {
+    pub(crate) version: u64,
+    pub(crate) kms_key_ref: String,
+    pub(crate) wrapped_at_ms: u128,
+    pub(crate) active: bool,
+}
+
+// ─── AI-6: Configurable diagnosis rule (loadable from dr-hook-runtime.json) ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DiagnosisRule {
+    #[serde(default)]
+    pub(crate) failure_type: Option<String>,
+    #[serde(default)]
+    pub(crate) keywords: Vec<String>,
+    pub(crate) root_cause: String,
+    pub(crate) confidence: String,
+    pub(crate) recommended_action: String,
+}
+
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -729,6 +780,20 @@ pub(crate) struct AppState {
     // SCALE-1: autoscale policy + current status (in-memory; no external orchestrator required).
     pub(crate) autoscale_policy: Arc<Mutex<handlers::autoscale::AutoscalePolicy>>,
     pub(crate) autoscale_status: Arc<Mutex<handlers::autoscale::AutoscaleStatus>>,
+    // AI-3: Self-heal rate-limiter counters.
+    pub(crate) self_heal_counters: Arc<Mutex<SelfHealCounters>>,
+    // AI-4: Slow-query ring buffer (max 1000 most-recent entries).
+    pub(crate) slow_query_log: Arc<Mutex<VecDeque<SlowQueryEntry>>>,
+    // AI-4: Latest advisor tune recommendations.
+    pub(crate) tune_recommendations: Arc<Mutex<Vec<TuneRecommendation>>>,
+    // AI-5: DEK version history for KMS key rotation.
+    pub(crate) dek_versions: Arc<Mutex<Vec<DekVersion>>>,
+    // AI-5: Current TLS certificate SHA-256 fingerprint (updated on rotation).
+    pub(crate) cert_fingerprint: Arc<Mutex<Option<String>>>,
+    // AI-6: Configurable incident diagnosis rules (loaded from dr-hook-runtime.json).
+    pub(crate) diagnosis_rules: Arc<Mutex<Vec<DiagnosisRule>>>,
+    // AI-1: Per-operator Chat-to-SQL request counters for rate limiting.
+    pub(crate) chat_sql_counters: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 #[derive(Clone, Default)]
@@ -1772,6 +1837,39 @@ async fn main() {
         // SCALE-1: autoscale policy and current status.
         autoscale_policy: Arc::new(Mutex::new(handlers::autoscale::AutoscalePolicy::default())),
         autoscale_status: Arc::new(Mutex::new(handlers::autoscale::AutoscaleStatus::default())),
+        // AI-3: Self-heal rate-limiter (max actions/hour from env, default 10).
+        self_heal_counters: Arc::new(Mutex::new(SelfHealCounters {
+            actions_this_hour: 0,
+            window_start_ms: 0,
+            max_per_hour: env::var("VNG_MAX_SELF_HEAL_PER_HOUR")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+        })),
+        // AI-4: Slow-query ring buffer (empty at start).
+        slow_query_log: Arc::new(Mutex::new(VecDeque::with_capacity(1000))),
+        // AI-4: Tune recommendations (empty at start; generated on demand).
+        tune_recommendations: Arc::new(Mutex::new(Vec::new())),
+        // AI-5: DEK version history (empty; populated on first KMS rotation).
+        dek_versions: Arc::new(Mutex::new(Vec::new())),
+        // AI-5: TLS cert fingerprint (resolved from VNG_TLS_CERT_PATH at startup if present).
+        cert_fingerprint: Arc::new(Mutex::new(
+            env::var("VNG_TLS_CERT_PATH").ok()
+                .filter(|v| !v.trim().is_empty())
+                .and_then(|p| std::fs::read(&p).ok())
+                .map(|bytes| compute_sha256_fingerprint(&bytes)),
+        )),
+        // AI-6: Diagnosis rules from dr-hook-runtime.json extended schema (empty if not configured).
+        diagnosis_rules: Arc::new(Mutex::new(
+            load_diagnosis_rules_from_state(
+                env::var("VNG_DR_HOOK_STATE_PATH")
+                    .ok()
+                    .or_else(|| Some("state/dr-hook-runtime.json".to_string()))
+                    .as_deref(),
+            ),
+        )),
+        // AI-1: Chat-to-SQL rate-limit counters (per operator).
+        chat_sql_counters: Arc::new(Mutex::new(HashMap::new())),
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -2275,6 +2373,30 @@ pub(crate) fn latest_dr_hook_records(state: &AppState, max_items: usize) -> Vec<
         }
         Err(_) => Vec::new(),
     }
+}
+
+// ─── AI-5: SHA-256 fingerprint helper ────────────────────────────────────────
+
+pub(crate) fn compute_sha256_fingerprint(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(bytes);
+    hash.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":")
+}
+
+// ─── AI-6: Load configurable diagnosis rules from extended dr-hook JSON ───────
+
+#[derive(Deserialize)]
+struct DiagnosisRulesEnvelope {
+    #[serde(default)]
+    diagnosis_rules: Vec<DiagnosisRule>,
+}
+
+pub(crate) fn load_diagnosis_rules_from_state(path: Option<&str>) -> Vec<DiagnosisRule> {
+    let Some(p) = path else { return Vec::new() };
+    let Ok(contents) = std::fs::read_to_string(p) else { return Vec::new() };
+    serde_json::from_str::<DiagnosisRulesEnvelope>(&contents)
+        .map(|e| e.diagnosis_rules)
+        .unwrap_or_default()
 }
 
 // ─── S6-001: Object-scoped query history endpoint ─────────────────────────────

@@ -141,6 +141,22 @@ fn state_with_key(key: Option<&str>) -> AppState {
         // SCALE-1: autoscale policy and status (default for tests).
         autoscale_policy: Arc::new(Mutex::new(crate::handlers::autoscale::AutoscalePolicy::default())),
         autoscale_status: Arc::new(Mutex::new(crate::handlers::autoscale::AutoscaleStatus::default())),
+        // AI-3: self-heal counters (max 10/hour for tests).
+        self_heal_counters: Arc::new(Mutex::new(crate::SelfHealCounters {
+            actions_this_hour: 0,
+            window_start_ms: 0,
+            max_per_hour: 10,
+        })),
+        // AI-4: slow-query ring buffer + empty recommendations.
+        slow_query_log: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        tune_recommendations: Arc::new(Mutex::new(Vec::new())),
+        // AI-5: DEK versions + no cert fingerprint for tests.
+        dek_versions: Arc::new(Mutex::new(Vec::new())),
+        cert_fingerprint: Arc::new(Mutex::new(None)),
+        // AI-6: no pre-loaded diagnosis rules for tests.
+        diagnosis_rules: Arc::new(Mutex::new(Vec::new())),
+        // AI-1: per-operator chat-sql counters.
+        chat_sql_counters: Arc::new(Mutex::new(std::collections::HashMap::new())),
     }
 }
 
@@ -15825,4 +15841,405 @@ fn gov2_audit_export_cef_endpoint_returns_text() {
     let resp = r.unwrap();
     let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("");
     assert!(ct.contains("text/plain"), "content-type should be text/plain, got: {ct}");
+}
+
+// ── AI-1 tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn ai1_nl_to_sql_heuristic_count_query() {
+    use crate::handlers::autonomous::nl_to_sql_heuristic;
+    let tables = vec!["orders".to_string()];
+    let (sql, confidence, refs) = nl_to_sql_heuristic("how many orders are there?", &tables);
+    assert!(sql.contains("COUNT"), "expected COUNT in SQL: {sql}");
+    assert_eq!(refs, vec!["orders"]);
+    assert!(confidence > 0.5);
+}
+
+#[test]
+fn ai1_nl_to_sql_heuristic_top_n_query() {
+    use crate::handlers::autonomous::nl_to_sql_heuristic;
+    let tables = vec!["customers".to_string()];
+    let (sql, _, _) = nl_to_sql_heuristic("show top 5 customers", &tables);
+    assert!(sql.contains("LIMIT 5"), "expected LIMIT 5: {sql}");
+    assert!(sql.contains("customers"), "expected table: {sql}");
+}
+
+#[test]
+fn ai1_nl_to_sql_unknown_table_low_confidence() {
+    use crate::handlers::autonomous::nl_to_sql_heuristic;
+    let (_, confidence, refs) = nl_to_sql_heuristic("show me all blorp records", &[]);
+    assert!(confidence < 0.5, "empty catalog → low confidence");
+    assert!(refs.is_empty(), "no known tables → no refs");
+}
+
+#[tokio::test]
+async fn ai1_chat_sql_endpoint_returns_ok() {
+    use crate::handlers::autonomous::{ai_chat_sql, ChatSqlRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let req = ChatSqlRequest { query: "list all records".to_string(), context: None };
+    let r = ai_chat_sql(State(state), headers, Json(req)).await;
+    assert!(r.is_ok(), "ai_chat_sql should return Ok: {r:?}");
+    let (status, _) = r.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ai1_chat_sql_rate_limit_per_operator() {
+    use crate::handlers::autonomous::{ai_chat_sql, ChatSqlRequest};
+    let state = state_with_key(Some("secret"));
+    // Set a very tight RPM limit (1 request).
+    state.model_gateway_policy.lock().unwrap().rate_limit_rpm = 1;
+    let headers = operator_headers("secret", "platform-admin");
+    // First request should succeed.
+    let r1 = ai_chat_sql(State(state.clone()), headers.clone(), Json(ChatSqlRequest { query: "q".to_string(), context: None })).await;
+    assert!(r1.is_ok());
+    // Second request should be rate-limited.
+    let r2 = ai_chat_sql(State(state), headers, Json(ChatSqlRequest { query: "q".to_string(), context: None })).await;
+    assert!(r2.is_err(), "second request should hit rate limit");
+    let (code, _) = r2.unwrap_err();
+    assert_eq!(code, axum::http::StatusCode::TOO_MANY_REQUESTS);
+}
+
+// ── AI-2 tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn ai2_infer_column_type_integer() {
+    use crate::handlers::autonomous::infer_column_type;
+    let t = infer_column_type("user_id", &["1".to_string(), "2".to_string(), "99".to_string()]);
+    assert_eq!(t, "INTEGER");
+}
+
+#[test]
+fn ai2_infer_column_type_real() {
+    use crate::handlers::autonomous::infer_column_type;
+    let t = infer_column_type("price", &["1.5".to_string(), "2.99".to_string()]);
+    assert_eq!(t, "REAL");
+}
+
+#[test]
+fn ai2_infer_column_type_boolean() {
+    use crate::handlers::autonomous::infer_column_type;
+    let t = infer_column_type("active", &["true".to_string(), "false".to_string()]);
+    assert_eq!(t, "BOOLEAN");
+}
+
+#[tokio::test]
+async fn ai2_ingest_suggest_returns_ddl() {
+    use crate::handlers::autonomous::{ai_ingest_suggest, IngestSuggestRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let req = IngestSuggestRequest {
+        table_name: "events".to_string(),
+        headers: vec!["id".to_string(), "name".to_string(), "score".to_string()],
+        sample_rows: Some(vec![
+            vec!["1".to_string(), "Alice".to_string(), "99.5".to_string()],
+        ]),
+    };
+    let r = ai_ingest_suggest(State(state), headers, Json(req)).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert!(resp.suggested_ddl.contains("CREATE TABLE events"), "got: {}", resp.suggested_ddl);
+    assert!(resp.suggested_ddl.contains("REAL") || resp.suggested_ddl.contains("INTEGER"),
+        "should have typed columns: {}", resp.suggested_ddl);
+}
+
+#[tokio::test]
+async fn ai2_export_query_returns_select() {
+    use crate::handlers::autonomous::{ai_export_query, ExportQueryRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let req = ExportQueryRequest {
+        description: "get all users".to_string(),
+        format: None,
+    };
+    let r = ai_export_query(State(state), headers, Json(req)).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert!(resp.suggested_sql.starts_with("SELECT"), "expected SELECT: {}", resp.suggested_sql);
+}
+
+// ── AI-3 tests ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn ai3_self_heal_run_returns_ok() {
+    use crate::handlers::autonomous::autonomous_self_heal_run;
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let r = autonomous_self_heal_run(State(state), headers).await;
+    assert!(r.is_ok(), "self_heal_run should return Ok");
+    let (status, Json(resp)) = r.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(resp.status, "ok");
+    assert_eq!(resp.signals_detected, 0);
+}
+
+#[tokio::test]
+async fn ai3_self_heal_status_returns_ok() {
+    use crate::handlers::autonomous::autonomous_self_heal_status;
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let r = autonomous_self_heal_status(State(state), headers).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert_eq!(resp.status, "ok");
+    assert_eq!(resp.max_per_hour, 10);
+}
+
+#[tokio::test]
+async fn ai3_self_heal_blocked_by_emergency_stop() {
+    use crate::handlers::autonomous::autonomous_self_heal_run;
+    let state = state_with_key(Some("secret"));
+    state.emergency_stop.set(true);
+    let headers = operator_headers("secret", "platform-admin");
+    let r = autonomous_self_heal_run(State(state), headers).await;
+    assert!(r.is_ok());
+    let (status, _) = r.unwrap();
+    assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn ai3_self_heal_processes_unresolved_signal() {
+    use crate::handlers::autonomous::autonomous_self_heal_run;
+    use crate::handlers::sre::ClusterFailureSignal;
+    let state = state_with_key(Some("secret"));
+    {
+        let mut sigs = state.cluster_failure_signals.lock().unwrap();
+        sigs.push(ClusterFailureSignal {
+            signal_id: "sig-1".to_string(),
+            node_id: "node-1".to_string(),
+            transport: "tcp".to_string(),
+            failure_type: "disk".to_string(),
+            severity: "high".to_string(),
+            message: "disk io error".to_string(),
+            observed_unix_ms: 1000,
+            resolved: false,
+            resolved_by: None,
+            resolved_unix_ms: None,
+            resolution_note: None,
+        });
+    }
+    let headers = operator_headers("secret", "platform-admin");
+    let r = autonomous_self_heal_run(State(state), headers).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert_eq!(resp.signals_detected, 1);
+    assert_eq!(resp.actions_taken, 1);
+}
+
+// ── AI-4 tests ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn ai4_tune_recommendations_returns_ok() {
+    use crate::handlers::autonomous::ai_tune_recommendations;
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let r = ai_tune_recommendations(State(state), headers).await;
+    assert!(r.is_ok(), "tune_recommendations should return Ok");
+    let (status, Json(resp)) = r.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(resp.status, "ok");
+}
+
+#[tokio::test]
+async fn ai4_slow_query_stored_in_ring_buffer() {
+    use crate::handlers::autonomous::{ai_slow_query_report, SlowQueryReportRequest};
+    let state = state_with_key(Some("secret"));
+    // Set low threshold so the query gets logged.
+    std::env::set_var("VNG_SLOW_QUERY_THRESHOLD_MS", "100");
+    let headers = operator_headers("secret", "platform-admin");
+    let req = SlowQueryReportRequest {
+        query: "SELECT * FROM orders".to_string(),
+        duration_ms: 500,
+        table_name: Some("orders".to_string()),
+    };
+    let r = ai_slow_query_report(State(state.clone()), headers, Json(req)).await;
+    assert!(r.is_ok());
+    let log_size = state.slow_query_log.lock().unwrap().len();
+    assert_eq!(log_size, 1, "slow query should be in ring buffer");
+    std::env::remove_var("VNG_SLOW_QUERY_THRESHOLD_MS");
+}
+
+#[tokio::test]
+async fn ai4_tune_recommendation_generated_from_slow_queries() {
+    use crate::handlers::autonomous::{append_slow_query, build_tune_recommendations};
+    let state = state_with_key(Some("secret"));
+    // Add repeated slow queries on same table.
+    for _ in 0..3 {
+        append_slow_query(&state, "SELECT * FROM customers", 2000, Some("customers"));
+    }
+    let recs = build_tune_recommendations(&state);
+    assert!(!recs.is_empty(), "should have at least one recommendation");
+    let idx_rec = recs.iter().any(|r| r.action == "CREATE INDEX" && r.table.as_deref() == Some("customers"));
+    assert!(idx_rec, "expected CREATE INDEX recommendation for customers");
+}
+
+// ── AI-5 tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn ai5_compute_sha256_fingerprint_deterministic() {
+    let fp1 = crate::compute_sha256_fingerprint(b"test cert bytes");
+    let fp2 = crate::compute_sha256_fingerprint(b"test cert bytes");
+    assert_eq!(fp1, fp2, "fingerprint must be deterministic");
+    assert!(fp1.contains(':'), "fingerprint should be hex colon-separated");
+    assert_eq!(fp1.split(':').count(), 32, "SHA-256 = 32 bytes");
+}
+
+#[test]
+fn ai5_compute_sha256_fingerprint_unique() {
+    let fp1 = crate::compute_sha256_fingerprint(b"cert-a");
+    let fp2 = crate::compute_sha256_fingerprint(b"cert-b");
+    assert_ne!(fp1, fp2, "different inputs must produce different fingerprints");
+}
+
+#[tokio::test]
+async fn ai5_kms_rotate_creates_dek_version() {
+    use crate::handlers::security::{security_kms_rotate, KmsRotateRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let req = KmsRotateRequest { new_key_env: None, reason: Some("test".to_string()) };
+    let r = security_kms_rotate(State(state.clone()), headers, Json(req)).await;
+    assert!(r.is_ok(), "kms_rotate should return Ok");
+    let (_, Json(resp)) = r.unwrap();
+    assert_eq!(resp.status, "ok");
+    assert_eq!(resp.new_dek_version, 1);
+
+    let versions = state.dek_versions.lock().unwrap();
+    assert_eq!(versions.len(), 1, "should have 1 DEK version");
+    assert!(versions[0].active, "new version should be active");
+}
+
+#[tokio::test]
+async fn ai5_kms_rotate_retains_old_dek_version() {
+    use crate::handlers::security::{security_kms_rotate, KmsRotateRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    // First rotation.
+    let _ = security_kms_rotate(State(state.clone()), headers.clone(),
+        Json(KmsRotateRequest { new_key_env: None, reason: None })).await;
+    // Second rotation.
+    let r = security_kms_rotate(State(state.clone()), headers,
+        Json(KmsRotateRequest { new_key_env: None, reason: None })).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert_eq!(resp.new_dek_version, 2, "second rotation = version 2");
+    assert!(resp.old_dek_version_retained, "old version must be retained");
+
+    let versions = state.dek_versions.lock().unwrap();
+    assert_eq!(versions.len(), 2, "two DEK versions total");
+    assert!(!versions[0].active, "old version is inactive");
+    assert!(versions[1].active, "new version is active");
+}
+
+#[tokio::test]
+async fn ai5_tls_rotate_returns_fingerprint_none_when_no_cert() {
+    use crate::handlers::security::{security_tls_rotate, TlsCertRotateRequest};
+    // Ensure env vars are not set in test.
+    std::env::remove_var("VNG_TLS_CERT_PATH");
+    std::env::remove_var("VNG_TLS_KEY_PATH");
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let req = TlsCertRotateRequest { reason: Some("test".to_string()) };
+    let r = security_tls_rotate(State(state), headers, Json(req)).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert!(!resp.rotation_initiated, "no cert → preflight fails");
+    assert!(resp.new_fingerprint.is_none(), "no cert → no fingerprint");
+}
+
+// ── AI-6 tests ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn ai6_diagnosis_built_in_network_rule() {
+    use crate::handlers::sre::{sre_incident_diagnose, IncidentDiagnoseRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let req = IncidentDiagnoseRequest {
+        failure_type: Some("network".to_string()),
+        severity: None, node_id: None, message: None,
+    };
+    let r = sre_incident_diagnose(State(state), headers, Json(req)).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert_eq!(resp.root_cause, "network_partition_or_latency");
+    assert_eq!(resp.confidence, "high");
+}
+
+#[tokio::test]
+async fn ai6_diagnosis_custom_rule_overrides_builtin() {
+    use crate::handlers::sre::{sre_incident_diagnose, IncidentDiagnoseRequest};
+    let state = state_with_key(Some("secret"));
+    // Inject a custom diagnosis rule.
+    {
+        let mut rules = state.diagnosis_rules.lock().unwrap();
+        rules.push(crate::DiagnosisRule {
+            failure_type: Some("network".to_string()),
+            keywords: vec![],
+            root_cause: "custom_network_issue".to_string(),
+            confidence: "very_high".to_string(),
+            recommended_action: "custom_action".to_string(),
+        });
+    }
+    let headers = operator_headers("secret", "platform-admin");
+    let req = IncidentDiagnoseRequest {
+        failure_type: Some("network".to_string()),
+        severity: None, node_id: None, message: None,
+    };
+    let r = sre_incident_diagnose(State(state), headers, Json(req)).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert_eq!(resp.root_cause, "custom_network_issue", "custom rule should override builtin");
+    assert_eq!(resp.confidence, "very_high");
+}
+
+#[tokio::test]
+async fn ai6_diagnosis_custom_keyword_rule_matches() {
+    use crate::handlers::sre::{sre_incident_diagnose, IncidentDiagnoseRequest};
+    let state = state_with_key(Some("secret"));
+    {
+        let mut rules = state.diagnosis_rules.lock().unwrap();
+        rules.push(crate::DiagnosisRule {
+            failure_type: None, // matches any failure_type
+            keywords: vec!["quota".to_string()],
+            root_cause: "resource_quota_exceeded".to_string(),
+            confidence: "high".to_string(),
+            recommended_action: "increase_quota".to_string(),
+        });
+    }
+    let headers = operator_headers("secret", "platform-admin");
+    let req = IncidentDiagnoseRequest {
+        failure_type: Some("unknown".to_string()),
+        severity: None,
+        node_id: None,
+        message: Some("disk quota exceeded".to_string()),
+    };
+    let r = sre_incident_diagnose(State(state), headers, Json(req)).await;
+    assert!(r.is_ok());
+    let (_, Json(resp)) = r.unwrap();
+    assert_eq!(resp.root_cause, "resource_quota_exceeded", "keyword rule should match");
+}
+
+#[test]
+fn ai6_load_diagnosis_rules_from_json() {
+    use crate::load_diagnosis_rules_from_state;
+    // Write a temp file with diagnosis rules.
+    let tmp = std::env::temp_dir().join("vng-test-diag-rules.json");
+    let content = r#"{
+        "schema_version": 1,
+        "diagnosis_rules": [
+            {
+                "failure_type": "custom_type",
+                "keywords": ["blorp"],
+                "root_cause": "custom_root",
+                "confidence": "high",
+                "recommended_action": "do_something"
+            }
+        ]
+    }"#;
+    std::fs::write(&tmp, content).unwrap();
+    let rules = load_diagnosis_rules_from_state(tmp.to_str());
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].root_cause, "custom_root");
+    assert_eq!(rules[0].confidence, "high");
+    let _ = std::fs::remove_file(tmp);
 }

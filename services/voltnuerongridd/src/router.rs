@@ -117,6 +117,8 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
             "/api/v1/security/kms/outage/reconcile",
             post(security_kms_outage_reconcile),
         )
+        // AI-5: KMS key rotation with DEK versioning
+        .route("/api/v1/security/kms/rotate", post(security_kms_rotate))
         .route("/api/v1/i18n/messages", get(i18n_messages))
         .route(
             "/api/v1/autonomous/actions/records",
@@ -502,6 +504,18 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         // S9-WS8-02: AI governance audit
         .route("/api/v1/ai/governance/audit", get(ai_governance_audit))
         .route("/api/v1/ai/request", post(ai_rate_check))
+        // AI-1: Native Chat-to-SQL engine
+        .route("/api/v1/ai/chat/sql", post(ai_chat_sql))
+        // AI-2: AI ingest/export assistant
+        .route("/api/v1/ai/ingest/suggest", post(ai_ingest_suggest))
+        .route("/api/v1/ai/export/query", post(ai_export_query))
+        // AI-3: Self-heal orchestrator
+        .route("/api/v1/autonomous/self-heal/run", post(autonomous_self_heal_run))
+        .route("/api/v1/autonomous/self-heal/status", get(autonomous_self_heal_status))
+        // AI-4: Self-tune advisor
+        .route("/api/v1/ai/tune/recommendations", get(ai_tune_recommendations))
+        .route("/api/v1/ai/tune/apply", post(ai_tune_apply))
+        .route("/api/v1/ai/tune/slow-query", post(ai_slow_query_report))
         // WS4 Ingest endpoints
         .route("/api/v1/ingest/csv", post(ingest_csv))
         .route("/api/v1/ingest/json", post(ingest_json))

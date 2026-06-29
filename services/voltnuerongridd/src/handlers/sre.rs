@@ -1461,11 +1461,12 @@ pub(crate) struct IncidentDiagnoseRequest {
 pub(crate) struct IncidentDiagnoseResponse {
     pub status: &'static str,
     pub root_cause: String,
-    pub confidence: &'static str,
+    pub confidence: String,
     pub recommended_action: String,
 }
 
-/// AI-3: Rules-based incident root cause classification.
+/// AI-3/AI-6: Rules-based incident root cause classification.
+/// Checks configurable `state.diagnosis_rules` before falling back to built-in patterns.
 pub(crate) async fn sre_incident_diagnose(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1476,54 +1477,71 @@ pub(crate) async fn sre_incident_diagnose(
     let severity = req.severity.as_deref().unwrap_or("low").to_ascii_lowercase();
     let message = req.message.as_deref().unwrap_or("").to_ascii_lowercase();
 
-    let (root_cause, confidence, recommended_action) = match failure_type.as_str() {
-        "network" | "transport" | "connection_timeout" => (
-            "network_partition_or_latency".to_string(),
-            "high",
-            "check_node_connectivity;verify_firewall_rules;restart_transport_listener".to_string(),
-        ),
-        "raft_election" | "leader_election" | "no_leader" => (
-            "quorum_loss_or_split_brain".to_string(),
-            "high",
-            "check_raft_peer_health;verify_quorum_size;restart_minority_nodes".to_string(),
-        ),
-        "disk" | "storage" | "io_error" => (
-            "disk_failure_or_full".to_string(),
-            "high",
-            "check_disk_usage;rotate_logs;run_fsck;expand_storage".to_string(),
-        ),
-        "memory" | "oom" | "allocation" => (
-            "memory_pressure".to_string(),
-            "medium",
-            "check_heap_usage;reduce_cache_size;add_swap".to_string(),
-        ),
-        "sql_execution" | "query_timeout" | "deadlock" => (
-            "query_plan_degradation_or_lock_contention".to_string(),
-            "medium",
-            "run_analyze_on_affected_tables;check_lock_waiters;kill_blocked_queries".to_string(),
-        ),
-        "auth" | "rbac" | "credential" => (
-            "security_policy_violation_or_misconfiguration".to_string(),
-            "high",
-            "rotate_credentials;audit_rbac_grants;check_admin_key_env".to_string(),
-        ),
-        _ => {
-            // Infer from message keywords
-            if message.contains("timeout") || message.contains("timed out") {
-                ("operation_timeout".to_string(), "medium",
-                 "increase_statement_timeout;check_server_load".to_string())
-            } else if message.contains("crash") || message.contains("panic") {
-                ("process_crash_or_panic".to_string(), "high",
-                 "review_panic_log;capture_core_dump;restart_with_backtrace".to_string())
-            } else {
-                ("unknown_failure".to_string(), "low",
-                 "collect_logs;run_sre_reliability_status;escalate".to_string())
-            }
-        }
+    // AI-6: Check configurable rules first.
+    let custom_match: Option<(String, String, String)> = {
+        let rules = state.diagnosis_rules.lock().expect("diagnosis_rules lock");
+        rules.iter().find(|rule| {
+            let ft_match = rule.failure_type.as_deref()
+                .map(|ft| ft.to_ascii_lowercase() == failure_type)
+                .unwrap_or(true); // if no failure_type filter, match on keywords only
+            let kw_match = rule.keywords.is_empty()
+                || rule.keywords.iter().any(|kw| message.contains(&kw.to_ascii_lowercase()));
+            ft_match && kw_match
+        }).map(|r| (r.root_cause.clone(), r.confidence.clone(), r.recommended_action.clone()))
     };
 
-    // Escalate confidence if severity is critical
-    let final_confidence = if severity == "critical" && confidence == "medium" { "high" } else { confidence };
+    let (root_cause, confidence, recommended_action) = if let Some((rc, conf, action)) = custom_match {
+        (rc, conf, action)
+    } else {
+        // Built-in classification rules.
+        let (rc, conf, action) = match failure_type.as_str() {
+            "network" | "transport" | "connection_timeout" => (
+                "network_partition_or_latency",
+                "high",
+                "check_node_connectivity;verify_firewall_rules;restart_transport_listener",
+            ),
+            "raft_election" | "leader_election" | "no_leader" => (
+                "quorum_loss_or_split_brain",
+                "high",
+                "check_raft_peer_health;verify_quorum_size;restart_minority_nodes",
+            ),
+            "disk" | "storage" | "io_error" => (
+                "disk_failure_or_full",
+                "high",
+                "check_disk_usage;rotate_logs;run_fsck;expand_storage",
+            ),
+            "memory" | "oom" | "allocation" => (
+                "memory_pressure",
+                "medium",
+                "check_heap_usage;reduce_cache_size;add_swap",
+            ),
+            "sql_execution" | "query_timeout" | "deadlock" => (
+                "query_plan_degradation_or_lock_contention",
+                "medium",
+                "run_analyze_on_affected_tables;check_lock_waiters;kill_blocked_queries",
+            ),
+            "auth" | "rbac" | "credential" => (
+                "security_policy_violation_or_misconfiguration",
+                "high",
+                "rotate_credentials;audit_rbac_grants;check_admin_key_env",
+            ),
+            _ => {
+                if message.contains("timeout") || message.contains("timed out") {
+                    ("operation_timeout", "medium",
+                     "increase_statement_timeout;check_server_load")
+                } else if message.contains("crash") || message.contains("panic") {
+                    ("process_crash_or_panic", "high",
+                     "review_panic_log;capture_core_dump;restart_with_backtrace")
+                } else {
+                    ("unknown_failure", "low",
+                     "collect_logs;run_sre_reliability_status;escalate")
+                }
+            }
+        };
+        // Escalate confidence if severity is critical.
+        let final_confidence = if severity == "critical" && conf == "medium" { "high" } else { conf };
+        (rc.to_string(), final_confidence.to_string(), action.to_string())
+    };
 
     append_audit_event(&state, AuditEventKind::Failover,
         req.node_id.as_deref().unwrap_or("operator"),
@@ -1532,7 +1550,7 @@ pub(crate) async fn sre_incident_diagnose(
     Ok((StatusCode::OK, Json(IncidentDiagnoseResponse {
         status: "ok",
         root_cause,
-        confidence: final_confidence,
+        confidence,
         recommended_action,
     })))
 }

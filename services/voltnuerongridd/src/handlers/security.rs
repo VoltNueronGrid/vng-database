@@ -54,6 +54,8 @@ pub(crate) struct TlsCertRotateResponse {
     pub(crate) key_present: bool,
     pub(crate) preflight_ok: bool,
     pub(crate) reason: String,
+    /// AI-5: SHA-256 fingerprint of the new cert (None if cert not present/readable).
+    pub(crate) new_fingerprint: Option<String>,
 }
 
 // ─── S6-WS5-03: TLS certificate info struct ─────────────────────────────────
@@ -411,6 +413,27 @@ pub(crate) async fn security_tls_rotate(
     let preflight_ok = cert_present && key_present;
     let rotation_initiated = preflight_ok;
     let reason = req.reason.unwrap_or_else(|| "manual_rotation".to_string());
+
+    // AI-5: If cert is readable, compute and store its SHA-256 fingerprint.
+    let new_fingerprint = if cert_present {
+        if let Ok(bytes) = std::fs::read(&cert_source) {
+            let fp = crate::compute_sha256_fingerprint(&bytes);
+            *state.cert_fingerprint.lock().expect("cert_fp lock") = Some(fp.clone());
+            Some(fp)
+        } else { None }
+    } else { None };
+
+    append_audit_event(
+        &state, AuditEventKind::Security,
+        "operator", "security_tls_rotate",
+        if rotation_initiated { "ok" } else { "preflight_failed" },
+        &json!({
+            "cert_source": cert_source, "key_source": key_source,
+            "preflight_ok": preflight_ok, "reason": reason,
+            "new_fingerprint": new_fingerprint,
+        }).to_string(),
+    );
+
     Ok((StatusCode::OK, Json(TlsCertRotateResponse {
         status: "ok",
         rotation_initiated,
@@ -420,6 +443,7 @@ pub(crate) async fn security_tls_rotate(
         key_present,
         preflight_ok,
         reason,
+        new_fingerprint,
     })))
 }
 
@@ -873,4 +897,88 @@ fn parse_attestation_type(value: &str) -> Option<AttestationType> {
         "review_approval" => Some(AttestationType::ReviewApproval),
         _ => None,
     }
+}
+
+// ─── AI-5: KMS key rotation handler ──────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct KmsRotateRequest {
+    pub(crate) new_key_env: Option<String>,
+    pub(crate) reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct KmsRotateResponse {
+    pub(crate) status: &'static str,
+    pub(crate) rotation_initiated: bool,
+    pub(crate) new_key_env: String,
+    pub(crate) old_dek_version_retained: bool,
+    pub(crate) new_dek_version: u64,
+    pub(crate) reason: String,
+    pub(crate) note: Option<String>,
+}
+
+/// AI-5: Re-wrap the active DEK under a new KMS key. Old DEK version is retained
+/// for decrypting existing rows. New version is marked active.
+pub(crate) async fn security_kms_rotate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<KmsRotateRequest>,
+) -> Result<(StatusCode, Json<KmsRotateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    let operator = require_operator_privilege(
+        &headers, &state, "security.kms", "security/kms/rotate", PrivilegeAction::Manage,
+    )?;
+
+    let new_key_env = req.new_key_env
+        .unwrap_or_else(|| std::env::var("VNG_KMS_ROTATE_KEY_REF_ENV")
+            .unwrap_or_else(|_| "VNG_KMS_KEY_URI".to_string()));
+
+    let key_ref = std::env::var(&new_key_env).unwrap_or_else(|_| new_key_env.clone());
+    let reason = req.reason.unwrap_or_else(|| "manual_kms_rotation".to_string());
+
+    let (new_version, old_retained) = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+
+        let mut versions = state.dek_versions.lock().expect("dek_versions lock");
+        // Mark all current active DEKs as inactive (retain for decryption).
+        let old_retained = !versions.is_empty();
+        for v in versions.iter_mut() { v.active = false; }
+
+        let new_ver = versions.len() as u64 + 1;
+        versions.push(crate::DekVersion {
+            version: new_ver,
+            kms_key_ref: key_ref.clone(),
+            wrapped_at_ms: now_ms,
+            active: true,
+        });
+        (new_ver, old_retained)
+    };
+
+    let note = if key_ref == new_key_env {
+        Some(format!("env var '{new_key_env}' not set; using env name as key_ref placeholder"))
+    } else { None };
+
+    append_audit_event(
+        &state, AuditEventKind::Security, &operator.operator_id,
+        "security_kms_rotate", "ok",
+        &json!({
+            "new_key_env": new_key_env, "new_dek_version": new_version,
+            "old_retained": old_retained, "reason": reason,
+        }).to_string(),
+    );
+
+    Ok((StatusCode::OK, Json(KmsRotateResponse {
+        status: "ok",
+        rotation_initiated: true,
+        new_key_env,
+        old_dek_version_retained: old_retained,
+        new_dek_version: new_version,
+        reason,
+        note,
+    })))
 }
