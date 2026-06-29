@@ -372,10 +372,21 @@ pub(crate) fn execute_olap_query(
     let table_names = collect_query_table_names(&query);
     // C-1: prefer RocksDB rows when available (primary read path); fall back to
     // in-memory PagedRowStore scan for dev/test environments without RocksDB.
+    // Q-2: emit an observable signal (warn span event + data_source tag) so the
+    // fallback is never silent.
+    let data_source: &str;
     let all_rows: Vec<(String, voltnuerongrid_store::mvcc::RowData)> = if let Some(rdb_rows) = rocksdb_rows {
+        data_source = "rocksdb";
         // RocksDB rows have no db prefix — convert HashMap to RowData directly.
         rdb_rows.into_iter().map(|(k, cols)| (k, cols)).collect()
     } else {
+        data_source = "paged_store";
+        tracing::warn!(
+            target: "vng.olap",
+            db = %db,
+            query_signature = %query.chars().take(64).collect::<String>(),
+            "Q-2: OLAP query falling back to in-memory PagedRowStore (RocksDB rows unavailable); results are not durably sourced"
+        );
         // In-memory fallback: use repeatable-read snapshot or current head.
         let effective_xid = snapshot_xid.unwrap_or_else(|| rs.current_xid());
         rs.scan_at_snapshot(effective_xid)
@@ -423,6 +434,7 @@ pub(crate) fn execute_olap_query(
         query_signature: query.chars().take(64).collect(),
         elapsed_ms: started.elapsed().as_millis(),
         rows: row_count,
+        data_source: data_source.to_string(),
     }
 }
 

@@ -255,6 +255,103 @@ impl TriggerRegistry {
     }
 }
 
+// ─── Q-3: CREATE/DROP TRIGGER DDL parsing ─────────────────────────────────────
+
+/// Parse a `CREATE TRIGGER` statement into a [`TriggerDefinition`].
+///
+/// Supported grammar (case-insensitive, whitespace-tolerant):
+///
+/// ```sql
+/// CREATE TRIGGER <name>
+///   {BEFORE | AFTER} {INSERT | UPDATE | DELETE}
+///   ON [<schema>.]<table>
+///   [FOR EACH ROW | FOR EACH STATEMENT]
+///   [EXECUTE FUNCTION <fn>(...) | EXECUTE PROCEDURE <fn>(...) | <body...>]
+/// ```
+///
+/// Returns `None` when the statement does not match the grammar (e.g. a DDL
+/// `CREATE TRIGGER` for `TRUNCATE`, or a malformed statement).
+pub fn parse_create_trigger(sql: &str) -> Option<TriggerDefinition> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    // Minimum: create trigger <name> <timing> <event> on <table>
+    if tokens.len() < 7 {
+        return None;
+    }
+    if tokens[0] != "create" || tokens[1] != "trigger" {
+        return None;
+    }
+    let name = tokens[2];
+    if name.is_empty() {
+        return None;
+    }
+    let timing = tokens[3];
+    let event_word = tokens[4];
+    if tokens[5] != "on" {
+        return None;
+    }
+    let event = match (timing, event_word) {
+        ("before", "insert") => TriggerEvent::BeforeInsert,
+        ("after", "insert") => TriggerEvent::AfterInsert,
+        ("before", "update") => TriggerEvent::BeforeUpdate,
+        ("after", "update") => TriggerEvent::AfterUpdate,
+        ("before", "delete") => TriggerEvent::BeforeDelete,
+        ("after", "delete") => TriggerEvent::AfterDelete,
+        _ => return None,
+    };
+    // Table token (index 6), possibly schema-qualified.
+    let raw_table = tokens[6].trim_matches(|c: char| c == '(' || c == ')' || c == ',');
+    let (schema, table) = match raw_table.split_once('.') {
+        Some((s, t)) => (s.to_string(), t.to_string()),
+        None => ("public".to_string(), raw_table.to_string()),
+    };
+    if table.is_empty() {
+        return None;
+    }
+    // Granularity: FOR EACH STATEMENT → Statement, otherwise default Row.
+    let granularity = if lower.contains("for each statement") {
+        TriggerGranularity::Statement
+    } else {
+        TriggerGranularity::Row
+    };
+    // Body: everything from the first EXECUTE keyword onward (preserve original
+    // casing); fall back to the full original statement when no EXECUTE present.
+    let body = {
+        let lower_exec = lower.find("execute ");
+        match lower_exec {
+            Some(pos) => trimmed[pos..].trim().to_string(),
+            None => trimmed.to_string(),
+        }
+    };
+    Some(TriggerDefinition::new(
+        name,
+        table,
+        schema,
+        event,
+        granularity,
+        body,
+    ))
+}
+
+/// Parse a `DROP TRIGGER [IF EXISTS] <name> [ON <table>]` statement and return
+/// the trigger name to remove. Returns `None` when the statement is malformed.
+pub fn parse_drop_trigger_name(sql: &str) -> Option<String> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    if tokens.len() < 3 || tokens[0] != "drop" || tokens[1] != "trigger" {
+        return None;
+    }
+    // Skip optional IF EXISTS.
+    let name_idx = if tokens.len() >= 5 && tokens[2] == "if" && tokens[3] == "exists" {
+        4
+    } else {
+        2
+    };
+    tokens.get(name_idx).map(|s| s.to_string()).filter(|s| !s.is_empty())
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -348,5 +445,79 @@ mod tests {
         assert!(!TriggerEvent::AfterInsert.is_ddl());
         assert!(TriggerEvent::CreateTable.is_ddl());
         assert!(!TriggerEvent::CreateTable.is_dml());
+    }
+
+    // ── Q-3: CREATE/DROP TRIGGER parsing ──────────────────────────────────────
+
+    #[test]
+    fn test_parse_create_trigger_after_insert() {
+        let def = parse_create_trigger(
+            "CREATE TRIGGER orders_audit AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION audit_orders()",
+        )
+        .expect("should parse");
+        assert_eq!(def.name, "orders_audit");
+        assert_eq!(def.table, "orders");
+        assert_eq!(def.schema, "public");
+        assert_eq!(def.event, TriggerEvent::AfterInsert);
+        assert_eq!(def.granularity, TriggerGranularity::Row);
+        assert!(def.body.to_ascii_lowercase().contains("execute function audit_orders()"));
+    }
+
+    #[test]
+    fn test_parse_create_trigger_before_update_schema_qualified() {
+        let def = parse_create_trigger(
+            "CREATE TRIGGER t1 BEFORE UPDATE ON sales.orders EXECUTE PROCEDURE chk()",
+        )
+        .expect("should parse");
+        assert_eq!(def.schema, "sales");
+        assert_eq!(def.table, "orders");
+        assert_eq!(def.event, TriggerEvent::BeforeUpdate);
+    }
+
+    #[test]
+    fn test_parse_create_trigger_statement_granularity() {
+        let def = parse_create_trigger(
+            "CREATE TRIGGER t2 AFTER DELETE ON items FOR EACH STATEMENT EXECUTE FUNCTION f()",
+        )
+        .expect("should parse");
+        assert_eq!(def.event, TriggerEvent::AfterDelete);
+        assert_eq!(def.granularity, TriggerGranularity::Statement);
+    }
+
+    #[test]
+    fn test_parse_create_trigger_rejects_malformed() {
+        assert!(parse_create_trigger("CREATE TABLE foo (id INT)").is_none());
+        assert!(parse_create_trigger("CREATE TRIGGER t AFTER TRUNCATE ON x").is_none());
+        assert!(parse_create_trigger("CREATE TRIGGER t").is_none());
+    }
+
+    #[test]
+    fn test_parse_drop_trigger_name() {
+        assert_eq!(
+            parse_drop_trigger_name("DROP TRIGGER orders_audit").as_deref(),
+            Some("orders_audit")
+        );
+        assert_eq!(
+            parse_drop_trigger_name("DROP TRIGGER IF EXISTS t1 ON orders").as_deref(),
+            Some("t1")
+        );
+        assert!(parse_drop_trigger_name("DROP TABLE x").is_none());
+    }
+
+    #[test]
+    fn test_parse_create_then_register_and_fire_lookup() {
+        let mut reg = TriggerRegistry::new();
+        let def = parse_create_trigger(
+            "CREATE TRIGGER au AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION f()",
+        )
+        .unwrap();
+        reg.register(def).unwrap();
+        let found = reg.find_triggers("orders", "public", &TriggerEvent::AfterInsert);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "au");
+        // DROP removes it.
+        let name = parse_drop_trigger_name("DROP TRIGGER au").unwrap();
+        assert!(reg.remove_trigger(&name));
+        assert!(reg.find_triggers("orders", "public", &TriggerEvent::AfterInsert).is_empty());
     }
 }

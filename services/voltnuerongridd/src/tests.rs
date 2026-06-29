@@ -4247,6 +4247,237 @@ fn ws2_admin_schema_tree_returns_views_functions_triggers_and_events() {
     assert!(schema.events.iter().any(|event| event.name == "refresh_cache" && event.schedule == "EVERY 1 HOUR"));
 }
 
+// ── Q-3: CREATE TRIGGER DDL wires into TriggerRegistry and fires on DML ───────
+
+#[test]
+fn q3_create_trigger_ddl_registers_and_fires_on_insert() {
+    use voltnuerongrid_store::trigger_emitter::RecordingTriggerEmitter;
+    use voltnuerongrid_store::triggers::TriggerEvent;
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let recorder = RecordingTriggerEmitter::new();
+    let mut state = state_with_key(None);
+    state.trigger_emitter = std::sync::Arc::new(recorder.clone());
+    let headers = tenant_user_headers("analyst-acme", "acme");
+
+    // CREATE TABLE then CREATE TRIGGER via SQL.
+    for sql in [
+        "CREATE TABLE orders (id INT, status TEXT)",
+        "CREATE TRIGGER orders_audit AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION audit_orders()",
+    ] {
+        let req = SqlExecuteRequest { sql_batch: sql.to_string(), max_rows: None, ..Default::default() };
+        let resp = rt
+            .block_on(sql_execute(State(state.clone()), headers.clone(), Json(req)))
+            .expect("ddl ok");
+        assert_eq!(resp.0, StatusCode::OK);
+    }
+
+    // The DDL must have registered the trigger in the live registry.
+    {
+        let reg = state.trigger_registry.lock().expect("trigger lock");
+        let found = reg.find_triggers("orders", "public", &TriggerEvent::AfterInsert);
+        assert_eq!(found.len(), 1, "CREATE TRIGGER must register into the registry");
+        assert_eq!(found[0].name, "orders_audit");
+    }
+
+    // INSERT must fire the trigger.
+    let ins = SqlExecuteRequest {
+        sql_batch: "INSERT INTO orders VALUES (1, 'new')".to_string(),
+        max_rows: None,
+        ..Default::default()
+    };
+    let resp = rt
+        .block_on(sql_execute(State(state.clone()), headers.clone(), Json(ins)))
+        .expect("insert ok");
+    assert_eq!(resp.0, StatusCode::OK);
+    assert!(recorder.fire_count() >= 1, "AFTER INSERT trigger must fire");
+    assert!(recorder.fired_names().contains(&"orders_audit".to_string()));
+}
+
+#[test]
+fn q3_drop_trigger_ddl_stops_firing() {
+    use voltnuerongrid_store::trigger_emitter::RecordingTriggerEmitter;
+    use voltnuerongrid_store::triggers::TriggerEvent;
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let recorder = RecordingTriggerEmitter::new();
+    let mut state = state_with_key(None);
+    state.trigger_emitter = std::sync::Arc::new(recorder.clone());
+    let headers = tenant_user_headers("analyst-acme", "acme");
+
+    for sql in [
+        "CREATE TABLE orders (id INT, status TEXT)",
+        "CREATE TRIGGER orders_audit AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION audit_orders()",
+        "DROP TRIGGER orders_audit",
+    ] {
+        let req = SqlExecuteRequest { sql_batch: sql.to_string(), max_rows: None, ..Default::default() };
+        rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(req)))
+            .expect("ddl ok");
+    }
+
+    // Registry must no longer contain the trigger.
+    {
+        let reg = state.trigger_registry.lock().expect("trigger lock");
+        assert!(
+            reg.find_triggers("orders", "public", &TriggerEvent::AfterInsert).is_empty(),
+            "DROP TRIGGER must remove the trigger from the registry"
+        );
+    }
+
+    // INSERT must NOT fire any trigger.
+    let ins = SqlExecuteRequest {
+        sql_batch: "INSERT INTO orders VALUES (1, 'new')".to_string(),
+        max_rows: None,
+        ..Default::default()
+    };
+    rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(ins)))
+        .expect("insert ok");
+    assert_eq!(recorder.fire_count(), 0, "dropped trigger must not fire");
+}
+
+// ── Q-4: Constraint enforcement from DDL on INSERT ────────────────────────────
+
+fn q4_exec(rt: &tokio::runtime::Runtime, state: &AppState, headers: &HeaderMap, sql: &str)
+    -> (StatusCode, String)
+{
+    let req = SqlExecuteRequest { sql_batch: sql.to_string(), max_rows: None, ..Default::default() };
+    match rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(req))) {
+        Ok((status, body)) => (status, body.0.reason),
+        Err((status, body)) => (status, body.0.reason),
+    }
+}
+
+#[test]
+fn q4_check_constraint_from_ddl_rejects_insert() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let (s, _) = q4_exec(&rt, &state, &headers,
+        "CREATE TABLE people (id INT PRIMARY KEY, age INT CHECK (age >= 18))");
+    assert_eq!(s, StatusCode::OK);
+    // Valid insert passes.
+    let (s, _) = q4_exec(&rt, &state, &headers, "INSERT INTO people (id, age) VALUES (1, 30)");
+    assert_eq!(s, StatusCode::OK);
+    // CHECK violation rejected (column-level CHECK from CREATE TABLE).
+    let (s, body) = q4_exec(&rt, &state, &headers, "INSERT INTO people (id, age) VALUES (2, 10)");
+    assert_eq!(s, StatusCode::CONFLICT, "CHECK (age >= 18) must reject age = 10");
+    assert!(body.contains("constraint_violation"), "reason: {body}");
+}
+
+#[test]
+fn q4_not_null_from_ddl_rejects_missing_column() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let (s, _) = q4_exec(&rt, &state, &headers,
+        "CREATE TABLE acct (id INT PRIMARY KEY, name TEXT NOT NULL)");
+    assert_eq!(s, StatusCode::OK);
+    // Insert omitting the NOT NULL column must be rejected.
+    let (s, body) = q4_exec(&rt, &state, &headers, "INSERT INTO acct (id) VALUES (1)");
+    assert_eq!(s, StatusCode::CONFLICT, "missing NOT NULL column must be rejected");
+    assert!(body.contains("constraint_violation"), "reason: {body}");
+    // Insert with the column present passes.
+    let (s, _) = q4_exec(&rt, &state, &headers, "INSERT INTO acct (id, name) VALUES (2, 'alice')");
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[test]
+fn q4_unique_from_ddl_rejects_duplicate() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    q4_exec(&rt, &state, &headers,
+        "CREATE TABLE member (id INT PRIMARY KEY, email TEXT UNIQUE)");
+    let (s, _) = q4_exec(&rt, &state, &headers, "INSERT INTO member (id, email) VALUES (1, 'a@x.io')");
+    assert_eq!(s, StatusCode::OK);
+    let (s, body) = q4_exec(&rt, &state, &headers, "INSERT INTO member (id, email) VALUES (2, 'a@x.io')");
+    assert_eq!(s, StatusCode::CONFLICT, "duplicate UNIQUE email must be rejected");
+    assert!(body.contains("constraint_violation"), "reason: {body}");
+}
+
+#[test]
+fn q4_foreign_key_from_ddl_requires_parent_row() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    q4_exec(&rt, &state, &headers, "CREATE TABLE customers (id INT PRIMARY KEY)");
+    q4_exec(&rt, &state, &headers,
+        "CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT REFERENCES customers(id))");
+    // FK violation: parent customer 42 does not exist.
+    let (s, body) = q4_exec(&rt, &state, &headers,
+        "INSERT INTO orders (id, customer_id) VALUES (1, 42)");
+    assert_eq!(s, StatusCode::CONFLICT, "FK must reject missing parent");
+    assert!(body.contains("constraint_violation"), "reason: {body}");
+    // Insert parent then child succeeds.
+    let (s, _) = q4_exec(&rt, &state, &headers, "INSERT INTO customers (id) VALUES (42)");
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = q4_exec(&rt, &state, &headers,
+        "INSERT INTO orders (id, customer_id) VALUES (2, 42)");
+    assert_eq!(s, StatusCode::OK, "FK satisfied once parent exists");
+}
+
+#[test]
+fn q4_alter_table_add_check_constraint_enforced() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    q4_exec(&rt, &state, &headers, "CREATE TABLE p2 (id INT PRIMARY KEY, age INT)");
+    q4_exec(&rt, &state, &headers,
+        "ALTER TABLE p2 ADD CONSTRAINT chk_age CHECK (age >= 18)");
+    let (s, body) = q4_exec(&rt, &state, &headers, "INSERT INTO p2 (id, age) VALUES (1, 10)");
+    assert_eq!(s, StatusCode::CONFLICT, "ALTER-added CHECK must be enforced");
+    assert!(body.contains("constraint_violation"), "reason: {body}");
+}
+
+// ── Q-1: Cost-based routing label reflects table size ─────────────────────────
+
+#[test]
+fn q1_small_table_aggregate_reports_oltp_route() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    // Seed StatsRegistry with a tiny row count for the target table.
+    {
+        let mut stats = state.stats_registry.lock().expect("stats lock");
+        stats.update_table("orders", 5, std::collections::HashMap::new());
+    }
+    let req = SqlExecuteRequest {
+        sql_batch: "SELECT region, SUM(amount) FROM orders GROUP BY region".to_string(),
+        max_rows: None,
+        ..Default::default()
+    };
+    let resp = match rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(req))) {
+        Ok((_, body)) => body.0,
+        Err((_, body)) => panic!("unexpected error: {}", body.0.reason),
+    };
+    assert_eq!(
+        resp.route_path, "oltp",
+        "small-table aggregate must be cost-routed to OLTP label"
+    );
+}
+
+#[test]
+fn q1_large_table_aggregate_reports_olap_route() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    {
+        let mut stats = state.stats_registry.lock().expect("stats lock");
+        stats.update_table("orders", 5_000_000, std::collections::HashMap::new());
+    }
+    let req = SqlExecuteRequest {
+        sql_batch: "SELECT region, SUM(amount) FROM orders GROUP BY region".to_string(),
+        max_rows: None,
+        ..Default::default()
+    };
+    let resp = match rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(req))) {
+        Ok((_, body)) => body.0,
+        Err((_, body)) => panic!("unexpected error: {}", body.0.reason),
+    };
+    assert_eq!(
+        resp.route_path, "olap",
+        "large-table aggregate must stay on the OLAP label"
+    );
+}
+
 // â”€â”€ REQ-23: ACID transaction tracking tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #[test]
 fn ws23_acid_tx_begin_commit_tracked_in_registry() {
@@ -4340,6 +4571,143 @@ fn ws23_acid_rollback_to_savepoint_records_marker() {
     assert!(matches!(tx.state, AcidTxState::Committed), "should commit after ROLLBACK TO + COMMIT");
     let has_marker = tx.savepoints.iter().any(|s| s.contains("rolled_back_to:before_risky"));
     assert!(has_marker, "rollback-to marker should be recorded in savepoints list");
+}
+
+// ── T-1: SAVEPOINT selective rollback affects committed row visibility ─────────
+
+/// Count rows whose key starts with `table:` in the row store.
+fn t1_count_rows(state: &AppState, table_prefix: &str) -> usize {
+    let rs = state.row_store.lock().expect("row_store lock");
+    let xid = rs.current_xid();
+    rs.scan_at_snapshot(xid)
+        .into_iter()
+        .filter(|(k, _)| k.starts_with(table_prefix))
+        .count()
+}
+
+fn t1_row_exists(state: &AppState, key: &str) -> bool {
+    let rs = state.row_store.lock().expect("row_store lock");
+    rs.read_latest(key).is_some()
+}
+
+#[test]
+fn t1_rollback_to_savepoint_discards_post_savepoint_inserts() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            "INSERT INTO sp1t (id, v) VALUES (1, 'keep')".to_string(),
+            "SAVEPOINT s1".to_string(),
+            "INSERT INTO sp1t (id, v) VALUES (2, 'undo')".to_string(),
+            "ROLLBACK TO SAVEPOINT s1".to_string(),
+            "COMMIT".to_string(),
+        ],
+        isolation_level: None,
+    };
+    rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+        .expect("transaction should succeed");
+    assert!(t1_row_exists(&state, "sp1t:1"), "pre-savepoint row must persist");
+    assert!(!t1_row_exists(&state, "sp1t:2"), "post-savepoint row must be discarded");
+    assert_eq!(t1_count_rows(&state, "sp1t:"), 1, "exactly 1 row should survive");
+}
+
+#[test]
+fn t1_nested_savepoints_rollback_to_outer_discards_both() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            "INSERT INTO sp2t (id, v) VALUES (1, 'keep')".to_string(),
+            "SAVEPOINT s1".to_string(),
+            "INSERT INTO sp2t (id, v) VALUES (2, 'undo')".to_string(),
+            "SAVEPOINT s2".to_string(),
+            "INSERT INTO sp2t (id, v) VALUES (3, 'undo')".to_string(),
+            "ROLLBACK TO SAVEPOINT s1".to_string(),
+            "COMMIT".to_string(),
+        ],
+        isolation_level: None,
+    };
+    rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+        .expect("transaction should succeed");
+    assert!(t1_row_exists(&state, "sp2t:1"), "row before outer savepoint persists");
+    assert!(!t1_row_exists(&state, "sp2t:2"), "row after s1 discarded");
+    assert!(!t1_row_exists(&state, "sp2t:3"), "row after s2 discarded");
+    assert_eq!(t1_count_rows(&state, "sp2t:"), 1);
+}
+
+#[test]
+fn t1_release_savepoint_keeps_all_work() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            "INSERT INTO sp3t (id, v) VALUES (1, 'a')".to_string(),
+            "SAVEPOINT s1".to_string(),
+            "INSERT INTO sp3t (id, v) VALUES (2, 'b')".to_string(),
+            "RELEASE SAVEPOINT s1".to_string(),
+            "COMMIT".to_string(),
+        ],
+        isolation_level: None,
+    };
+    rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+        .expect("transaction should succeed");
+    assert!(t1_row_exists(&state, "sp3t:1"));
+    assert!(t1_row_exists(&state, "sp3t:2"), "RELEASE keeps the work — both rows persist");
+    assert_eq!(t1_count_rows(&state, "sp3t:"), 2);
+}
+
+// ── T-2: multi-statement atomic visibility / dirty-read prevention ────────────
+
+#[test]
+fn ws23_acid_dirty_read_prevented() {
+    // A transaction that inserts then ROLLBACKs must leave no visible row —
+    // uncommitted writes are never observable to a subsequent reader. In the
+    // batch-commit model DML buffers until COMMIT, so a rolled-back insert is
+    // never flushed to the row store.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            "INSERT INTO dirty (id, v) VALUES (1, 'uncommitted')".to_string(),
+            "ROLLBACK".to_string(),
+        ],
+        isolation_level: None,
+    };
+    rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+        .expect("transaction should succeed");
+    assert!(!t1_row_exists(&state, "dirty:1"), "rolled-back insert must not be visible");
+    assert_eq!(t1_count_rows(&state, "dirty:"), 0);
+}
+
+#[test]
+fn ws23_acid_read_your_own_writes_within_tx() {
+    // After COMMIT, all writes made within the transaction are visible together
+    // (atomic visibility) — none are partially applied.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            "INSERT INTO ryow (id, v) VALUES (1, 'a')".to_string(),
+            "INSERT INTO ryow (id, v) VALUES (2, 'b')".to_string(),
+            "COMMIT".to_string(),
+        ],
+        isolation_level: None,
+    };
+    rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+        .expect("transaction should succeed");
+    assert!(t1_row_exists(&state, "ryow:1"));
+    assert!(t1_row_exists(&state, "ryow:2"));
+    assert_eq!(t1_count_rows(&state, "ryow:"), 2, "all committed writes visible atomically");
 }
 
 // â”€â”€ REQ-23: isolation level enforcement tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -9230,6 +9598,95 @@ fn linearisable_write_two_pending_commands_both_applied() {
     assert_eq!(watch_val, 2, "watch channel must reflect last_applied == 2");
 }
 
+// ── T-3: Distributed ACID — transaction grouped as one atomic Raft entry ──────
+
+#[test]
+fn t3_encode_raft_batch_command_groups_dml() {
+    let stmts = vec![
+        "BEGIN".to_string(),
+        "INSERT INTO t (id) VALUES (1)".to_string(),
+        "UPDATE t SET id = 2 WHERE id = 1".to_string(),
+        "COMMIT".to_string(),
+    ];
+    let cmd = crate::encode_raft_batch_command("shop", &stmts).expect("has DML");
+    assert!(cmd.starts_with(crate::RAFT_BATCH_PREFIX));
+    assert!(cmd.contains("shop\n"));
+    assert!(cmd.contains("INSERT INTO t (id) VALUES (1)"));
+    assert!(cmd.contains(crate::RAFT_BATCH_STMT_SEP.trim()));
+    // No DML → None (control-only batch must not append an empty Raft entry).
+    assert!(crate::encode_raft_batch_command("", &["BEGIN".to_string(), "COMMIT".to_string()]).is_none());
+}
+
+#[test]
+fn t3_batch_command_applied_atomically_as_single_entry() {
+    use crate::helpers::raft_loop::apply_committed_entries;
+    let state = state_with_key(Some("test-key"));
+    let _rx = state.raft_last_applied_tx.subscribe();
+    {
+        let mut node = state.raft_state.lock().unwrap();
+        node.become_candidate();
+        node.become_leader();
+    }
+    // One batch command carrying three INSERTs.
+    let batch = crate::encode_raft_batch_command(
+        "",
+        &[
+            "INSERT INTO t3 (id, v) VALUES (1, 'a')".to_string(),
+            "INSERT INTO t3 (id, v) VALUES (2, 'b')".to_string(),
+            "INSERT INTO t3 (id, v) VALUES (3, 'c')".to_string(),
+        ],
+    )
+    .expect("batch");
+    let idx = {
+        let mut node = state.raft_state.lock().unwrap();
+        node.append_command_pending(batch, 0)
+    };
+    // Exactly one log entry was appended for the whole transaction.
+    assert_eq!(idx, 1, "transaction must occupy a single Raft log index");
+    assert_eq!(state.raft_state.lock().unwrap().commit_index, 1);
+
+    apply_committed_entries(&state);
+
+    // last_applied advanced by exactly one (atomic batch), and ALL rows landed.
+    assert_eq!(state.raft_state.lock().unwrap().last_applied, 1,
+        "atomic batch is a single apply unit → one last_applied increment");
+    let rs = state.row_store.lock().unwrap();
+    assert!(rs.read_latest("t3:1").is_some(), "row 1 applied");
+    assert!(rs.read_latest("t3:2").is_some(), "row 2 applied");
+    assert!(rs.read_latest("t3:3").is_some(), "row 3 applied — all-or-nothing");
+}
+
+#[test]
+fn t3_transaction_commit_appends_single_batch_to_raft_log() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    // Promote to leader so the transaction replicates.
+    {
+        let mut node = state.raft_state.lock().unwrap();
+        node.become_candidate();
+        node.become_leader();
+    }
+    let req = SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            "INSERT INTO t3tx (id, v) VALUES (1, 'a')".to_string(),
+            "INSERT INTO t3tx (id, v) VALUES (2, 'b')".to_string(),
+            "COMMIT".to_string(),
+        ],
+        isolation_level: None,
+    };
+    rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
+        .expect("transaction should succeed");
+    // The whole transaction must occupy exactly one Raft log entry (batched),
+    // not one entry per statement.
+    let node = state.raft_state.lock().unwrap();
+    let batch_entries = node.log.iter()
+        .filter(|e| e.command.starts_with(crate::RAFT_BATCH_PREFIX))
+        .count();
+    assert_eq!(batch_entries, 1, "transaction DML must be one atomic Raft batch entry");
+}
+
 // ── S4-WS3-02: Columnar project endpoint ─────────────────────────────────
 #[tokio::test]
 async fn s4_ws3_02_columnar_project_empty_store_returns_no_columns() {
@@ -9496,6 +9953,10 @@ async fn s11_ws1_11_htap_stats_empty_olap_store() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.table_count, 0, "fresh OLAP store must have no tables");
     assert_eq!(body.total_entries, 0);
+    // Q-2: in-memory test mode has no durable RocksDB engine, so the
+    // authoritative analytical source must be reported as the paged_store
+    // fallback rather than silently implying durable storage.
+    assert_eq!(body.data_source, "paged_store");
 }
 
 #[tokio::test]
@@ -9505,6 +9966,63 @@ async fn s11_ws1_11_htap_stats_missing_auth_returns_401() {
     let result = htap_stats(State(state), headers).await;
     assert!(result.is_err());
     assert_eq!(result.unwrap_err().0, StatusCode::UNAUTHORIZED);
+}
+
+// ── Q-2: OLAP fallback is observable via data_source ──────────────────────────
+
+#[test]
+fn q2_execute_olap_query_reports_paged_store_fallback() {
+    use crate::helpers::execution::execute_olap_query;
+    let state = state_with_key(None);
+    // Seed a couple of rows directly into the in-memory PagedRowStore.
+    {
+        let mut rs = state.row_store.lock().expect("row_store lock");
+        let xid = rs.begin_xid();
+        let mut r1 = std::collections::HashMap::new();
+        r1.insert("__table".to_string(), "orders".to_string());
+        r1.insert("id".to_string(), "1".to_string());
+        rs.insert(xid, "orders:1", r1);
+    }
+    let rs = state.row_store.lock().expect("row_store lock");
+    // rocksdb_rows = None forces the in-memory fallback path.
+    let resp = execute_olap_query(
+        "SELECT * FROM orders".to_string(),
+        Some(100),
+        &rs,
+        "",
+        "",
+        None,
+        None,
+    );
+    assert_eq!(resp.status, "ok");
+    assert_eq!(
+        resp.data_source, "paged_store",
+        "OLAP query without RocksDB rows must report the paged_store fallback"
+    );
+}
+
+#[test]
+fn q2_execute_olap_query_reports_rocksdb_when_rows_supplied() {
+    use crate::helpers::execution::execute_olap_query;
+    let state = state_with_key(None);
+    let rs = state.row_store.lock().expect("row_store lock");
+    let mut row = std::collections::HashMap::new();
+    row.insert("__table".to_string(), "orders".to_string());
+    row.insert("id".to_string(), "7".to_string());
+    let rocksdb_rows = Some(vec![("orders:7".to_string(), row)]);
+    let resp = execute_olap_query(
+        "SELECT * FROM orders".to_string(),
+        Some(100),
+        &rs,
+        "",
+        "",
+        None,
+        rocksdb_rows,
+    );
+    assert_eq!(
+        resp.data_source, "rocksdb",
+        "OLAP query with RocksDB rows must report the durable rocksdb source"
+    );
 }
 
 // ─── S11-WS1-12: Connector health endpoint tests ──────────────────────────
@@ -13732,6 +14250,7 @@ fn q2_revoke_role_removes_from_db_grants() {
 
 // ─── Q3: CALL routing ────────────────────────────────────────────────────────
 
+#[cfg(feature = "demo")]
 #[test]
 fn q3_call_insert_rows_inserts_records_in_demo_mode() {
     std::env::set_var("VNG_DEMO_MODE", "true");

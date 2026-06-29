@@ -207,6 +207,44 @@ pub(crate) fn replay_ddl_into(
 }
 
 
+/// Q-3: Replay `CREATE TRIGGER` / `DROP TRIGGER` DDL from the durability engine
+/// into a freshly-created [`TriggerRegistry`] at boot so triggers survive a
+/// restart and fire on subsequent DML.
+pub(crate) fn replay_triggers_into(
+    registry: &mut voltnuerongrid_store::triggers::TriggerRegistry,
+    engine: &Arc<Mutex<voltnuerongrid_store::BoxedDurabilityEngine>>,
+) {
+    use voltnuerongrid_store::SqlWalKind;
+    let stmts: Vec<String> = {
+        let guard = engine.lock().expect("wal_engine lock for replay_triggers");
+        if guard.persists_sql() && guard.sql_count(SqlWalKind::Ddl) > 0 {
+            guard.iter_sql(SqlWalKind::Ddl)
+        } else {
+            Vec::new()
+        }
+    };
+    let mut applied = 0usize;
+    for sql in &stmts {
+        let lower = sql.trim().to_ascii_lowercase();
+        if lower.starts_with("create trigger ") {
+            if let Some(def) = voltnuerongrid_store::triggers::parse_create_trigger(sql) {
+                registry.remove_trigger(&def.name);
+                if registry.register(def).is_ok() {
+                    applied += 1;
+                }
+            }
+        } else if lower.starts_with("drop trigger ") {
+            if let Some(name) = voltnuerongrid_store::triggers::parse_drop_trigger_name(sql) {
+                registry.remove_trigger(&name);
+            }
+        }
+    }
+    if applied > 0 {
+        eprintln!("[vng-wal] replayed {applied} trigger definition(s) from durability engine");
+    }
+}
+
+
 /// Replay DML into a freshly-created row store from the durability engine.
 pub(crate) fn replay_dml_into(
     rs: &mut PagedRowStore,

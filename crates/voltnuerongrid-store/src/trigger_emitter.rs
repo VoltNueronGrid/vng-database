@@ -62,6 +62,47 @@ impl TriggerEmitter for NoOpTriggerEmitter {
     }
 }
 
+// ─── RecordingTriggerEmitter (Q-3) ────────────────────────────────────────────
+
+/// Emitter that records every fired trigger name into a shared vector and bumps
+/// a shared counter.  Intended for integration tests that assert a trigger
+/// fired on a given DML operation.
+#[derive(Clone, Default)]
+pub struct RecordingTriggerEmitter {
+    pub fired: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl RecordingTriggerEmitter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of times any trigger fired.
+    pub fn fire_count(&self) -> usize {
+        self.count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Snapshot of all fired trigger names, in fire order.
+    pub fn fired_names(&self) -> Vec<String> {
+        self.fired.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+}
+
+impl TriggerEmitter for RecordingTriggerEmitter {
+    fn emit(
+        &self,
+        trigger: &TriggerDefinition,
+        _event_payload: &str,
+    ) -> Result<(), String> {
+        self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut g) = self.fired.lock() {
+            g.push(trigger.name.clone());
+        }
+        Ok(())
+    }
+}
+
 // ─── Future adapters (planned) ────────────────────────────────────────────────
 //
 // KafkaTriggerEmitter  — publishes to a Kafka topic per trigger/table.

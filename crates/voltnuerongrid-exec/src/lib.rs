@@ -170,6 +170,103 @@ impl HtapQueryRouter {
             reason: reason.to_string(),
         }
     }
+
+    /// Q-1 / AR-2: Cost-based routing refinement.
+    ///
+    /// Starts from the pure AST routing decision in [`route_statement`], then
+    /// consults `stats` to override the path when the table size makes the
+    /// default choice a poor one:
+    ///
+    /// * A `SELECT` that *looks* analytical (GROUP BY, aggregate, …) but targets
+    ///   a small table (`< OLAP_MIN_ROWS`) is routed back to **OLTP** — the
+    ///   DataFusion set-up cost outweighs any scan benefit for tiny tables.
+    /// * A point-style `SELECT` against a very large table (`>= OLAP_MIN_ROWS`)
+    ///   with no usable equality predicate is promoted to **OLAP** so a large
+    ///   sequential scan does not saturate the OLTP row store.
+    ///
+    /// `db` is the optional database scope used to build the `"db.table"` stats
+    /// key; pass `None` for the legacy no-database scope.
+    ///
+    /// Only a shared read of `stats` is required — this never mutates the
+    /// registry, so it is safe to call on the hot path under a read lock.
+    pub fn route_with_stats(
+        sql: &str,
+        stats: &StatsRegistry,
+        db: Option<&str>,
+    ) -> RouteDecision {
+        let base = Self::route_statement(sql);
+        let analysis = SqlAnalyzer::analyze_statement(sql);
+        if analysis.kind != SqlStatementKind::Select {
+            return base;
+        }
+        let Some(table) = extract_primary_table(sql) else {
+            return base;
+        };
+        let stats_key = match db {
+            Some(d) if !d.is_empty() => format!("{}.{}", d.to_ascii_lowercase(), table),
+            _ => table.clone(),
+        };
+        // Fall back to the bare table name when the db-qualified key is unknown.
+        let row_count = stats
+            .get(&stats_key)
+            .or_else(|| stats.get(&table))
+            .map(|s| s.row_count);
+        let Some(row_count) = row_count else {
+            // No statistics collected yet — keep the AST decision.
+            return base;
+        };
+        let upper: String = sql.to_ascii_uppercase().split_whitespace().collect::<Vec<_>>().join(" ");
+        let has_equality_predicate = upper.contains("WHERE ") && upper.contains('=');
+        // A JOIN (or set operation) can only be executed on the OLAP/DataFusion
+        // plane — the OLTP row-store path has no join executor. Never demote
+        // such queries to OLTP regardless of table size.
+        let requires_olap_engine = upper.contains(" JOIN ")
+            || upper.contains(" UNION ")
+            || upper.contains(" INTERSECT ")
+            || upper.contains(" EXCEPT ");
+        match base.path {
+            QueryPath::Olap if row_count < OLAP_MIN_ROWS && !requires_olap_engine => {
+                RouteDecision {
+                    path: QueryPath::Oltp,
+                    reason: format!(
+                        "cost override: '{table}' has {row_count} rows (< {OLAP_MIN_ROWS}); OLTP avoids OLAP setup cost"
+                    ),
+                }
+            }
+            QueryPath::Oltp if row_count >= OLAP_MIN_ROWS && !has_equality_predicate => {
+                RouteDecision {
+                    path: QueryPath::Olap,
+                    reason: format!(
+                        "cost override: '{table}' has {row_count} rows (>= {OLAP_MIN_ROWS}) with no equality predicate; OLAP avoids large OLTP scan"
+                    ),
+                }
+            }
+            _ => base,
+        }
+    }
+}
+
+/// Q-1 / AR-2: Row-count threshold above which a full-table read is cheaper on
+/// the OLAP (columnar/DataFusion) plane than on the OLTP row store.
+pub const OLAP_MIN_ROWS: usize = 10_000;
+
+/// Q-1: Extract the primary (first `FROM`) table name from a SELECT statement,
+/// lower-cased and stripped of schema/alias decoration. Returns `None` when no
+/// `FROM` clause is present (e.g. `SELECT 1`).
+pub fn extract_primary_table(sql: &str) -> Option<String> {
+    let lower = sql.to_ascii_lowercase();
+    let from_pos = lower.find(" from ")?;
+    let after = &lower[from_pos + 6..];
+    let token = after
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c: char| c == '(' || c == ')' || c == ',' || c == ';');
+    if token.is_empty() {
+        return None;
+    }
+    // Strip schema/database qualifier: keep the last dotted segment.
+    let table = token.rsplit('.').next().unwrap_or(token);
+    Some(table.to_string())
 }
 
 // ─── H-1: Basic table statistics for the query optimizer ─────────────────────
@@ -273,5 +370,104 @@ mod tests {
             "BEGIN; UPDATE orders SET amount=200 WHERE id=1; SELECT region, SUM(amount) FROM orders GROUP BY region;";
         let decision = HtapQueryRouter::route_batch(batch);
         assert_eq!(decision.path, QueryPath::Hybrid);
+    }
+
+    #[test]
+    fn extracts_primary_table_from_select() {
+        assert_eq!(
+            extract_primary_table("SELECT * FROM orders WHERE id = 1").as_deref(),
+            Some("orders")
+        );
+        assert_eq!(
+            extract_primary_table("SELECT region, SUM(amount) FROM sales GROUP BY region").as_deref(),
+            Some("sales")
+        );
+        assert_eq!(
+            extract_primary_table("SELECT * FROM shop.orders").as_deref(),
+            Some("orders")
+        );
+        assert_eq!(extract_primary_table("SELECT 1").as_deref(), None);
+    }
+
+    #[test]
+    fn q1_small_table_aggregate_routes_to_oltp() {
+        let mut stats = StatsRegistry::new();
+        stats.update_table("orders", 10, std::collections::HashMap::new());
+        let decision = HtapQueryRouter::route_with_stats(
+            "SELECT region, SUM(amount) FROM orders GROUP BY region",
+            &stats,
+            None,
+        );
+        assert_eq!(
+            decision.path,
+            QueryPath::Oltp,
+            "tiny table aggregate must avoid OLAP setup cost"
+        );
+    }
+
+    #[test]
+    fn q1_large_table_aggregate_stays_olap() {
+        let mut stats = StatsRegistry::new();
+        stats.update_table("orders", 1_000_000, std::collections::HashMap::new());
+        let decision = HtapQueryRouter::route_with_stats(
+            "SELECT region, SUM(amount) FROM orders GROUP BY region",
+            &stats,
+            None,
+        );
+        assert_eq!(decision.path, QueryPath::Olap, "large table aggregate stays OLAP");
+    }
+
+    #[test]
+    fn q1_large_table_full_scan_promoted_to_olap() {
+        let mut stats = StatsRegistry::new();
+        stats.update_table("events", 500_000, std::collections::HashMap::new());
+        // Point-style SELECT with no equality predicate over a huge table.
+        let decision =
+            HtapQueryRouter::route_with_stats("SELECT * FROM events", &stats, None);
+        assert_eq!(
+            decision.path,
+            QueryPath::Olap,
+            "large unfiltered scan must be promoted to OLAP"
+        );
+    }
+
+    #[test]
+    fn q1_point_select_with_predicate_stays_oltp() {
+        let mut stats = StatsRegistry::new();
+        stats.update_table("events", 500_000, std::collections::HashMap::new());
+        let decision = HtapQueryRouter::route_with_stats(
+            "SELECT * FROM events WHERE id = 42",
+            &stats,
+            None,
+        );
+        assert_eq!(
+            decision.path,
+            QueryPath::Oltp,
+            "indexed point lookup stays OLTP regardless of table size"
+        );
+    }
+
+    #[test]
+    fn q1_unknown_stats_keep_ast_decision() {
+        let stats = StatsRegistry::new();
+        let decision = HtapQueryRouter::route_with_stats(
+            "SELECT region, SUM(amount) FROM orders GROUP BY region",
+            &stats,
+            None,
+        );
+        // No stats → fall back to AST decision (OLAP for aggregate).
+        assert_eq!(decision.path, QueryPath::Olap);
+    }
+
+    #[test]
+    fn q1_db_qualified_stats_key_resolves() {
+        let mut stats = StatsRegistry::new();
+        stats.update_table("shop.orders", 5, std::collections::HashMap::new());
+        let decision = HtapQueryRouter::route_with_stats(
+            "SELECT region, SUM(amount) FROM orders GROUP BY region",
+            &stats,
+            Some("shop"),
+        );
+        assert_eq!(decision.path, QueryPath::Oltp);
     }
 }

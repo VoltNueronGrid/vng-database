@@ -1,3 +1,16 @@
 {
-  "ws27-test": {}
+  "ws27-flush": {
+    "key-0": {
+      "expires_at_ms": 1782753708443,
+      "value": 0
+    },
+    "key-1": {
+      "expires_at_ms": 1782753708444,
+      "value": 1
+    },
+    "key-2": {
+      "expires_at_ms": 1782753708444,
+      "value": 2
+    }
+  }
 }

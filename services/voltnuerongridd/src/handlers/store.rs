@@ -316,6 +316,12 @@ pub(crate) struct HtapStatsResponse {
     pub(crate) status: &'static str,
     pub(crate) table_count: usize,
     pub(crate) total_entries: usize,
+    /// Q-2: authoritative durable row source for analytical reads —
+    /// `"rocksdb"` when RocksDB is the active durability engine, otherwise
+    /// `"paged_store"` (in-memory only; non-durable dev/test mode). The
+    /// `olap_store` counted above is an analytics-only auxiliary replica fed by
+    /// the HTAP sync origin, never the primary read path.
+    pub(crate) data_source: &'static str,
 }
 
 // ─── Index lookup / constraint DTOs ──────────────────────────────────────────
@@ -447,10 +453,18 @@ pub(crate) async fn htap_stats(
     let table_count = olap.len();
     let total_entries: usize = olap.values().map(|rows| rows.len()).sum();
     drop(olap);
+    // Q-2: report the authoritative durable row source so clients can tell when
+    // analytical reads are served from durable RocksDB vs the in-memory fallback.
+    let data_source = state
+        .wal_engine
+        .lock()
+        .map(|w| if w.persists_rows() { "rocksdb" } else { "paged_store" })
+        .unwrap_or("paged_store");
     Ok((StatusCode::OK, Json(HtapStatsResponse {
         status: "ok",
         table_count,
         total_entries,
+        data_source,
     })))
 }
 

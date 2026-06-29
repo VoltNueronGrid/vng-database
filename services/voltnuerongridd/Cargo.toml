@@ -61,6 +61,12 @@ uuid = { version = "1", features = ["v4"] }
 arrow = { version = "53", default-features = false, features = ["ipc"] }
 parquet = { version = "53", default-features = false, features = ["arrow", "snap"] }
 
+[features]
+# Q-5 / AR-4: The synthetic-data demo shim (`CALL insert_rows(table, count)`)
+# is compiled only under this feature so the production binary carries no demo
+# code and the SQL hot path performs no `VNG_DEMO_MODE` env lookup.
+demo = []
+
 [dev-dependencies]
 arrow-array = { version = "53", default-features = false }
 arrow-schema = { version = "53", default-features = false }

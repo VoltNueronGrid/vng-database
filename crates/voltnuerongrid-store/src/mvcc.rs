@@ -299,6 +299,67 @@ impl PagedRowStore {
     }
 
     // ------------------------------------------------------------------
+    // T-2: Committed-only read paths (dirty-read prevention)
+    // ------------------------------------------------------------------
+
+    /// T-2: Read the latest version of `key` visible at `snapshot_xid`, but
+    /// only when no *other* transaction currently holds an uncommitted
+    /// write-intent on the key. `reader_xid` is the reading transaction's id
+    /// (pass `0` for an autonomous/non-transactional reader).
+    ///
+    /// When a foreign transaction holds a write-intent, its in-progress value
+    /// is not yet committed; this method returns the previously-committed
+    /// version (the MVCC value at `snapshot_xid`) rather than the dirty value,
+    /// preventing a dirty read. A reader observing its *own* intent still sees
+    /// its own uncommitted writes (read-your-own-writes).
+    pub fn read_committed<'a>(
+        &'a self,
+        key: &str,
+        snapshot_xid: Xid,
+        reader_xid: Xid,
+    ) -> Option<&'a RowData> {
+        // If a different transaction holds the intent, exclude its uncommitted
+        // version by reading at a snapshot strictly *below* that intent's xid.
+        let effective_snapshot = match self.write_intents.get(key) {
+            Some(&owner) if owner != reader_xid => {
+                // The intent owner's write has xid == owner (allocated via
+                // begin_xid before begin_write_intent). Read just below it.
+                snapshot_xid.min(owner.saturating_sub(1))
+            }
+            _ => snapshot_xid,
+        };
+        self.read_at_snapshot(key, effective_snapshot)
+    }
+
+    /// T-2: Scan all rows committed as of `snapshot_xid`, excluding the
+    /// in-progress (uncommitted) value of any row currently held under a
+    /// foreign write-intent. `reader_xid` is the reading transaction's id
+    /// (`0` for a non-transactional reader). Rows whose only versions belong to
+    /// a foreign uncommitted intent are omitted entirely.
+    pub fn scan_committed(&self, snapshot_xid: Xid, reader_xid: Xid) -> Vec<(&str, &RowData)> {
+        let mut result = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for page in &self.pages {
+            for row in &page.rows {
+                if seen.contains(row.key.as_str()) {
+                    continue;
+                }
+                let effective_snapshot = match self.write_intents.get(row.key.as_str()) {
+                    Some(&owner) if owner != reader_xid => {
+                        snapshot_xid.min(owner.saturating_sub(1))
+                    }
+                    _ => snapshot_xid,
+                };
+                if let Some(data) = row.visible_at(effective_snapshot) {
+                    result.push((row.key.as_str(), data));
+                    seen.insert(row.key.as_str());
+                }
+            }
+        }
+        result
+    }
+
+    // ------------------------------------------------------------------
     // Metrics / introspection
     // ------------------------------------------------------------------
 
@@ -592,6 +653,65 @@ mod tests {
         assert!(store.was_modified_after("item:1", snapshot));
         // For a key that was not modified, should return false.
         assert!(!store.was_modified_after("item:99", snapshot));
+    }
+
+    // ─── T-2: committed-only reads (dirty-read prevention) ────────────────────
+
+    #[test]
+    fn t2_read_committed_hides_foreign_uncommitted_write() {
+        let mut store = PagedRowStore::new(256);
+        // Commit an initial value for acct:1.
+        let xid1 = store.begin_xid();
+        store.insert(xid1, "acct:1", row(&[("bal", "100")]));
+        let reader_snapshot = store.current_xid();
+
+        // A second transaction writes a new value AND holds an uncommitted intent.
+        let xid2 = store.begin_xid();
+        store.begin_write_intent(xid2, "acct:1").unwrap();
+        store.insert(xid2, "acct:1", row(&[("bal", "999")]));
+
+        // A concurrent reader (reader_xid = 0) must NOT see the dirty 999 value.
+        let seen = store
+            .read_committed("acct:1", reader_snapshot, 0)
+            .expect("row exists");
+        assert_eq!(seen.get("bal").map(String::as_str), Some("100"),
+            "dirty read prevented: must see committed 100, not in-progress 999");
+
+        // The writer itself (reader_xid = xid2) does see its own write.
+        let own = store
+            .read_committed("acct:1", store.current_xid(), xid2)
+            .expect("row exists");
+        assert_eq!(own.get("bal").map(String::as_str), Some("999"),
+            "read-your-own-writes: writer sees its in-progress value");
+
+        // After the writer releases its intent (commit), the reader sees 999.
+        store.release_write_intents(xid2);
+        let after = store
+            .read_committed("acct:1", store.current_xid(), 0)
+            .expect("row exists");
+        assert_eq!(after.get("bal").map(String::as_str), Some("999"));
+    }
+
+    #[test]
+    fn t2_scan_committed_excludes_foreign_dirty_rows() {
+        let mut store = PagedRowStore::new(256);
+        let xid1 = store.begin_xid();
+        store.insert(xid1, "t:1", row(&[("v", "a")]));
+        store.insert(xid1, "t:2", row(&[("v", "b")]));
+        let snap = store.current_xid();
+
+        // Foreign tx updates t:1 (uncommitted intent held).
+        let xid2 = store.begin_xid();
+        store.begin_write_intent(xid2, "t:1").unwrap();
+        store.insert(xid2, "t:1", row(&[("v", "DIRTY")]));
+
+        let rows = store.scan_committed(snap, 0);
+        let t1 = rows.iter().find(|(k, _)| *k == "t:1").map(|(_, d)| d);
+        assert_eq!(
+            t1.and_then(|d| d.get("v")).map(String::as_str),
+            Some("a"),
+            "scan_committed must show committed value, not the foreign dirty write"
+        );
     }
 
     #[test]

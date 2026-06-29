@@ -128,6 +128,7 @@ pub(crate) use helpers::dr_hook::{
 pub(crate) use helpers::boot::{
     persist_sql_statement, build_durability_engine,
     replay_ddl_into, replay_dml_into, replay_database_catalog_into,
+    replay_triggers_into,
 };
 // ─── Re-export auth helpers so handler/helper modules can use `crate::fn` ────
 // ─── Re-export audit helpers ──────────────────────────────────────────────────
@@ -184,6 +185,35 @@ pub(crate) static WS22_GATE_DEADLOCK_DETECTIONS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static WS22_GATE_SCAN_CAP_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static DRIVER_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub(crate) const DEADLOCK_SCAN_MAX_HOPS: usize = 8;
+
+/// T-3: Prefix marking a Raft log command as a grouped transaction batch.
+/// Encoding: `__vng_batch:<db>\n<stmt1>__vng_stmt__<stmt2>...`. The apply loop
+/// applies every statement in the batch under a single Xid so the transaction
+/// is atomic on followers (all-or-nothing via the single committed log entry).
+pub(crate) const RAFT_BATCH_PREFIX: &str = "__vng_batch:";
+/// T-3: Separator between statements inside a batched Raft command.
+pub(crate) const RAFT_BATCH_STMT_SEP: &str = "\n__vng_stmt__\n";
+
+/// T-3: Encode a transaction's effective DML statements into a single Raft
+/// batch command string scoped to `db`. Returns `None` when there is no DML to
+/// replicate (so callers can skip appending an empty entry).
+pub(crate) fn encode_raft_batch_command(db: &str, statements: &[String]) -> Option<String> {
+    let dml: Vec<&str> = statements
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| {
+            let u = s.to_ascii_uppercase();
+            u.starts_with("INSERT") || u.starts_with("UPDATE") || u.starts_with("DELETE")
+        })
+        .collect();
+    if dml.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{RAFT_BATCH_PREFIX}{db}\n{}",
+        dml.join(RAFT_BATCH_STMT_SEP)
+    ))
+}
 
 pub(crate) const CONTROL_PLANE_OPERATOR_ROLES: [OperatorRole; 4] = [
     OperatorRole::Dba,
@@ -1675,6 +1705,7 @@ async fn main() {
     // Clone before the struct literal consumes `wal_engine` via the field assignment.
     let wal_engine_for_catalog = wal_engine.clone();
     let wal_engine_for_users = wal_engine.clone();
+    let wal_engine_for_triggers = wal_engine.clone();
 
     let (raft_last_applied_tx, _raft_last_applied_rx) = tokio::sync::watch::channel(0u64);
     let raft_last_applied_tx = Arc::new(raft_last_applied_tx);
@@ -1821,7 +1852,12 @@ async fn main() {
             Arc::new(Mutex::new(reg))
         },
         // ISSUE-03: trigger registry + emitter.
-        trigger_registry: Arc::new(Mutex::new(TriggerRegistry::new())),
+        // Q-3: replay persisted CREATE/DROP TRIGGER DDL so triggers survive restart.
+        trigger_registry: Arc::new(Mutex::new({
+            let mut reg = TriggerRegistry::new();
+            replay_triggers_into(&mut reg, &wal_engine_for_triggers);
+            reg
+        })),
         trigger_emitter: Arc::new(LoggingTriggerEmitter),
         vector_index: Arc::new(Mutex::new(helpers::vector::VectorIndex::new())),
         fts_index: Arc::new(Mutex::new(helpers::fts::FtsIndex::new())),
@@ -2203,6 +2239,7 @@ pub(crate) async fn run_native_connection<S: AsyncRead + AsyncWrite + Send + Unp
 ///
 /// **Tracked gap:** §4.3 in `gaps-may26-1.md`. Replace once `CREATE PROCEDURE`
 /// and the UDF runtime are wired through the SQL parser/executor properly.
+#[cfg(feature = "demo")]
 pub(crate) fn try_handle_call_insert_rows_demo(
     state: &AppState,
     _headers: &HeaderMap,
@@ -2329,6 +2366,8 @@ pub(crate) fn try_handle_call_insert_rows_demo(
 
 /// Heuristic value generator for the insert_rows demo.
 /// Pure function — no state, easy to unit-test.
+/// Also used by the Studio "Generate N rows" UI endpoint (a real feature),
+/// so this helper is always compiled regardless of the `demo` feature.
 pub(crate) fn synthesize_demo_value(col_name: &str, table_name: &str, row_id: usize) -> String {
     if col_name.ends_with("_id") || col_name == "id" {
         row_id.to_string()

@@ -541,7 +541,24 @@ fn apply_dml_command(
     xid: u64,
     state: &AppState,
 ) {
-    use crate::{extract_all_insert_rows, extract_update_row_from_sql, extract_delete_key_from_sql};
+    // T-3: a transaction's DML is grouped into ONE Raft log entry encoded as
+    //   __vng_batch:<db>\n<stmt1>\n__vng_stmt__\n<stmt2>...
+    // Applying the whole batch under a single `xid` here makes the transaction
+    // atomic on followers — all statements land together or (on a crash before
+    // commit) none do, since Raft only applies committed entries.
+    if let Some(rest) = command.strip_prefix(crate::RAFT_BATCH_PREFIX) {
+        let (db, body) = match rest.find('\n') {
+            Some(nl) => (&rest[..nl], &rest[nl + 1..]),
+            None => ("", ""),
+        };
+        for stmt in body.split(crate::RAFT_BATCH_STMT_SEP) {
+            let stmt = stmt.trim();
+            if !stmt.is_empty() {
+                apply_single_dml(db, stmt, rs, xid, state);
+            }
+        }
+        return;
+    }
 
     // M-1: peel off the optional `__vng_db:<name>\n` scope prefix.
     let (db, sql) = if let Some(rest) = command.strip_prefix("__vng_db:") {
@@ -554,6 +571,19 @@ fn apply_dml_command(
     } else {
         ("", command)
     };
+    apply_single_dml(db, sql, rs, xid, state);
+}
+
+/// Apply a single (db-scoped) DML statement to the row store. Shared by the
+/// single-statement and T-3 batch apply paths.
+fn apply_single_dml(
+    db: &str,
+    sql: &str,
+    rs: &mut voltnuerongrid_store::mvcc::PagedRowStore,
+    xid: u64,
+    state: &AppState,
+) {
+    use crate::{extract_all_insert_rows, extract_update_row_from_sql, extract_delete_key_from_sql};
 
     let upper = sql.trim_start().to_ascii_uppercase();
     if upper.starts_with("INSERT") {

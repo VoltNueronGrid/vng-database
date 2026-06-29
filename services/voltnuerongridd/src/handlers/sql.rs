@@ -19,7 +19,9 @@ use crate::{execute_transaction_statements, acquire_sql_data_plane_connection, r
 use crate::{acquire_pessimistic_lock, release_pessimistic_lock};
 use crate::{execute_oltp_select, df_select_owned, run_async_in_executor};
 use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
-use crate::{route_path_name, try_handle_call_insert_rows_demo};
+use crate::route_path_name;
+#[cfg(feature = "demo")]
+use crate::try_handle_call_insert_rows_demo;
 use crate::{extract_delete_key_from_sql, extract_update_row_from_sql, extract_column_names_from_ddl, extract_insert_row_from_sql, extract_all_insert_rows};
 use crate::helpers::sql_parse::{extract_bulk_update_target, extract_bulk_delete_target};
 use crate::helpers::sql_parse::{db_prefix_key, make_table_scan_prefix, validate_row_against_ddl, extract_partition_column};
@@ -153,15 +155,72 @@ fn read_latest_with_rocksdb_fallback(
 
 // ─── ISSUE-03: Trigger execution helper ──────────────────────────────────────
 
+/// T-1: Compute the effective statements to flush at COMMIT after applying
+/// SAVEPOINT / ROLLBACK TO SAVEPOINT / RELEASE SAVEPOINT semantics.
+///
+/// In the batch transaction model every statement of a `BEGIN … COMMIT` block
+/// arrives in one request and DML is flushed at COMMIT. This helper walks the
+/// statement list in order and returns the subset of DML statements that
+/// survive savepoint rollbacks:
+///
+/// * `SAVEPOINT <name>` records a marker at the current applied-length.
+/// * `ROLLBACK TO SAVEPOINT <name>` discards every statement applied after the
+///   matching savepoint (and any later savepoints).
+/// * `RELEASE SAVEPOINT <name>` drops the marker but keeps the work.
+/// * `BEGIN` / `COMMIT` / `ROLLBACK` are control statements and never flushed.
+///
+/// All other statements (INSERT/UPDATE/DELETE and any non-savepoint SQL) are
+/// appended to the surviving set in order.
+fn effective_statements_after_savepoints(statements: &[String]) -> Vec<String> {
+    let mut applied: Vec<String> = Vec::new();
+    // (savepoint_name, applied_len_at_creation)
+    let mut savepoints: Vec<(String, usize)> = Vec::new();
+    for stmt in statements {
+        match SqlAnalyzer::classify_statement(stmt) {
+            SqlStatementKind::Savepoint => {
+                if let Some(name) = stmt.split_ascii_whitespace().nth(1) {
+                    savepoints.push((name.to_ascii_lowercase(), applied.len()));
+                }
+            }
+            SqlStatementKind::ReleaseSavepoint => {
+                if let Some(name) = stmt.split_ascii_whitespace().nth(2) {
+                    let name = name.to_ascii_lowercase();
+                    if let Some(pos) = savepoints.iter().rposition(|(n, _)| n == &name) {
+                        savepoints.remove(pos);
+                    }
+                }
+            }
+            SqlStatementKind::RollbackToSavepoint => {
+                let tokens: Vec<&str> = stmt.split_ascii_whitespace().collect();
+                let name = if tokens.get(2).map(|t| t.eq_ignore_ascii_case("SAVEPOINT")).unwrap_or(false) {
+                    tokens.get(3)
+                } else {
+                    tokens.get(2)
+                };
+                if let Some(name) = name {
+                    let name = name.to_ascii_lowercase();
+                    if let Some(pos) = savepoints.iter().rposition(|(n, _)| n == &name) {
+                        let marker = savepoints[pos].1;
+                        applied.truncate(marker);
+                        // Drop this and any later savepoints (they are now gone).
+                        savepoints.truncate(pos + 1);
+                    }
+                }
+            }
+            SqlStatementKind::Begin
+            | SqlStatementKind::Commit
+            | SqlStatementKind::Rollback => {
+                // Control statements — never flushed.
+            }
+            _ => {
+                applied.push(stmt.clone());
+            }
+        }
+    }
+    applied
+}
+
 /// Fire all registered DML triggers that match `(table, schema, event)`.
-///
-/// This is best-effort: errors from the emitter are logged to stderr but never
-/// propagate to the caller so that a failing trigger does not abort the DML
-/// statement.  The function acquires the `trigger_registry` lock, looks up
-/// matching triggers, builds a minimal JSON payload, and calls
-/// `trigger_emitter.emit()` for each match.
-///
-/// `old_row` is `Some` for UPDATE/DELETE; `new_row` is `Some` for INSERT/UPDATE.
 fn fire_dml_triggers(
     state: &crate::AppState,
     table: &str,
@@ -465,6 +524,11 @@ pub(crate) struct OlapQueryResponse {
     pub(crate) query_signature: String,
     pub(crate) elapsed_ms: u128,
     pub(crate) rows: usize,
+    /// Q-2: which physical store served this OLAP query — `"rocksdb"` (primary
+    /// durable path) or `"paged_store"` (in-memory fallback used in dev/test
+    /// when RocksDB is not the active durability engine).
+    #[serde(default)]
+    pub(crate) data_source: String,
 }
 
 // ─── AcidTransactions DTO ─────────────────────────────────────────────────────
@@ -609,12 +673,17 @@ pub(crate) async fn sql_transaction(
             acid.record_statement(&tx_id, affected);
         }
         if has_commit {
+            // T-1: Compute the effective DML statements after applying any
+            // SAVEPOINT / ROLLBACK TO SAVEPOINT semantics. Statements executed
+            // after a savepoint that is later rolled back must NOT be flushed at
+            // COMMIT. RELEASE SAVEPOINT keeps the work but drops the marker.
+            let effective_statements = effective_statements_after_savepoints(&statements);
             // M-7: Collect the set of row keys this transaction intends to write.
             // Used for both (a) write-write conflict detection (S2-WS2-05) and
             // (b) row-level serializable OCC conflict detection.
             let commit_write_keys: std::collections::HashSet<String> = {
                 let mut keys = std::collections::HashSet::new();
-                for stmt in &statements {
+                for stmt in &effective_statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
                         for (raw_k, _, _) in extract_all_insert_rows(stmt) {
@@ -742,7 +811,7 @@ pub(crate) async fn sql_transaction(
                 let snapshot_xid = rs.current_xid();
                 acid.set_row_store_snapshot(&tx_id, snapshot_xid);
                 let xid = rs.begin_xid();
-                for stmt in &statements {
+                for stmt in &effective_statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
                         // Use extract_all_insert_rows to handle multi-row INSERT correctly.
@@ -887,7 +956,7 @@ pub(crate) async fn sql_transaction(
                 // S2-WS2-02: record committed DML mutations in the WAL engine for
                 // durability and recovery replay.
                 if let Ok(mut wal) = state.wal_engine.lock() {
-                    for stmt in &req.statements {
+                    for stmt in &effective_statements {
                         let upper = stmt.trim_start().to_ascii_uppercase();
                         if upper.starts_with("INSERT") {
                             if let Some((raw_k, d)) = extract_insert_row_from_sql(stmt) {
@@ -913,6 +982,23 @@ pub(crate) async fn sql_transaction(
                 // Release all intents for this xid — writes are now committed and visible.
                 rs.release_write_intents(xid);
             }
+            // T-3: Replicate the whole transaction as ONE atomic Raft log entry.
+            // The row store was already updated above (direct path), so we use
+            // the fire-and-forget `append_command` which pre-advances
+            // last_applied; followers apply the batch all-or-nothing under a
+            // single Xid. Only the leader appends; single-node clusters commit
+            // immediately. This groups BEGIN…COMMIT DML so a follower never sees
+            // a partially-applied transaction.
+            if let Some(batch_cmd) = crate::encode_raft_batch_command(&db, &effective_statements) {
+                let total_peers = state.raft_peers.len();
+                let mut node = match state.raft_state.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Err(lock_poisoned_err("raft_state")),
+                };
+                if node.role == crate::RaftRole::Leader {
+                    node.append_command(batch_cmd, total_peers);
+                }
+            }
             // S4-WS3-04: publish each committed DML mutation to RowStoreSyncOrigin for HTAP consumers.
             {
                 use voltnuerongrid_store::htap_sync::MutationOp;
@@ -920,7 +1006,7 @@ pub(crate) async fn sql_transaction(
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("sync_origin")),
                 };
-                for stmt in &req.statements {
+                for stmt in &effective_statements {
                     let upper = stmt.trim_start().to_ascii_uppercase();
                     if upper.starts_with("INSERT") {
                         if let Some((raw_k, _d)) = extract_insert_row_from_sql(stmt) {
@@ -1285,6 +1371,34 @@ pub(crate) async fn sql_execute(
     let decision = dispatcher.dispatch_sql_execute_route_decision(&envelope);
     let parsed = SqlAnalyzer::parse_batch(&req.sql_batch);
 
+    // Q-1 / AR-2: Cost-based routing refinement. For a single-statement SELECT
+    // batch, consult the StatsRegistry so the AST decision can be overridden
+    // when the target table size makes OLAP/OLTP the wrong choice. Only a
+    // shared read of the registry is taken; the registry is never mutated here.
+    let decision = {
+        let mut decision = decision;
+        if parsed.len() == 1 {
+            if let Some(stmt) = parsed.first() {
+                if matches!(
+                    SqlAnalyzer::analyze_statement(&stmt.raw).kind,
+                    voltnuerongrid_sql::SqlStatementKind::Select
+                ) {
+                    if let Ok(stats) = state.stats_registry.lock() {
+                        let db_scope = if db.is_empty() { None } else { Some(db.as_str()) };
+                        let refined = voltnuerongrid_exec::HtapQueryRouter::route_with_stats(
+                            &stmt.raw, &stats, db_scope,
+                        );
+                        if refined.path != decision.payload.path {
+                            decision.payload.path = refined.path;
+                            decision.payload.reason = refined.reason;
+                        }
+                    }
+                }
+            }
+        }
+        decision
+    };
+
     // ── L-2: CREATE PROCEDURE / DROP PROCEDURE / CALL dispatch ──────────────
     // Route stored-procedure DDL and CALL statements through the
     // `ProcedureRegistry` before the normal SQL execution path.
@@ -1485,8 +1599,11 @@ pub(crate) async fn sql_execute(
 
     // ── Demo CALL intercept (built-in insert_rows shim) ───────────────────────
     // Handles CALL insert_rows('<table>', <count>).
-    // Gate behind VNG_DEMO_MODE=true to avoid shadowing user-defined stored procedures.
-    if std::env::var("VNG_DEMO_MODE").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false) {
+    // Q-5 / AR-4: compiled only under the `demo` Cargo feature so the production
+    // binary carries no synthetic-data generator and the SQL hot path performs
+    // no `VNG_DEMO_MODE` env lookup. Build/run with `--features demo` to enable.
+    #[cfg(feature = "demo")]
+    {
         if let Some(early) = try_handle_call_insert_rows_demo(&state, &headers, &principal, &connection_id, &req, &db) {
             return early;
         }
@@ -2378,6 +2495,69 @@ pub(crate) async fn sql_execute(
                     handle_create_index_ddl(&state, stmt, &db);
                 }
             }
+            // Q-3: CREATE TRIGGER / DROP TRIGGER — register into the live
+            // TriggerRegistry so the trigger fires on subsequent DML.  The DDL
+            // is already persisted to the WAL above (object_kind "trigger"), so
+            // it is replayed into the registry at boot via replay_triggers_into.
+            for stmt in &ddl_snapshot {
+                let lower = stmt.trim().to_ascii_lowercase();
+                if lower.starts_with("create trigger ") {
+                    if let Some(def) = voltnuerongrid_store::triggers::parse_create_trigger(stmt) {
+                        if let Ok(mut reg) = state.trigger_registry.lock() {
+                            // Replace an existing trigger of the same name (idempotent DDL replay).
+                            reg.remove_trigger(&def.name);
+                            let _ = reg.register(def);
+                        }
+                    }
+                } else if lower.starts_with("drop trigger ") {
+                    if let Some(name) = voltnuerongrid_store::triggers::parse_drop_trigger_name(stmt) {
+                        if let Ok(mut reg) = state.trigger_registry.lock() {
+                            reg.remove_trigger(&name);
+                        }
+                    }
+                }
+            }
+            // Q-4: Register column/table constraints declared in CREATE TABLE and
+            // ALTER TABLE ADD CONSTRAINT so PK/UNIQUE/NOT NULL/CHECK/FK are
+            // enforced on subsequent INSERT/UPDATE. Idempotent across DDL replay
+            // (a duplicate constraint name is ignored).
+            for stmt in &ddl_snapshot {
+                let lower = stmt.trim().to_ascii_lowercase();
+                let parsed = if lower.starts_with("create table") {
+                    voltnuerongrid_store::constraints::parse_create_table_constraints(stmt)
+                } else if lower.starts_with("alter table") && lower.contains(" add ") {
+                    voltnuerongrid_store::constraints::parse_alter_add_constraint(stmt)
+                        .into_iter()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                if parsed.is_empty() {
+                    continue;
+                }
+                if let Ok(mut mgr) = state.constraint_manager.lock() {
+                    for pc in parsed {
+                        use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
+                        if pc.kind == ConstraintKind::Check {
+                            let _ = mgr.add_check_constraint(
+                                &pc.name,
+                                &pc.table,
+                                &pc.column,
+                                pc.check_expr.as_deref().unwrap_or(""),
+                            );
+                        } else {
+                            let _ = mgr.add_constraint(ConstraintDescriptor {
+                                name: pc.name,
+                                table: pc.table,
+                                column: pc.column,
+                                kind: pc.kind,
+                                ref_table: pc.ref_table,
+                                ref_column: pc.ref_column,
+                            });
+                        }
+                    }
+                }
+            }
             // PART-1: Register partition tables for PARTITION BY RANGE(col) DDL.
             for stmt in &ddl_snapshot {
                 let upper = stmt.trim_start().to_ascii_uppercase();
@@ -2739,6 +2919,27 @@ pub(crate) async fn sql_execute(
                                 }
                                 // CON-1: Validate constraints (PK/UNIQUE/NOT NULL) before writing.
                                 if let Ok(mgr) = state.constraint_manager.lock() {
+                                    // Q-4: reject INSERTs that omit a NOT NULL / PRIMARY KEY column.
+                                    for req_col in mgr.not_null_columns(table_name) {
+                                        let present = d
+                                            .get(&req_col)
+                                            .map(|v| !v.is_empty())
+                                            .unwrap_or(false);
+                                        if !present {
+                                            drop(mgr);
+                                            rs.release_write_intents(xid);
+                                            release_sql_data_plane_connection(&state, &connection_id);
+                                            return Err((
+                                                StatusCode::CONFLICT,
+                                                Json(crate::AuthErrorResponse {
+                                                    status: "error",
+                                                    reason: format!("constraint_violation: not-null column '{req_col}' missing"),
+                                                    locale: "en".to_string(),
+                                                    localized_message: format!("NOT NULL violation on INSERT into '{table_name}': column '{req_col}' is required"),
+                                                }),
+                                            ));
+                                        }
+                                    }
                                     for (col, val) in d.iter().filter(|(c, _)| !c.starts_with("__")) {
                                         if let Err(violation) = mgr.validate(table_name, col, Some(val.as_str())) {
                                             drop(mgr);
@@ -3271,6 +3472,25 @@ pub(crate) async fn sql_execute(
             query_signature: query.chars().take(64).collect(),
             elapsed_ms: started.elapsed().as_millis(),
             rows: row_count,
+            // Q-2: this code path reads from the PagedRowStore snapshot, which is
+            // hydrated from RocksDB when RocksDB is the active durability engine.
+            data_source: {
+                let persists = state
+                    .wal_engine
+                    .lock()
+                    .map(|w| w.persists_rows())
+                    .unwrap_or(false);
+                if persists {
+                    "rocksdb".to_string()
+                } else {
+                    tracing::warn!(
+                        target: "vng.olap",
+                        query_signature = %query.chars().take(64).collect::<String>(),
+                        "Q-2: OLAP query served from in-memory PagedRowStore (no durable row engine active)"
+                    );
+                    "paged_store".to_string()
+                }
+            },
         });
     }
 
