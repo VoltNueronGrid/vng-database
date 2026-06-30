@@ -1,0 +1,9 @@
+{
+  "gate": "e-oltp",
+  "scenario": "oltp",
+  "profile": "local",
+  "status": "passed",
+  "artifact": "tests/kpi/results/e/e1-oltp-latency.json",
+  "base_url": "http://127.0.0.1:8080",
+  "timestamp_utc": "2026-06-30T17:22:42Z"
+}

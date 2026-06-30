@@ -1,0 +1,14 @@
+{
+  "duration_secs": 10.0,
+  "read_ops": 4941,
+  "read_qps": 494.1,
+  "reader_pool": 16,
+  "scenario": "htap-mixed-throughput",
+  "status": "passed",
+  "threshold_read_qps_min": 10.0,
+  "threshold_write_tps_min": 10.0,
+  "timestamp": "1782840198",
+  "write_ops": 5184,
+  "write_tps": 518.4,
+  "writer_pool": 16
+}

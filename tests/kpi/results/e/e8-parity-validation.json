@@ -1,0 +1,33 @@
+{
+  "task": "E-8",
+  "name": "deployment-parity-validation",
+  "status": "passed",
+  "matrix_doc": "docs/deployment-parity-matrix.md",
+  "smoke_suite": ["health", "sql_roundtrip", "rbac_enforced", "raft_reachable"],
+  "topologies": [
+    {
+      "topology": "local-single-node",
+      "health": true,
+      "sql_roundtrip": true,
+      "rbac_enforced": true,
+      "raft_reachable": true,
+      "all_passed": true
+    },
+    {
+      "topology": "local-multi-node",
+      "health": true,
+      "sql_roundtrip": true,
+      "rbac_enforced": true,
+      "raft_reachable": true,
+      "all_passed": true
+    }
+  ],
+  "cloud_only_gaps": [
+    "object_storage_cold_tier",
+    "managed_autoscaling",
+    "multi_az_region_replication",
+    "provider_managed_kms_and_tls",
+    "cluster_scale_kpi_targets"
+  ],
+  "timestamp_utc": "2026-06-30T17:42:57Z"
+}

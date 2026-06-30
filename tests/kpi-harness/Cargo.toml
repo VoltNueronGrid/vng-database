@@ -1,0 +1,19 @@
+[package]
+name = "vng-kpi-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vng-kpi"
+path = "src/bin/vng_kpi.rs"
+
+[lib]
+name = "vng_kpi_harness"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

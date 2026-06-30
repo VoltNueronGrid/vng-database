@@ -1,0 +1,56 @@
+{
+  "actions": [
+    {
+      "audited": true,
+      "endpoint": "/api/v1/autonomous/actions/authorize",
+      "policy_checked": true
+    },
+    {
+      "audited": true,
+      "endpoint": "/api/v1/autonomous/emergency-stop",
+      "policy_checked": true
+    },
+    {
+      "audited": true,
+      "endpoint": "/api/v1/autonomous/controller/run",
+      "policy_checked": true
+    },
+    {
+      "audited": true,
+      "endpoint": "/api/v1/autonomous/self-heal/run",
+      "policy_checked": true
+    },
+    {
+      "audited": true,
+      "endpoint": "/api/v1/autonomous/schema/reconcile",
+      "policy_checked": true
+    },
+    {
+      "audited": true,
+      "endpoint": "/api/v1/autonomous/plugin/build",
+      "policy_checked": true
+    },
+    {
+      "audited": true,
+      "endpoint": "/api/v1/autonomous/security/sweep",
+      "policy_checked": true
+    },
+    {
+      "audited": true,
+      "endpoint": "/api/v1/autonomous/incident/remediate",
+      "policy_checked": true
+    },
+    {
+      "audited": true,
+      "endpoint": "/api/v1/ai/tune/apply",
+      "policy_checked": true
+    }
+  ],
+  "audited_actions": 9,
+  "coverage_pct": 100.0,
+  "name": "autonomous-action-safety-validation",
+  "policy_checked_actions": 9,
+  "status": "passed",
+  "task": "E-7",
+  "total_actions": 9
+}

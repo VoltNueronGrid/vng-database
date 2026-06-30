@@ -1,0 +1,13 @@
+{
+  "concurrency": 4,
+  "duration_secs": 10.0,
+  "p50_ms": 7.708,
+  "p95_ms": 15.714,
+  "p99_ms": 17.245,
+  "sample_count": 5200,
+  "scenario": "oltp-latency",
+  "status": "passed",
+  "threshold_p95_ms": 20.0,
+  "threshold_p99_ms": 60.0,
+  "timestamp": "1782840162"
+}

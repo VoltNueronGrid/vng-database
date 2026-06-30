@@ -1,0 +1,17 @@
+{
+  "task": "E-5",
+  "name": "failover-rto-rpo",
+  "status": "passed",
+  "nodes": 3,
+  "old_leader": "node-1",
+  "new_leader": "node-2",
+  "committed_rows": 40,
+  "survived_rows": 40,
+  "rows_lost": 0,
+  "rto_seconds": 1.63,
+  "rto_budget_seconds": 30,
+  "rto_within_budget": true,
+  "rpo_zero": true,
+  "write_path": "linearisable-quorum",
+  "timestamp_utc": "2026-06-30T17:38:53Z"
+}

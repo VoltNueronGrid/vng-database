@@ -1,0 +1,13 @@
+{
+  "gate": "e-group",
+  "profile": "local",
+  "status": "passed",
+  "timestamp_utc": "2026-06-30T17:26:11Z",
+  "scenarios": [
+    { "scenario": "oltp", "status": "passed" },
+    { "scenario": "olap", "status": "passed" },
+    { "scenario": "htap", "status": "passed" },
+    { "scenario": "ingest", "status": "passed" },
+    { "scenario": "connector", "status": "passed" }
+  ]
+}

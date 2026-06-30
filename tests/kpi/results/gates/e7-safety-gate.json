@@ -1,0 +1,7 @@
+{
+  "gate": "e7-autonomous-safety",
+  "status": "passed",
+  "coverage_pct": 100.0,
+  "artifact": "tests/kpi/results/e/e7-autonomous-safety.json",
+  "timestamp_utc": "2026-06-30T17:34:06Z"
+}

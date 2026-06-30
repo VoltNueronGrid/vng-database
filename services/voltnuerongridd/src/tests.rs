@@ -19040,3 +19040,246 @@ async fn d1_pgwire_error_maps_to_error_response() {
     assert!(bytes.contains(&b'Z'));
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tasks-7 group E — E-7 · Autonomous action safety validation
+// Enumerates every autonomous action endpoint and proves, by live handler
+// invocation, that each (a) emits an audit/action record ("audited") and
+// (b) is rejected without operator authorisation ("policy_checked"). Emits a
+// 100%-coverage artifact consumed by the E-group release gate.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn e7_autonomous_actions_all_audited_and_policy_checked() {
+    use crate::handlers::autonomous::{
+        ai_tune_apply, authorize_autonomous_action, autonomous_emergency_stop,
+        autonomous_self_heal_run, AuthorizeActionRequest, EmergencyStopRequest, TuneApplyRequest,
+    };
+    use crate::handlers::autonomous_ctl as actl;
+    use axum::http::StatusCode;
+
+    fn counts(s: &AppState) -> (usize, usize) {
+        let a = s.ops.audit_sink.lock().unwrap().all().len();
+        let r = s.ai.action_records.lock().unwrap().len();
+        (a, r)
+    }
+
+    // ── Positive pass: each endpoint with valid operator auth must audit. ──
+    let state = state_with_key(Some("secret"));
+    let hdr = || operator_headers("secret", "platform-admin");
+
+    // Seed a directly-executable tune recommendation (no table dependency).
+    state.ai.tune_recommendations.lock().unwrap().push(crate::TuneRecommendation {
+        action: "INCREASE_CONNECTIONS".to_string(),
+        table: None,
+        column: None,
+        reason: "e7 seed".to_string(),
+        estimated_speedup: Some(1.2),
+    });
+    // Plugin build must sign — provide a signing key so it registers a signed artifact.
+    std::env::set_var("VNG_PLUGIN_SIGNING_KEY", "e7-signing-key");
+
+    let mut coverage: Vec<serde_json::Value> = Vec::new();
+    let mut audited_flags: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+
+    macro_rules! assert_audited {
+        ($endpoint:expr, $before:expr) => {{
+            let (a0, r0) = $before;
+            let (a1, r1) = counts(&state);
+            let audited = a1 > a0 || r1 > r0;
+            audited_flags.insert($endpoint, audited);
+        }};
+    }
+
+    let b = counts(&state);
+    authorize_autonomous_action(
+        State(state.clone()), hdr(),
+        Json(AuthorizeActionRequest { action: "performance_tune".into(), scope: Some("cluster".into()) }),
+    ).await.unwrap();
+    assert_audited!("autonomous/actions/authorize", b);
+
+    let b = counts(&state);
+    autonomous_emergency_stop(
+        State(state.clone()), hdr(),
+        Json(EmergencyStopRequest { enabled: false, reason: Some("e7".into()), requested_by: Some("e7".into()) }),
+    ).await.unwrap();
+    assert_audited!("autonomous/emergency-stop", b);
+
+    let b = counts(&state);
+    actl::autonomous_controller_run(
+        State(state.clone()), hdr(),
+        Json(actl::ControllerRunRequest { goal: "tune performance".into(), dry_run: false }),
+    ).await.unwrap();
+    assert_audited!("autonomous/controller/run", b);
+
+    // Seed an unresolved failure signal so self-heal performs (and audits) a remediation.
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
+        signals.push(ClusterFailureSignal {
+            signal_id: "e7-sig".to_string(),
+            node_id: "node-2".to_string(),
+            transport: "raft".to_string(),
+            failure_type: "leader_heartbeat_timeout".to_string(),
+            severity: "critical".to_string(),
+            message: "e7 heartbeat timeout".to_string(),
+            observed_unix_ms: now_unix_ms(),
+            resolved: false,
+            resolved_by: None,
+            resolved_unix_ms: None,
+            resolution_note: None,
+        });
+    }
+    let b = counts(&state);
+    autonomous_self_heal_run(State(state.clone()), hdr()).await.unwrap();
+    assert_audited!("autonomous/self-heal/run", b);
+
+    let b = counts(&state);
+    actl::autonomous_schema_reconcile(
+        State(state.clone()), hdr(),
+        Json(actl::SchemaReconcileRequest {
+            desired_tables: vec![actl::DesiredTable {
+                name: "e7_recon_tbl".into(),
+                columns: vec!["id INT PRIMARY KEY".into(), "v TEXT".into()],
+                indexes: vec![],
+            }],
+        }),
+    ).await.unwrap();
+    assert_audited!("autonomous/schema/reconcile", b);
+
+    let b = counts(&state);
+    actl::autonomous_plugin_build(
+        State(state.clone()), hdr(),
+        Json(actl::PluginBuildRequest {
+            id: "e7.connector".into(), name: "E7".into(), version: "1.0.0".into(),
+            template: Some("connector".into()),
+        }),
+    ).await.unwrap();
+    std::env::remove_var("VNG_PLUGIN_SIGNING_KEY");
+    assert_audited!("autonomous/plugin/build", b);
+
+    let b = counts(&state);
+    actl::autonomous_security_sweep(State(state.clone()), hdr()).await.unwrap();
+    assert_audited!("autonomous/security/sweep", b);
+
+    let b = counts(&state);
+    actl::autonomous_incident_remediate(
+        State(state.clone()), hdr(),
+        Json(actl::IncidentRemediateRequest {
+            failure_type: Some("network".into()), severity: Some("high".into()),
+            message: Some("partition".into()), node_id: Some("node-1".into()),
+        }),
+    ).await.unwrap();
+    assert_audited!("autonomous/incident/remediate", b);
+
+    let b = counts(&state);
+    // Seed a directly-executable recommendation immediately before applying so it
+    // is not clobbered by an earlier controller/tune step.
+    {
+        let mut recs = state.ai.tune_recommendations.lock().unwrap();
+        recs.clear();
+        recs.push(crate::TuneRecommendation {
+            action: "INCREASE_CONNECTIONS".to_string(),
+            table: None,
+            column: None,
+            reason: "e7 seed".to_string(),
+            estimated_speedup: Some(1.2),
+        });
+    }
+    ai_tune_apply(
+        State(state.clone()), hdr(),
+        Json(TuneApplyRequest { recommendation_index: 0, target_db: Some("default".into()), add_permits: Some(10) }),
+    ).await.unwrap();
+    assert_audited!("ai/tune/apply", b);
+
+    // ── Negative pass: each endpoint must reject calls without operator auth. ──
+    let ns = state_with_key(Some("secret"));
+    let empty = axum::http::HeaderMap::new();
+    let mut policy_flags: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+
+    policy_flags.insert("autonomous/actions/authorize", authorize_autonomous_action(
+        State(ns.clone()), empty.clone(),
+        Json(AuthorizeActionRequest { action: "performance_tune".into(), scope: None }),
+    ).await.is_err());
+    policy_flags.insert("autonomous/emergency-stop", autonomous_emergency_stop(
+        State(ns.clone()), empty.clone(),
+        Json(EmergencyStopRequest { enabled: false, reason: None, requested_by: None }),
+    ).await.is_err());
+    policy_flags.insert("autonomous/controller/run", actl::autonomous_controller_run(
+        State(ns.clone()), empty.clone(),
+        Json(actl::ControllerRunRequest { goal: "tune".into(), dry_run: true }),
+    ).await.is_err());
+    policy_flags.insert("autonomous/self-heal/run",
+        autonomous_self_heal_run(State(ns.clone()), empty.clone()).await.is_err());
+    policy_flags.insert("autonomous/schema/reconcile", actl::autonomous_schema_reconcile(
+        State(ns.clone()), empty.clone(),
+        Json(actl::SchemaReconcileRequest { desired_tables: vec![] }),
+    ).await.is_err());
+    policy_flags.insert("autonomous/plugin/build", actl::autonomous_plugin_build(
+        State(ns.clone()), empty.clone(),
+        Json(actl::PluginBuildRequest { id: "x".into(), name: "x".into(), version: "1".into(), template: None }),
+    ).await.is_err());
+    policy_flags.insert("autonomous/security/sweep",
+        actl::autonomous_security_sweep(State(ns.clone()), empty.clone()).await.is_err());
+    policy_flags.insert("autonomous/incident/remediate", actl::autonomous_incident_remediate(
+        State(ns.clone()), empty.clone(),
+        Json(actl::IncidentRemediateRequest { failure_type: None, severity: None, message: None, node_id: None }),
+    ).await.is_err());
+    policy_flags.insert("ai/tune/apply", ai_tune_apply(
+        State(ns.clone()), empty.clone(),
+        Json(TuneApplyRequest { recommendation_index: 0, target_db: None, add_permits: None }),
+    ).await.is_err());
+
+    // ── Build the coverage matrix. ──
+    let endpoints = [
+        "autonomous/actions/authorize",
+        "autonomous/emergency-stop",
+        "autonomous/controller/run",
+        "autonomous/self-heal/run",
+        "autonomous/schema/reconcile",
+        "autonomous/plugin/build",
+        "autonomous/security/sweep",
+        "autonomous/incident/remediate",
+        "ai/tune/apply",
+    ];
+    for ep in endpoints {
+        let audited = *audited_flags.get(ep).unwrap_or(&false);
+        let policy_checked = *policy_flags.get(ep).unwrap_or(&false);
+        assert!(audited, "{ep} must emit an audit/action record");
+        assert!(policy_checked, "{ep} must reject calls without operator auth");
+        coverage.push(serde_json::json!({
+            "endpoint": format!("/api/v1/{ep}"),
+            "audited": audited,
+            "policy_checked": policy_checked,
+        }));
+    }
+
+    let total = coverage.len();
+    let audited_count = coverage.iter().filter(|c| c["audited"] == true).count();
+    let policy_count = coverage.iter().filter(|c| c["policy_checked"] == true).count();
+    let status = if audited_count == total && policy_count == total { "passed" } else { "failed" };
+    let coverage_pct = if total == 0 { 0.0 } else { (audited_count.min(policy_count) as f64 / total as f64) * 100.0 };
+
+    let artifact = serde_json::json!({
+        "task": "E-7",
+        "name": "autonomous-action-safety-validation",
+        "status": status,
+        "total_actions": total,
+        "audited_actions": audited_count,
+        "policy_checked_actions": policy_count,
+        "coverage_pct": coverage_pct,
+        "actions": coverage,
+    });
+
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    let dir = repo_root.join("tests/kpi/results/e");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("e7-autonomous-safety.json"),
+        serde_json::to_string_pretty(&artifact).unwrap(),
+    ).unwrap();
+
+    assert_eq!(status, "passed", "all autonomous actions must be audited and policy-checked");
+    assert_eq!(audited_count, 9);
+    assert_eq!(policy_count, 9);
+    let _ = StatusCode::OK;
+}

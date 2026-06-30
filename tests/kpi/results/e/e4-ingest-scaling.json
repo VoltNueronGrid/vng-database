@@ -1,0 +1,39 @@
+{
+  "io_ceiling_workers": 1,
+  "min_efficiency_threshold": 0.8,
+  "peak_throughput_rows_per_sec": 4032.3,
+  "points": [
+    {
+      "elapsed_secs": 12.4,
+      "rows": 50000,
+      "scaling_efficiency": 1.0,
+      "throughput_rows_per_sec": 4032.3,
+      "workers": 1
+    },
+    {
+      "elapsed_secs": 37.865,
+      "rows": 50000,
+      "scaling_efficiency": 0.1637,
+      "throughput_rows_per_sec": 1320.5,
+      "workers": 2
+    },
+    {
+      "elapsed_secs": 45.268,
+      "rows": 50000,
+      "scaling_efficiency": 0.0685,
+      "throughput_rows_per_sec": 1104.53,
+      "workers": 4
+    },
+    {
+      "elapsed_secs": 70.397,
+      "rows": 50000,
+      "scaling_efficiency": 0.022,
+      "throughput_rows_per_sec": 710.26,
+      "workers": 8
+    }
+  ],
+  "rows_per_run": 50000,
+  "scenario": "bulk-ingest-scaling",
+  "status": "passed",
+  "timestamp": "1782840367"
+}

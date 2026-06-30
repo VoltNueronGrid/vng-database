@@ -1,0 +1,9 @@
+{
+  "gate": "e-htap",
+  "scenario": "htap",
+  "profile": "local",
+  "status": "passed",
+  "artifact": "tests/kpi/results/e/e3-htap-throughput.json",
+  "base_url": "http://127.0.0.1:8080",
+  "timestamp_utc": "2026-06-30T17:23:19Z"
+}

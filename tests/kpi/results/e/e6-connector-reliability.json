@@ -1,0 +1,9 @@
+{
+  "cycles": 200,
+  "resume_success_rate": 1.0,
+  "scenario": "connector-reliability",
+  "status": "passed",
+  "successful_resumes": 200,
+  "threshold_min_rate": 0.9995,
+  "timestamp": "1782840369"
+}

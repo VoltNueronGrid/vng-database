@@ -23,6 +23,7 @@ members = [
   "tools/voltnuerongrid-migrate",
   "tests/soak",
   "tests/benchmarks",
+  "tests/kpi-harness",
 ]
 
 [workspace.package]
