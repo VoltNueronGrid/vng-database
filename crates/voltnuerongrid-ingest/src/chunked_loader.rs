@@ -239,7 +239,7 @@ impl Default for ChunkedLoaderConfig {
 
 /// A parallel chunk loader that owns its worker-thread configuration.
 ///
-/// In this phase the struct is a typed scaffold — actual thread-pool dispatch
+/// The struct is a typed configuration holder — actual thread-pool dispatch
 /// is layered on top via [`load_records_chunked`] with a matching
 /// [`IngestParallelConfig`] derived from `self.config`.
 pub struct ParallelChunkLoader {

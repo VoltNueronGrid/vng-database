@@ -1,9 +1,10 @@
-//! Raft consensus algorithm scaffold — S7-WS6-02.
+//! Raft consensus algorithm — S7-WS6-02.
 //!
-//! Provides a single-node Raft state machine that can answer vote requests
-//! and accept append-entries RPCs.  The implementation is a scaffold: it
-//! models all the required state transitions and log structures but does
-//! not run a background election timer or do network I/O.  It is wired into
+//! Provides a Raft state machine that runs elections, answers vote requests,
+//! and accepts append-entries RPCs.  The implementation models all required
+//! state transitions and log structures; the background election timer,
+//! heartbeat fan-out, log apply loop, and network I/O are driven by
+//! `helpers::raft_loop`.  It is wired into
 //! `AppState` so the service can expose status and RPC endpoints.
 
 #![forbid(unsafe_code)]

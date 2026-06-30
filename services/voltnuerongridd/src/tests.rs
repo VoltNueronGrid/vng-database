@@ -1585,7 +1585,7 @@ fn authorize_action_response_tags_tenant_scope_record_and_audit() {
 #[test]
 fn ws1_udf_runtime_scaffold_executes_polyglot_functions() {
     let sql = "SELECT udf_rust('hello'); SELECT udf_js('abc'); SELECT udf_python('delta');";
-    let results = execute_udf_runtime_scaffold(sql).expect("udf scaffold should execute");
+    let results = execute_udf_runtime_legacy(sql).expect("udf legacy path should execute");
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].language, "rust");
     assert_eq!(results[0].output, "HELLO");
@@ -1598,7 +1598,7 @@ fn ws1_udf_runtime_scaffold_executes_polyglot_functions() {
 #[test]
 fn ws1_udf_runtime_scaffold_blocks_unsafe_payload() {
     let sql = "SELECT udf_python('x'); import os";
-    let err = execute_udf_runtime_scaffold(sql).expect_err("unsafe payload should be blocked");
+    let err = execute_udf_runtime_legacy(sql).expect_err("unsafe payload should be blocked");
     assert_eq!(err, "udf_guardrail_blocked_python_payload");
 }
 
@@ -4687,6 +4687,155 @@ fn cc1_rule12_store_bypass_endpoint_requires_auth() {
             "row-store bypass endpoint must reject unauthenticated access"),
         Ok(_) => panic!("row-store bypass endpoint must require auth"),
     }
+}
+
+#[test]
+fn cc1_rule0_relational_only_table_lifecycle() {
+    // Rule 0 (foundation): the full table lifecycle is driven purely through SQL.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    for (sql, label) in [
+        ("CREATE TABLE cc_life (id INT PRIMARY KEY, v TEXT)", "create"),
+        ("INSERT INTO cc_life (id, v) VALUES (1, 'a')", "insert"),
+        ("UPDATE cc_life SET v = 'b' WHERE id = 1", "update"),
+        ("DELETE FROM cc_life WHERE id = 1", "delete"),
+        ("DROP TABLE cc_life", "drop"),
+    ] {
+        let (s, body) = cc1_exec(&rt, &state, &headers, sql);
+        assert_eq!(s, StatusCode::OK, "{label} via SQL must succeed: {}", body.reason);
+    }
+}
+
+#[test]
+fn cc1_rule1_information_schema_exposes_metadata_as_relation() {
+    // Rule 1 (information principle): catalog metadata is queryable as tables.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_meta (id INT PRIMARY KEY, label TEXT)");
+    let (s, body) = cc1_exec(&rt, &state, &headers, "SELECT * FROM information_schema.tables");
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.columns.is_some(), "information_schema.tables must return columns as a relation");
+    assert!(body.rows.as_ref().map(|r| !r.is_empty()).unwrap_or(false),
+        "information_schema.tables must return metadata rows");
+}
+
+#[test]
+fn cc1_rule3_systematic_null_handling() {
+    // Rule 3 (systematic NULL): IS NULL / IS NOT NULL distinguish missing values.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_null (id INT PRIMARY KEY, note TEXT)");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_null (id, note) VALUES (1, 'present')");
+    // id=2 omits `note` → it is NULL.
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_null (id) VALUES (2)");
+    let (s_null, _) = cc1_exec(&rt, &state, &headers, "SELECT id FROM cc_null WHERE note IS NULL");
+    assert_eq!(s_null, StatusCode::OK, "IS NULL predicate must be accepted");
+    let (s_notnull, _) = cc1_exec(&rt, &state, &headers, "SELECT id FROM cc_null WHERE note IS NOT NULL");
+    assert_eq!(s_notnull, StatusCode::OK, "IS NOT NULL predicate must be accepted");
+}
+
+#[test]
+fn cc1_rule7_set_level_update_affects_all_matching_rows() {
+    // Rule 7 (high-level insert/update/delete): UPDATE ... WHERE is set-at-a-time.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_set (id INT PRIMARY KEY, status TEXT)");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_set (id, status) VALUES (1, 'open')");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_set (id, status) VALUES (2, 'open')");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_set (id, status) VALUES (3, 'closed')");
+    let (s, body) = cc1_exec(&rt, &state, &headers, "UPDATE cc_set SET status = 'done' WHERE status = 'open'");
+    assert_eq!(s, StatusCode::OK, "set-level UPDATE must succeed: {}", body.reason);
+    // Both 'open' rows must now be 'done'; the 'closed' row unchanged.
+    let rs = state.row_store.lock().expect("row_store");
+    let snap = rs.current_xid();
+    let rows = rs.scan_at_snapshot(snap);
+    let status_of = |id: &str| rows.iter()
+        .find(|(k, _)| k.ends_with(&format!("cc_set:{id}")) || *k == format!("cc_set:{id}"))
+        .and_then(|(_, d)| d.get("status").cloned());
+    assert_eq!(status_of("1").as_deref(), Some("done"), "row 1 updated");
+    assert_eq!(status_of("2").as_deref(), Some("done"), "row 2 updated");
+    assert_eq!(status_of("3").as_deref(), Some("closed"), "row 3 (non-matching) unchanged");
+}
+
+#[test]
+fn cc1_rule11_location_transparent_sql_api() {
+    // Rule 11 (distribution independence): the SQL API is identical regardless of
+    // cluster topology — clients use standard SQL with no node-specific syntax.
+    // (Cross-node execution is covered by T-3; here we assert the single logical
+    // node serves standard SQL with no location-qualified identifiers required.)
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_loc (id INT PRIMARY KEY, v TEXT)");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_loc (id, v) VALUES (1, 'x')");
+    // No node/shard qualifier in the SQL — location transparent.
+    let (s, body) = cc1_exec(&rt, &state, &headers, "SELECT id, v FROM cc_loc WHERE id = 1");
+    assert_eq!(s, StatusCode::OK, "location-transparent SELECT must succeed: {}", body.reason);
+}
+
+#[test]
+fn cc1_rule2_guaranteed_access_by_pk() {
+    // Rule 2 (guaranteed access): every value is reachable by table + primary key + column.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_acc (id INT PRIMARY KEY, v TEXT)");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_acc (id, v) VALUES (7, 'seven')");
+    let (s, body) = cc1_exec(&rt, &state, &headers, "SELECT v FROM cc_acc WHERE id = 7");
+    assert_eq!(s, StatusCode::OK, "PK access must succeed: {}", body.reason);
+    // The row is reachable by PK in the store.
+    let rs = state.row_store.lock().expect("row_store");
+    let snap = rs.current_xid();
+    let found = rs.scan_at_snapshot(snap).into_iter()
+        .any(|(k, d)| k.ends_with("cc_acc:7") && d.get("v").map(|s| s == "seven").unwrap_or(false));
+    assert!(found, "value must be reachable by table+PK+column");
+}
+
+#[test]
+fn cc1_rule4_dynamic_online_catalog() {
+    // Rule 4 (dynamic online catalog): column metadata is queryable as a relation.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_cat (id INT PRIMARY KEY, label TEXT)");
+    let (s, body) = cc1_exec(&rt, &state, &headers, "SELECT * FROM information_schema.columns");
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.rows.as_ref().map(|r| !r.is_empty()).unwrap_or(false),
+        "information_schema.columns must expose column metadata as rows");
+}
+
+#[test]
+fn cc1_rule8_physical_data_independence() {
+    // Rule 8 (physical data independence): the SQL surface is unchanged regardless of
+    // the underlying storage representation — the same query works without referencing
+    // storage internals (pages, files, column families).
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_phys (id INT PRIMARY KEY, v TEXT)");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_phys (id, v) VALUES (1, 'a')");
+    let (s, body) = cc1_exec(&rt, &state, &headers, "SELECT id, v FROM cc_phys WHERE id = 1");
+    assert_eq!(s, StatusCode::OK, "query references no storage internals: {}", body.reason);
+}
+
+#[test]
+fn cc1_rule9_logical_data_independence() {
+    // Rule 9 (logical data independence): adding a column via ALTER does not break
+    // existing queries.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_logi (id INT PRIMARY KEY, v TEXT)");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_logi (id, v) VALUES (1, 'a')");
+    let (s_alter, body_a) = cc1_exec(&rt, &state, &headers, "ALTER TABLE cc_logi ADD COLUMN extra TEXT");
+    assert_eq!(s_alter, StatusCode::OK, "ALTER ADD COLUMN must succeed: {}", body_a.reason);
+    // The pre-existing query still works after the schema change.
+    let (s, body) = cc1_exec(&rt, &state, &headers, "SELECT id, v FROM cc_logi WHERE id = 1");
+    assert_eq!(s, StatusCode::OK, "existing query unaffected by ALTER: {}", body.reason);
 }
 
 // â”€â”€ REQ-23: ACID transaction tracking tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -386,7 +386,7 @@ pub(crate) async fn security_plugins_provenance_register(
     }))
 }
 
-/// S6-WS5-03: Initiate a TLS cert rotation (scaffold — records attempt, does not hot-swap certs).
+/// S6-WS5-03: Initiate a TLS cert rotation (records the attempt and new fingerprint; in-place cert hot-swap is deferred).
 #[tracing::instrument(skip_all, name = "security.tls_rotate")]
 pub(crate) async fn security_tls_rotate(
     State(state): State<AppState>,

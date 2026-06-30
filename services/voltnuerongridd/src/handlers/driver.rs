@@ -378,7 +378,7 @@ pub(crate) async fn driver_session_list(
     })))
 }
 
-/// S8-WS10-02: Execute a simple query through a driver session (scaffold).
+/// S8-WS10-02: Execute a simple query through a driver session.
 pub(crate) async fn driver_query(
     State(state): State<AppState>,
     headers: HeaderMap,

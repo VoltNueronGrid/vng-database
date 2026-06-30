@@ -177,7 +177,7 @@ pub enum LogicalPlan {
     /// Window function applied to a result set (from S3-WS1-04 has_window_fn support).
     WindowFn {
         input: Box<LogicalPlan>,
-        /// The window function expression indicator (scaffold: always "OVER").
+        /// The window function expression indicator (always "OVER").
         window_func: String,
     },
     /// Deduplication of result rows via SELECT DISTINCT (S3-WS1-04 is_distinct support).

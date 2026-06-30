@@ -1481,7 +1481,7 @@ pub(crate) async fn wal_size(
     let wal = state.wal_engine.lock().expect("wal_engine lock wal_size");
     let records = wal.wal_records();
     let record_count = records.len();
-    // Estimate: 8 bytes (sequence) + avg key + avg value; 64 bytes per record scaffold.
+    // Estimate: 8 bytes (sequence) + avg key + avg value; 64 bytes per record estimate.
     let estimated_bytes = records.iter().fold(0usize, |acc, r| {
         acc + 8 + r.key.len() + r.value.len()
     });

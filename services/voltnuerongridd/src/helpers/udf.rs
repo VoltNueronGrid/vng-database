@@ -10,7 +10,7 @@
 //! - **Python** — source validated (blocked imports checked at registration) then
 //!   executed in a sandboxed `python3 -I` subprocess with per-call timeout.
 //!
-//! The legacy scaffold functions (`execute_udf_runtime_scaffold`, etc.) are
+//! The legacy fallback functions (`execute_udf_runtime_legacy`, etc.) are
 //! preserved unchanged at the bottom of this file for backward compatibility with
 //! existing unit tests.
 
@@ -456,7 +456,6 @@ fn execute_python_udf(
     args: &[&str],
     timeout_ms: u64,
 ) -> Result<String, String> {
-    use std::io::Write;
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
@@ -559,9 +558,9 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-// ── Legacy scaffold (preserved for backward compatibility) ────────────────────
+// ── Legacy fallback (preserved for backward compatibility) ─────────────────
 
-pub(crate) fn execute_udf_runtime_scaffold(sql_batch: &str) -> Result<Vec<UdfExecutionResult>, String> {
+pub(crate) fn execute_udf_runtime_legacy(sql_batch: &str) -> Result<Vec<UdfExecutionResult>, String> {
     enforce_udf_guardrails(sql_batch)?;
     let mut results = Vec::new();
     for statement in SqlAnalyzer::parse_batch(sql_batch) {

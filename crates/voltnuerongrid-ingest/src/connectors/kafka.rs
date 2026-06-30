@@ -16,7 +16,6 @@
 //   VNG_KAFKA_SASL_PASSWORD  — SASL password
 
 use std::collections::HashMap;
-use std::io::Read;
 use std::time::Duration;
 
 use crate::{

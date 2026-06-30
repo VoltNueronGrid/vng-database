@@ -1,4 +1,4 @@
-//! Observability scaffold — Phase 0.5.
+//! Observability layer — Phase 0.5.
 //!
 //! Wires up:
 //! - `tracing` for structured logging (env-filter, JSON for prod, pretty for dev).

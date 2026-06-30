@@ -7,7 +7,12 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+// AR-6: these axum re-exports are unused by the binary itself but are pulled
+// into the `tests` module via `use super::*`; keep them under `allow` so the
+// non-test build stays warning-free without breaking the test build.
+#[allow(unused_imports)]
 use axum::http::{HeaderMap, StatusCode};
+#[allow(unused_imports)]
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -15,7 +20,11 @@ use voltnuerongrid_auth::{
     ConfiguredKmsProviderAdapter, KmsKeyResolution,
     RbacPrivilegeMatrix, SecurityConfigContract,
 };
-use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent, AuditEventKind};
+// AR-6: used by the `tests` module via `use super::*`; not referenced by the
+// binary itself.
+#[allow(unused_imports)]
+use voltnuerongrid_audit::AuditEventKind;
+use voltnuerongrid_audit::{AppendOnlyAuditSink, AuditEvent};
 use voltnuerongrid_ai::AutonomousActionExecutionRecord;
 use voltnuerongrid_exec::{HtapQueryRouter, QueryPath};
 use voltnuerongrid_sql::{SqlAnalyzer, SqlStatementKind};
@@ -100,14 +109,14 @@ pub(crate) use helpers::sql_parse::{
 };
 // execution
 pub(crate) use helpers::execution::{
-    svc_unavailable_sql_response, execute_transaction_statements,
+    execute_transaction_statements,
     acquire_pessimistic_lock, release_pessimistic_lock,
     execute_olap_query, execute_oltp_select,
     df_select_owned, run_async_in_executor,
 };
 // udf
 pub(crate) use helpers::udf::{
-    execute_udf_runtime_scaffold, udf_function_catalog_contract,
+    execute_udf_runtime_legacy, udf_function_catalog_contract,
     udf_guard_policy_contract, build_udf_execution_plan,
     UdfRegistry,
 };
@@ -649,6 +658,45 @@ pub(crate) struct DiagnosisRule {
 }
 
 
+/// Shared, cheaply-clonable application state injected into every axum handler.
+///
+/// AR-1 (architecture): the fields below are organised into the following
+/// logical sub-systems. Until the full sub-struct extraction lands (a staged
+/// refactor — see `docs/tasks-6.md` §AR-1), use this map to locate a field:
+///
+/// * **Identity / RBAC / security** — `node_id`, `cluster_mode`, `admin_api_key`,
+///   `security_config`, `allowed_operator_roles`, `operator_role_bindings`,
+///   `tenant_user_bindings`, `rbac_privilege_matrix`, `kms_runtime`, `db_grants`,
+///   `user_store`, `session_store`, `session_signer`, `tde_override`.
+/// * **Cluster / Raft / replication** — `leader_node_id`, `cluster_nodes`,
+///   `raft_state`, `raft_peers`, `cluster_token`, `raft_last_applied_tx`,
+///   `node_url`, `current_leader_url`, `snapshot_chunk_sessions`,
+///   `sync_origin`, `replication_transport`, `replica_replay_states`,
+///   `cluster_failure_signals`.
+/// * **Storage / SQL engine** — `row_store`, `wal_engine`, `olap_store`,
+///   `ddl_catalog`, `database_catalog`, `acid_transactions`, `index_manager`,
+///   `constraint_manager`, `tx_undo_log`, `db_semaphores`, `table_stats`,
+///   `stats_registry`, `connection_tx_active`, `proc_registry`,
+///   `trigger_registry`, `trigger_emitter`, `partition_registry`,
+///   `pessimistic_locks`, `pessimistic_lock_waits`, `pessimistic_lock_metrics`,
+///   `cdc_cursors`.
+/// * **Ingest** — `ingest_csv_records`, `ingest_json_records`,
+///   `ingest_parquet_records`, `ingest_excel_records`, `ingest_outbox_streams`,
+///   `ingest_event_bus`, `ingest_outbox_cursors`, `broker_flush_counts`.
+/// * **AI / autonomous** — `autonomous_mode`, `emergency_stop`, `guardrails`,
+///   `model_gateway_policy`, `ai_request_counters`, `ai_rate_window_starts`,
+///   `self_heal_counters`, `slow_query_log`, `tune_recommendations`,
+///   `dek_versions`, `cert_fingerprint`, `diagnosis_rules`, `chat_sql_counters`.
+/// * **Observability / ops** — `audit_sink`, `audit_log_path`, `action_records`,
+///   `dr_hook_records`, `dr_hook_policy_state`, `dr_hook_policy_config`,
+///   `dr_hook_state_path`, `dr_hook_queue`, `chaos_state`,
+///   `autoscale_policy`, `autoscale_status`.
+/// * **Plugins / extensions / drivers** — `plugin_lifecycle`, `plugin_registry`,
+///   `connector_registry`, `udf_registry`, `vector_index`, `fts_index`,
+///   `geo_index`, `driver_pool`, `driver_sessions`, `distributed_cache`,
+///   `cache_snapshot_path`, `runtime_config`.
+///
+/// All fields are `Arc`-wrapped, so `clone()` is a cheap reference-count bump.
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) node_id: String,
@@ -693,7 +741,7 @@ pub(crate) struct AppState {
     pub(crate) guardrails: Arc<Vec<GuardrailRule>>,
     pub(crate) ddl_catalog: Arc<Mutex<DdlCatalog>>,
     pub(crate) acid_transactions: Arc<Mutex<AcidTransactionRegistry>>,
-    /// MVCC page-based row store (S2-WS2-04: PagedRowStore scaffold).
+    /// MVCC page-based row store (S2-WS2-04: PagedRowStore).
     pub(crate) row_store: Arc<Mutex<PagedRowStore>>,
     /// S9-WS8-02: AI model gateway isolation policy.
     pub(crate) model_gateway_policy: Arc<Mutex<ModelGatewayPolicy>>,
@@ -703,7 +751,7 @@ pub(crate) struct AppState {
     /// S9-WS8A-02: Optional path to a JSON-lines audit log file.
     /// Resolved from `VNG_AUDIT_LOG_PATH` env var at start-up.
     pub(crate) audit_log_path: Option<String>,
-    /// S7-WS6-02: Raft consensus node state (single-node scaffold).
+    /// S7-WS6-02: Raft consensus node state (elections, log replication, snapshots).
     pub(crate) raft_state: Arc<Mutex<RaftNode>>,
     /// Raft peer base URLs loaded from `VNG_RAFT_PEERS`. Empty on single-node deployments.
     pub(crate) raft_peers: Arc<Vec<String>>,
@@ -1590,7 +1638,7 @@ impl NativeListenerConfig {
     fn validate(self) -> Self {
         if self.max_connections == 0 {
             eprintln!(
-                "Invalid VNG_NATIVE_MAX_CONNECTIONS=0; defaulting to 2048 for scaffold safety"
+                "Invalid VNG_NATIVE_MAX_CONNECTIONS=0; defaulting to 2048 for safety"
             );
             return Self {
                 max_connections: 2048,

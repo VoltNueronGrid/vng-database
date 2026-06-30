@@ -107,7 +107,7 @@ pub(crate) fn build_retry_plan(policy: &DrHookPolicyConfig, attempts: u32) -> Ve
                 policy.base_backoff_ms,
                 policy.max_backoff_ms,
             );
-            // Deterministic jitter contract scaffold: 20% envelope for callers.
+            // Deterministic jitter contract: 20% envelope for callers.
             let jitter = (backoff / 5).max(50);
             DrHookRetryPlanStep {
                 attempt,

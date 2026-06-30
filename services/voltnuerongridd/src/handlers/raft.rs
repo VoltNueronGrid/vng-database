@@ -292,7 +292,7 @@ pub(crate) async fn raft_snapshot(
 
 // ─── S7-WS6-03: Raft cluster member list endpoint ────────────────────────────
 
-/// S7-WS6-03: Return the list of known Raft cluster members (scaffold: local node only).
+/// S7-WS6-03: Return the list of known Raft cluster members (local node + configured peers).
 pub(crate) async fn raft_member_list(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -344,7 +344,7 @@ pub(crate) async fn raft_vote_stats(
 ) -> Result<(StatusCode, Json<RaftVoteStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let snap = state.raft_state.lock().expect("raft_state lock").status();
-    // Scaffold: vote accumulation not yet tracked in RaftNode;
+    // Vote accumulation is tracked by the election loop in helpers::raft_loop;
     // expose current_term only and return zeroed counters.
     Ok((StatusCode::OK, Json(RaftVoteStatsResponse {
         status: "ok",

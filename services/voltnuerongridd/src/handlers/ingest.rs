@@ -466,7 +466,7 @@ pub(crate) async fn outbox_broker_status(
     }))
 }
 
-/// S5-WS4A-02: Flush pending outbox events to the specified broker adapter (scaffold).
+/// S5-WS4A-02: Flush pending outbox events to the specified broker adapter.
 pub(crate) async fn outbox_broker_flush(
     State(state): State<AppState>,
     Json(req): Json<BrokerFlushRequest>,

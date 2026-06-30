@@ -18,7 +18,7 @@ use crate::{now_unix_ms, build_http_envelope};
 use crate::{execute_transaction_statements, acquire_sql_data_plane_connection, release_sql_data_plane_connection};
 use crate::{acquire_pessimistic_lock, release_pessimistic_lock};
 use crate::{execute_oltp_select, df_select_owned, run_async_in_executor};
-use crate::{execute_udf_runtime_scaffold, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
+use crate::{execute_udf_runtime_legacy, udf_function_catalog_contract, udf_guard_policy_contract, build_udf_execution_plan};
 use crate::route_path_name;
 #[cfg(feature = "demo")]
 use crate::try_handle_call_insert_rows_demo;
@@ -873,10 +873,11 @@ pub(crate) async fn sql_transaction(
                         // matching rows instead of silently updating at most one.
                         if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
                             let table_name = d.get("__table").map(|t| t.clone()).unwrap_or_default();
-                            let is_scan_update = raw_k == table_name
-                                && extract_bulk_update_target(stmt)
-                                    .map(|(_, _, _, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
-                                    .unwrap_or(false);
+                            // Rule 7 (Codd): a UPDATE whose WHERE filters on a non-PK column
+                            // is set-at-a-time — scan the table and update every matching row.
+                            let is_scan_update = extract_bulk_update_target(stmt)
+                                .map(|(_, _, _, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
+                                .unwrap_or(false);
                             if is_scan_update {
                                 if let Some((tbl, set_col, set_val, where_col, where_val)) =
                                     extract_bulk_update_target(stmt)
@@ -1653,7 +1654,7 @@ pub(crate) async fn sql_execute(
     let udf_function_catalog = udf_function_catalog_contract();
     let udf_guard_policies = udf_guard_policy_contract();
     let udf_execution_plan = build_udf_execution_plan(&req.sql_batch);
-    let udf_execution = execute_udf_runtime_scaffold(&req.sql_batch);
+    let udf_execution = execute_udf_runtime_legacy(&req.sql_batch);
 
     let udf_results = match udf_execution {
         Ok(results) => results,
@@ -3014,14 +3015,13 @@ pub(crate) async fn sql_execute(
                         }
                     } else if upper.starts_with("UPDATE") {
                         if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
-                            // Rule 7 (Codd) — set-at-a-time UPDATE: when no primary-key
-                            // WHERE constraint was parsed (raw_k == table name), fall back
-                            // to a full table scan filtered by the WHERE predicate.
+                            // Rule 7 (Codd) — set-at-a-time UPDATE: when the WHERE clause
+                            // filters on a non-PK column, fall back to a full table scan
+                            // filtered by the WHERE predicate (updates every matching row).
                             let table_name = d.get("__table").map(|t| t.clone()).unwrap_or_default();
-                            let is_scan_update = raw_k == table_name
-                                && extract_bulk_update_target(stmt)
-                                    .map(|(_, _, _, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
-                                    .unwrap_or(false);
+                            let is_scan_update = extract_bulk_update_target(stmt)
+                                .map(|(_, _, _, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
+                                .unwrap_or(false);
 
                             if is_scan_update {
                                 if let Some((tbl, set_col, set_val, where_col, where_val)) =
@@ -3084,6 +3084,11 @@ pub(crate) async fn sql_execute(
                                         if let Ok(mgr) = state.constraint_manager.lock() {
                                             let mut violation_found: Option<String> = None;
                                             for (col, val) in updated.iter().filter(|(c, _)| !c.starts_with("__")) {
+                                                // Q-4 fix: skip columns whose value is unchanged so a
+                                                // row's own PK/UNIQUE value does not conflict with itself.
+                                                if before.as_ref().and_then(|b| b.get(col)) == Some(val) {
+                                                    continue;
+                                                }
                                                 if let Err(v) = mgr.validate(&tbl, col, Some(val.as_str())) {
                                                     violation_found = Some(v.to_string());
                                                     break;
@@ -3134,6 +3139,11 @@ pub(crate) async fn sql_execute(
                                 if !table_name_upd.is_empty() {
                                     if let Ok(mgr) = state.constraint_manager.lock() {
                                         for (col, val) in merged.iter().filter(|(c, _)| !c.starts_with("__")) {
+                                            // Q-4 fix: skip columns whose value is unchanged so a
+                                            // row's own PK/UNIQUE value does not conflict with itself.
+                                            if before.as_ref().and_then(|b| b.get(col)) == Some(val) {
+                                                continue;
+                                            }
                                             if let Err(violation) = mgr.validate(table_name_upd, col, Some(val.as_str())) {
                                                 drop(mgr);
                                                 rs.release_write_intents(xid);

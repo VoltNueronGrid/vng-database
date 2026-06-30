@@ -189,7 +189,6 @@ impl WithAuth for ureq::Request {
             self.set("Authorization", &format!("Bearer {token}"))
         } else if let (Some(user), Some(pass)) = (&cfg.username, &cfg.password) {
             // Basic auth: base64(user:pass)
-            use std::fmt::Write as FmtWrite;
             let creds = format!("{user}:{pass}");
             let encoded = base64_encode(creds.as_bytes());
             self.set("Authorization", &format!("Basic {encoded}"))

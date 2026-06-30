@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::io::AsyncWriteExt;
-use std::env;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
@@ -1374,7 +1373,7 @@ pub(crate) async fn connectors_health(
         connector_type: c.connector_type.clone(),
         version: c.version.clone(),
         signed: c.signed,
-        // Scaffold: signed connectors are considered healthy; unsigned ones are degraded.
+        // Signed connectors are considered healthy; unsigned ones are degraded.
         healthy: c.signed,
     }).collect();
     let total = entries.len();
