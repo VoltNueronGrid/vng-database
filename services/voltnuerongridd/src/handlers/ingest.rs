@@ -734,6 +734,13 @@ pub(crate) async fn ingest_csv(
             "outbox_events_written": outbox_events_written,
         }),
     );
+    // B-5: emit an operational lifecycle event for the completed ingest batch.
+    crate::helpers::op_events::emit_operational_event(
+        &state,
+        "ingest",
+        "batch_complete",
+        json!({ "connector_id": response.connector_id, "format": "csv", "records_parsed": response.records_parsed }),
+    );
     Ok((
         StatusCode::OK,
         Json(serde_json::to_value(&response).unwrap_or_default()),

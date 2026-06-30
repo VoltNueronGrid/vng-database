@@ -598,10 +598,13 @@ pub(crate) async fn sql_transaction(
             .as_deref()
             .unwrap_or("read_committed")
             .to_string();
-        // C-3: For repeatable_read, capture the row-store snapshot Xid at BEGIN time
-        // so all reads in this transaction see a consistent view.  Must be captured
-        // *before* acquiring acid_transactions lock to avoid deadlock.
-        let begin_snapshot_xid: Option<u64> = if has_begin && iso_level == "repeatable_read" {
+        // C-3 / B-2: For repeatable_read and optimistic, capture the row-store snapshot
+        // Xid at BEGIN time so reads are stable (repeatable_read) and so optimistic
+        // version validation compares against the version observed at BEGIN.  Must be
+        // captured *before* acquiring acid_transactions lock to avoid deadlock.
+        let begin_snapshot_xid: Option<u64> = if has_begin
+            && (iso_level == "repeatable_read" || iso_level == "optimistic")
+        {
             let rs = match state.storage.row_store.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("row_store")),
@@ -701,6 +704,44 @@ pub(crate) async fn sql_transaction(
                 }
                 keys
             };
+            // B-2: Optimistic-locking validation (runs only for `optimistic` txns).
+            // Two complementary checks, both lock-free:
+            //   (1) Row-store version check: a written key whose MVCC version
+            //       advanced past this txn's BEGIN snapshot was modified by a
+            //       concurrent transaction → stale write.
+            //   (2) Committed-peer check: another committed optimistic txn already
+            //       wrote one of our keys → lost-update prevention.
+            // Either yields a typed 409 `optimistic_version_conflict:<key>` and
+            // aborts the transaction without ever holding a row lock.
+            if iso_level == "optimistic" {
+                let begin_snapshot = acid.row_store_snapshot_xid(&tx_id).unwrap_or(0);
+                let version_conflict = {
+                    let rs = match state.storage.row_store.lock() {
+                        Ok(g) => g,
+                        Err(_) => return Err(lock_poisoned_err("row_store")),
+                    };
+                    crate::helpers::execution::optimistic_version_conflict(
+                        &rs, &commit_write_keys, begin_snapshot,
+                    )
+                };
+                let conflict = version_conflict
+                    .or_else(|| acid.check_optimistic_conflict(&tx_id, &commit_write_keys));
+                if let Some(conflict_key) = conflict {
+                    acid.rollback(&tx_id, now_ms);
+                    drop(acid);
+                    let locale = locale_from_headers(&headers);
+                    let localized = I18nCatalog::message(locale, "unauthorized");
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(AuthErrorResponse {
+                            status: "error",
+                            reason: format!("optimistic_version_conflict:{conflict_key}"),
+                            locale: locale.as_str().to_string(),
+                            localized_message: localized.message.to_string(),
+                        }),
+                    ));
+                }
+            }
             // M-7: Row-level serializable conflict detection (write-write).
             // Conflict only when a committed serializable peer wrote the exact
             // same row key(s) — no false positives from non-overlapping writes.
@@ -2595,7 +2636,11 @@ pub(crate) async fn sql_execute(
                             .to_ascii_lowercase();
                         if !table_name.is_empty() {
                             if let Ok(mut reg) = state.storage.partition_registry.lock() {
-                                reg.insert(table_name, part_col);
+                                reg.insert(table_name.clone(), part_col);
+                            }
+                            // B-4: parse + register range-partition segments (boundaries).
+                            if let Some(cfg) = crate::helpers::partition::parse_range_partition(stmt) {
+                                crate::helpers::partition::register_partition_config(&state, &table_name, cfg);
                             }
                         }
                     }

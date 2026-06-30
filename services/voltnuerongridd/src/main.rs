@@ -328,8 +328,12 @@ impl AcidTransactionRegistry {
         };
         // For repeatable_read: snapshot Xid is captured at BEGIN time so reads
         // are stable for the lifetime of the transaction.
+        // For optimistic (B-2): snapshot Xid is captured at BEGIN so version
+        // validation at COMMIT compares writes against the version observed at BEGIN.
         // For other levels: stays None until set at COMMIT by set_row_store_snapshot().
-        let row_store_snapshot_xid = if isolation_level == "repeatable_read" {
+        let row_store_snapshot_xid = if isolation_level == "repeatable_read"
+            || isolation_level == "optimistic"
+        {
             begin_snapshot_xid
         } else {
             None
@@ -565,6 +569,41 @@ impl AcidTransactionRegistry {
         None
     }
 
+    /// B-2: Optimistic-locking conflict detection against committed peers.
+    ///
+    /// Returns the first key in `current_written_keys` that a *committed*
+    /// `optimistic` transaction (other than `current_tx_id`) already wrote.
+    /// This is the validate-on-commit step of optimistic concurrency control:
+    /// two optimistic transactions that both write the same row cannot both
+    /// commit — the later one is aborted with a typed version conflict. No row
+    /// locks are taken at any point.
+    pub(crate) fn check_optimistic_conflict(
+        &self,
+        current_tx_id: &str,
+        current_written_keys: &std::collections::HashSet<String>,
+    ) -> Option<String> {
+        if current_written_keys.is_empty() {
+            return None;
+        }
+        for (other_tx_id, other_entry) in &self.transactions {
+            if other_tx_id == current_tx_id {
+                continue;
+            }
+            if other_entry.isolation_level != "optimistic" {
+                continue;
+            }
+            if other_entry.state != AcidTxState::Committed {
+                continue;
+            }
+            for k in current_written_keys {
+                if other_entry.written_row_keys.contains(k) {
+                    return Some(k.clone());
+                }
+            }
+        }
+        None
+    }
+
     pub(crate) fn active_transactions(&self) -> Vec<&AcidTxEntry> {
         self.transactions
             .values()
@@ -737,6 +776,8 @@ pub(crate) struct StorageState {
     pub(crate) trigger_emitter: Arc<dyn TriggerEmitter>,
     /// PART-1: partition registry — maps table_name → partition column.
     pub(crate) partition_registry: Arc<Mutex<HashMap<String, String>>>,
+    /// B-4: Range-partition segment configuration per table (table → boundaries).
+    pub(crate) partition_segments: Arc<Mutex<HashMap<String, helpers::partition::RangePartitionConfig>>>,
     /// C-2: shard registry — maps table_name → shard config (DISTRIBUTE BY HASH).
     pub(crate) shard_registry: Arc<Mutex<HashMap<String, helpers::dataplane::ShardTableConfig>>>,
     pub(crate) pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
@@ -797,6 +838,8 @@ pub(crate) struct OpsState {
     pub(crate) audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
     /// S9-WS8A-02: Optional path to a JSON-lines audit log file.
     pub(crate) audit_log_path: Option<String>,
+    /// B-5: Operational lifecycle event stream (ring buffer, observability).
+    pub(crate) operational_events: Arc<Mutex<helpers::op_events::OperationalEventStream>>,
     pub(crate) dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
     pub(crate) dr_hook_policy_state: Arc<Mutex<DrHookPolicyState>>,
     pub(crate) dr_hook_policy_config: Arc<DrHookPolicyConfig>,
@@ -1842,6 +1885,7 @@ async fn main() {
             })),
             trigger_emitter: Arc::new(LoggingTriggerEmitter),
             partition_registry: Arc::new(Mutex::new(HashMap::new())),
+            partition_segments: Arc::new(Mutex::new(HashMap::new())),
             shard_registry: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
@@ -1897,6 +1941,7 @@ async fn main() {
         ops: OpsState {
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
             audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
+            operational_events: Arc::new(Mutex::new(helpers::op_events::OperationalEventStream::new())),
             dr_hook_records: Arc::new(Mutex::new(Vec::new())),
             dr_hook_policy_state: Arc::new(Mutex::new(loaded_policy_state)),
             dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),

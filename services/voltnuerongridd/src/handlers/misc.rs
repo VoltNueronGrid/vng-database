@@ -2109,3 +2109,160 @@ pub(crate) fn syslog_udp_send(lines: &[String]) {
     }
 }
 
+
+// ─── B-5: Operational event stream endpoint ───────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct OperationalEventsQuery {
+    pub(crate) subsystem: Option<String>,
+    pub(crate) limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct OperationalEventsResponse {
+    pub(crate) status: &'static str,
+    pub(crate) total: usize,
+    /// Total events currently retained in the stream ring buffer.
+    pub(crate) stream_depth: usize,
+    pub(crate) events: Vec<crate::helpers::op_events::OperationalEvent>,
+}
+
+/// `GET /api/v1/events/operational` — recent operational lifecycle events,
+/// optionally filtered by `subsystem` and capped by `limit` (B-5).
+pub(crate) async fn operational_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OperationalEventsQuery>,
+) -> Result<(StatusCode, Json<OperationalEventsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_operator_auth(&headers, &state)?;
+    require_operator_privilege(
+        &headers, &state, "compliance", "events/operational", PrivilegeAction::Read,
+    )?;
+    let limit = query.limit.unwrap_or(100).min(1024);
+    let (events, stream_depth) = state
+        .ops
+        .operational_events
+        .lock()
+        .map(|s| (s.recent(query.subsystem.as_deref(), limit), s.len()))
+        .unwrap_or_default();
+    Ok((StatusCode::OK, Json(OperationalEventsResponse {
+        status: "ok",
+        total: events.len(),
+        stream_depth,
+        events,
+    })))
+}
+
+// ─── B-6: JSONB document query endpoint ───────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct JsonbQueryRequest {
+    /// Table to scan (rows are keyed `table:rowid`).
+    pub(crate) table: String,
+    /// Column holding the JSONB document string.
+    pub(crate) column: String,
+    /// Operator: `->>` (path-eq-text), `@>` (contains), `?` (has-key).
+    pub(crate) op: String,
+    /// For `->>`: the JSON key. For `?`: the key to test. Unused for `@>`.
+    #[serde(default)]
+    pub(crate) key: Option<String>,
+    /// For `->>`: the expected text value. For `@>`: the containment JSON doc.
+    #[serde(default)]
+    pub(crate) value: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct JsonbQueryMatch {
+    pub(crate) row_key: String,
+    pub(crate) document: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct JsonbQueryResponse {
+    pub(crate) status: &'static str,
+    pub(crate) table: String,
+    pub(crate) op: String,
+    pub(crate) matched: usize,
+    pub(crate) rows: Vec<JsonbQueryMatch>,
+}
+
+/// `POST /api/v1/query/jsonb` — evaluate a JSONB path/containment predicate over
+/// a table's document column and return the matching rows (B-6).
+pub(crate) async fn jsonb_query(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<JsonbQueryRequest>,
+) -> Result<(StatusCode, Json<JsonbQueryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    crate::auth::require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/jsonb/query")?;
+
+    use crate::helpers::jsonb::JsonbPredicate;
+    let predicate = match req.op.trim() {
+        "->>" => JsonbPredicate::PathEqText {
+            key: req.key.clone().unwrap_or_default(),
+            value: req.value.clone().unwrap_or_default(),
+        },
+        "@>" => JsonbPredicate::Contains { doc: req.value.clone().unwrap_or_default() },
+        "?" => JsonbPredicate::HasKey { key: req.key.clone().unwrap_or_default() },
+        other => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(AuthErrorResponse {
+                    status: "error",
+                    reason: format!("unsupported_jsonb_operator:{other}"),
+                    locale: "en".to_string(),
+                    localized_message: "Unsupported JSONB operator".to_string(),
+                }),
+            ));
+        }
+    };
+
+    let prefix = format!("{}:", req.table.to_ascii_lowercase());
+    let mut rows = Vec::new();
+    if let Ok(rs) = state.storage.row_store.lock() {
+        // B-6: for top-level key-existence (`?`), build a GIN-like inverted index
+        // over the scanned documents so matching rows are found by key lookup
+        // rather than re-parsing each document for the predicate.
+        if let JsonbPredicate::HasKey { key } = &predicate {
+            let mut index = crate::helpers::jsonb::JsonbKeyIndex::new();
+            let mut docs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            for (row_key, data) in rs.scan_at_snapshot(rs.current_xid()) {
+                if !row_key.to_ascii_lowercase().starts_with(&prefix) {
+                    continue;
+                }
+                if let Some(doc) = data.get(&req.column) {
+                    index.index_document(row_key, doc);
+                    docs.insert(row_key.to_string(), doc.clone());
+                }
+            }
+            for row_key in index.rows_with_key(key) {
+                if let Some(doc) = docs.get(&row_key) {
+                    rows.push(JsonbQueryMatch { row_key, document: doc.clone() });
+                }
+            }
+            tracing::debug!(
+                indexed_keys = index.key_count(),
+                "jsonb has-key query served via GIN-like inverted index"
+            );
+        } else {
+            for (key, data) in rs.scan_at_snapshot(rs.current_xid()) {
+                if !key.to_ascii_lowercase().starts_with(&prefix) {
+                    continue;
+                }
+                if let Some(doc) = data.get(&req.column) {
+                    if crate::helpers::jsonb::eval_predicate(doc, &predicate) {
+                        rows.push(JsonbQueryMatch { row_key: key.to_string(), document: doc.clone() });
+                    }
+                }
+            }
+        }
+    }
+    rows.sort_by(|a, b| a.row_key.cmp(&b.row_key));
+
+    Ok((StatusCode::OK, Json(JsonbQueryResponse {
+        status: "ok",
+        table: req.table,
+        op: req.op,
+        matched: rows.len(),
+        rows,
+    })))
+}

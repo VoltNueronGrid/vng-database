@@ -355,6 +355,13 @@ async fn run_election(
                 "ok",
                 &format!("{{\"new_leader_id\":\"{}\",\"term\":{}}}", node_id.replace('"', ""), new_term),
             );
+            // B-5: emit an operational lifecycle event for the leader change.
+            crate::helpers::op_events::emit_operational_event(
+                state,
+                "raft",
+                "leader_elected",
+                serde_json::json!({ "new_leader_id": node_id, "term": new_term }),
+            );
             // C-6: On leader election, reassign any active ACID transactions that
             // were pinned to a previous leader (represented by the candidate's
             // old leader identity).  We reassign from the previous leader's node_id

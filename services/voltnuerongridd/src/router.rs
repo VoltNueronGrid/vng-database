@@ -569,6 +569,8 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/catalog/schemas", get(catalog_schemas))
         // REQ-02 DDL catalog table metadata endpoint (columns + indexes)
         .route("/api/v1/catalog/tables/:table_name/columns", get(catalog_table_columns))
+        // B-4 partition catalog endpoint (segments + per-segment row counts)
+        .route("/api/v1/catalog/partitions/:table", get(catalog_partitions))
         // REQ-23 ACID transaction introspection
         .route("/api/v1/sql/transactions/active", get(sql_transactions_active))
         // S2-WS2-05: isolation stats per active transaction
@@ -663,6 +665,16 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/compliance/report", {
             use crate::handlers::misc::compliance_report;
             get(compliance_report)
+        })
+        // B-5: Operational event stream
+        .route("/api/v1/events/operational", {
+            use crate::handlers::misc::operational_events;
+            get(operational_events)
+        })
+        // B-6: JSONB document query (path / containment operators)
+        .route("/api/v1/query/jsonb", {
+            use crate::handlers::misc::jsonb_query;
+            post(jsonb_query)
         })
         // GOV-2: Audit export webhook
         .route("/api/v1/audit/export/webhook", {

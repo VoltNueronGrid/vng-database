@@ -460,3 +460,80 @@ fn extract_event_schedule(ddl: &str) -> String {
     }
     String::new()
 }
+
+// ─── B-4: Partition catalog endpoint ──────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct PartitionQuery {
+    /// Optional range predicate operator on the partition column: `<`, `<=`, `>`, `>=`, `=`.
+    pub(crate) op: Option<String>,
+    /// Optional predicate value (integer) used with `op` to compute pruned segments.
+    pub(crate) value: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct PartitionInfoResponse {
+    pub(crate) status: &'static str,
+    pub(crate) table: String,
+    pub(crate) partitioned: bool,
+    pub(crate) column: Option<String>,
+    pub(crate) boundaries: Vec<i64>,
+    pub(crate) segment_count: usize,
+    /// Per-segment row counts derived from the local row store.
+    pub(crate) per_segment_row_counts: Vec<usize>,
+    /// Rows whose partition column was missing or non-numeric.
+    pub(crate) unrouted_row_count: usize,
+    /// When a range predicate is supplied, the segment ids that survive pruning
+    /// (segments not listed cannot contain matching rows). `None` otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) pruned_segments: Option<Vec<usize>>,
+}
+
+/// `GET /api/v1/catalog/partitions/{table}` — report a table's range-partition
+/// map plus the per-segment row distribution (B-4). When `?op=&value=` are
+/// supplied, also returns the set of segments that survive pruning for that
+/// range predicate.
+pub(crate) async fn catalog_partitions(
+    State(state): State<AppState>,
+    Path(table): Path<String>,
+    Query(query): Query<PartitionQuery>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<PartitionInfoResponse>), (StatusCode, Json<AuthErrorResponse>)> {
+    require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/catalog/schemas")?;
+    let Some(cfg) = crate::helpers::partition::lookup_partition_config(&state, &table) else {
+        return Ok((
+            StatusCode::OK,
+            Json(PartitionInfoResponse {
+                status: "ok",
+                table,
+                partitioned: false,
+                column: None,
+                boundaries: Vec::new(),
+                segment_count: 0,
+                per_segment_row_counts: Vec::new(),
+                unrouted_row_count: 0,
+                pruned_segments: None,
+            }),
+        ));
+    };
+    let (counts, unrouted) = crate::helpers::partition::per_segment_row_counts(&state, &table, &cfg);
+    // B-4: optional partition pruning for a supplied range predicate.
+    let pruned_segments = match (query.op.as_deref().and_then(crate::helpers::partition::RangeOp::parse), query.value) {
+        (Some(op), Some(value)) => Some(crate::helpers::partition::prune_segments(&cfg, op, value)),
+        _ => None,
+    };
+    Ok((
+        StatusCode::OK,
+        Json(PartitionInfoResponse {
+            status: "ok",
+            table,
+            partitioned: true,
+            column: Some(cfg.column.clone()),
+            boundaries: cfg.boundaries.clone(),
+            segment_count: cfg.segment_count(),
+            per_segment_row_counts: counts,
+            unrouted_row_count: unrouted,
+            pruned_segments,
+        }),
+    ))
+}

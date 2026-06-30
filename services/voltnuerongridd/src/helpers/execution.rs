@@ -290,12 +290,25 @@ pub(crate) fn evaluate_deadlock_scan_outcome(
     waiting_tx: &str,
     holder_tx: &str,
 ) -> DeadlockScanOutcome {
+    // B-3: incremental wait-for graph traversal. Each transaction waits on at
+    // most one resource (`wait_graph: tx -> resource`), so following the chain
+    // from `holder_tx` is O(hops) — we visit only the wait-for edges reachable
+    // from the requesting transaction, never the whole lock table. The hop
+    // budget is configurable via `VNG_DEADLOCK_SCAN_MAX_HOPS` (default
+    // `DEADLOCK_SCAN_MAX_HOPS`).
+    let max_hops = deadlock_scan_max_hops();
     let mut visited_txs = HashSet::new();
     let mut current_holder = holder_tx;
 
-    for _ in 0..DEADLOCK_SCAN_MAX_HOPS {
+    for _ in 0..max_hops {
+        // Revisiting a transaction means the wait-for chain reachable from the
+        // requester contains a cycle. Even when that cycle does not pass through
+        // `waiting_tx` itself, the requester is parked behind a set of
+        // transactions that can never make progress — i.e. a deadlock for the
+        // requester. Report it as a cycle so the caller aborts instead of
+        // blocking forever.
         if !visited_txs.insert(current_holder.to_string()) {
-            return DeadlockScanOutcome::NoCycle;
+            return DeadlockScanOutcome::CycleDetected;
         }
         let current_wait_resource = match wait_graph.get(current_holder) {
             Some(resource) => resource,
@@ -313,12 +326,44 @@ pub(crate) fn evaluate_deadlock_scan_outcome(
     DeadlockScanOutcome::ScanCapReached
 }
 
+/// B-3: Effective deadlock scan hop budget. Reads `VNG_DEADLOCK_SCAN_MAX_HOPS`
+/// at call time (so it can be tuned without a restart in tests), falling back to
+/// the compile-time `DEADLOCK_SCAN_MAX_HOPS` default when unset or invalid.
+pub(crate) fn deadlock_scan_max_hops() -> usize {
+    std::env::var("VNG_DEADLOCK_SCAN_MAX_HOPS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEADLOCK_SCAN_MAX_HOPS)
+}
+
 
 pub(crate) fn cleanup_wait_edges_for_resource(
     wait_graph: &mut HashMap<String, String>,
     resource_key: &str,
 ) {
     wait_graph.retain(|_, waiting_resource| waiting_resource != resource_key);
+}
+
+/// B-2: Optimistic-locking version check. For an optimistic transaction that
+/// captured `begin_snapshot_xid` at BEGIN, return the first written key that a
+/// concurrent transaction modified *after* that snapshot (i.e. a stale-version
+/// write). Returns `None` when every write is conflict-free.
+///
+/// This holds no row locks — it is a pure read of the MVCC version chain at
+/// COMMIT time, which is the defining property of optimistic concurrency
+/// control (validate-on-commit rather than lock-on-write).
+pub(crate) fn optimistic_version_conflict(
+    rs: &voltnuerongrid_store::mvcc::PagedRowStore,
+    written_keys: &HashSet<String>,
+    begin_snapshot_xid: u64,
+) -> Option<String> {
+    for key in written_keys {
+        if rs.was_modified_after(key, begin_snapshot_xid) {
+            return Some(key.clone());
+        }
+    }
+    None
 }
 
 

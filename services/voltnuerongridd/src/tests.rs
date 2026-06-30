@@ -92,6 +92,7 @@ fn state_with_key(key: Option<&str>) -> AppState {
             trigger_registry: Arc::new(Mutex::new(voltnuerongrid_store::triggers::TriggerRegistry::new())),
             trigger_emitter: Arc::new(voltnuerongrid_store::trigger_emitter::NoOpTriggerEmitter),
             partition_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            partition_segments: Arc::new(Mutex::new(std::collections::HashMap::new())),
             shard_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
@@ -132,6 +133,7 @@ fn state_with_key(key: Option<&str>) -> AppState {
         ops: OpsState {
             audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
             audit_log_path: None,
+            operational_events: Arc::new(Mutex::new(crate::helpers::op_events::OperationalEventStream::new())),
             dr_hook_records: Arc::new(Mutex::new(Vec::new())),
             dr_hook_policy_state: Arc::new(Mutex::new(DrHookPolicyState::default())),
             dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
@@ -18571,4 +18573,429 @@ async fn a8_incident_remediate_diagnoses_and_executes_fix() {
     let events = state.ops.audit_sink.lock().unwrap().all().to_vec();
     let linked = events.iter().filter(|e| e.details_json.contains(&resp.correlation_id)).count();
     assert!(linked >= 2, "diagnosis and fix should both be correlated");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tasks-7 group B — Storage & Advanced SQL (B-2 optimistic, B-3 deadlock)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── B-2 · optimistic locking variant ──────────────────────────────────────
+
+#[test]
+fn b2_optimistic_version_conflict_detects_concurrent_write() {
+    // Capture a begin snapshot, then a concurrent transaction writes the key
+    // (advancing its MVCC version past the snapshot) → version conflict.
+    let mut rs = PagedRowStore::default();
+    let begin_snapshot = rs.current_xid();
+    let xid = rs.begin_xid();
+    let mut data = std::collections::HashMap::new();
+    data.insert("id".to_string(), "1".to_string());
+    rs.insert(xid, "orders:1", data);
+
+    let written: std::collections::HashSet<String> =
+        ["orders:1".to_string()].into_iter().collect();
+    let conflict = crate::helpers::execution::optimistic_version_conflict(&rs, &written, begin_snapshot);
+    assert_eq!(conflict.as_deref(), Some("orders:1"), "concurrent write must conflict");
+}
+
+#[test]
+fn b2_optimistic_no_conflict_when_unchanged_or_disjoint() {
+    let mut rs = PagedRowStore::default();
+    let xid = rs.begin_xid();
+    let mut data = std::collections::HashMap::new();
+    data.insert("id".to_string(), "1".to_string());
+    rs.insert(xid, "orders:1", data);
+    // Snapshot taken AFTER the write — the key is not modified after it.
+    let begin_snapshot = rs.current_xid();
+
+    let same_key: std::collections::HashSet<String> =
+        ["orders:1".to_string()].into_iter().collect();
+    assert!(crate::helpers::execution::optimistic_version_conflict(&rs, &same_key, begin_snapshot).is_none());
+
+    let disjoint: std::collections::HashSet<String> =
+        ["orders:999".to_string()].into_iter().collect();
+    assert!(crate::helpers::execution::optimistic_version_conflict(&rs, &disjoint, 0).is_none());
+}
+
+#[test]
+fn b2_optimistic_registry_conflict_against_committed_peer() {
+    let mut reg = AcidTransactionRegistry::default();
+    // Committed optimistic peer wrote orders:7.
+    reg.begin("tx-peer", "n1", "optimistic", 1_000, Some(0));
+    reg.record_written_row_keys("tx-peer", std::iter::once("orders:7".to_string()));
+    reg.commit("tx-peer", 2_000);
+
+    let writes: std::collections::HashSet<String> =
+        ["orders:7".to_string()].into_iter().collect();
+    assert_eq!(
+        reg.check_optimistic_conflict("tx-current", &writes).as_deref(),
+        Some("orders:7"),
+    );
+    // Non-optimistic committed peer does NOT trigger an optimistic conflict.
+    let mut reg2 = AcidTransactionRegistry::default();
+    reg2.begin("tx-rc", "n1", "read_committed", 1_000, None);
+    reg2.record_written_row_keys("tx-rc", std::iter::once("orders:7".to_string()));
+    reg2.commit("tx-rc", 2_000);
+    assert!(reg2.check_optimistic_conflict("tx-current", &writes).is_none());
+}
+
+#[tokio::test]
+async fn b2_optimistic_transaction_commits_without_locks() {
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let resp = sql_transaction(
+        State(state.clone()), headers,
+        Json(SqlTransactionRequest {
+            statements: vec![
+                "BEGIN".to_string(),
+                "INSERT INTO acct (id, balance) VALUES ('acc1', '100')".to_string(),
+                "COMMIT".to_string(),
+            ],
+            isolation_level: Some("optimistic".to_string()),
+        }),
+    ).await;
+    assert!(resp.is_ok(), "optimistic tx should commit: {:?}", resp.err());
+    assert_eq!(resp.unwrap().1.0.status, "committed");
+    // No pessimistic locks were taken — optimistic mode never locks rows.
+    assert!(state.storage.pessimistic_locks.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn b2_optimistic_second_writer_same_key_returns_409() {
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let tx = |v: &str| SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            format!("INSERT INTO acct (id, balance) VALUES ('acc1', '{v}')"),
+            "COMMIT".to_string(),
+        ],
+        isolation_level: Some("optimistic".to_string()),
+    };
+    let r1 = sql_transaction(State(state.clone()), headers.clone(), Json(tx("100"))).await;
+    assert!(r1.is_ok(), "first optimistic writer should commit");
+    let r2 = sql_transaction(State(state.clone()), headers.clone(), Json(tx("200"))).await;
+    let err = r2.expect_err("second optimistic writer on same key must conflict");
+    assert_eq!(err.0, StatusCode::CONFLICT);
+    assert!(err.1.0.reason.contains("optimistic_version_conflict"), "reason: {}", err.1.0.reason);
+}
+
+#[tokio::test]
+async fn b2_optimistic_disjoint_keys_both_commit() {
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let mk = |id: &str| SqlTransactionRequest {
+        statements: vec![
+            "BEGIN".to_string(),
+            format!("INSERT INTO acct (id, balance) VALUES ('{id}', '1')"),
+            "COMMIT".to_string(),
+        ],
+        isolation_level: Some("optimistic".to_string()),
+    };
+    assert!(sql_transaction(State(state.clone()), headers.clone(), Json(mk("accA"))).await.is_ok());
+    assert!(sql_transaction(State(state.clone()), headers.clone(), Json(mk("accB"))).await.is_ok());
+}
+
+// ── B-3 · deadlock detection efficiency ────────────────────────────────────
+
+#[test]
+fn b3_deadlock_deep_chain_cycle_detected_within_budget() {
+    // A real 4-transaction cycle within the hop budget must be detected.
+    let mut lock_table = HashMap::new();
+    let mut wait_graph = HashMap::new();
+    let txs = ["tx-w", "tx-x", "tx-y", "tx-z"];
+    let resources = ["res:w", "res:x", "res:y", "res:z"];
+    // Each tx holds its own resource.
+    for (i, (tx, res)) in txs.iter().zip(resources.iter()).enumerate() {
+        let _ = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, tx, res, "owner", 30_000, 0, 1_000 + i as u128,
+        );
+    }
+    // tx-w → res:x, tx-x → res:y, tx-y → res:z (each waits on the next).
+    for i in 0..3 {
+        let (s, _) = acquire_pessimistic_lock(
+            &mut lock_table, &mut wait_graph, txs[i], resources[i + 1], "owner", 30_000, 2_000, 2_000 + i as u128,
+        );
+        assert_eq!(s, StatusCode::REQUEST_TIMEOUT);
+    }
+    // tx-z → res:w closes the 4-cycle → deadlock.
+    let (status, resp) = acquire_pessimistic_lock(
+        &mut lock_table, &mut wait_graph, "tx-z", "res:w", "owner", 30_000, 2_000, 3_000,
+    );
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(resp.lock_state, "deadlock_risk");
+    assert_eq!(resp.reason, "pessimistic_lock_deadlock_risk");
+}
+
+#[test]
+fn b3_deadlock_scan_max_hops_env_override_respected() {
+    // Default budget is DEADLOCK_SCAN_MAX_HOPS.
+    std::env::remove_var("VNG_DEADLOCK_SCAN_MAX_HOPS");
+    assert_eq!(crate::helpers::execution::deadlock_scan_max_hops(), DEADLOCK_SCAN_MAX_HOPS);
+    // Override applies and ignores invalid/zero values.
+    std::env::set_var("VNG_DEADLOCK_SCAN_MAX_HOPS", "32");
+    assert_eq!(crate::helpers::execution::deadlock_scan_max_hops(), 32);
+    std::env::set_var("VNG_DEADLOCK_SCAN_MAX_HOPS", "0");
+    assert_eq!(crate::helpers::execution::deadlock_scan_max_hops(), DEADLOCK_SCAN_MAX_HOPS);
+    std::env::remove_var("VNG_DEADLOCK_SCAN_MAX_HOPS");
+}
+
+// ── B-4 · physical partitioning ────────────────────────────────────────────
+
+#[tokio::test]
+async fn b4_partition_ddl_registers_segments() {
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlExecuteRequest {
+        sql_batch: "CREATE TABLE people (id INT PRIMARY KEY, age INT) PARTITION BY RANGE(age) BOUNDARIES (10, 20, 30)".to_string(),
+        ..Default::default()
+    };
+    sql_execute(State(state.clone()), headers, Json(req)).await.expect("ddl ok");
+    let cfg = crate::helpers::partition::lookup_partition_config(&state, "people").expect("registered");
+    assert_eq!(cfg.column, "age");
+    assert_eq!(cfg.boundaries, vec![10, 20, 30]);
+    assert_eq!(cfg.segment_count(), 4);
+}
+
+#[test]
+fn b4_partition_pruning_returns_subset() {
+    let cfg = crate::helpers::partition::RangePartitionConfig {
+        column: "age".to_string(),
+        boundaries: vec![10, 20, 30],
+    };
+    use crate::helpers::partition::{prune_segments, RangeOp};
+    // age < 25 → segments 0,1,2 (segment 3 holds [30,inf) — pruned).
+    assert_eq!(prune_segments(&cfg, RangeOp::Lt, 25), vec![0, 1, 2]);
+    // age >= 20 → segments 2,3.
+    assert_eq!(prune_segments(&cfg, RangeOp::Ge, 20), vec![2, 3]);
+}
+
+#[tokio::test]
+async fn b4_partition_catalog_reports_per_segment_counts() {
+    use crate::handlers::catalog::catalog_partitions;
+    let state = state_with_key(Some("secret"));
+    crate::helpers::partition::register_partition_config(
+        &state, "people",
+        crate::helpers::partition::RangePartitionConfig { column: "age".to_string(), boundaries: vec![10, 20, 30] },
+    );
+    // Insert rows across ranges: ages 5,15,25,35 → segments 0,1,2,3.
+    {
+        let mut rs = state.storage.row_store.lock().unwrap();
+        for (i, age) in [5, 15, 25, 35].into_iter().enumerate() {
+            let xid = rs.begin_xid();
+            let mut d = std::collections::HashMap::new();
+            d.insert("age".to_string(), age.to_string());
+            rs.insert(xid, &format!("people:{i}"), d);
+        }
+    }
+    let headers = operator_headers("secret", "platform-admin");
+    let (status, Json(resp)) = catalog_partitions(State(state.clone()), Path("people".to_string()), Query(crate::handlers::catalog::PartitionQuery { op: None, value: None }), headers).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(resp.partitioned);
+    assert_eq!(resp.segment_count, 4);
+    assert_eq!(resp.per_segment_row_counts, vec![1, 1, 1, 1]);
+    assert_eq!(resp.per_segment_row_counts.iter().sum::<usize>(), 4);
+}
+
+#[tokio::test]
+async fn b4_unpartitioned_table_reports_not_partitioned() {
+    use crate::handlers::catalog::catalog_partitions;
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = catalog_partitions(State(state.clone()), Path("plain".to_string()), Query(crate::handlers::catalog::PartitionQuery { op: None, value: None }), headers).await.unwrap();
+    assert!(!resp.partitioned);
+    assert_eq!(resp.segment_count, 0);
+}
+
+#[tokio::test]
+async fn b4_partition_catalog_prunes_with_range_predicate() {
+    use crate::handlers::catalog::{catalog_partitions, PartitionQuery};
+    let state = state_with_key(Some("secret"));
+    crate::helpers::partition::register_partition_config(
+        &state, "people",
+        crate::helpers::partition::RangePartitionConfig { column: "age".to_string(), boundaries: vec![10, 20, 30] },
+    );
+    let headers = operator_headers("secret", "platform-admin");
+    // age < 15 → only segments 0 and 1 survive pruning.
+    let (_s, Json(resp)) = catalog_partitions(
+        State(state.clone()), Path("people".to_string()),
+        Query(PartitionQuery { op: Some("<".to_string()), value: Some(15) }), headers,
+    ).await.unwrap();
+    assert_eq!(resp.pruned_segments, Some(vec![0, 1]));
+}
+
+// ── B-5 · operational event stream ──────────────────────────────────────────
+
+#[tokio::test]
+async fn b5_self_heal_emits_operational_event() {
+    use crate::handlers::autonomous::autonomous_self_heal_run;
+    let state = state_with_key(Some("secret"));
+    inject_signal(&state, "sig-net", "network", "connection reset");
+    let headers = operator_headers("secret", "platform-admin");
+    let _ = autonomous_self_heal_run(State(state.clone()), headers).await.unwrap();
+    let events = state.ops.operational_events.lock().unwrap().recent(Some("self_heal"), 10);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "remediation_action");
+}
+
+#[tokio::test]
+async fn b5_autoscale_emits_operational_event() {
+    use crate::handlers::autoscale::{autoscale_tick, autoscale_set_policy, AutoscalePolicyRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = admin_headers("secret");
+    // Aggressive scale-up: any queue depth >= 1 scales up immediately (no cooldown).
+    let _ = autoscale_set_policy(
+        State(state.clone()), headers.clone(),
+        Json(AutoscalePolicyRequest {
+            min_replicas: Some(1),
+            max_replicas: Some(5),
+            scale_up_queue_threshold: Some(1),
+            scale_down_queue_threshold: Some(0),
+            cooldown_secs: Some(0),
+            backend: None,
+        }),
+    ).await;
+    // Create load so current_queue_depth() > 0: a db semaphore with a held permit.
+    {
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::DEFAULT_DB_MAX_CONNECTIONS));
+        let permit = sem.clone().try_acquire_owned().ok();
+        std::mem::forget(permit); // hold one permit so available < total → queue depth >= 1
+        state.storage.db_semaphores.lock().unwrap().insert("loaddb".to_string(), sem);
+    }
+    let _ = autoscale_tick(State(state.clone()), headers).await;
+    let events = state.ops.operational_events.lock().unwrap().recent(Some("autoscale"), 10);
+    assert_eq!(events.len(), 1, "scale-up decision must emit one operational event");
+    assert_eq!(events[0].kind, "scale_decision");
+    assert_eq!(events[0].detail["direction"], "up");
+}
+
+#[tokio::test]
+async fn b5_ingest_csv_emits_operational_event() {
+    use crate::handlers::ingest::ingest_csv;
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let req = serde_json::json!({ "connector_id": "c1", "csv_data": "a,b\n1,2\n3,4" });
+    let _ = ingest_csv(State(state.clone()), headers, Json(serde_json::from_value(req).unwrap())).await;
+    let events = state.ops.operational_events.lock().unwrap().recent(Some("ingest"), 10);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "batch_complete");
+}
+
+#[tokio::test]
+async fn b5_operational_events_endpoint_filters_by_subsystem() {
+    use crate::handlers::misc::{operational_events, OperationalEventsQuery};
+    let state = state_with_key(Some("secret"));
+    // Seed events across subsystems.
+    crate::helpers::op_events::emit_operational_event(&state, "raft", "leader_elected", serde_json::json!({"term":2}));
+    crate::helpers::op_events::emit_operational_event(&state, "ingest", "batch_complete", serde_json::json!({"rows":4}));
+    crate::helpers::op_events::emit_operational_event(&state, "raft", "leader_elected", serde_json::json!({"term":3}));
+    let headers = operator_headers("secret", "platform-admin");
+    // Filtered by subsystem=raft.
+    let (status, Json(resp)) = operational_events(
+        State(state.clone()), headers.clone(),
+        Query(OperationalEventsQuery { subsystem: Some("raft".to_string()), limit: None }),
+    ).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(resp.total, 2);
+    assert!(resp.events.iter().all(|e| e.subsystem == "raft"));
+    // Unfiltered.
+    let (_s, Json(all)) = operational_events(
+        State(state.clone()), headers,
+        Query(OperationalEventsQuery { subsystem: None, limit: None }),
+    ).await.unwrap();
+    assert_eq!(all.total, 3);
+}
+
+// ── B-6 · multimodel / JSONB ────────────────────────────────────────────────
+
+fn seed_jsonb_rows(state: &AppState) {
+    let mut rs = state.storage.row_store.lock().unwrap();
+    let docs = [
+        ("docs:1", r#"{"status":"active","level":3,"tags":["a","b"]}"#),
+        ("docs:2", r#"{"status":"inactive","level":1}"#),
+        ("docs:3", r#"{"status":"active","level":5,"vip":true}"#),
+    ];
+    for (k, doc) in docs {
+        let xid = rs.begin_xid();
+        let mut d = std::collections::HashMap::new();
+        d.insert("body".to_string(), doc.to_string());
+        rs.insert(xid, k, d);
+    }
+}
+
+#[tokio::test]
+async fn b6_jsonb_path_eq_text_query() {
+    use crate::handlers::misc::{jsonb_query, JsonbQueryRequest};
+    let state = state_with_key(Some("secret"));
+    seed_jsonb_rows(&state);
+    let headers = operator_headers("secret", "platform-admin");
+    let (status, Json(resp)) = jsonb_query(
+        State(state.clone()), headers,
+        Json(JsonbQueryRequest {
+            table: "docs".into(), column: "body".into(), op: "->>".into(),
+            key: Some("status".into()), value: Some("active".into()),
+        }),
+    ).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(resp.matched, 2);
+    let keys: Vec<&str> = resp.rows.iter().map(|r| r.row_key.as_str()).collect();
+    assert_eq!(keys, vec!["docs:1", "docs:3"]);
+}
+
+#[tokio::test]
+async fn b6_jsonb_containment_query() {
+    use crate::handlers::misc::{jsonb_query, JsonbQueryRequest};
+    let state = state_with_key(Some("secret"));
+    seed_jsonb_rows(&state);
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = jsonb_query(
+        State(state.clone()), headers,
+        Json(JsonbQueryRequest {
+            table: "docs".into(), column: "body".into(), op: "@>".into(),
+            key: None, value: Some(r#"{"vip":true}"#.into()),
+        }),
+    ).await.unwrap();
+    assert_eq!(resp.matched, 1);
+    assert_eq!(resp.rows[0].row_key, "docs:3");
+}
+
+#[tokio::test]
+async fn b6_jsonb_has_key_query() {
+    use crate::handlers::misc::{jsonb_query, JsonbQueryRequest};
+    let state = state_with_key(Some("secret"));
+    seed_jsonb_rows(&state);
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = jsonb_query(
+        State(state.clone()), headers,
+        Json(JsonbQueryRequest {
+            table: "docs".into(), column: "body".into(), op: "?".into(),
+            key: Some("tags".into()), value: None,
+        }),
+    ).await.unwrap();
+    assert_eq!(resp.matched, 1);
+    assert_eq!(resp.rows[0].row_key, "docs:1");
+}
+
+#[tokio::test]
+async fn b6_jsonb_unsupported_operator_returns_400() {
+    use crate::handlers::misc::{jsonb_query, JsonbQueryRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let err = jsonb_query(
+        State(state.clone()), headers,
+        Json(JsonbQueryRequest {
+            table: "docs".into(), column: "body".into(), op: "%%".into(), key: None, value: None,
+        }),
+    ).await.expect_err("unsupported operator must be rejected");
+    assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[test]
+fn b6_jsonb_gin_index_accelerates_key_lookup() {
+    use crate::helpers::jsonb::JsonbKeyIndex;
+    let mut idx = JsonbKeyIndex::new();
+    idx.index_document("docs:1", r#"{"status":"active","vip":true}"#);
+    idx.index_document("docs:2", r#"{"status":"inactive"}"#);
+    assert_eq!(idx.rows_with_key("status"), vec!["docs:1", "docs:2"]);
+    assert_eq!(idx.rows_with_key("vip"), vec!["docs:1"]);
 }

@@ -1136,6 +1136,13 @@ pub(crate) async fn autonomous_self_heal_run(
                 "outcome": outcome, "reason": remediation.reason, "evidence": remediation.evidence,
             }).to_string(),
         );
+        // B-5: emit an operational lifecycle event for the self-heal action.
+        crate::helpers::op_events::emit_operational_event(
+            &state,
+            "self_heal",
+            "remediation_action",
+            json!({ "signal_id": signal_id, "action": action_name, "failure_type": failure_type, "outcome": outcome }),
+        );
 
         action_summaries.push(SelfHealActionSummary {
             signal_id: signal_id.clone(),

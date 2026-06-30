@@ -209,6 +209,13 @@ pub(crate) async fn autoscale_tick(
         apply_local_scale_event(&state, direction, new_replicas, now_secs);
         // Clear the scaling flag after local state is applied.
         status.scaling = false;
+        // B-5: emit an operational lifecycle event for the autoscale decision.
+        crate::helpers::op_events::emit_operational_event(
+            &state,
+            "autoscale",
+            "scale_decision",
+            serde_json::json!({ "direction": direction, "new_replicas": new_replicas, "queue_depth": queue_depth }),
+        );
     }
 
     Ok((StatusCode::OK, Json(serde_json::json!({
