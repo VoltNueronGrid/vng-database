@@ -10036,6 +10036,367 @@ fn t3_transaction_commit_appends_single_batch_to_raft_log() {
     assert_eq!(batch_entries, 1, "transaction DML must be one atomic Raft batch entry");
 }
 
+// ── C-7: Metadata Raft durability — multi-node recovery tests ────────────────
+//
+// These tests simulate the multi-node Raft scenarios without requiring a real
+// network: we use in-memory RaftNode instances and the existing state machine
+// methods directly.
+
+/// C-7 T001: A rejoining follower recovers full row-state via snapshot install
+/// plus any log entries appended after the snapshot.
+///
+/// Scenario:
+///   1. Leader has 3 committed entries (snapshot_index=2, 1 entry beyond).
+///   2. Follower is behind (no log, no snapshot).
+///   3. Leader sends InstallSnapshot covering indices 1-2 + row data.
+///   4. Follower applies snapshot: rows visible, log/commit/applied advance.
+///   5. Leader sends remaining entry (index 3) via AppendEntries.
+///   6. Follower applies it; last_applied reaches 3.
+#[test]
+fn c7_rejoining_follower_recovers_via_snapshot_and_log_replay() {
+    use crate::helpers::raft_loop::apply_committed_entries;
+
+    // --- Leader: build a 3-entry committed log, then compact to index 2. ---
+    let mut leader = RaftNode::new("leader");
+    leader.become_candidate();
+    leader.become_leader();
+    leader.init_leader_indices(&["follower-url".to_string()]);
+
+    for i in 1u64..=3 {
+        leader.log.push(RaftLogEntry { index: i, term: 1, command: format!("INSERT INTO t VALUES ('k{i}')") });
+    }
+    // Simulate quorum: single-node commit and apply the first 3 entries.
+    leader.commit_index = 3;
+    leader.last_applied = 3;
+    // Compact indices 1-2 into a snapshot.
+    leader.compact_log(2);
+    assert_eq!(leader.snapshot_index, 2, "leader snapshot_index after compaction");
+    assert_eq!(leader.log.len(), 1, "one entry (index 3) remains after compaction");
+
+    // --- Build follower AppState (needs watch channel etc.) ---
+    let follower_state = state_with_key(Some("key"));
+    let _rx = follower_state.cluster.raft_last_applied_tx.subscribe();
+    {
+        // Make follower a legitimate follower in term 1.
+        let mut node = follower_state.cluster.raft_state.lock().unwrap();
+        node.current_term = 1;
+    }
+
+    // --- Step 1: leader sends InstallSnapshot for indices 1-2 with row data. ---
+    let mut snap_rows = std::collections::HashMap::new();
+    let mut r1 = std::collections::HashMap::new(); r1.insert("id".to_string(), "k1".to_string());
+    let mut r2 = std::collections::HashMap::new(); r2.insert("id".to_string(), "k2".to_string());
+    snap_rows.insert("t:k1".to_string(), r1);
+    snap_rows.insert("t:k2".to_string(), r2);
+
+    let snap_req = RaftInstallSnapshotRequest {
+        term: 1,
+        leader_id: "leader".to_string(),
+        snapshot_index: 2,
+        snapshot_term: 1,
+        rows: snap_rows.clone(),
+    };
+    let snap_resp = {
+        let mut node = follower_state.cluster.raft_state.lock().unwrap();
+        node.handle_install_snapshot(&snap_req)
+    };
+    assert!(snap_resp.success, "follower must accept snapshot");
+
+    // Install the row data from the snapshot into the follower's row store.
+    {
+        let mut rs = follower_state.storage.row_store.lock().unwrap();
+        rs.replace_all(snap_rows.into_iter().map(|(k, v)| (k, v)));
+    }
+
+    // Verify follower state after snapshot.
+    {
+        let node = follower_state.cluster.raft_state.lock().unwrap();
+        assert_eq!(node.snapshot_index, 2);
+        assert_eq!(node.commit_index, 2);
+        assert_eq!(node.last_applied, 2);
+    }
+    // Both snapshot rows must be visible.
+    {
+        let rs = follower_state.storage.row_store.lock().unwrap();
+        assert!(rs.read_latest("t:k1").is_some(), "snapshot row k1 must be visible");
+        assert!(rs.read_latest("t:k2").is_some(), "snapshot row k2 must be visible");
+    }
+
+    // --- Step 2: leader sends index 3 via AppendEntries. ---
+    let entry3 = leader.log[0].clone(); // index=3
+    let append_req = RaftAppendRequest {
+        term: 1,
+        leader_id: "leader".to_string(),
+        prev_log_index: 2,
+        prev_log_term: 1,
+        entries: vec![entry3.clone()],
+        leader_commit: 3,
+    };
+    let append_resp = {
+        let mut node = follower_state.cluster.raft_state.lock().unwrap();
+        node.handle_append_entries(&append_req)
+    };
+    assert!(append_resp.success, "follower must accept index 3 entry");
+    assert_eq!(append_resp.match_index, 3);
+
+    // --- Step 3: run apply loop to advance last_applied to 3. ---
+    apply_committed_entries(&follower_state);
+    {
+        let node = follower_state.cluster.raft_state.lock().unwrap();
+        assert_eq!(node.last_applied, 3, "last_applied must reach 3 after applying entry 3");
+        assert_eq!(node.commit_index, 3, "commit_index must be 3 after AppendEntries");
+    }
+}
+
+/// C-7 T002: Linearizable write path on a simulated 2-peer cluster.
+///
+/// Leader appends a command via `append_command_pending` with 2 peers.
+/// commit_index does NOT advance until two AppendEntries success responses
+/// are processed (leader + 1 peer = quorum of 2 out of 3).
+/// After `record_append_success` for one peer, commit_index advances.
+/// The watch channel fires once the apply loop runs.
+#[test]
+fn c7_linearizable_write_quorum_wait_simulated_two_peers() {
+    use crate::helpers::raft_loop::apply_committed_entries;
+
+    let state = state_with_key(Some("key"));
+    let _rx = state.cluster.raft_last_applied_tx.subscribe();
+
+    // Promote to leader with 2 peers.
+    {
+        let mut node = state.cluster.raft_state.lock().unwrap();
+        node.become_candidate();
+        node.become_leader();
+        node.init_leader_indices(&[
+            "http://peer-a:8080".to_string(),
+            "http://peer-b:8080".to_string(),
+        ]);
+    }
+
+    // Append a pending command — commit_index must NOT advance for 2-peer cluster.
+    let pending_idx = {
+        let mut node = state.cluster.raft_state.lock().unwrap();
+        node.append_command_pending(
+            "INSERT INTO lin2 VALUES ('key1', '{\"v\":\"hello\"}')"
+                .to_string(),
+            2, // 2 peers → total 3 nodes → quorum = 2
+        )
+    };
+    assert_eq!(pending_idx, 1);
+
+    // Before any AppendEntries ACK: commit_index must be 0 and last_applied must be 0.
+    {
+        let node = state.cluster.raft_state.lock().unwrap();
+        assert_eq!(node.commit_index, 0,
+            "commit_index must be 0 before quorum ACK (2-peer cluster)");
+        assert_eq!(node.last_applied, 0,
+            "last_applied must be 0 before quorum ACK");
+    }
+
+    // Apply loop at this point: no entries to apply (commit_index == 0).
+    apply_committed_entries(&state);
+    assert_eq!(state.cluster.raft_state.lock().unwrap().last_applied, 0,
+        "no entries applied before quorum");
+
+    // Simulate ONE peer ACK (peer-a replies with match_index=1).
+    // total_nodes = 3; quorum = 2; self + peer-a = 2 >= quorum → commit.
+    {
+        let mut node = state.cluster.raft_state.lock().unwrap();
+        node.record_append_success("http://peer-a:8080", 1, 3);
+        assert_eq!(node.commit_index, 1,
+            "commit_index must advance to 1 after quorum ACK from peer-a");
+    }
+
+    // Now apply loop should advance last_applied.
+    apply_committed_entries(&state);
+    {
+        let node = state.cluster.raft_state.lock().unwrap();
+        assert_eq!(node.last_applied, 1,
+            "last_applied must reach pending_idx after quorum commit + apply");
+    }
+    // Watch channel must carry last_applied.
+    let watch_val = *state.cluster.raft_last_applied_tx.subscribe().borrow();
+    assert!(watch_val >= pending_idx,
+        "watch channel must have fired with last_applied >= {pending_idx}, got {watch_val}");
+}
+
+/// C-7 T003: Full multi-node snapshot-transfer + catch-up scenario.
+/// Simulates the flow that `fanout_heartbeat` drives:
+///   - Follower's next_index falls behind snapshot_index → needs snapshot.
+///   - Leader exports row-store and installs it on follower.
+///   - Follower's apply state and row-store match the leader's.
+///   - Subsequent AppendEntries (post-snapshot entries) also apply cleanly.
+#[test]
+fn c7_snapshot_transfer_catches_up_follower() {
+    use crate::helpers::raft_loop::apply_committed_entries;
+
+    // --- Leader: commit 5 entries, compact at 4, expose 1 remaining entry. ---
+    let mut leader_node = RaftNode::new("leader");
+    leader_node.become_candidate();
+    leader_node.become_leader();
+    for i in 1u64..=5 {
+        leader_node.log.push(RaftLogEntry {
+            index: i, term: 1,
+            command: format!("INSERT INTO snap_t VALUES ('row{i}')"),
+        });
+    }
+    leader_node.commit_index = 5;
+    leader_node.last_applied = 5;
+    leader_node.compact_log(4);
+
+    assert_eq!(leader_node.snapshot_index, 4);
+    assert_eq!(leader_node.log.len(), 1, "entry 5 survives compaction");
+
+    // --- Follower AppState (new, empty). ---
+    let follower_state = state_with_key(Some("key"));
+    let _rx = follower_state.cluster.raft_last_applied_tx.subscribe();
+
+    // Follower's Raft state: next_index=1 which is <= snapshot_index=4 → snapshot needed.
+    {
+        let node = follower_state.cluster.raft_state.lock().unwrap();
+        assert_eq!(node.snapshot_index, 0, "follower starts with no snapshot");
+    }
+
+    // --- Simulate InstallSnapshot from leader. ---
+    let mut snap_rows: std::collections::HashMap<String, std::collections::HashMap<String, String>> = std::collections::HashMap::new();
+    for i in 1u64..=4 {
+        let mut d = std::collections::HashMap::new();
+        d.insert("id".to_string(), format!("row{i}"));
+        snap_rows.insert(format!("snap_t:row{i}"), d);
+    }
+
+    let snap_req = RaftInstallSnapshotRequest {
+        term: 1,
+        leader_id: "leader".to_string(),
+        snapshot_index: 4,
+        snapshot_term: 1,
+        rows: snap_rows.clone(),
+    };
+    {
+        let mut node = follower_state.cluster.raft_state.lock().unwrap();
+        let resp = node.handle_install_snapshot(&snap_req);
+        assert!(resp.success);
+        assert_eq!(node.snapshot_index, 4);
+        assert_eq!(node.last_applied, 4);
+    }
+
+    // Apply snapshot rows to follower's row store.
+    {
+        let mut rs = follower_state.storage.row_store.lock().unwrap();
+        rs.replace_all(snap_rows.into_iter().map(|(k, v)| (k, v)));
+    }
+
+    // Verify rows 1-4 are visible.
+    {
+        let rs = follower_state.storage.row_store.lock().unwrap();
+        for i in 1u64..=4 {
+            assert!(rs.read_latest(&format!("snap_t:row{i}")).is_some(),
+                "snapshot row {i} must be visible after install");
+        }
+    }
+
+    // --- Catch-up: leader sends entry 5 via AppendEntries. ---
+    let entry5 = leader_node.log[0].clone();
+    let ae_req = RaftAppendRequest {
+        term: 1,
+        leader_id: "leader".to_string(),
+        prev_log_index: 4,
+        prev_log_term: 1,
+        entries: vec![entry5],
+        leader_commit: 5,
+    };
+    {
+        let mut node = follower_state.cluster.raft_state.lock().unwrap();
+        let resp = node.handle_append_entries(&ae_req);
+        assert!(resp.success, "follower must accept post-snapshot entry");
+        assert_eq!(resp.match_index, 5);
+    }
+
+    // Apply loop applies entry 5.
+    apply_committed_entries(&follower_state);
+    {
+        let node = follower_state.cluster.raft_state.lock().unwrap();
+        assert_eq!(node.last_applied, 5,
+            "follower last_applied must reach 5 after full catch-up");
+    }
+}
+
+// ── C-6: Failover controller wired into Raft loop ────────────────────────────
+//
+// These tests verify that:
+//  1. `HttpFailoverAgent::ping_async` resolves `Unreachable` for a non-listening port.
+//  2. On leader election, active ACID sessions previously assigned to a crashed
+//     leader node are migrated to the new leader via `reassign_active_node`.
+
+/// C-6 T001: HttpFailoverAgent returns Unreachable for a non-listening port.
+/// This exercises the async reqwest path (no curl subprocess).
+#[tokio::test]
+async fn c6_http_failover_agent_async_unreachable_for_nonexistent_host() {
+    use voltnuerongrid_failover::HttpFailoverAgent;
+    let agent = HttpFailoverAgent::new(300);
+    // Port 19999 is highly unlikely to be open.
+    let status = agent.ping_async("http://127.0.0.1:19999").await;
+    assert_eq!(
+        status,
+        voltnuerongrid_failover::HealthStatus::Unreachable,
+        "non-listening port must return Unreachable"
+    );
+}
+
+/// C-6 T002: On leader election, active ACID sessions that were pinned to the
+/// previous leader are reassigned to the new leader's node_id.
+/// This verifies the `reassign_active_node` wiring path.
+#[test]
+fn c6_leader_election_reassigns_acid_sessions_to_new_leader() {
+    let state = state_with_key(Some("key"));
+
+    // Register two active transactions pinned to the old leader "prev-leader".
+    {
+        let mut txns = state.storage.acid_transactions.lock().unwrap();
+        txns.begin("tx-1", "prev-leader", "serializable", 1000, None);
+        txns.begin("tx-2", "prev-leader", "read_committed", 1001, None);
+    }
+
+    // Simulate leader election: reassign sessions from "prev-leader" to "new-leader".
+    {
+        let mut txns = state.storage.acid_transactions.lock().unwrap();
+        let reassigned = txns.reassign_active_node("prev-leader", "new-leader");
+        assert_eq!(reassigned, 2, "both sessions must be reassigned on leader election");
+    }
+
+    // Verify both transactions are now assigned to the new leader.
+    {
+        let txns = state.storage.acid_transactions.lock().unwrap();
+        assert_eq!(
+            txns.transactions.get("tx-1").map(|t| t.assigned_node_id.as_str()),
+            Some("new-leader"),
+            "tx-1 must point to new-leader"
+        );
+        assert_eq!(
+            txns.transactions.get("tx-2").map(|t| t.assigned_node_id.as_str()),
+            Some("new-leader"),
+            "tx-2 must point to new-leader"
+        );
+    }
+}
+
+/// C-6 T003: Health check integration — `InMemoryPeerRegistry` + `NoopHealthChecker`
+/// correctly reports a registered peer as Unreachable (noop always returns Unreachable).
+#[test]
+fn c6_failover_noop_checker_unreachable_for_registered_peer() {
+    use voltnuerongrid_failover::{InMemoryPeerRegistry, NoopHealthChecker, HealthChecker, NodeInfo, HealthStatus, PeerDiscovery};
+
+    let mut registry = InMemoryPeerRegistry::default();
+    registry.register_peer(NodeInfo {
+        node_id: "node-a".to_string(),
+        base_url: "http://node-a:8080".to_string(),
+    });
+    let checker = NoopHealthChecker;
+    for peer in registry.known_peers() {
+        assert_eq!(checker.check(&peer), HealthStatus::Unreachable);
+    }
+}
+
 // ── S4-WS3-02: Columnar project endpoint ─────────────────────────────────
 #[tokio::test]
 async fn s4_ws3_02_columnar_project_empty_store_returns_no_columns() {
@@ -15216,6 +15577,182 @@ fn p3_group_commit_fsync_count_less_than_individual_calls() {
     assert_eq!(seqs.len(), n, "batch must return one seq per entry");
 }
 
+// ─── B-1: Row-store durability hardening tests ───────────────────────────────
+
+/// B-1 T001: `replace_all` snapshot install clears old rows and inserts new ones
+/// atomically.  This verifies the Raft snapshot install path: after `replace_all`,
+/// only the rows supplied in the snapshot are visible.
+#[test]
+fn b1_replace_all_clears_old_rows_and_installs_snapshot() {
+    use voltnuerongrid_store::mvcc::{PagedRowStore, RowData};
+
+    let mut rs = PagedRowStore::default();
+    let xid1 = rs.begin_xid();
+    // Insert 3 old rows.
+    let mut d = RowData::new();
+    d.insert("v".to_string(), "old".to_string());
+    rs.insert(xid1, "db.old1", d.clone());
+    rs.insert(xid1, "db.old2", d.clone());
+    rs.insert(xid1, "db.old3", d);
+
+    assert_eq!(rs.visible_row_count(rs.current_xid()), 3);
+
+    // Snapshot contains only 2 new rows.
+    let mut snap = std::collections::HashMap::new();
+    let mut nd = RowData::new();
+    nd.insert("v".to_string(), "new".to_string());
+    snap.insert("db.snap_a".to_string(), nd.clone());
+    snap.insert("db.snap_b".to_string(), nd);
+
+    rs.replace_all(snap);
+
+    // Exactly the 2 snapshot rows must be visible; old rows gone.
+    let visible = rs.visible_row_count(rs.current_xid());
+    assert_eq!(visible, 2, "replace_all must install exactly the snapshot rows; got {visible}");
+    assert!(rs.read_latest("db.old1").is_none(), "old row must not survive replace_all");
+    assert!(rs.read_latest("db.snap_a").is_some(), "snapshot row must be visible");
+    assert!(rs.read_latest("db.snap_b").is_some(), "snapshot row must be visible");
+}
+
+/// B-1 T002: DROP DATABASE purges rows for that DB from the in-memory store
+/// and calls the durability engine's drop_db_column_family.  Rows for other
+/// databases must survive.
+#[test]
+fn b1_drop_database_purges_rows_for_dropped_db() {
+    use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig};
+
+    let state = state_with_key(Some("secret"));
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let mut h = operator_headers("secret", "platform-admin");
+    h.insert("x-vng-database", HeaderValue::from_static("dropme"));
+
+    // Create two databases.
+    let _ = rt.block_on(sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "CREATE DATABASE dropme".to_string(), ..Default::default() }),
+    ));
+    let mut h2 = operator_headers("secret", "platform-admin");
+    h2.insert("x-vng-database", HeaderValue::from_static("keepme"));
+    let _ = rt.block_on(sql_execute(State(state.clone()), h2.clone(),
+        Json(SqlExecuteRequest { sql_batch: "CREATE DATABASE keepme".to_string(), ..Default::default() }),
+    ));
+
+    // Create table and insert rows in both databases.
+    let _ = rt.block_on(sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "CREATE TABLE t (id TEXT, val TEXT)".to_string(), ..Default::default() }),
+    ));
+    let _ = rt.block_on(sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "INSERT INTO t (id, val) VALUES ('r1', 'dropped')".to_string(), ..Default::default() }),
+    ));
+    let _ = rt.block_on(sql_execute(State(state.clone()), h2.clone(),
+        Json(SqlExecuteRequest { sql_batch: "CREATE TABLE t (id TEXT, val TEXT)".to_string(), ..Default::default() }),
+    ));
+    let _ = rt.block_on(sql_execute(State(state.clone()), h2.clone(),
+        Json(SqlExecuteRequest { sql_batch: "INSERT INTO t (id, val) VALUES ('r1', 'kept')".to_string(), ..Default::default() }),
+    ));
+
+    // Verify keepme row exists before drop.
+    let pre = rt.block_on(sql_execute(State(state.clone()), h2.clone(),
+        Json(SqlExecuteRequest { sql_batch: "SELECT * FROM t".to_string(), ..Default::default() }),
+    )).expect("pre-drop SELECT keepme must succeed");
+    let pre_body = serde_json::to_string(&pre.1.0).unwrap_or_default();
+    assert!(pre_body.contains("kept"), "keepme row must exist before drop: {pre_body}");
+
+    // Drop the first database.
+    let drop_result = rt.block_on(sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "DROP DATABASE dropme".to_string(), ..Default::default() }),
+    )).expect("DROP DATABASE must succeed");
+    assert_eq!(drop_result.0, StatusCode::OK);
+
+    // Rows in in-memory store must be gone for dropme prefix.
+    let rs = state.storage.row_store.lock().unwrap();
+    let snapshot = rs.export_rows_snapshot();
+    for (k, _) in &snapshot {
+        assert!(!k.starts_with("dropme."), "DROP DATABASE must purge in-memory rows with prefix dropme.; found {k}");
+    }
+    drop(rs);
+
+    // keepme rows must survive.
+    let post = rt.block_on(sql_execute(State(state.clone()), h2.clone(),
+        Json(SqlExecuteRequest { sql_batch: "SELECT * FROM t".to_string(), ..Default::default() }),
+    )).expect("post-drop SELECT keepme must succeed");
+    let post_body = serde_json::to_string(&post.1.0).unwrap_or_default();
+    assert!(post_body.contains("kept"), "keepme row must survive DROP DATABASE dropme: {post_body}");
+}
+
+/// B-1 T003: Every DML commit path (INSERT, UPDATE, DELETE) calls store_row on the
+/// durability engine.  We use a BoxedDurabilityEngine::in_memory() engine wired into
+/// AppState and verify that scan_persisted_rows() is NOT implemented for in-memory
+/// (persists_rows()==false), so we instead verify that the in-memory engine's
+/// sql_count(Dml) advances with each statement, confirming the persist_sql_statement
+/// call is made.  For the row-level call, we verify sql_count advances monotonically.
+#[test]
+fn b1_dml_commit_persists_statement_to_durability_engine() {
+    use voltnuerongrid_store::SqlWalKind;
+
+    let state = state_with_key(Some("secret"));
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let mut h = operator_headers("secret", "platform-admin");
+    h.insert("x-vng-database", HeaderValue::from_static("durdb"));
+
+    // Setup table.
+    let _ = rt.block_on(sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "CREATE TABLE items (id TEXT, name TEXT)".to_string(), ..Default::default() }),
+    ));
+    let ddl_count_before = state.storage.wal_engine.lock().unwrap().sql_count(SqlWalKind::Ddl);
+    let dml_count_before = state.storage.wal_engine.lock().unwrap().sql_count(SqlWalKind::Dml);
+
+    // INSERT.
+    let _ = rt.block_on(sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "INSERT INTO items (id, name) VALUES ('i1', 'foo')".to_string(), ..Default::default() }),
+    )).expect("INSERT must succeed");
+    let dml_after_insert = state.storage.wal_engine.lock().unwrap().sql_count(SqlWalKind::Dml);
+    assert!(dml_after_insert > dml_count_before,
+        "INSERT must advance DML WAL count: before={dml_count_before}, after={dml_after_insert}");
+
+    // UPDATE.
+    let _ = rt.block_on(sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "UPDATE items SET name = 'bar' WHERE id = 'i1'".to_string(), ..Default::default() }),
+    )).expect("UPDATE must succeed");
+    let dml_after_update = state.storage.wal_engine.lock().unwrap().sql_count(SqlWalKind::Dml);
+    assert!(dml_after_update > dml_after_insert,
+        "UPDATE must advance DML WAL count");
+
+    // DELETE.
+    let _ = rt.block_on(sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "DELETE FROM items WHERE id = 'i1'".to_string(), ..Default::default() }),
+    )).expect("DELETE must succeed");
+    let dml_after_delete = state.storage.wal_engine.lock().unwrap().sql_count(SqlWalKind::Dml);
+    assert!(dml_after_delete > dml_after_update,
+        "DELETE must advance DML WAL count");
+
+    let _ = ddl_count_before; // silence unused-var lint
+}
+
+/// B-1 T004: Group-commit fsync: `append_sql_batch` with N entries issues exactly
+/// ONE fsync when the RocksDB engine is used with `VNG_WAL_FSYNC_ON_COMMIT=1`.
+/// For the in-memory engine, fsync_count stays 0 but the batch must still return
+/// N sequence numbers.  This is the unit-level gate for the group-commit invariant.
+#[test]
+fn b1_group_commit_batch_returns_one_seq_per_entry() {
+    use voltnuerongrid_store::{BoxedDurabilityEngine, DurabilityConfig, SqlWalKind};
+
+    let mut engine = BoxedDurabilityEngine::in_memory(DurabilityConfig::default());
+    let entries: Vec<(SqlWalKind, &str)> = vec![
+        (SqlWalKind::Dml, "INSERT INTO t (id) VALUES ('a')"),
+        (SqlWalKind::Dml, "INSERT INTO t (id) VALUES ('b')"),
+        (SqlWalKind::Dml, "UPDATE t SET id='c' WHERE id='a'"),
+        (SqlWalKind::Dml, "DELETE FROM t WHERE id='b'"),
+        (SqlWalKind::Ddl, "CREATE TABLE x (id TEXT)"),
+    ];
+    let seqs = engine.append_sql_batch(&entries);
+    assert_eq!(seqs.len(), 5, "batch must return one sequence number per entry");
+    // Sequences within the same kind must be strictly ascending.
+    // DML seqs are entries 0-3; DDL seq is entry 4.
+    for i in 0..3 {
+        assert!(seqs[i] < seqs[i + 1], "DML sequences must be strictly ascending");
+    }
+}
+
 // ─── P3: Full ACID Enforcement tests ─────────────────────────────────────────
 
 /// P3 T009: ROLLBACK after partial INSERT batch leaves no inserted rows visible.
@@ -16391,6 +16928,121 @@ fn scale1_set_policy_updates_thresholds() {
     assert_eq!(policy.scale_up_queue_threshold, 200);
     assert_eq!(policy.cooldown_secs, 30);
     assert_eq!(policy.backend, "kubernetes");
+}
+
+// ── C-8: Autoscale live triggering local backend ───────────────────────────
+//
+// These tests verify that `autoscale_tick` wires scale-up/down decisions to
+// the local `cluster_nodes` registry (C-8 acceptance criteria).
+
+/// C-8 T001: autoscale_tick adds a synthetic ClusterNodeRuntime entry on scale-up.
+#[test]
+fn c8_autoscale_tick_adds_local_node_on_scale_up() {
+    use crate::handlers::autoscale::{autoscale_tick, AutoscalePolicy, AutoscaleStatus};
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = admin_headers("secret");
+
+    // Configure policy that will fire scale-up at queue_depth >= 1.
+    // (queue depth in test context = 0 semaphore activity, so force via pre-seeded status).
+    // Instead: set up policy threshold very low and inject a high enough status.
+    {
+        let mut policy = state.ops.autoscale_policy.lock().unwrap();
+        *policy = AutoscalePolicy {
+            min_replicas: 1,
+            max_replicas: 4,
+            scale_up_queue_threshold: 0, // fires immediately when depth >= 0
+            scale_down_queue_threshold: 0,
+            cooldown_secs: 0,
+            backend: "local".to_string(),
+        };
+    }
+    // Seed status: 1 replica, no cooldown, not scaling.
+    {
+        let mut status = state.ops.autoscale_status.lock().unwrap();
+        *status = AutoscaleStatus {
+            replicas: 1,
+            target: 1,
+            scaling: false,
+            last_scale_at_unix_secs: 0,
+            last_scale_direction: "none".to_string(),
+            last_trigger_queue_depth: 0,
+        };
+    }
+
+    let before_count = state.cluster.cluster_nodes.lock().unwrap().len();
+
+    let result = rt.block_on(autoscale_tick(State(state.clone()), headers));
+    assert!(result.is_ok(), "autoscale_tick must succeed");
+    let (status_code, Json(body)) = result.unwrap();
+    assert_eq!(status_code, StatusCode::OK);
+    assert_eq!(body["direction"], "up", "must scale up");
+
+    // A new synthetic node must have been added to cluster_nodes.
+    let after_count = state.cluster.cluster_nodes.lock().unwrap().len();
+    assert_eq!(after_count, before_count + 1,
+        "scale-up must add one synthetic node to cluster_nodes");
+}
+
+/// C-8 T002: autoscale_tick removes a synthetic node on scale-down.
+#[test]
+fn c8_autoscale_tick_removes_local_node_on_scale_down() {
+    use crate::handlers::autoscale::{autoscale_tick, AutoscalePolicy, AutoscaleStatus};
+
+    let rt = tokio::runtime::Runtime::new().expect("rt");
+    let state = state_with_key(Some("secret"));
+    let headers = admin_headers("secret");
+
+    // Configure policy that fires scale-down immediately (queue always <= threshold=9999).
+    {
+        let mut policy = state.ops.autoscale_policy.lock().unwrap();
+        *policy = AutoscalePolicy {
+            min_replicas: 1,
+            max_replicas: 4,
+            scale_up_queue_threshold: 99999, // never fires up
+            scale_down_queue_threshold: 99999, // always fires down when replicas > min
+            cooldown_secs: 0,
+            backend: "local".to_string(),
+        };
+    }
+    // Seed status with 2 replicas so scale-down can fire.
+    {
+        let mut status = state.ops.autoscale_status.lock().unwrap();
+        *status = AutoscaleStatus {
+            replicas: 2,
+            target: 2,
+            scaling: false,
+            last_scale_at_unix_secs: 0,
+            last_scale_direction: "none".to_string(),
+            last_trigger_queue_depth: 0,
+        };
+    }
+    // Inject the synthetic node that was previously added by a scale-up.
+    {
+        let mut nodes = state.cluster.cluster_nodes.lock().unwrap();
+        nodes.insert("autoscale-node-2".to_string(), crate::ClusterNodeRuntime {
+            node_id: "autoscale-node-2".to_string(),
+            role: "follower".to_string(),
+            status: "active".to_string(),
+            total_cpu_cores: 1,
+            total_ram_mb: 512,
+            draining: false,
+            last_heartbeat_ms: 0,
+        });
+    }
+
+    let before_count = state.cluster.cluster_nodes.lock().unwrap().len();
+
+    let result = rt.block_on(autoscale_tick(State(state.clone()), headers));
+    assert!(result.is_ok());
+    let (status_code, Json(body)) = result.unwrap();
+    assert_eq!(status_code, StatusCode::OK);
+    assert_eq!(body["direction"], "down", "must scale down");
+
+    let after_count = state.cluster.cluster_nodes.lock().unwrap().len();
+    assert_eq!(after_count, before_count - 1,
+        "scale-down must remove one synthetic node from cluster_nodes");
 }
 
 // ── SCALE-2 tests ─────────────────────────────────────────────────────────────

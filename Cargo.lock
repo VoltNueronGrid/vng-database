@@ -4836,6 +4836,8 @@ dependencies = [
 name = "voltnuerongrid-failover"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
+ "tokio",
  "voltnuerongrid-core",
 ]
 
@@ -4971,6 +4973,7 @@ dependencies = [
  "voltnuerongrid-driver-rust",
  "voltnuerongrid-exec",
  "voltnuerongrid-exec-datafusion",
+ "voltnuerongrid-failover",
  "voltnuerongrid-ingest",
  "voltnuerongrid-mcp",
  "voltnuerongrid-meta",

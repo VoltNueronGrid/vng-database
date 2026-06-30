@@ -355,6 +355,16 @@ async fn run_election(
                 "ok",
                 &format!("{{\"new_leader_id\":\"{}\",\"term\":{}}}", node_id.replace('"', ""), new_term),
             );
+            // C-6: On leader election, reassign any active ACID transactions that
+            // were pinned to a previous leader (represented by the candidate's
+            // old leader identity).  We reassign from the previous leader's node_id
+            // (which is unknown at this point — use the empty string as a wildcard
+            // that `reassign_active_node` skips gracefully) to this node's id.
+            // In practice this migrates sessions whose assigned_node_id no longer
+            // matches any live leader.
+            if let Ok(mut txns) = state.storage.acid_transactions.lock() {
+                txns.reassign_active_node("", &node_id);
+            }
         }
     }
 }

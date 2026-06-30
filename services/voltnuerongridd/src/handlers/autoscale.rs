@@ -201,9 +201,13 @@ pub(crate) async fn autoscale_tick(
 
     let (scaled, direction, new_replicas) = evaluate_autoscale(&mut status, &policy, queue_depth, now_secs);
 
-    // After evaluation, clear the scaling flag (in production, an orchestrator would clear it
-    // once the scale operation completes; here we clear it immediately as we're simulation-only).
+    // C-8: Wire autoscale decision to the local cluster node registry.
+    // When scale-up fires: add a new ClusterNodeRuntime entry representing the
+    // additional virtual node.  When scale-down fires: mark the highest-indexed
+    // non-self node as draining and remove it from the registry.
     if scaled {
+        apply_local_scale_event(&state, direction, new_replicas, now_secs);
+        // Clear the scaling flag after local state is applied.
         status.scaling = false;
     }
 
@@ -214,6 +218,47 @@ pub(crate) async fn autoscale_tick(
         "new_replicas": new_replicas,
         "queue_depth": queue_depth,
     }))))
+}
+
+/// C-8: Apply a scale-up or scale-down event to the local `cluster_nodes` registry.
+///
+/// Scale-up   → insert a new `ClusterNodeRuntime` with a synthetic node_id.
+/// Scale-down → mark the last non-self synthetic node as `draining` and remove it.
+fn apply_local_scale_event(state: &AppState, direction: &str, new_replicas: usize, now_secs: u64) {
+    let now_ms = now_secs.saturating_mul(1000);
+    let Ok(mut nodes) = state.cluster.cluster_nodes.lock() else { return };
+    match direction {
+        "up" => {
+            // Synthetic node id: "autoscale-node-{new_replicas}".
+            let synthetic_id = format!("autoscale-node-{new_replicas}");
+            nodes.entry(synthetic_id.clone()).or_insert_with(|| crate::ClusterNodeRuntime {
+                node_id: synthetic_id,
+                role: "follower".to_string(),
+                status: "active".to_string(),
+                total_cpu_cores: 1,
+                total_ram_mb: 512,
+                draining: false,
+                last_heartbeat_ms: now_ms,
+            });
+        }
+        "down" => {
+            // Remove the highest-indexed synthetic autoscale node if any.
+            let synthetic_key = format!("autoscale-node-{}", nodes.len());
+            if nodes.contains_key(&synthetic_key) {
+                nodes.remove(&synthetic_key);
+            } else {
+                // Fallback: remove any synthetic node (autoscale-node-* prefix).
+                let to_remove = nodes.keys()
+                    .filter(|k| k.starts_with("autoscale-node-"))
+                    .last()
+                    .cloned();
+                if let Some(k) = to_remove {
+                    nodes.remove(&k);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // ── Request DTOs ─────────────────────────────────────────────────────────────

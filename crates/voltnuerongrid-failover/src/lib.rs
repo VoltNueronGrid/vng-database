@@ -89,14 +89,9 @@ impl PeerDiscovery for InMemoryPeerRegistry {
 }
 
 // ── HttpFailoverAgent ─────────────────────────────────────────────────────────
-// NOTE: HTTP-based health checks require `reqwest` or similar. To avoid adding
-// a heavyweight async dependency to this crate before P5 wiring begins, the
-// HTTP implementation is provided as a synchronous blocking stub that delegates
-// to the caller's runtime. Full async implementation is part of P5.
 
 /// A production-grade failover agent that checks peer health over HTTP.
-/// Uses blocking HTTP calls to remain dependency-light until P5 wires it
-/// into the Raft loop with a proper async runtime.
+/// Uses async `reqwest` for non-blocking HTTP calls.
 pub struct HttpFailoverAgent {
     timeout_ms: u64,
 }
@@ -106,35 +101,39 @@ impl HttpFailoverAgent {
         Self { timeout_ms }
     }
 
-    /// Blocking HTTP GET to `{base_url}/health`. Returns `Healthy` on 200,
+    /// Async HTTP GET to `{base_url}/health`. Returns `Healthy` on 200,
     /// `Degraded` on 4xx/5xx, `Unreachable` on connection error or timeout.
-    pub fn ping(&self, base_url: &str) -> HealthStatus {
+    pub async fn ping_async(&self, base_url: &str) -> HealthStatus {
         let url = format!("{}/health", base_url.trim_end_matches('/'));
-        // Use std::process::Command to call curl as a portable blocking HTTP client
-        // without adding an async dependency. Replace with reqwest once P5 lands.
-        let output = std::process::Command::new("curl")
-            .args([
-                "--silent",
-                "--max-time", &format!("{:.1}", self.timeout_ms as f64 / 1000.0),
-                "--output", "/dev/null",
-                "--write-out", "%{http_code}",
-                &url,
-            ])
-            .output();
-        match output {
-            Ok(o) if o.status.success() => {
-                let code = String::from_utf8_lossy(&o.stdout);
-                let code = code.trim().parse::<u16>().unwrap_or(0);
-                if code == 200 {
-                    HealthStatus::Healthy
-                } else if code >= 400 {
-                    HealthStatus::Degraded
-                } else {
-                    HealthStatus::Unreachable
-                }
+        let timeout = std::time::Duration::from_millis(self.timeout_ms);
+        let client = match reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return HealthStatus::Unreachable,
+        };
+        match client.get(&url).send().await {
+            Ok(resp) if resp.status() == 200 => HealthStatus::Healthy,
+            Ok(resp) if resp.status().is_client_error() || resp.status().is_server_error() => {
+                HealthStatus::Degraded
             }
             _ => HealthStatus::Unreachable,
         }
+    }
+
+    /// Synchronous wrapper around `ping_async` for use in blocking contexts.
+    /// Spawns a one-shot Tokio runtime when no existing runtime is available.
+    pub fn ping(&self, base_url: &str) -> HealthStatus {
+        // Build a current-thread runtime for the blocking call regardless of
+        // whether we're in an async context, to avoid requiring rt-multi-thread.
+        // This is intentionally used only in sync/test paths; the preferred API
+        // for production callers is `ping_async`.
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|rt| rt.block_on(self.ping_async(base_url)))
+            .unwrap_or(HealthStatus::Unreachable)
     }
 }
 
