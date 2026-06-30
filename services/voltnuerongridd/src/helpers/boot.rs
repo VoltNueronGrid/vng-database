@@ -33,7 +33,7 @@ pub(crate) fn persist_sql_statement(
         sql_len = sql.len(),
         "wal.persist_sql_statement"
     );
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         let _ = wal.append_sql(kind, sql);
     } else {
         tracing::error!(target: "vng.wal", "wal_engine mutex poisoned in persist_sql_statement");

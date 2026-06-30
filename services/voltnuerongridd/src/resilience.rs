@@ -55,7 +55,7 @@ pub fn lock_or_unavailable<'a, T>(
 /// Macro used in handlers: bind a guard or return a 503 response.
 ///
 /// ```ignore
-/// let rs = handler_lock!(state.row_store, "row_store");
+/// let rs = handler_lock!(state.storage.row_store, "row_store");
 /// // rs is now a MutexGuard<PagedRowStore>
 /// ```
 #[macro_export]

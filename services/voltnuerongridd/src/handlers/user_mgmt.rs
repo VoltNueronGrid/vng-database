@@ -103,7 +103,7 @@ pub(crate) async fn admin_create_user(
 
     // Check for duplicate
     {
-        let store = match state.user_store.lock() {
+        let store = match state.auth.user_store.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("user_store")),
         };
@@ -165,7 +165,7 @@ pub(crate) async fn admin_create_user(
     // Persist to WAL before mutating in-memory state.
     let wal_line = user_to_wal(&account);
     {
-        match state.wal_engine.lock() {
+        match state.storage.wal_engine.lock() {
             Ok(mut wal) => { wal.append_sql(voltnuerongrid_store::SqlWalKind::Ddl, &wal_line); }
             Err(_) => return Err(lock_poisoned("wal_engine")),
         }
@@ -173,7 +173,7 @@ pub(crate) async fn admin_create_user(
 
     // Insert into in-memory store.
     {
-        match state.user_store.lock() {
+        match state.auth.user_store.lock() {
             Ok(mut store) => { store.insert(account); }
             Err(_) => return Err(lock_poisoned("user_store")),
         }
@@ -210,7 +210,7 @@ pub(crate) async fn admin_list_users(
     )?;
 
     let users: Vec<serde_json::Value> = {
-        let store = match state.user_store.lock() {
+        let store = match state.auth.user_store.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("user_store")),
         };
@@ -245,7 +245,7 @@ pub(crate) async fn admin_delete_user(
     )?;
 
     let removed = {
-        let mut store = match state.user_store.lock() {
+        let mut store = match state.auth.user_store.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("user_store")),
         };
@@ -266,7 +266,7 @@ pub(crate) async fn admin_delete_user(
 
     // Invalidate all sessions for this user.
     {
-        match state.session_store.lock() {
+        match state.auth.session_store.lock() {
             Ok(mut sessions) => { sessions.remove_by_user(&user_id); }
             Err(_) => return Err(lock_poisoned("session_store")),
         }
@@ -274,7 +274,7 @@ pub(crate) async fn admin_delete_user(
 
     // WAL: record DROP USER (for crash recovery).
     {
-        match state.wal_engine.lock() {
+        match state.storage.wal_engine.lock() {
             Ok(mut wal) => { wal.append_sql(voltnuerongrid_store::SqlWalKind::Ddl, &format!("DROP USER {user_id}")); }
             Err(_) => return Err(lock_poisoned("wal_engine")),
         }
@@ -313,7 +313,7 @@ pub(crate) async fn admin_revoke_user_sessions(
 
     // Verify the user actually exists before revoking sessions.
     {
-        let store = match state.user_store.lock() {
+        let store = match state.auth.user_store.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("user_store")),
         };
@@ -331,7 +331,7 @@ pub(crate) async fn admin_revoke_user_sessions(
     }
 
     let sessions_revoked = {
-        let mut sessions = match state.session_store.lock() {
+        let mut sessions = match state.auth.session_store.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("session_store")),
         };
@@ -361,7 +361,7 @@ pub(crate) async fn auth_login(
     let username = req.username.trim().to_ascii_lowercase();
 
     let account = {
-        let store = match state.user_store.lock() {
+        let store = match state.auth.user_store.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("user_store")),
         };
@@ -419,7 +419,7 @@ pub(crate) async fn auth_login(
     }
 
     // Issue session token.
-    let signer = match state.session_signer.lock() {
+    let signer = match state.auth.session_signer.lock() {
         Ok(g) => g,
         Err(_) => return Err(lock_poisoned("session_signer")),
     };
@@ -436,7 +436,7 @@ pub(crate) async fn auth_login(
         expires_at_secs,
     };
     {
-        match state.session_store.lock() {
+        match state.auth.session_store.lock() {
             Ok(mut sessions) => { sessions.insert(fingerprint, entry); }
             Err(_) => return Err(lock_poisoned("session_store")),
         }
@@ -495,7 +495,7 @@ pub(crate) async fn auth_token_rotate(
 
     // Verify the current token is valid and look up the session
     let (user_id, _expires) = {
-        let signer = match state.session_signer.lock() {
+        let signer = match state.auth.session_signer.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("session_signer")),
         };
@@ -513,7 +513,7 @@ pub(crate) async fn auth_token_rotate(
     // Find the session entry
     let old_fingerprint = crate::user_store::SessionSigner::fingerprint(&current_token);
     let entry = {
-        let sessions = match state.session_store.lock() {
+        let sessions = match state.auth.session_store.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("session_store")),
         };
@@ -532,7 +532,7 @@ pub(crate) async fn auth_token_rotate(
 
     // Issue a new token
     let (new_token, new_expires_at_secs) = {
-        let signer = match state.session_signer.lock() {
+        let signer = match state.auth.session_signer.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("session_signer")),
         };
@@ -552,7 +552,7 @@ pub(crate) async fn auth_token_rotate(
 
     // Atomically: remove old session, insert new session
     {
-        let mut sessions = match state.session_store.lock() {
+        let mut sessions = match state.auth.session_store.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned("session_store")),
         };

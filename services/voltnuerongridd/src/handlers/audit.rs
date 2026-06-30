@@ -118,7 +118,7 @@ pub(crate) async fn audit_events(
     )?;
     let max_items = query.max_items.unwrap_or(100).min(1_000);
     let events = state
-        .audit_sink
+        .ops.audit_sink
         .lock()
         .map(|sink| sink.latest(max_items))
         .unwrap_or_default();
@@ -138,7 +138,7 @@ pub(crate) async fn audit_chain_verify(
 ) -> Result<Json<AuditChainVerifyResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     require_audit_runtime_principal(&headers, &state, PrivilegeAction::Read, "audit/chain/verify")?;
     let events = state
-        .audit_sink
+        .ops.audit_sink
         .lock()
         .map(|sink| sink.all().to_vec())
         .unwrap_or_default();
@@ -162,7 +162,7 @@ pub(crate) async fn audit_snapshot(
 ) -> Result<(StatusCode, Json<AuditSnapshotResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_audit_runtime_principal(&headers, &state, PrivilegeAction::Read, "audit/snapshot")?;
     let events = state
-        .audit_sink
+        .ops.audit_sink
         .lock()
         .map(|sink| sink.all().to_vec())
         .unwrap_or_default();
@@ -192,7 +192,7 @@ pub(crate) async fn audit_purge(
 ) -> Result<(StatusCode, Json<AuditPurgeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let events_purged = {
-        let mut sink = state.audit_sink.lock().expect("audit_sink lock");
+        let mut sink = state.ops.audit_sink.lock().expect("audit_sink lock");
         let count = sink.all().len();
         *sink = AppendOnlyAuditSink::new();
         count
@@ -214,7 +214,7 @@ pub(crate) async fn audit_cli_summary(
 ) -> Result<(StatusCode, Json<AuditCliSummaryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_audit_runtime_principal(&headers, &state, PrivilegeAction::Read, "audit/cli/summary")?;
     let events = state
-        .audit_sink
+        .ops.audit_sink
         .lock()
         .map(|sink| sink.all().to_vec())
         .unwrap_or_default();
@@ -253,13 +253,13 @@ pub(crate) async fn audit_export(
         PrivilegeAction::Read,
     )?;
     let principal = RuntimeAccessPrincipal::Operator(operator);
-    let all_events = state.audit_sink.lock().expect("audit_sink lock").all().to_vec();
+    let all_events = state.ops.audit_sink.lock().expect("audit_sink lock").all().to_vec();
     let total_event_count = all_events.len();
     let cursor = params.cursor.unwrap_or(0).min(total_event_count);
     let limit = params.limit.unwrap_or(1000).max(1).min(10000);
     let events: Vec<AuditEvent> = all_events.into_iter().skip(cursor).take(limit).collect();
     let event_count = events.len();
-    let file_backed = state.audit_log_path.is_some();
+    let file_backed = state.ops.audit_log_path.is_some();
     append_runtime_audit_event(
         &state,
         AuditEventKind::Security,
@@ -277,7 +277,7 @@ pub(crate) async fn audit_export(
             cursor,
             limit,
             file_backed,
-            audit_log_path: state.audit_log_path.clone(),
+            audit_log_path: state.ops.audit_log_path.clone(),
             events,
         }),
     ))

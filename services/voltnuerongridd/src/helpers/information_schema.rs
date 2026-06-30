@@ -511,7 +511,7 @@ pub(crate) fn synthesize_virtual_catalog_response(
     state: &crate::AppState,
 ) -> (Vec<Value>, Vec<Value>) {
     let entries: Vec<DdlCatalogEntry> = {
-        let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+        let catalog = state.storage.ddl_catalog.lock().expect("ddl_catalog lock");
         catalog.active_entries().into_iter().cloned().collect()
     };
 

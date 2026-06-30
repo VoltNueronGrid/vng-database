@@ -145,7 +145,7 @@ fn read_latest_with_rocksdb_fallback(
         return Some(row.clone());
     }
     // In-memory miss — try RocksDB if it persists rows.
-    if let Ok(wal_guard) = wal.wal_engine.lock() {
+    if let Ok(wal_guard) = wal.storage.wal_engine.lock() {
         if wal_guard.persists_rows() {
             return wal_guard.get_row(db, raw_k);
         }
@@ -263,7 +263,7 @@ fn fire_dml_triggers(
     };
 
     let triggers_to_fire: Vec<voltnuerongrid_store::triggers::TriggerDefinition> = {
-        match state.trigger_registry.lock() {
+        match state.storage.trigger_registry.lock() {
             Ok(reg) => reg
                 .find_triggers(table, schema, event)
                 .into_iter()
@@ -274,7 +274,7 @@ fn fire_dml_triggers(
     };
 
     for trigger in &triggers_to_fire {
-        if let Err(e) = state.trigger_emitter.emit(trigger, &payload) {
+        if let Err(e) = state.storage.trigger_emitter.emit(trigger, &payload) {
             eprintln!(
                 "[vng:trigger] emit error for trigger '{}' on {}.{}: {e}",
                 trigger.name, schema, table
@@ -602,7 +602,7 @@ pub(crate) async fn sql_transaction(
         // so all reads in this transaction see a consistent view.  Must be captured
         // *before* acquiring acid_transactions lock to avoid deadlock.
         let begin_snapshot_xid: Option<u64> = if has_begin && iso_level == "repeatable_read" {
-            let rs = match state.row_store.lock() {
+            let rs = match state.storage.row_store.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("row_store")),
             };
@@ -611,7 +611,7 @@ pub(crate) async fn sql_transaction(
             None
         };
 
-        let mut acid = match state.acid_transactions.lock() {
+        let mut acid = match state.storage.acid_transactions.lock() {
             Ok(g) => g,
             Err(_) => return Err(lock_poisoned_err("acid_transactions")),
         };
@@ -620,7 +620,7 @@ pub(crate) async fn sql_transaction(
             // Register connection → tx mapping so sql_execute can look up the
             // repeatable-read snapshot for standalone SELECT calls.
             if iso_level == "repeatable_read" {
-                if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                if let Ok(mut conn_map) = state.storage.connection_tx_active.lock() {
                     conn_map.insert(connection_id.clone(), tx_id.clone());
                 }
             }
@@ -750,7 +750,7 @@ pub(crate) async fn sql_transaction(
             // S2-WS2-05: write-write conflict detection using row-store snapshot xid.
             {
                 if !commit_write_keys.is_empty() {
-                    let rs = match state.row_store.lock() {
+                    let rs = match state.storage.row_store.lock() {
                         Ok(g) => g,
                         Err(_) => return Err(lock_poisoned_err("row_store")),
                     };
@@ -796,14 +796,14 @@ pub(crate) async fn sql_transaction(
             }
             // C-3: Clear the connection→tx mapping on COMMIT so sql_execute no longer
             // applies the repeatable-read snapshot to standalone SELECTs.
-            if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+            if let Ok(mut conn_map) = state.storage.connection_tx_active.lock() {
                 conn_map.remove(&connection_id);
             }
             // S2-WS2-05: flush committed DML (INSERT/UPDATE/DELETE) into PagedRowStore.
             // Write intents are registered before each write and released after the flush
             // so that concurrent transactions see the in-progress lock via begin_write_intent.
             {
-                let mut rs = match state.row_store.lock() {
+                let mut rs = match state.storage.row_store.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("row_store")),
                 };
@@ -820,7 +820,7 @@ pub(crate) async fn sql_transaction(
                             let table_name_t = d.get("__table").map(|t| t.as_str()).unwrap_or("").to_string();
                             // CON-1: Validate constraints before acquiring write intent.
                             if !table_name_t.is_empty() {
-                                if let Ok(mgr) = state.constraint_manager.lock() {
+                                if let Ok(mgr) = state.storage.constraint_manager.lock() {
                                     for (col, val) in d.iter().filter(|(c, _)| !c.starts_with("__")) {
                                         if let Err(violation) = mgr.validate(&table_name_t, col, Some(val.as_str())) {
                                             drop(mgr);
@@ -842,13 +842,13 @@ pub(crate) async fn sql_transaction(
                             // Gap #3 + M-2: record before-image for ROLLBACK support, falling
                             // back to RocksDB if the row is not in the in-memory store yet.
                             let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
-                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                            record_undo(&state.storage.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
-                            if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
+                            if let Ok(mut wal) = state.storage.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d.clone());
                             // CON-1: Record committed values for PK/UNIQUE tracking.
                             if !table_name_t.is_empty() {
-                                if let Ok(mut mgr) = state.constraint_manager.lock() {
+                                if let Ok(mut mgr) = state.storage.constraint_manager.lock() {
                                     for (col, val) in d.iter().filter(|(c, _)| !c.starts_with("__")) {
                                         mgr.record_committed_value(&table_name_t, col, val);
                                     }
@@ -861,10 +861,10 @@ pub(crate) async fn sql_transaction(
                             let k = db_prefix_key(&db, &raw_k);
                             // Gap #3 + M-2: record before-image for ROLLBACK support.
                             let before = read_latest_with_rocksdb_fallback(&rs, &state, &db, &k, &raw_k);
-                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                            record_undo(&state.storage.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
-                            if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, None); }
+                            if let Ok(mut wal) = state.storage.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, None); }
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                         }
                     } else if upper.starts_with("UPDATE") {
@@ -886,7 +886,7 @@ pub(crate) async fn sql_transaction(
                                     let table_prefix = format!("{tbl}:");
                                     let db_prefix_str = if db.is_empty() { String::new() } else { format!("{db}.") };
                                     let scan_rows: Vec<(String, std::collections::HashMap<String, String>)> =
-                                        if let Ok(wal) = state.wal_engine.lock() {
+                                        if let Ok(wal) = state.storage.wal_engine.lock() {
                                             if wal.persists_rows() {
                                                 wal.scan_rows_for_db(&db, snapshot_xid)
                                                     .into_iter()
@@ -923,14 +923,14 @@ pub(crate) async fn sql_transaction(
                                         let before = rs.read_latest(&matched_k).cloned();
                                         let mut updated = existing;
                                         updated.insert(set_col.clone(), set_val.clone());
-                                        record_undo(&state.tx_undo_log, &connection_id, &matched_k, before);
+                                        record_undo(&state.storage.tx_undo_log, &connection_id, &matched_k, before);
                                         let _ = rs.begin_write_intent(xid, &matched_k);
                                         let raw_k_stripped = if db_prefix_str.is_empty() {
                                             matched_k.clone()
                                         } else {
                                             matched_k.strip_prefix(&db_prefix_str).unwrap_or(matched_k.as_str()).to_string()
                                         };
-                                        { let mut wal = state.wal_engine.lock().expect("wal store_row bulk txn"); wal.store_row(&db, &raw_k_stripped, xid, Some(&updated)); }
+                                        { let mut wal = state.storage.wal_engine.lock().expect("wal store_row bulk txn"); wal.store_row(&db, &raw_k_stripped, xid, Some(&updated)); }
                                         rs.insert(xid, &matched_k, updated);
                                     }
                                     persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
@@ -945,9 +945,9 @@ pub(crate) async fn sql_transaction(
                                 for (col, val) in &d {
                                     merged.insert(col.clone(), val.clone());
                                 }
-                                record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                                record_undo(&state.storage.tx_undo_log, &connection_id, &k, before);
                                 let _ = rs.begin_write_intent(xid, &k);
-                                if let Ok(mut wal) = state.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&merged)); }
+                                if let Ok(mut wal) = state.storage.wal_engine.lock() { wal.store_row(&db, &raw_k, xid, Some(&merged)); }
                                 rs.insert(xid, &k, merged);
                                 persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Dml, stmt);
                             }
@@ -956,7 +956,7 @@ pub(crate) async fn sql_transaction(
                 }
                 // S2-WS2-02: record committed DML mutations in the WAL engine for
                 // durability and recovery replay.
-                if let Ok(mut wal) = state.wal_engine.lock() {
+                if let Ok(mut wal) = state.storage.wal_engine.lock() {
                     for stmt in &effective_statements {
                         let upper = stmt.trim_start().to_ascii_uppercase();
                         if upper.starts_with("INSERT") {
@@ -991,8 +991,8 @@ pub(crate) async fn sql_transaction(
             // immediately. This groups BEGIN…COMMIT DML so a follower never sees
             // a partially-applied transaction.
             if let Some(batch_cmd) = crate::encode_raft_batch_command(&db, &effective_statements) {
-                let total_peers = state.raft_peers.len();
-                let mut node = match state.raft_state.lock() {
+                let total_peers = state.cluster.raft_peers.len();
+                let mut node = match state.cluster.raft_state.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("raft_state")),
                 };
@@ -1003,7 +1003,7 @@ pub(crate) async fn sql_transaction(
             // S4-WS3-04: publish each committed DML mutation to RowStoreSyncOrigin for HTAP consumers.
             {
                 use voltnuerongrid_store::htap_sync::MutationOp;
-                let mut origin = match state.sync_origin.lock() {
+                let mut origin = match state.cluster.sync_origin.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("sync_origin")),
                 };
@@ -1030,22 +1030,22 @@ pub(crate) async fn sql_transaction(
         } else if has_rollback {
             acid.rollback(&tx_id, now_ms);
             // C-3: Clear the connection→tx mapping on ROLLBACK as well.
-            if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+            if let Ok(mut conn_map) = state.storage.connection_tx_active.lock() {
                 conn_map.remove(&connection_id);
             }
         }
         // Gap #3: on COMMIT clear undo log; on ROLLBACK apply it then clear.
         if has_commit {
-            if let Ok(mut log) = state.tx_undo_log.lock() { log.remove(&connection_id); }
+            if let Ok(mut log) = state.storage.tx_undo_log.lock() { log.remove(&connection_id); }
         } else if has_rollback {
             let undo_entries = {
-                match state.tx_undo_log.lock() {
+                match state.storage.tx_undo_log.lock() {
                     Ok(mut log) => log.remove(&connection_id).unwrap_or_default(),
                     Err(_) => Vec::new(),
                 }
             };
             if !undo_entries.is_empty() {
-                let mut rs = match state.row_store.lock() {
+                let mut rs = match state.storage.row_store.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("row_store")),
                 };
@@ -1088,7 +1088,7 @@ pub(crate) async fn sql_pessimistic_lock_acquire(
     let owner = req
         .owner
         .unwrap_or_else(|| "runtime-transaction-manager".to_string());
-    let mut lock_table = match state.pessimistic_locks.lock() {
+    let mut lock_table = match state.storage.pessimistic_locks.lock() {
         Ok(guard) => guard,
         Err(_) => {
             return (
@@ -1102,7 +1102,7 @@ pub(crate) async fn sql_pessimistic_lock_acquire(
             )
         }
     };
-    let mut wait_graph = match state.pessimistic_lock_waits.lock() {
+    let mut wait_graph = match state.storage.pessimistic_lock_waits.lock() {
         Ok(guard) => guard,
         Err(_) => {
             return (
@@ -1129,11 +1129,11 @@ pub(crate) async fn sql_pessimistic_lock_acquire(
             now_ms,
         );
     match response.lock_state {
-        "deadlock_risk" => { state.pessimistic_lock_metrics.deadlock_detections.fetch_add(1, Ordering::Relaxed); }
-        "wait_timeout" if response.reason.contains("scan_cap") => { state.pessimistic_lock_metrics.scan_cap_timeouts.fetch_add(1, Ordering::Relaxed); }
-        "wait_timeout" => { state.pessimistic_lock_metrics.wait_timeouts.fetch_add(1, Ordering::Relaxed); }
-        "acquired" | "renewed" => { state.pessimistic_lock_metrics.lock_grants.fetch_add(1, Ordering::Relaxed); }
-        "held_by_other_transaction" => { state.pessimistic_lock_metrics.lock_conflicts.fetch_add(1, Ordering::Relaxed); }
+        "deadlock_risk" => { state.storage.pessimistic_lock_metrics.deadlock_detections.fetch_add(1, Ordering::Relaxed); }
+        "wait_timeout" if response.reason.contains("scan_cap") => { state.storage.pessimistic_lock_metrics.scan_cap_timeouts.fetch_add(1, Ordering::Relaxed); }
+        "wait_timeout" => { state.storage.pessimistic_lock_metrics.wait_timeouts.fetch_add(1, Ordering::Relaxed); }
+        "acquired" | "renewed" => { state.storage.pessimistic_lock_metrics.lock_grants.fetch_add(1, Ordering::Relaxed); }
+        "held_by_other_transaction" => { state.storage.pessimistic_lock_metrics.lock_conflicts.fetch_add(1, Ordering::Relaxed); }
         _ => {}
     }
     (status, Json(response))
@@ -1143,7 +1143,7 @@ pub(crate) async fn sql_pessimistic_lock_release(
     State(state): State<AppState>,
     Json(req): Json<PessimisticLockReleaseRequest>,
 ) -> (StatusCode, Json<PessimisticLockResponse>) {
-    let mut lock_table = match state.pessimistic_locks.lock() {
+    let mut lock_table = match state.storage.pessimistic_locks.lock() {
         Ok(guard) => guard,
         Err(_) => {
             return (
@@ -1157,7 +1157,7 @@ pub(crate) async fn sql_pessimistic_lock_release(
             )
         }
     };
-    let mut wait_graph = match state.pessimistic_lock_waits.lock() {
+    let mut wait_graph = match state.storage.pessimistic_lock_waits.lock() {
         Ok(guard) => guard,
         Err(_) => {
             return (
@@ -1174,7 +1174,7 @@ pub(crate) async fn sql_pessimistic_lock_release(
     let (status, response) =
         release_pessimistic_lock(&mut lock_table, &mut wait_graph, &req.transaction_id, &req.resource);
     if response.lock_state == "released" {
-        state.pessimistic_lock_metrics.lock_releases.fetch_add(1, Ordering::Relaxed);
+        state.storage.pessimistic_lock_metrics.lock_releases.fetch_add(1, Ordering::Relaxed);
     }
     (status, Json(response))
 }
@@ -1182,12 +1182,12 @@ pub(crate) async fn sql_pessimistic_lock_release(
 pub(crate) async fn sql_pessimistic_lock_metrics(
     State(state): State<AppState>,
 ) -> Json<PessimisticLockContentionMetricsResponse> {
-    let deadlock_detections = state.pessimistic_lock_metrics.deadlock_detections.load(Ordering::Relaxed);
-    let scan_cap_timeouts = state.pessimistic_lock_metrics.scan_cap_timeouts.load(Ordering::Relaxed);
-    let wait_timeouts = state.pessimistic_lock_metrics.wait_timeouts.load(Ordering::Relaxed);
-    let lock_grants = state.pessimistic_lock_metrics.lock_grants.load(Ordering::Relaxed);
-    let lock_conflicts = state.pessimistic_lock_metrics.lock_conflicts.load(Ordering::Relaxed);
-    let lock_releases = state.pessimistic_lock_metrics.lock_releases.load(Ordering::Relaxed);
+    let deadlock_detections = state.storage.pessimistic_lock_metrics.deadlock_detections.load(Ordering::Relaxed);
+    let scan_cap_timeouts = state.storage.pessimistic_lock_metrics.scan_cap_timeouts.load(Ordering::Relaxed);
+    let wait_timeouts = state.storage.pessimistic_lock_metrics.wait_timeouts.load(Ordering::Relaxed);
+    let lock_grants = state.storage.pessimistic_lock_metrics.lock_grants.load(Ordering::Relaxed);
+    let lock_conflicts = state.storage.pessimistic_lock_metrics.lock_conflicts.load(Ordering::Relaxed);
+    let lock_releases = state.storage.pessimistic_lock_metrics.lock_releases.load(Ordering::Relaxed);
     let total_attempts = deadlock_detections + scan_cap_timeouts + wait_timeouts + lock_grants + lock_conflicts;
     let contention_ratio = if total_attempts > 0 {
         (deadlock_detections + scan_cap_timeouts + wait_timeouts + lock_conflicts) as f64 / total_attempts as f64
@@ -1317,7 +1317,7 @@ pub(crate) async fn sql_execute(
     // Gap #9: acquire a per-database connection permit (enforces max_connections per database).
     let _db_permit = if !db.is_empty() {
         let sem = {
-            let mut semaphores = match state.db_semaphores.lock() {
+            let mut semaphores = match state.storage.db_semaphores.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("db_semaphores")),
             };
@@ -1384,7 +1384,7 @@ pub(crate) async fn sql_execute(
                     SqlAnalyzer::analyze_statement(&stmt.raw).kind,
                     voltnuerongrid_sql::SqlStatementKind::Select
                 ) {
-                    if let Ok(stats) = state.stats_registry.lock() {
+                    if let Ok(stats) = state.storage.stats_registry.lock() {
                         let db_scope = if db.is_empty() { None } else { Some(db.as_str()) };
                         let refined = voltnuerongrid_exec::HtapQueryRouter::route_with_stats(
                             &stmt.raw, &stats, db_scope,
@@ -1413,7 +1413,7 @@ pub(crate) async fn sql_execute(
         let sql_trim = req.sql_batch.trim().to_string();
 
         if ProcedureRegistry::is_create_procedure(&sql_trim) {
-            let mut reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+            let mut reg = state.storage.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
             match reg.register_from_ddl(&sql_trim) {
                 Ok(name) => {
                     release_sql_data_plane_connection(&state, &connection_id);
@@ -1440,7 +1440,7 @@ pub(crate) async fn sql_execute(
                 .trim_end_matches(';')
                 .trim()
                 .to_ascii_lowercase();
-            let mut reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+            let mut reg = state.storage.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
             match reg.drop_procedure(&name) {
                 Ok(()) => {
                     release_sql_data_plane_connection(&state, &connection_id);
@@ -1463,7 +1463,7 @@ pub(crate) async fn sql_execute(
             }
         } else if ProcedureRegistry::is_call(&sql_trim) {
             let resolved = {
-                let reg = state.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
+                let reg = state.storage.proc_registry.lock().unwrap_or_else(|e| e.into_inner());
                 reg.resolve_call(&sql_trim)
             };
             match resolved {
@@ -1498,7 +1498,7 @@ pub(crate) async fn sql_execute(
         
         match kind {
             voltnuerongrid_sql::SqlStatementKind::CreateDatabase => {
-                let mut catalog = state.database_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                let mut catalog = state.storage.database_catalog.lock().unwrap_or_else(|e| e.into_inner());
                 let now_ms = crate::now_unix_ms() as u128;
                 match catalog.create(&db_name, now_ms, None, None) {
                     Ok(_) => {
@@ -1552,16 +1552,16 @@ pub(crate) async fn sql_execute(
                 }
             }
             voltnuerongrid_sql::SqlStatementKind::DropDatabase => {
-                let mut catalog = state.database_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                let mut catalog = state.storage.database_catalog.lock().unwrap_or_else(|e| e.into_inner());
                 match catalog.drop_database(&db_name, flag) {
                     Ok(dropped_opt) => {
                         // Only purge rows if actually dropped
                         if dropped_opt.is_some() {
-                            crate::helpers::boot::purge_database_rows(&db_name, &state.row_store, &state.wal_engine);
+                            crate::helpers::boot::purge_database_rows(&db_name, &state.storage.row_store, &state.storage.wal_engine);
                             // Also purge all DDL catalog entries (tables, views, functions,
                             // triggers, events) for the dropped database so that the schema tree
                             // reflects the deletion on the next refresh.
-                            if let Ok(mut ddl_cat) = state.ddl_catalog.lock() {
+                            if let Ok(mut ddl_cat) = state.storage.ddl_catalog.lock() {
                                 ddl_cat.purge_database(&db_name);
                             }
                             persist_sql_statement(&state, voltnuerongrid_store::SqlWalKind::Ddl, &format!("DROP DATABASE {}", db_name));
@@ -1735,12 +1735,12 @@ pub(crate) async fn sql_execute(
                         .trim_end_matches(';')
                         .to_ascii_lowercase();
                     {
-                        let mut cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
                         cat.record_drop("", "", &view_name);
                     }
                     let matview_prefix = format!("__matview:{view_name}:");
                     let delta_prefix = format!("__delta:{view_name}:");
-                    let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                     let xid = rs.begin_xid();
                     let old_keys: Vec<String> = rs.scan_at_snapshot(xid)
                         .into_iter().filter(|(k, _)| k.starts_with(&matview_prefix) || k.starts_with(&delta_prefix))
@@ -1774,7 +1774,7 @@ pub(crate) async fn sql_execute(
                             (tail.to_ascii_lowercase(), false, false)
                         };
                     let defining_sql: Option<(String, String)> = {
-                        let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                        let cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
                         cat.get(&view_name)
                             .filter(|e| e.object_kind == "materialized_view" || e.object_kind == "incremental_matview")
                             .map(|e| {
@@ -1806,7 +1806,7 @@ pub(crate) async fn sql_execute(
                             if is_incremental {
                                 let delta_prefix = format!("__delta:{base_table}:");
                                 let matview_prefix = format!("__matview:{view_name}:");
-                                let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                                 let xid = rs.begin_xid();
                                 let deltas: Vec<(String, std::collections::HashMap<String, String>)> = rs
                                     .scan_at_snapshot(xid).into_iter()
@@ -1845,18 +1845,18 @@ pub(crate) async fn sql_execute(
                             }
                             // Full refresh (default or CONCURRENTLY).
                             let snapshot = {
-                                let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                                let rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                                 let xid = rs.current_xid();
-                                let rocksdb_rows = if let Ok(wal) = state.wal_engine.lock() {
+                                let rocksdb_rows = if let Ok(wal) = state.storage.wal_engine.lock() {
                                     if wal.persists_rows() { Some(wal.scan_rows_for_db(&db, xid)) } else { None }
                                 } else { None };
-                                let idx_mgr = state.index_manager.lock().unwrap_or_else(|e| e.into_inner());
+                                let idx_mgr = state.storage.index_manager.lock().unwrap_or_else(|e| e.into_inner());
                                 crate::helpers::execution::execute_oltp_select(
                                     &[select_sql.clone()], &rs, 100_000, &db, Some(xid), rocksdb_rows, Some(&idx_mgr),
                                 )
                             };
                             let matview_prefix = format!("__matview:{view_name}:");
-                            let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                             let xid = rs.begin_xid();
                             let old_keys: Vec<String> = rs.scan_at_snapshot(xid)
                                 .into_iter().filter(|(k, _)| k.starts_with(&matview_prefix))
@@ -1936,7 +1936,7 @@ pub(crate) async fn sql_execute(
         let sql_upper = req.sql_batch.trim().to_ascii_uppercase();
         if sql_upper.starts_with("EXPLAIN ") {
             let inner_sql = req.sql_batch.trim()["EXPLAIN ".len()..].trim();
-            let index_descriptors: Vec<(String, String, String)> = state.index_manager
+            let index_descriptors: Vec<(String, String, String)> = state.storage.index_manager
                 .lock()
                 .ok()
                 .map(|mgr| {
@@ -1993,7 +1993,7 @@ pub(crate) async fn sql_execute(
     // ISSUE-05: Also snapshot catalog-registered UDFs for inline substitution.
     // MV-1: Also snapshot materialized view names so SELECT FROM matview can be intercepted.
     let (view_catalog_snapshot, udf_catalog_snapshot, matview_names): (Vec<(String, String)>, Vec<crate::helpers::udf::CatalogUdfEntry>, std::collections::HashSet<String>) = {
-        match state.ddl_catalog.lock() {
+        match state.storage.ddl_catalog.lock() {
             Ok(cat) => {
                 // Only regular (non-materialized) views are expanded inline.
                 // Materialized views are served from the __matview: snapshot prefix.
@@ -2032,12 +2032,12 @@ pub(crate) async fn sql_execute(
                 .trim_end_matches(';')
                 .to_ascii_lowercase();
             {
-                let mut cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                let mut cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
                 cat.record_drop("", "", &view_name);
             };
             // Clear the cached snapshot rows.
             let matview_prefix = format!("__matview:{view_name}:");
-            let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+            let mut rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
             let xid = rs.begin_xid();
             let old_keys: Vec<String> = rs
                 .scan_at_snapshot(xid)
@@ -2094,7 +2094,7 @@ pub(crate) async fn sql_execute(
                 };
             let view_name = view_name_upper.as_str();
             let defining_sql: Option<(String, String)> = {
-                let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                let cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
                 cat.get(view_name)
                     .filter(|e| e.object_kind == "materialized_view")
                     .map(|e| {
@@ -2123,7 +2123,7 @@ pub(crate) async fn sql_execute(
                     // MV-2: apply only the rows from the __delta:<base_table>: prefix.
                     let delta_prefix = format!("__delta:{base_table}:");
                     let matview_prefix = format!("__matview:{view_name}:");
-                    let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                     let xid = rs.begin_xid();
                     // Collect and clear deltas.
                     let deltas: Vec<(String, std::collections::HashMap<String, String>)> = rs
@@ -2169,12 +2169,12 @@ pub(crate) async fn sql_execute(
                 // Full refresh (default or CONCURRENTLY).
                 // Execute the SELECT against current row_store.
                 let snapshot = {
-                    let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                    let rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                     let xid = rs.current_xid();
-                    let rocksdb_rows = if let Ok(wal) = state.wal_engine.lock() {
+                    let rocksdb_rows = if let Ok(wal) = state.storage.wal_engine.lock() {
                         if wal.persists_rows() { Some(wal.scan_rows_for_db(&db, xid)) } else { None }
                     } else { None };
-                    let idx_mgr = state.index_manager.lock().unwrap_or_else(|e| e.into_inner());
+                    let idx_mgr = state.storage.index_manager.lock().unwrap_or_else(|e| e.into_inner());
                     crate::helpers::execution::execute_oltp_select(
                         &[select_sql.clone()], &rs, 100_000, &db, Some(xid), rocksdb_rows, Some(&idx_mgr),
                     )
@@ -2187,7 +2187,7 @@ pub(crate) async fn sql_execute(
                     format!("__matview:{view_name}:")
                 };
                 let matview_prefix = format!("__matview:{view_name}:");
-                let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                let mut rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                 let xid = rs.begin_xid();
                 // Remove old rows at write target.
                 let old_keys: Vec<String> = rs
@@ -2266,7 +2266,7 @@ pub(crate) async fn sql_execute(
             let table_name = upper.trim_start_matches("ANALYZE ")
                 .trim().trim_end_matches(';').to_ascii_lowercase();
             let rows: Vec<(String, std::collections::HashMap<String, String>)> = {
-                let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                let rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                 let xid = rs.current_xid();
                 let prefix = if db.is_empty() { format!("{table_name}:") } else { format!("{db}.{table_name}:") };
                 rs.scan_at_snapshot(xid).into_iter()
@@ -2395,7 +2395,7 @@ pub(crate) async fn sql_execute(
         // REQ-02: update DDL catalog when DDL statements touched the catalog
         if transaction.as_ref().map(|r| r.touches_catalog).unwrap_or(false) {
             let now_ms = now_unix_ms();
-            let mut catalog = match state.ddl_catalog.lock() {
+            let mut catalog = match state.storage.ddl_catalog.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("ddl_catalog")),
             };
@@ -2470,11 +2470,11 @@ pub(crate) async fn sql_execute(
                             // CACHE-1: DDL-trigger-driven cache invalidation on DROP TABLE.
                             if info.object_kind == "table" && !info.object_name.is_empty() {
                                 let prefix = format!("table:{}:", info.object_name);
-                                if let Ok(mut cache) = state.distributed_cache.lock() {
+                                if let Ok(mut cache) = state.ops.distributed_cache.lock() {
                                     cache.evict_by_prefix(&prefix);
                                 }
                                 // Also remove from partition registry (PART-1).
-                                if let Ok(mut reg) = state.partition_registry.lock() {
+                                if let Ok(mut reg) = state.storage.partition_registry.lock() {
                                     reg.remove(&info.object_name);
                                 }
                             }
@@ -2525,7 +2525,7 @@ pub(crate) async fn sql_execute(
                 let lower = stmt.trim().to_ascii_lowercase();
                 if lower.starts_with("create trigger ") {
                     if let Some(def) = voltnuerongrid_store::triggers::parse_create_trigger(stmt) {
-                        if let Ok(mut reg) = state.trigger_registry.lock() {
+                        if let Ok(mut reg) = state.storage.trigger_registry.lock() {
                             // Replace an existing trigger of the same name (idempotent DDL replay).
                             reg.remove_trigger(&def.name);
                             let _ = reg.register(def);
@@ -2533,7 +2533,7 @@ pub(crate) async fn sql_execute(
                     }
                 } else if lower.starts_with("drop trigger ") {
                     if let Some(name) = voltnuerongrid_store::triggers::parse_drop_trigger_name(stmt) {
-                        if let Ok(mut reg) = state.trigger_registry.lock() {
+                        if let Ok(mut reg) = state.storage.trigger_registry.lock() {
                             reg.remove_trigger(&name);
                         }
                     }
@@ -2557,7 +2557,7 @@ pub(crate) async fn sql_execute(
                 if parsed.is_empty() {
                     continue;
                 }
-                if let Ok(mut mgr) = state.constraint_manager.lock() {
+                if let Ok(mut mgr) = state.storage.constraint_manager.lock() {
                     for pc in parsed {
                         use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
                         if pc.kind == ConstraintKind::Check {
@@ -2594,7 +2594,7 @@ pub(crate) async fn sql_execute(
                             .unwrap_or("")
                             .to_ascii_lowercase();
                         if !table_name.is_empty() {
-                            if let Ok(mut reg) = state.partition_registry.lock() {
+                            if let Ok(mut reg) = state.storage.partition_registry.lock() {
                                 reg.insert(table_name, part_col);
                             }
                         }
@@ -2637,18 +2637,18 @@ pub(crate) async fn sql_execute(
                     };
                     if !view_name.is_empty() && !select_clean.is_empty() {
                         let snapshot = {
-                            let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                            let rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                             let xid = rs.current_xid();
-                            let rocksdb_rows = if let Ok(wal) = state.wal_engine.lock() {
+                            let rocksdb_rows = if let Ok(wal) = state.storage.wal_engine.lock() {
                                 if wal.persists_rows() { Some(wal.scan_rows_for_db(&db, xid)) } else { None }
                             } else { None };
-                            let idx_mgr = state.index_manager.lock().unwrap_or_else(|e| e.into_inner());
+                            let idx_mgr = state.storage.index_manager.lock().unwrap_or_else(|e| e.into_inner());
                             crate::helpers::execution::execute_oltp_select(
                                 &[select_clean.clone()], &rs, 100_000, &db, Some(xid), rocksdb_rows, Some(&idx_mgr),
                             )
                         };
                         let matview_prefix = format!("__matview:{view_name}:");
-                        let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
                         let xid = rs.begin_xid();
                         for (i, row) in snapshot.iter().enumerate() {
                             let k = format!("{matview_prefix}{i}");
@@ -2660,7 +2660,7 @@ pub(crate) async fn sql_execute(
                     }
                 }
             }
-            catalog = match state.ddl_catalog.lock() {
+            catalog = match state.storage.ddl_catalog.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("ddl_catalog")),
             };
@@ -2750,14 +2750,14 @@ pub(crate) async fn sql_execute(
             // Pre-apply leadership check: in a multi-node cluster, followers must
             // not write DML locally — they have no way to replicate.  Try to proxy
             // the request transparently to the current leader; fall back to 503.
-            let peer_count = state.raft_peers.len();
+            let peer_count = state.cluster.raft_peers.len();
             if peer_count > 0 {
                 let is_leader = {
-                    let node = state.raft_state.lock().expect("raft_state lock leadership_precheck");
+                    let node = state.cluster.raft_state.lock().expect("raft_state lock leadership_precheck");
                     node.role == crate::RaftRole::Leader
                 };
                 if !is_leader {
-                    let leader_url = state.current_leader_url.lock().expect("leader_url lock").clone();
+                    let leader_url = state.cluster.current_leader_url.lock().expect("leader_url lock").clone();
                     release_sql_data_plane_connection(&state, &connection_id);
                     if let Some(ref url) = leader_url {
                         let forward_body = serde_json::json!({
@@ -2773,7 +2773,7 @@ pub(crate) async fn sql_execute(
                                 builder = builder.header(*hdr, val);
                             }
                         }
-                        if let Some(token) = state.cluster_token.as_ref().as_deref() {
+                        if let Some(token) = state.cluster.cluster_token.as_ref().as_deref() {
                             builder = builder.header("x-vng-cluster-token", token);
                         }
                         if let Ok(leader_resp) = builder.send().await {
@@ -2812,9 +2812,9 @@ pub(crate) async fn sql_execute(
                 }
             }
 
-            let total_peers = state.raft_peers.len();
+            let total_peers = state.cluster.raft_peers.len();
             let is_multi_node_leader = {
-                let node = match state.raft_state.lock() {
+                let node = match state.cluster.raft_state.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("raft_state")),
                 };
@@ -2826,7 +2826,7 @@ pub(crate) async fn sql_execute(
                 // 1. Append every DML command to the Raft log (no row_store write yet).
                 let mut max_pending_index: u64 = 0;
                 {
-                    let mut node = match state.raft_state.lock() {
+                    let mut node = match state.cluster.raft_state.lock() {
                         Ok(g) => g,
                         Err(_) => return Err(lock_poisoned_err("raft_state")),
                     };
@@ -2853,7 +2853,7 @@ pub(crate) async fn sql_execute(
                 }
                 // 3. Wait for the apply loop to commit and apply (up to 2 s).
                 if max_pending_index > 0 {
-                    let mut rx = state.raft_last_applied_tx.subscribe();
+                    let mut rx = state.cluster.raft_last_applied_tx.subscribe();
                     let wait_ok = tokio::time::timeout(
                         std::time::Duration::from_secs(2),
                         rx.wait_for(|&applied| applied >= max_pending_index),
@@ -2880,7 +2880,7 @@ pub(crate) async fn sql_execute(
                 }
             } else {
                 // ── Direct path (single-node leader / follower / non-Raft) ────────
-                let mut rs = match state.row_store.lock() {
+                let mut rs = match state.storage.row_store.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("row_store")),
                 };
@@ -2901,10 +2901,10 @@ pub(crate) async fn sql_execute(
                         } else {
                             None
                         };
-                        if let Ok(mut acid) = state.acid_transactions.lock() {
+                        if let Ok(mut acid) = state.storage.acid_transactions.lock() {
                             acid.begin(&tx_id, &state.node_id, req_iso, now_unix_ms(), begin_snapshot_xid);
                         }
-                        if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                        if let Ok(mut conn_map) = state.storage.connection_tx_active.lock() {
                             conn_map.insert(connection_id.clone(), tx_id.clone());
                         }
                         Some(tx_id)
@@ -2923,7 +2923,7 @@ pub(crate) async fn sql_execute(
                             let table_name = d.get("__table").map(|t| t.as_str()).unwrap_or("");
                             if !table_name.is_empty() {
                                 let validation_result = {
-                                    let cat = state.ddl_catalog.lock().expect("ddl_catalog validate");
+                                    let cat = state.storage.ddl_catalog.lock().expect("ddl_catalog validate");
                                     validate_row_against_ddl(table_name, &d, &cat)
                                 };
                                 if let Err(msg) = validation_result {
@@ -2940,7 +2940,7 @@ pub(crate) async fn sql_execute(
                                     ));
                                 }
                                 // CON-1: Validate constraints (PK/UNIQUE/NOT NULL) before writing.
-                                if let Ok(mgr) = state.constraint_manager.lock() {
+                                if let Ok(mgr) = state.storage.constraint_manager.lock() {
                                     // Q-4: reject INSERTs that omit a NOT NULL / PRIMARY KEY column.
                                     for req_col in mgr.not_null_columns(table_name) {
                                         let present = d
@@ -2989,9 +2989,9 @@ pub(crate) async fn sql_execute(
                                     *stats_inserts.entry(k[..colon].to_string()).or_insert(0) += 1;
                                 }
                             }
-                            record_undo(&state.tx_undo_log, &connection_id, &k, before);
+                            record_undo(&state.storage.tx_undo_log, &connection_id, &k, before);
                             let _ = rs.begin_write_intent(xid, &k);
-                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
+                            { let mut wal = state.storage.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&d)); }
                             rs.insert(xid, &k, d.clone());
                             // MV-2: Write delta record for incremental matview tracking.
                             if !table_name.is_empty() && !raw_k.starts_with("__") {
@@ -3003,7 +3003,7 @@ pub(crate) async fn sql_execute(
                             }
                             // CON-1: Record committed values for PK/UNIQUE tracking after successful insert.
                             if !table_name.is_empty() {
-                                if let Ok(mut mgr) = state.constraint_manager.lock() {
+                                if let Ok(mut mgr) = state.storage.constraint_manager.lock() {
                                     for (col, val) in d.iter().filter(|(c, _)| !c.starts_with("__")) {
                                         mgr.record_committed_value(table_name, col, val);
                                     }
@@ -3040,7 +3040,7 @@ pub(crate) async fn sql_execute(
                                     // a crash-recovery boot.  Lock ordering: wal_engine inside
                                     // row_store is already the established pattern (store_row).
                                     let scan_rows: Vec<(String, std::collections::HashMap<String, String>)> =
-                                        if let Ok(wal) = state.wal_engine.lock() {
+                                        if let Ok(wal) = state.storage.wal_engine.lock() {
                                             if wal.persists_rows() {
                                                 // RocksDB keys have NO db prefix — add it so the
                                                 // existing filter/write logic (which strips it) works unchanged.
@@ -3081,7 +3081,7 @@ pub(crate) async fn sql_execute(
                                         let mut updated = existing;
                                         updated.insert(set_col.clone(), set_val.clone());
                                         // CON-1: Validate constraints on bulk UPDATE.
-                                        if let Ok(mgr) = state.constraint_manager.lock() {
+                                        if let Ok(mgr) = state.storage.constraint_manager.lock() {
                                             let mut violation_found: Option<String> = None;
                                             for (col, val) in updated.iter().filter(|(c, _)| !c.starts_with("__")) {
                                                 // Q-4 fix: skip columns whose value is unchanged so a
@@ -3109,14 +3109,14 @@ pub(crate) async fn sql_execute(
                                                 ));
                                             }
                                         }
-                                        record_undo(&state.tx_undo_log, &connection_id, &matched_k, before.clone());
+                                        record_undo(&state.storage.tx_undo_log, &connection_id, &matched_k, before.clone());
                                         let _ = rs.begin_write_intent(xid, &matched_k);
                                         let raw_k_stripped = if db_prefix_str.is_empty() {
                                             matched_k.clone()
                                         } else {
                                             matched_k.strip_prefix(&db_prefix_str).unwrap_or(matched_k.as_str()).to_string()
                                         };
-                                        { let mut wal = state.wal_engine.lock().expect("wal store_row bulk"); wal.store_row(&db, &raw_k_stripped, xid, Some(&updated)); }
+                                        { let mut wal = state.storage.wal_engine.lock().expect("wal store_row bulk"); wal.store_row(&db, &raw_k_stripped, xid, Some(&updated)); }
                                         rs.insert(xid, &matched_k, updated.clone());
                                         // ISSUE-03: fire AFTER UPDATE triggers.
                                         fire_dml_triggers(&state, &tbl, "public", &TriggerEvent::AfterUpdate, before.as_ref(), Some(&updated));
@@ -3137,7 +3137,7 @@ pub(crate) async fn sql_execute(
                                 let table_name_upd = d.get("__table").map(|s| s.as_str()).unwrap_or("");
                                 // CON-1: Validate constraints on UPDATE (merged row values).
                                 if !table_name_upd.is_empty() {
-                                    if let Ok(mgr) = state.constraint_manager.lock() {
+                                    if let Ok(mgr) = state.storage.constraint_manager.lock() {
                                         for (col, val) in merged.iter().filter(|(c, _)| !c.starts_with("__")) {
                                             // Q-4 fix: skip columns whose value is unchanged so a
                                             // row's own PK/UNIQUE value does not conflict with itself.
@@ -3161,9 +3161,9 @@ pub(crate) async fn sql_execute(
                                         }
                                     }
                                 }
-                                record_undo(&state.tx_undo_log, &connection_id, &k, before.clone());
+                                record_undo(&state.storage.tx_undo_log, &connection_id, &k, before.clone());
                                 let _ = rs.begin_write_intent(xid, &k);
-                                { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&merged)); }
+                                { let mut wal = state.storage.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, Some(&merged)); }
                                 rs.insert(xid, &k, merged.clone());
                                 // ISSUE-03: fire AFTER UPDATE triggers.
                                 fire_dml_triggers(&state, table_name_upd, "public", &TriggerEvent::AfterUpdate, before.as_ref(), Some(&merged));
@@ -3184,7 +3184,7 @@ pub(crate) async fn sql_execute(
                                 // C-1: prefer RocksDB as the primary scan source for bulk DELETE
                                 // when the durability engine persists rows (same reasoning as bulk UPDATE).
                                 let scan_rows: Vec<(String, std::collections::HashMap<String, String>)> =
-                                    if let Ok(wal) = state.wal_engine.lock() {
+                                    if let Ok(wal) = state.storage.wal_engine.lock() {
                                         if wal.persists_rows() {
                                             wal.scan_rows_for_db(&db, snapshot_xid)
                                                 .into_iter()
@@ -3221,11 +3221,11 @@ pub(crate) async fn sql_execute(
                                             *stats_inserts.entry(matched_k[..colon].to_string()).or_insert(0) -= 1;
                                         }
                                     }
-                                    record_undo(&state.tx_undo_log, &connection_id, &matched_k, before.clone());
+                                    record_undo(&state.storage.tx_undo_log, &connection_id, &matched_k, before.clone());
                                     let _ = rs.begin_write_intent(xid, &matched_k);
                                     rs.delete(xid, &matched_k);
                                     let raw_k = matched_k.trim_start_matches(&format!("{db_prefix_str}")).to_string();
-                                    { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
+                                    { let mut wal = state.storage.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
                                     // ISSUE-03: fire AFTER DELETE triggers.
                                     fire_dml_triggers(&state, &tbl, "public", &TriggerEvent::AfterDelete, before.as_ref(), None);
                                 }
@@ -3243,10 +3243,10 @@ pub(crate) async fn sql_execute(
                             }
                             // Extract table name from the raw key (format: "table:id").
                             let del_table = raw_k.split(':').next().unwrap_or("");
-                            record_undo(&state.tx_undo_log, &connection_id, &k, before.clone());
+                            record_undo(&state.storage.tx_undo_log, &connection_id, &k, before.clone());
                             let _ = rs.begin_write_intent(xid, &k);
                             rs.delete(xid, &k);
-                            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
+                            { let mut wal = state.storage.wal_engine.lock().expect("wal store_row"); wal.store_row(&db, &raw_k, xid, None); }
                             // MV-2: Write delta record for incremental matview tracking.
                             if !del_table.is_empty() && !raw_k.starts_with("__") {
                                 let delta_key = format!("__delta:{}:{}", del_table, raw_k);
@@ -3270,14 +3270,14 @@ pub(crate) async fn sql_execute(
                         u == "ROLLBACK" || u.starts_with("ROLLBACK;") || u.starts_with("ROLLBACK ")
                     });
                     if let Some(ref tx_id) = implicit_tx_id {
-                        if let Ok(mut acid) = state.acid_transactions.lock() {
+                        if let Ok(mut acid) = state.storage.acid_transactions.lock() {
                             if batch_has_rollback {
                                 acid.rollback(tx_id, now_unix_ms());
                             } else {
                                 acid.commit(tx_id, now_unix_ms());
                             }
                         }
-                        if let Ok(mut conn_map) = state.connection_tx_active.lock() {
+                        if let Ok(mut conn_map) = state.storage.connection_tx_active.lock() {
                             conn_map.remove(&connection_id);
                         }
                     }
@@ -3285,7 +3285,7 @@ pub(crate) async fn sql_execute(
 
                 // Gap #7: Apply incremental stat deltas (O(tables_touched) instead of O(all_rows)).
                 if !stats_inserts.is_empty() {
-                    if let Ok(mut stats) = state.table_stats.lock() {
+                    if let Ok(mut stats) = state.storage.table_stats.lock() {
                         for (table_key, delta) in &stats_inserts {
                             let cur = stats.entry(table_key.clone()).or_insert(0);
                             *cur = (*cur as i64 + delta).max(0) as u64;
@@ -3298,7 +3298,7 @@ pub(crate) async fn sql_execute(
                     let state_clone = state.clone();
                     let db_clone = db.clone();
                     tokio::spawn(async move {
-                        let snapshot = if let Ok(rs) = state_clone.row_store.lock() {
+                        let snapshot = if let Ok(rs) = state_clone.storage.row_store.lock() {
                             rs.export_rows_snapshot()
                         } else {
                             return;
@@ -3316,7 +3316,7 @@ pub(crate) async fn sql_execute(
                             let table = after_db.split(':').next().unwrap_or(after_db);
                             *table_counts.entry(table.to_string()).or_default() += 1;
                         }
-                        if let Ok(mut reg) = state_clone.stats_registry.lock() {
+                        if let Ok(mut reg) = state_clone.storage.stats_registry.lock() {
                             for (tbl, cnt) in table_counts {
                                 reg.update_table(&tbl, cnt, std::collections::HashMap::new());
                             }
@@ -3326,7 +3326,7 @@ pub(crate) async fn sql_execute(
                 // Fire-and-forget: replicate to Raft log so followers catch up.
                 // append_command pre-advances last_applied so the apply loop skips re-execution.
                 {
-                    let mut node = match state.raft_state.lock() {
+                    let mut node = match state.cluster.raft_state.lock() {
                         Ok(g) => g,
                         Err(_) => return Err(lock_poisoned_err("raft_state")),
                     };
@@ -3357,13 +3357,13 @@ pub(crate) async fn sql_execute(
 
     if has_rollback {
         let undo_entries = {
-            match state.tx_undo_log.lock() {
+            match state.storage.tx_undo_log.lock() {
                 Ok(mut log) => log.remove(&connection_id).unwrap_or_default(),
                 Err(_) => Vec::new(),
             }
         };
         if !undo_entries.is_empty() {
-            let mut rs = match state.row_store.lock() {
+            let mut rs = match state.storage.row_store.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("row_store")),
             };
@@ -3384,7 +3384,7 @@ pub(crate) async fn sql_execute(
         }
     } else if has_commit {
         // Gap #3: COMMIT — clear the undo log for this connection.
-        if let Ok(mut log) = state.tx_undo_log.lock() { log.remove(&connection_id); }
+        if let Ok(mut log) = state.storage.tx_undo_log.lock() { log.remove(&connection_id); }
     }
 
     if !olap_statements.is_empty() {
@@ -3396,10 +3396,10 @@ pub(crate) async fn sql_execute(
             .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
         if require_leader_reads {
-            let total_peers = state.raft_peers.len();
+            let total_peers = state.cluster.raft_peers.len();
             if total_peers > 0 {
                 let is_leader = {
-                    let node = state.raft_state.lock().expect("raft_state leader read check");
+                    let node = state.cluster.raft_state.lock().expect("raft_state leader read check");
                     node.role == crate::RaftRole::Leader
                 };
                 if !is_leader {
@@ -3438,7 +3438,7 @@ pub(crate) async fn sql_execute(
         let started = std::time::Instant::now();
         let query = olap_statements.join("; ");
         let limit = req.max_rows.unwrap_or(1_000).min(100_000);
-        let rs = state.row_store.lock().expect("row_store lock olap_execute");
+        let rs = state.storage.row_store.lock().expect("row_store lock olap_execute");
         let table_names = collect_query_table_names(&query);
         let all_rows = rs.export_rows_snapshot();
         drop(rs);
@@ -3507,7 +3507,7 @@ pub(crate) async fn sql_execute(
             // hydrated from RocksDB when RocksDB is the active durability engine.
             data_source: {
                 let persists = state
-                    .wal_engine
+                    .storage.wal_engine
                     .lock()
                     .map(|w| w.persists_rows())
                     .unwrap_or(false);
@@ -3532,10 +3532,10 @@ pub(crate) async fn sql_execute(
         // REQ-12: collect real numeric values from all ingest stores; fall back to synthetic sample.
         let mut real_values: Vec<f64> = Vec::new();
         for store in [
-            &state.ingest_csv_records,
-            &state.ingest_json_records,
-            &state.ingest_parquet_records,
-            &state.ingest_excel_records,
+            &state.ingest.ingest_csv_records,
+            &state.ingest.ingest_json_records,
+            &state.ingest.ingest_parquet_records,
+            &state.ingest.ingest_excel_records,
         ] {
             if let Ok(guard) = store.lock() {
                 for records in guard.values() {
@@ -3588,7 +3588,7 @@ pub(crate) async fn sql_execute(
         // H-1: Build an index descriptor list for index-aware cost routing.
         // Snapshot (table, column, index_name) from the IndexManager so the planner
         // can promote Filter(Scan) → IndexScan and assign lower cost to index lookups.
-        let index_descriptors: Vec<(String, String, String)> = state.index_manager
+        let index_descriptors: Vec<(String, String, String)> = state.storage.index_manager
             .lock()
             .ok()
             .map(|mgr| {
@@ -3636,20 +3636,20 @@ pub(crate) async fn sql_execute(
         if planner_path.as_deref() == Some("oltp") && !olap_statements.is_empty() {
             // C-3: use repeatable-read snapshot if this connection has one.
             let rr_snapshot_xid: Option<u64> = {
-                let conn_map = state.connection_tx_active.lock().ok();
+                let conn_map = state.storage.connection_tx_active.lock().ok();
                 conn_map.and_then(|m| m.get(&connection_id).and_then(|tx_id| {
-                    state.acid_transactions.lock().ok()
+                    state.storage.acid_transactions.lock().ok()
                         .and_then(|a| a.rr_read_snapshot_xid(tx_id))
                 }))
             };
-            let rs = match state.row_store.lock() {
+            let rs = match state.storage.row_store.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("row_store")),
             };
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
             // C-1: fetch rows from RocksDB as primary read source when available.
             let rocksdb_rows_oltp: Option<Vec<(String, std::collections::HashMap<String, String>)>> = {
-                let wal = match state.wal_engine.lock() {
+                let wal = match state.storage.wal_engine.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("wal_engine")),
                 };
@@ -3660,7 +3660,7 @@ pub(crate) async fn sql_execute(
                     None
                 }
             };
-            let idx_mgr = state.index_manager.lock().ok();
+            let idx_mgr = state.storage.index_manager.lock().ok();
             // M-6: check deadline before OLTP select (full table scans can be slow).
             check_deadline(statement_deadline).map_err(|e| { release_sql_data_plane_connection(&state, &connection_id); e })?;
             let rows = execute_oltp_select(&olap_statements, &rs, limit, &db, rr_snapshot_xid, rocksdb_rows_oltp, idx_mgr.as_deref());
@@ -3670,11 +3670,11 @@ pub(crate) async fn sql_execute(
             // active serializable transaction's read-set so phantom detection
             // at COMMIT time can check read-write anti-dependencies.
             if !rows.is_empty() {
-                let active_tx_id: Option<String> = state.connection_tx_active
+                let active_tx_id: Option<String> = state.storage.connection_tx_active
                     .lock().ok()
                     .and_then(|m| m.get(&connection_id).cloned());
                 if let Some(tx_id) = active_tx_id {
-                    if let Ok(mut acid) = state.acid_transactions.lock() {
+                    if let Ok(mut acid) = state.storage.acid_transactions.lock() {
                         let read_keys: Vec<String> = rows.iter()
                             .map(|r| db_prefix_key(&db, &r.key))
                             .collect();
@@ -3699,7 +3699,7 @@ pub(crate) async fn sql_execute(
             let first_sql = olap_statements.first().map(|s| s.clone());
             if let Some(sql) = first_sql {
                 // Snapshot rows for all referenced tables.
-                let rs = match state.row_store.lock() {
+                let rs = match state.storage.row_store.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("row_store")),
                 };
@@ -3787,7 +3787,7 @@ pub(crate) async fn sql_execute(
     let (result_columns, result_rows): (Option<Vec<serde_json::Value>>, Option<Vec<serde_json::Value>>) =
         if !olap_statements.is_empty() {
             use voltnuerongrid_sql::{parse_one, Statement};
-            let rs = match state.row_store.lock() {
+            let rs = match state.storage.row_store.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("row_store")),
             };
@@ -3795,7 +3795,7 @@ pub(crate) async fn sql_execute(
             let db_prefix_filter = if db.is_empty() { String::new() } else { format!("{db}.") };
             // C-1: prefer RocksDB as primary read source when available.
             let all_rows: Vec<(String, std::collections::HashMap<String, String>)> = {
-                let wal = match state.wal_engine.lock() {
+                let wal = match state.storage.wal_engine.lock() {
                     Ok(g) => g,
                     Err(_) => return Err(lock_poisoned_err("wal_engine")),
                 };
@@ -3840,7 +3840,7 @@ pub(crate) async fn sql_execute(
                     // These are used to (a) build the column header list in the right order,
                     // and (b) remap positional `col_N` storage keys back to readable names.
                     let ddl_cols: Vec<String> = filter_table.as_deref().map(|tbl| {
-                        let catalog = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                        let catalog = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
                         catalog.get(tbl)
                             .map(|e| extract_column_names_from_ddl(&e.original_statement))
                             .unwrap_or_default()
@@ -3969,7 +3969,7 @@ pub(crate) async fn sql_execute(
         // P4: Compute OLAP freshness lag — milliseconds since the last committed
         // OLTP mutation was appended to the HTAP sync origin.
         freshness_lag_ms: if matches!(decision.payload.path, crate::QueryPath::Olap | crate::QueryPath::Hybrid) {
-            if let Ok(origin) = state.sync_origin.lock() {
+            if let Ok(origin) = state.cluster.sync_origin.lock() {
                 let last_ms = origin.last_mutation_epoch_ms();
                 if last_ms > 0 {
                     Some((now_unix_ms() as u64).saturating_sub(last_ms))
@@ -4019,7 +4019,7 @@ pub(crate) async fn sql_transactions_isolation(
         PrivilegeAction::Read,
         "sql/transactions/isolation",
     )?;
-    let acid = match state.acid_transactions.lock() {
+    let acid = match state.storage.acid_transactions.lock() {
         Ok(g) => g,
         Err(_) => return Err(lock_poisoned_err("acid_transactions")),
     };
@@ -4048,7 +4048,7 @@ pub(crate) async fn sql_transactions_active(
         PrivilegeAction::Read,
         "sql/transactions/active",
     )?;
-    let acid = match state.acid_transactions.lock() {
+    let acid = match state.storage.acid_transactions.lock() {
         Ok(g) => g,
         Err(_) => return Err(lock_poisoned_err("acid_transactions")),
     };
@@ -4119,7 +4119,7 @@ fn handle_create_index_ddl(state: &AppState, sql: &str, db: &str) {
 
     // Register one BTree index per column (IndexDescriptor is single-column).
     // For multi-column indexes, each column gets its own index entry named "idx_name_col".
-    let rs = state.row_store.lock().expect("row_store lock create_index backfill");
+    let rs = state.storage.row_store.lock().expect("row_store lock create_index backfill");
     let snapshot_xid = rs.current_xid();
     // Collect rows for this table from the row store.
     let table_prefix = if db.is_empty() {
@@ -4140,7 +4140,7 @@ fn handle_create_index_ddl(state: &AppState, sql: &str, db: &str) {
         .collect();
     drop(rs); // release row_store before acquiring index_manager
 
-    let mut mgr = state.index_manager.lock().expect("index_manager lock create_index");
+    let mut mgr = state.storage.index_manager.lock().expect("index_manager lock create_index");
     for col in &columns {
         let entry_name = if columns.len() == 1 {
             idx_name.clone()
@@ -4182,7 +4182,7 @@ fn handle_create_index_ddl(state: &AppState, sql: &str, db: &str) {
 
 // ── M-2: GRANT / REVOKE / CREATE ROLE / DROP ROLE helpers ───────────────────
 
-/// Parse and apply a GRANT statement to `state.db_grants`.
+/// Parse and apply a GRANT statement to `state.auth.db_grants`.
 ///
 /// Accepted forms:
 ///   GRANT <role> ON DATABASE <db> TO <user>
@@ -4203,12 +4203,12 @@ fn handle_grant_sql(state: &AppState, sql: &str) {
     if role.is_empty() || db.is_empty() {
         return;
     }
-    if let Ok(mut grants) = state.db_grants.lock() {
+    if let Ok(mut grants) = state.auth.db_grants.lock() {
         grants.entry(db).or_default().insert(role);
     }
 }
 
-/// Parse and apply a REVOKE statement to `state.db_grants`.
+/// Parse and apply a REVOKE statement to `state.auth.db_grants`.
 ///
 /// Accepted form:
 ///   REVOKE <role> FROM <user> ON DATABASE <db>
@@ -4228,7 +4228,7 @@ fn handle_revoke_sql(state: &AppState, sql: &str) {
     if role.is_empty() || db.is_empty() {
         return;
     }
-    if let Ok(mut grants) = state.db_grants.lock() {
+    if let Ok(mut grants) = state.auth.db_grants.lock() {
         if let Some(roles) = grants.get_mut(&db) {
             roles.remove(&role);
         }

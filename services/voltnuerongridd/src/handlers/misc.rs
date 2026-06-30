@@ -498,11 +498,11 @@ pub(crate) async fn olap_query(
     State(state): State<AppState>,
     Json(req): Json<OlapQueryRequest>,
 ) -> Json<OlapQueryResponse> {
-    let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+    let rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
     let data_dir = state.runtime_config.storage.data_dir.clone();
     // C-1: fetch rows from RocksDB when available (db = "" = no db scope).
     let rocksdb_rows: Option<Vec<(String, std::collections::HashMap<String, String>)>> = {
-        let wal = state.wal_engine.lock().unwrap_or_else(|e| e.into_inner());
+        let wal = state.storage.wal_engine.lock().unwrap_or_else(|e| e.into_inner());
         if wal.persists_rows() {
             Some(wal.scan_rows_for_db("", rs.current_xid()))
         } else {
@@ -519,12 +519,12 @@ pub(crate) async fn failover_status(
 ) -> Result<Json<FailoverStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
     let leader = state
-        .leader_node_id
+        .cluster.leader_node_id
         .lock()
         .map(|value| value.clone())
         .unwrap_or_else(|_| state.node_id.clone());
     let unresolved_critical_count = state
-        .cluster_failure_signals
+        .cluster.cluster_failure_signals
         .lock()
         .map(|signals| {
             signals
@@ -555,7 +555,7 @@ pub(crate) async fn failover_simulate(
 ) -> Result<Json<FailoverSimulateResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     let operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     let (previous_leader_node_id, new_leader_node_id) =
-        rotate_leader(&state.leader_node_id, &req.new_leader_node_id, &state.node_id);
+        rotate_leader(&state.cluster.leader_node_id, &req.new_leader_node_id, &state.node_id);
     record_transport_mutation(
         &state,
         &previous_leader_node_id,
@@ -639,9 +639,9 @@ pub(crate) async fn failover_simulate(
 /// CACHE-1: Persist the distributed cache to the snapshot file.
 /// Non-fatal: logs a warning but does not abort on I/O failure.
 pub(crate) fn persist_cache_snapshot(state: &AppState) {
-    if let Ok(cache) = state.distributed_cache.lock() {
+    if let Ok(cache) = state.ops.distributed_cache.lock() {
         let json = cache.snapshot_to_json();
-        let path = state.cache_snapshot_path.as_ref();
+        let path = state.ops.cache_snapshot_path.as_ref();
         if let Some(dir) = std::path::Path::new(path).parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -655,11 +655,11 @@ pub(crate) fn persist_cache_snapshot(state: &AppState) {
 
 /// CACHE-1: Load the distributed cache from the snapshot file on startup.
 pub(crate) fn load_cache_snapshot(state: &AppState) {
-    let path = state.cache_snapshot_path.as_ref();
+    let path = state.ops.cache_snapshot_path.as_ref();
     if let Ok(data) = std::fs::read_to_string(path) {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
             let now_ms = now_unix_ms_u64();
-            if let Ok(mut cache) = state.distributed_cache.lock() {
+            if let Ok(mut cache) = state.ops.distributed_cache.lock() {
                 cache.restore_from_json(&json, now_ms);
                 tracing::info!("cache_snapshot loaded from {path}");
             }
@@ -698,7 +698,7 @@ pub(crate) async fn cache_redis_command(
         },
         "GET" => {
             let key = req.key.as_deref().unwrap_or("");
-            let result = state.distributed_cache.lock().expect("cache manager lock")
+            let result = state.ops.distributed_cache.lock().expect("cache manager lock")
                 .get(partition_id, key, now_ms);
             match result {
                 Ok(value) => RedisCacheCommandResponse {
@@ -726,7 +726,7 @@ pub(crate) async fn cache_redis_command(
         "SET" => {
             let key = req.key.clone().unwrap_or_default();
             let value = req.value.clone().unwrap_or(serde_json::Value::Null);
-            let result = state.distributed_cache.lock().expect("cache manager lock")
+            let result = state.ops.distributed_cache.lock().expect("cache manager lock")
                 .set(partition_id, key, value, req.ttl_ms, now_ms);
             // CACHE-1: Persist cache to disk after mutation.
             if result.is_ok() {
@@ -745,7 +745,7 @@ pub(crate) async fn cache_redis_command(
         }
         "DEL" => {
             let key = req.key.as_deref().unwrap_or("");
-            let result = state.distributed_cache.lock().expect("cache manager lock")
+            let result = state.ops.distributed_cache.lock().expect("cache manager lock")
                 .invalidate(partition_id, key);
             match result {
                 Ok(removed) => {
@@ -776,7 +776,7 @@ pub(crate) async fn cache_redis_command(
         }
         "EXISTS" => {
             let key = req.key.as_deref().unwrap_or("");
-            let result = state.distributed_cache.lock().expect("cache manager lock")
+            let result = state.ops.distributed_cache.lock().expect("cache manager lock")
                 .get(partition_id, key, now_ms);
             let exists = result.as_ref().map(|v| v.is_some()).unwrap_or(false);
             RedisCacheCommandResponse {
@@ -791,7 +791,7 @@ pub(crate) async fn cache_redis_command(
             }
         }
         "KEYS" => {
-            let result = state.distributed_cache.lock().expect("cache manager lock")
+            let result = state.ops.distributed_cache.lock().expect("cache manager lock")
                 .keys_in_partition(partition_id, now_ms);
             match result {
                 Ok(keys) => RedisCacheCommandResponse {
@@ -817,7 +817,7 @@ pub(crate) async fn cache_redis_command(
             }
         }
         "FLUSH" => {
-            let result = state.distributed_cache.lock().expect("cache manager lock")
+            let result = state.ops.distributed_cache.lock().expect("cache manager lock")
                 .invalidate_partition(partition_id);
             match result {
                 Ok(flushed) => RedisCacheCommandResponse {
@@ -846,7 +846,7 @@ pub(crate) async fn cache_redis_command(
         "EXPIRE" => {
             let key = req.key.as_deref().unwrap_or("");
             let ttl = req.expire_ms.or(req.ttl_ms).unwrap_or(60_000);
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             match cache.expire_key(partition_id, key, ttl, now_ms) {
                 Ok(updated) => RedisCacheCommandResponse {
                     status: "ok",
@@ -874,7 +874,7 @@ pub(crate) async fn cache_redis_command(
         "INCR" | "INCRBY" => {
             let key = req.key.as_deref().unwrap_or("");
             let delta = if cmd.as_str() == "INCR" { 1.0 } else { req.delta.unwrap_or(1.0) };
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             match cache.increment_key(partition_id, key, delta, req.ttl_ms, now_ms) {
                 Ok(new_val) => RedisCacheCommandResponse {
                     status: "ok",
@@ -902,7 +902,7 @@ pub(crate) async fn cache_redis_command(
         "DECR" | "DECRBY" => {
             let key = req.key.as_deref().unwrap_or("");
             let delta = if cmd.as_str() == "DECR" { -1.0 } else { -(req.delta.unwrap_or(1.0)) };
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             match cache.increment_key(partition_id, key, delta, req.ttl_ms, now_ms) {
                 Ok(new_val) => RedisCacheCommandResponse {
                     status: "ok",
@@ -929,7 +929,7 @@ pub(crate) async fn cache_redis_command(
         // REQ-27: MGET â€” return values for multiple keys as a JSON array
         "MGET" => {
             let keys = req.keys.clone().unwrap_or_default();
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let mut results = Vec::new();
             for k in &keys {
                 let v = cache.get(partition_id, k, now_ms).ok().flatten();
@@ -954,7 +954,7 @@ pub(crate) async fn cache_redis_command(
             };
             let count = obj.len();
             {
-                let mut cache = state.distributed_cache.lock().expect("cache lock");
+                let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
                 for (k, v) in obj {
                     let _ = cache.set(partition_id, k, v, req.ttl_ms, now_ms);
                 }
@@ -968,7 +968,7 @@ pub(crate) async fn cache_redis_command(
         "GETSET" => {
             let key = req.key.as_deref().unwrap_or("");
             let new_val = req.value.clone().unwrap_or(serde_json::Value::Null);
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let old_val = cache.get(partition_id, key, now_ms).ok().flatten();
             let _ = cache.set(partition_id, key.to_string(), new_val, req.ttl_ms, now_ms);
             RedisCacheCommandResponse {
@@ -980,7 +980,7 @@ pub(crate) async fn cache_redis_command(
         "LPUSH" => {
             let key = req.key.as_deref().unwrap_or("");
             let push_val = req.value.clone().unwrap_or(serde_json::Value::Null);
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let mut list: Vec<serde_json::Value> = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Array(arr)) => arr,
                 _ => Vec::new(),
@@ -997,7 +997,7 @@ pub(crate) async fn cache_redis_command(
         "RPUSH" => {
             let key = req.key.as_deref().unwrap_or("");
             let push_val = req.value.clone().unwrap_or(serde_json::Value::Null);
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let mut list: Vec<serde_json::Value> = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Array(arr)) => arr,
                 _ => Vec::new(),
@@ -1013,7 +1013,7 @@ pub(crate) async fn cache_redis_command(
         // REQ-27: LLEN â€” return the length of a list
         "LLEN" => {
             let key = req.key.as_deref().unwrap_or("");
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let len = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Array(arr)) => arr.len(),
                 _ => 0,
@@ -1029,7 +1029,7 @@ pub(crate) async fn cache_redis_command(
             let key = req.key.as_deref().unwrap_or("");
             let start = req.start.unwrap_or(0);
             let stop = req.stop.unwrap_or(-1);
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let list: Vec<serde_json::Value> = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Array(arr)) => arr,
                 _ => Vec::new(),
@@ -1051,7 +1051,7 @@ pub(crate) async fn cache_redis_command(
             let key = req.key.as_deref().unwrap_or("");
             let field = req.field.as_deref().unwrap_or("");
             let val = req.value.clone().unwrap_or(serde_json::Value::Null);
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let mut hash: serde_json::Map<String, serde_json::Value> =
                 match cache.get(partition_id, key, now_ms).ok().flatten() {
                     Some(serde_json::Value::Object(m)) => m,
@@ -1068,7 +1068,7 @@ pub(crate) async fn cache_redis_command(
         "HGET" => {
             let key = req.key.as_deref().unwrap_or("");
             let field = req.field.as_deref().unwrap_or("");
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let field_val = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Object(m)) => m.get(field).cloned(),
                 _ => None,
@@ -1082,7 +1082,7 @@ pub(crate) async fn cache_redis_command(
         "HDEL" => {
             let key = req.key.as_deref().unwrap_or("");
             let field = req.field.as_deref().unwrap_or("");
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let mut removed = false;
             match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Object(mut m)) => {
@@ -1099,7 +1099,7 @@ pub(crate) async fn cache_redis_command(
         // REQ-27: HGETALL — return full hash as JSON object
         "HGETALL" => {
             let key = req.key.as_deref().unwrap_or("");
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let hash_val = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(v @ serde_json::Value::Object(_)) => v,
                 _ => serde_json::Value::Object(serde_json::Map::new()),
@@ -1113,7 +1113,7 @@ pub(crate) async fn cache_redis_command(
         "SADD" => {
             let key = req.key.as_deref().unwrap_or("");
             let member = req.value.clone().unwrap_or(serde_json::Value::Null);
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let mut set: Vec<serde_json::Value> = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Array(arr)) => arr,
                 _ => Vec::new(),
@@ -1133,7 +1133,7 @@ pub(crate) async fn cache_redis_command(
         // REQ-27: SMEMBERS — return all members of a set
         "SMEMBERS" => {
             let key = req.key.as_deref().unwrap_or("");
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let members = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Array(arr)) => arr,
                 _ => Vec::new(),
@@ -1146,7 +1146,7 @@ pub(crate) async fn cache_redis_command(
         // REQ-27: SCARD — return the cardinality (number of members) of a set
         "SCARD" => {
             let key = req.key.as_deref().unwrap_or("");
-            let mut cache = state.distributed_cache.lock().expect("cache lock");
+            let mut cache = state.ops.distributed_cache.lock().expect("cache lock");
             let card = match cache.get(partition_id, key, now_ms).ok().flatten() {
                 Some(serde_json::Value::Array(arr)) => arr.len(),
                 _ => 0,
@@ -1171,7 +1171,7 @@ pub(crate) async fn cache_redis_command(
             let key = req.key.clone().unwrap_or_default();
             let value = req.value.clone().unwrap_or(serde_json::Value::Null);
             // Persist the published value under the channel key so subscribers can poll.
-            let result = state.distributed_cache.lock().expect("cache manager lock")
+            let result = state.ops.distributed_cache.lock().expect("cache manager lock")
                 .set(partition_id, format!("__pub:{key}"), value, Some(60_000), now_ms);
             if result.is_ok() {
                 persist_cache_snapshot(&state);
@@ -1242,7 +1242,7 @@ pub(crate) async fn chaos_inject(
         injected_at_ms: now_epoch_ms_chaos(),
         cleared_at_ms: None,
     };
-    let mut cs = state.chaos_state.lock().expect("chaos_state lock");
+    let mut cs = state.ops.chaos_state.lock().expect("chaos_state lock");
     cs.active_faults.push(event);
     let count = cs.active_faults.len();
     drop(cs);
@@ -1257,7 +1257,7 @@ pub(crate) async fn chaos_clear(
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let cleared_at = now_epoch_ms_chaos();
-    let mut cs = state.chaos_state.lock().expect("chaos_state lock");
+    let mut cs = state.ops.chaos_state.lock().expect("chaos_state lock");
     let mut cleared: Vec<ChaosEvent> = cs.active_faults.drain(..).map(|mut e| {
         e.cleared_at_ms = Some(cleared_at);
         e
@@ -1275,7 +1275,7 @@ pub(crate) async fn chaos_status(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<ChaosStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let cs = state.chaos_state.lock().expect("chaos_state lock");
+    let cs = state.ops.chaos_state.lock().expect("chaos_state lock");
     let active_fault_count = cs.active_faults.len();
     let total_injected = cs.active_faults.len() + cs.event_history.len();
     let active_faults = cs.active_faults.clone();
@@ -1295,7 +1295,7 @@ pub(crate) async fn chaos_health(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<ChaosHealthResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let cs = state.chaos_state.lock().expect("chaos_state lock");
+    let cs = state.ops.chaos_state.lock().expect("chaos_state lock");
     let active_fault_count = cs.active_faults.len();
     let history_len = cs.event_history.len();
     drop(cs);
@@ -1315,7 +1315,7 @@ pub(crate) async fn chaos_history(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<ChaosHistoryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let cs = state.chaos_state.lock().expect("chaos_state lock history");
+    let cs = state.ops.chaos_state.lock().expect("chaos_state lock history");
     let events = cs.event_history.clone();
     let history_len = events.len();
     drop(cs);
@@ -1347,7 +1347,7 @@ pub(crate) async fn chaos_fire_drill(
         cleared_at_ms: Some(now_ms),
     };
     {
-        let mut cs = state.chaos_state.lock().expect("chaos_state fire_drill lock");
+        let mut cs = state.ops.chaos_state.lock().expect("chaos_state fire_drill lock");
         cs.event_history.push(drill_event);
     }
     Ok((StatusCode::OK, Json(ChaosFireDrillResponse {
@@ -1367,7 +1367,7 @@ pub(crate) async fn connectors_health(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<ConnectorHealthResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let registry = state.connector_registry.lock().expect("connector_registry lock connectors_health");
+    let registry = state.ingest.connector_registry.lock().expect("connector_registry lock connectors_health");
     let entries: Vec<ConnectorHealthEntry> = registry.iter().map(|c| ConnectorHealthEntry {
         connector_id: c.connector_id.clone(),
         connector_type: c.connector_type.clone(),
@@ -1588,7 +1588,7 @@ pub(crate) async fn search_fulltext(
     // PLUG-2: Real full-text search using the in-memory FtsIndex.
     // If the table is empty string, search across all tables (not scoped).
     let hits_raw = state
-        .fts_index
+        .ops.fts_index
         .lock()
         .expect("fts_index lock")
         .search(&table, &query, limit);
@@ -1621,7 +1621,7 @@ pub(crate) async fn search_fulltext(
 pub(crate) async fn table_stats(
     State(state): State<AppState>,
 ) -> axum::Json<serde_json::Value> {
-    let stats = state.table_stats.lock().expect("table_stats read");
+    let stats = state.storage.table_stats.lock().expect("table_stats read");
     axum::Json(serde_json::json!({
         "status": "ok",
         "table_stats": stats.iter()
@@ -1688,7 +1688,7 @@ pub(crate) async fn demo_seed(
 
     // Determine next row id (highest existing row id + 1).
     let scan_prefix = crate::helpers::sql_parse::make_table_scan_prefix(&db, &table_name);
-    let existing_max: usize = match state.row_store.lock() {
+    let existing_max: usize = match state.storage.row_store.lock() {
         Ok(rs) => {
             let snap = rs.current_xid();
             rs.scan_at_snapshot(snap)
@@ -1706,7 +1706,7 @@ pub(crate) async fn demo_seed(
         }
     };
 
-    let ddl_cols = match state.ddl_catalog.lock() {
+    let ddl_cols = match state.storage.ddl_catalog.lock() {
         Ok(catalog) => catalog
             .get(&table_name)
             .map(|e| crate::helpers::sql_parse::extract_column_names_from_ddl(&e.original_statement))
@@ -1733,12 +1733,12 @@ pub(crate) async fn demo_seed(
         }
         // M-8 Rule 12: demo seed rows must go through MVCC *and* RocksDB persistence
         // so they are durable across restarts (previously only in-memory PagedRowStore).
-        match state.row_store.lock() {
+        match state.storage.row_store.lock() {
             Ok(mut rs) => {
                 let xid = rs.begin_xid();
                 rs.insert(xid, &key, row_data.clone());
                 // Persist to RocksDB CF so rows survive a SIGKILL.
-                if let Ok(mut wal) = state.wal_engine.lock() {
+                if let Ok(mut wal) = state.storage.wal_engine.lock() {
                     let raw_key = key.trim_start_matches(&format!("{db}.")).to_string();
                     wal.store_row(&db, &raw_key, xid, Some(&row_data));
                 }
@@ -1794,21 +1794,21 @@ pub(crate) async fn compliance_report(
 ) -> Result<axum::response::Response, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_privilege(&headers, &state, "compliance", "report", voltnuerongrid_auth::PrivilegeAction::Read)?;
 
-    let rbac_role_count = state.rbac_privilege_matrix.grants_by_role.len();
+    let rbac_role_count = state.auth.rbac_privilege_matrix.grants_by_role.len();
     let audit_event_count = {
-        let sink = state.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
+        let sink = state.ops.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
         sink.len()
     };
     let constraint_count = {
-        let mgr = state.constraint_manager.lock().unwrap_or_else(|e| e.into_inner());
+        let mgr = state.storage.constraint_manager.lock().unwrap_or_else(|e| e.into_inner());
         mgr.constraint_count()
     };
     let active_ddl_objects = {
-        let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+        let cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
         cat.active_entries().len()
     };
     let active_operator_count = {
-        let um = state.user_store.lock().unwrap_or_else(|e| e.into_inner());
+        let um = state.auth.user_store.lock().unwrap_or_else(|e| e.into_inner());
         um.all().count()
     };
 
@@ -1833,7 +1833,7 @@ pub(crate) async fn compliance_report(
         findings.push("tls_not_configured: VNG_TLS_CERT_PATH not set and native listener disabled".to_string());
         score = score.saturating_sub(15);
     }
-    if state.admin_api_key.is_none() {
+    if state.auth.admin_api_key.is_none() {
         findings.push("admin_key_missing: VNG_ADMIN_API_KEY not set — server is unprotected".to_string());
         score = score.saturating_sub(30);
     }
@@ -2007,7 +2007,7 @@ pub(crate) async fn audit_export_webhook(
 
     let n = req.last_n_events.unwrap_or(100).min(10_000);
     let events: Vec<serde_json::Value> = {
-        let sink = state.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
+        let sink = state.ops.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
         sink.latest(n).into_iter().map(|e| serde_json::to_value(e).unwrap_or_default()).collect()
     };
     let delivered = events.len();
@@ -2090,7 +2090,7 @@ pub(crate) async fn audit_export_cef(
     require_operator_privilege(&headers, &state, "audit", "export", voltnuerongrid_auth::PrivilegeAction::Read)?;
 
     let events: Vec<voltnuerongrid_audit::AuditEvent> = {
-        let sink = state.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
+        let sink = state.ops.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
         sink.all().to_vec()
     };
 

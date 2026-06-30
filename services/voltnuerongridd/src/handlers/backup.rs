@@ -191,7 +191,7 @@ pub(crate) async fn backup_full(
 
     // Collect rows from row_store + snapshot XID
     let (rows, snapshot_xid): (HashMap<String, HashMap<String, String>>, u64) = {
-        let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+        let rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
         let xid = rs.current_xid();
         let rows = rs.scan_at_snapshot(xid)
             .into_iter()
@@ -202,7 +202,7 @@ pub(crate) async fn backup_full(
 
     // Collect catalog DDL
     let catalog_ddl: Vec<String> = {
-        let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+        let cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
         cat.all_entries().iter()
             .map(|e| e.original_statement.clone())
             .collect()
@@ -210,7 +210,7 @@ pub(crate) async fn backup_full(
 
     // Collect index entries
     let index_entries: Vec<(String, String, String)> = {
-        let idx = state.index_manager.lock().unwrap_or_else(|e| e.into_inner());
+        let idx = state.storage.index_manager.lock().unwrap_or_else(|e| e.into_inner());
         idx.list_indexes()
             .into_iter()
             .map(|d| (d.table.clone(), d.name.clone(), d.column.clone()))
@@ -380,14 +380,14 @@ pub(crate) async fn restore_from_backup(
     // Restore rows into row_store
     let rows_restored = filtered_rows.len();
     {
-        let mut rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
         rs.replace_all(filtered_rows.into_iter());
     }
 
     // Restore DDL catalog entries
     let catalog_entries_restored = archive.catalog_ddl.len();
     {
-        let mut cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
         let now_ms = now_unix_ms();
         for ddl in &archive.catalog_ddl {
             if let Some(info) = voltnuerongrid_store::ddl_catalog::parse_ddl_info(ddl) {
@@ -464,7 +464,7 @@ pub(crate) async fn backup_incremental(
 
     // Collect only rows modified after base_xid.
     let (rows, snapshot_xid): (HashMap<String, HashMap<String, String>>, u64) = {
-        let rs = state.row_store.lock().unwrap_or_else(|e| e.into_inner());
+        let rs = state.storage.row_store.lock().unwrap_or_else(|e| e.into_inner());
         let xid = rs.current_xid();
         let rows = rs.scan_at_snapshot(xid)
             .into_iter()
@@ -486,7 +486,7 @@ pub(crate) async fn backup_incremental(
     };
 
     let catalog_ddl: Vec<String> = {
-        let cat = state.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+        let cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
         cat.all_entries().iter().map(|e| e.original_statement.clone()).collect()
     };
 

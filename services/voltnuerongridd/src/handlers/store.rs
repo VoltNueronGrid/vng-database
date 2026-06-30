@@ -383,10 +383,10 @@ pub(crate) async fn htap_status(
 ) -> Result<(StatusCode, Json<HtapStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let sync_origin_pending = {
-        let so = state.sync_origin.lock().expect("sync_origin lock");
+        let so = state.cluster.sync_origin.lock().expect("sync_origin lock");
         so.pending_len()
     };
-    let olap_row_count = state.olap_store.lock().expect("olap_store lock").len();
+    let olap_row_count = state.storage.olap_store.lock().expect("olap_store lock").len();
     let last_sync_ms = now_unix_ms_u64();
     let sync_lag_estimate = sync_origin_pending as i64 - olap_row_count as i64;
     let is_synchronized = sync_origin_pending == 0;
@@ -406,7 +406,7 @@ pub(crate) async fn store_rows_keys(
     Query(params): Query<StoreRowsKeysQuery>,
 ) -> Result<(StatusCode, Json<StoreRowsKeysResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock store_rows_keys");
+    let rs = state.storage.row_store.lock().expect("row_store lock store_rows_keys");
     let all_rows = rs.export_rows_snapshot();
     drop(rs);
     let keys: Vec<String> = all_rows
@@ -430,7 +430,7 @@ pub(crate) async fn row_store_version(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowStoreVersionResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock row_store_version");
+    let rs = state.storage.row_store.lock().expect("row_store lock row_store_version");
     let current_xid = rs.current_xid();
     let page_count = rs.page_count();
     let total_rows = rs.total_row_count();
@@ -449,14 +449,14 @@ pub(crate) async fn htap_stats(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<HtapStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let olap = state.olap_store.lock().expect("olap_store lock htap_stats");
+    let olap = state.storage.olap_store.lock().expect("olap_store lock htap_stats");
     let table_count = olap.len();
     let total_entries: usize = olap.values().map(|rows| rows.len()).sum();
     drop(olap);
     // Q-2: report the authoritative durable row source so clients can tell when
     // analytical reads are served from durable RocksDB vs the in-memory fallback.
     let data_source = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .map(|w| if w.persists_rows() { "rocksdb" } else { "paged_store" })
         .unwrap_or("paged_store");
@@ -473,7 +473,7 @@ pub(crate) async fn row_store_snapshot(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowSnapshotResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let store = state.row_store.lock().expect("row_store lock snapshot");
+    let store = state.storage.row_store.lock().expect("row_store lock snapshot");
     let snapshot_xid = store.current_xid();
     let rows: Vec<RowSnapshotEntry> = store
         .export_rows_snapshot()
@@ -495,7 +495,7 @@ pub(crate) async fn row_store_stats(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowStoreStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock stats");
+    let rs = state.storage.row_store.lock().expect("row_store lock stats");
     let current_xid = rs.current_xid();
     let total_pages = rs.page_count();
     let total_rows = rs.total_row_count();
@@ -517,7 +517,7 @@ pub(crate) async fn row_store_count(
     Query(params): Query<RowCountQuery>,
 ) -> Result<(StatusCode, Json<RowCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock count");
+    let rs = state.storage.row_store.lock().expect("row_store lock count");
     let snapshot_xid = rs.current_xid();
     let count = {
         let all_rows = rs.scan_at_snapshot(snapshot_xid);
@@ -542,7 +542,7 @@ pub(crate) async fn row_store_delete(
     Json(req): Json<RowDeleteRequest>,
 ) -> Result<(StatusCode, Json<RowDeleteResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let mut rs = state.row_store.lock().expect("row_store lock delete");
+    let mut rs = state.storage.row_store.lock().expect("row_store lock delete");
     let snapshot_xid = rs.current_xid();
     let rows = rs.scan_at_snapshot(snapshot_xid);
     let exists = rows.iter().any(|(k, _)| *k == req.key.as_str());
@@ -550,7 +550,7 @@ pub(crate) async fn row_store_delete(
         let xid = rs.begin_xid();
         rs.delete(xid, &req.key);
         drop(rs);
-        let mut wal = state.wal_engine.lock().expect("wal_engine lock delete");
+        let mut wal = state.storage.wal_engine.lock().expect("wal_engine lock delete");
         wal.append_mutation(&req.key, "__deleted__");
     } else {
         drop(rs);
@@ -572,7 +572,7 @@ pub(crate) async fn store_list_indexes(
         PrivilegeAction::Read,
         "store/indexes",
     )?;
-    let mgr = state.index_manager.lock().expect("index lock");
+    let mgr = state.storage.index_manager.lock().expect("index lock");
     let indexes = mgr
         .list_indexes()
         .iter()
@@ -629,7 +629,7 @@ pub(crate) async fn store_create_index(
         kind: IndexKind::BTree,
         unique,
     };
-    let mut mgr = state.index_manager.lock().expect("index lock");
+    let mut mgr = state.storage.index_manager.lock().expect("index lock");
     Ok(match mgr.create_index(descriptor) {
         Ok(()) => {
             let response = CreateIndexResponse {
@@ -676,7 +676,7 @@ pub(crate) async fn store_drop_index(
         PrivilegeAction::Manage,
         "store/indexes",
     )?;
-    let mut mgr = state.index_manager.lock().expect("index lock");
+    let mut mgr = state.storage.index_manager.lock().expect("index lock");
     Ok(match mgr.get(&req.name) {
         Some(idx) => {
             ensure_store_table_access(&principal, &headers, &idx.descriptor().table)?;
@@ -728,7 +728,7 @@ pub(crate) async fn store_index_lookup(
         PrivilegeAction::Read,
         "store/indexes/lookup",
     )?;
-    let mgr = state.index_manager.lock().expect("index lock");
+    let mgr = state.storage.index_manager.lock().expect("index lock");
     Ok(match mgr.get(&req.index_name) {
         Some(idx) => {
             ensure_store_table_access(&principal, &headers, &idx.descriptor().table)?;
@@ -798,7 +798,7 @@ pub(crate) async fn store_add_constraint(
         ref_table: req.ref_table.clone(),
         ref_column: req.ref_column.clone(),
     };
-    let mut mgr = state.constraint_manager.lock().expect("constraint lock");
+    let mut mgr = state.storage.constraint_manager.lock().expect("constraint lock");
     Ok(match mgr.add_constraint(descriptor) {
         Ok(()) => {
             let response = AddConstraintResponse {
@@ -846,7 +846,7 @@ pub(crate) async fn store_validate_constraint(
         "store/constraints/validate",
     )?;
     ensure_store_table_access(&principal, &headers, &req.table)?;
-    let mgr = state.constraint_manager.lock().expect("constraint lock");
+    let mgr = state.storage.constraint_manager.lock().expect("constraint lock");
     Ok(match mgr.validate(&req.table, &req.column, req.value.as_deref()) {
         Ok(()) => {
             let response = ValidateConstraintResponse {
@@ -906,7 +906,7 @@ pub(crate) async fn store_rows_scan(
         PrivilegeAction::Read,
         "store/rows/scan",
     )?;
-    let rs = state.row_store.lock().expect("row_store lock");
+    let rs = state.storage.row_store.lock().expect("row_store lock");
     let snapshot_xid = req.snapshot_xid.unwrap_or_else(|| rs.current_xid());
     let key_prefix = req.key_prefix.unwrap_or_default();
     let limit = req.limit.unwrap_or(1_000).min(10_000);
@@ -961,7 +961,7 @@ pub(crate) async fn store_htap_export(
     let max_items = req.max_items.unwrap_or(500).min(5_000);
     let mutations = {
         use voltnuerongrid_store::htap_sync::MutationOp;
-        let origin = state.sync_origin.lock().expect("sync_origin lock");
+        let origin = state.cluster.sync_origin.lock().expect("sync_origin lock");
         let checkpoint = origin.checkpoint();
         let raw = origin.export_since(since, max_items);
         let entries: Vec<HtapMutationEntry> = raw
@@ -1021,7 +1021,7 @@ pub(crate) async fn store_columnar_scan(
     )?;
     let (batch, stats) = {
         use voltnuerongrid_store::columnar::vectorized_scan;
-        let rs = state.row_store.lock().expect("row_store lock columnar_scan");
+        let rs = state.storage.row_store.lock().expect("row_store lock columnar_scan");
         let snapshot_xid = rs.current_xid();
         let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
             .scan_at_snapshot(snapshot_xid)
@@ -1091,7 +1091,7 @@ pub(crate) async fn store_columnar_project(
     require_store_runtime_principal(&headers, &state, PrivilegeAction::Read, "store/columnar/project")?;
     let (batch, stats) = {
         use voltnuerongrid_store::columnar::vectorized_scan;
-        let rs = state.row_store.lock().expect("row_store lock columnar_project");
+        let rs = state.storage.row_store.lock().expect("row_store lock columnar_project");
         let snapshot_xid = rs.current_xid();
         let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
             .scan_at_snapshot(snapshot_xid)
@@ -1159,7 +1159,7 @@ pub(crate) async fn store_columnar_aggregate(
     require_store_runtime_principal(&headers, &state, PrivilegeAction::Read, "store/columnar/aggregate")?;
     use voltnuerongrid_store::columnar::{vectorized_scan, VectorizedAggOp, aggregate_batch};
     let (batch, stats) = {
-        let rs = state.row_store.lock().expect("row_store lock columnar_aggregate");
+        let rs = state.storage.row_store.lock().expect("row_store lock columnar_aggregate");
         let snapshot_xid = rs.current_xid();
         let raw_rows: Vec<(String, std::collections::HashMap<String, String>)> = rs
             .scan_at_snapshot(snapshot_xid)
@@ -1209,7 +1209,7 @@ pub(crate) async fn store_htap_apply(
         PrivilegeAction::Write,
         "store/htap/apply",
     )?;
-    let mut olap = state.olap_store.lock().expect("olap_store lock");
+    let mut olap = state.storage.olap_store.lock().expect("olap_store lock");
     let mut last_seq = 0u64;
     let mut applied = 0usize;
     for m in &req.mutations {
@@ -1267,7 +1267,7 @@ pub(crate) async fn store_htap_olap_scan(
         PrivilegeAction::Read,
         "store/htap/olap/scan",
     )?;
-    let olap = state.olap_store.lock().expect("olap_store lock");
+    let olap = state.storage.olap_store.lock().expect("olap_store lock");
     let rows: Vec<OlapScanRow> = olap
         .iter()
         .map(|(k, v)| OlapScanRow { key: k.clone(), data: v.clone() })
@@ -1290,8 +1290,8 @@ pub(crate) async fn htap_lag(
         PrivilegeAction::Read,
         "store/htap/lag",
     )?;
-    let sync_origin_pending = state.sync_origin.lock().expect("sync_origin lock htap_lag").pending_len();
-    let olap_row_count = state.olap_store.lock().expect("olap_store lock htap_lag").len();
+    let sync_origin_pending = state.cluster.sync_origin.lock().expect("sync_origin lock htap_lag").pending_len();
+    let olap_row_count = state.storage.olap_store.lock().expect("olap_store lock htap_lag").len();
     let estimated_lag_mutations = sync_origin_pending.saturating_sub(olap_row_count);
     Ok((StatusCode::OK, Json(HtapLagResponse {
         status: "ok",
@@ -1311,12 +1311,12 @@ pub(crate) async fn htap_force_sync(
 ) -> Result<(StatusCode, Json<HtapForceSyncResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_store_runtime_principal(&headers, &state, PrivilegeAction::Write, "store/htap/sync")?;
     // Collect all pending mutations without dropping/acking yet.
-    let batch = state.sync_origin.lock().expect("sync_origin lock htap_force_sync")
+    let batch = state.cluster.sync_origin.lock().expect("sync_origin lock htap_force_sync")
         .export_batch(usize::MAX);
     let mut applied = 0usize;
     let mut last_seq = 0u64;
     {
-        let mut olap = state.olap_store.lock().expect("olap_store lock htap_force_sync");
+        let mut olap = state.storage.olap_store.lock().expect("olap_store lock htap_force_sync");
         for m in &batch {
             last_seq = last_seq.max(m.sequence);
             match m.op {
@@ -1339,9 +1339,9 @@ pub(crate) async fn htap_force_sync(
     }
     // Acknowledge all exported mutations so they are removed from the sync_origin queue.
     if last_seq > 0 {
-        state.sync_origin.lock().expect("sync_origin ack lock").ack_through(last_seq);
+        state.cluster.sync_origin.lock().expect("sync_origin ack lock").ack_through(last_seq);
     }
-    let olap_row_count_after = state.olap_store.lock().expect("olap_store count lock").len();
+    let olap_row_count_after = state.storage.olap_store.lock().expect("olap_store count lock").len();
     Ok((StatusCode::OK, Json(HtapForceSyncResponse {
         status: "ok",
         mutations_applied: applied,
@@ -1389,7 +1389,7 @@ pub(crate) async fn htap_pull_sync(
     axum::extract::Query(params): axum::extract::Query<HtapPullQuery>,
 ) -> Result<(StatusCode, Json<HtapPullResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     // Auth: accept admin key OR cluster token so OLAP replicas can call this.
-    let cluster_token_ok = state.cluster_token.as_ref().as_ref().map_or(true, |expected| {
+    let cluster_token_ok = state.cluster.cluster_token.as_ref().as_ref().map_or(true, |expected| {
         if expected.is_empty() {
             return true;
         }
@@ -1399,7 +1399,7 @@ pub(crate) async fn htap_pull_sync(
             .map(|t| t == expected.as_str())
             .unwrap_or(false)
     });
-    let admin_key_ok = state.admin_api_key.as_ref().map_or(true, |expected| {
+    let admin_key_ok = state.auth.admin_api_key.as_ref().map_or(true, |expected| {
         headers.get("x-vng-admin-key")
             .and_then(|v| v.to_str().ok())
             .map(|k| k == expected.as_str())
@@ -1421,7 +1421,7 @@ pub(crate) async fn htap_pull_sync(
     let max_items = params.max_items.unwrap_or(1000).min(10_000);
 
     let (mutations_raw, freshness_lag_ms) = {
-        let origin = state.sync_origin.lock().expect("sync_origin lock htap_pull");
+        let origin = state.cluster.sync_origin.lock().expect("sync_origin lock htap_pull");
         let batch = origin.export_since(since, max_items);
         let lag = if origin.last_mutation_epoch_ms() > 0 {
             let now_ms = std::time::SystemTime::now()

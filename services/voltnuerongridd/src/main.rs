@@ -658,49 +658,14 @@ pub(crate) struct DiagnosisRule {
 }
 
 
-/// Shared, cheaply-clonable application state injected into every axum handler.
-///
-/// AR-1 (architecture): the fields below are organised into the following
-/// logical sub-systems. Until the full sub-struct extraction lands (a staged
-/// refactor — see `docs/tasks-6.md` §AR-1), use this map to locate a field:
-///
-/// * **Identity / RBAC / security** — `node_id`, `cluster_mode`, `admin_api_key`,
-///   `security_config`, `allowed_operator_roles`, `operator_role_bindings`,
-///   `tenant_user_bindings`, `rbac_privilege_matrix`, `kms_runtime`, `db_grants`,
-///   `user_store`, `session_store`, `session_signer`, `tde_override`.
-/// * **Cluster / Raft / replication** — `leader_node_id`, `cluster_nodes`,
-///   `raft_state`, `raft_peers`, `cluster_token`, `raft_last_applied_tx`,
-///   `node_url`, `current_leader_url`, `snapshot_chunk_sessions`,
-///   `sync_origin`, `replication_transport`, `replica_replay_states`,
-///   `cluster_failure_signals`.
-/// * **Storage / SQL engine** — `row_store`, `wal_engine`, `olap_store`,
-///   `ddl_catalog`, `database_catalog`, `acid_transactions`, `index_manager`,
-///   `constraint_manager`, `tx_undo_log`, `db_semaphores`, `table_stats`,
-///   `stats_registry`, `connection_tx_active`, `proc_registry`,
-///   `trigger_registry`, `trigger_emitter`, `partition_registry`,
-///   `pessimistic_locks`, `pessimistic_lock_waits`, `pessimistic_lock_metrics`,
-///   `cdc_cursors`.
-/// * **Ingest** — `ingest_csv_records`, `ingest_json_records`,
-///   `ingest_parquet_records`, `ingest_excel_records`, `ingest_outbox_streams`,
-///   `ingest_event_bus`, `ingest_outbox_cursors`, `broker_flush_counts`.
-/// * **AI / autonomous** — `autonomous_mode`, `emergency_stop`, `guardrails`,
-///   `model_gateway_policy`, `ai_request_counters`, `ai_rate_window_starts`,
-///   `self_heal_counters`, `slow_query_log`, `tune_recommendations`,
-///   `dek_versions`, `cert_fingerprint`, `diagnosis_rules`, `chat_sql_counters`.
-/// * **Observability / ops** — `audit_sink`, `audit_log_path`, `action_records`,
-///   `dr_hook_records`, `dr_hook_policy_state`, `dr_hook_policy_config`,
-///   `dr_hook_state_path`, `dr_hook_queue`, `chaos_state`,
-///   `autoscale_policy`, `autoscale_status`.
-/// * **Plugins / extensions / drivers** — `plugin_lifecycle`, `plugin_registry`,
-///   `connector_registry`, `udf_registry`, `vector_index`, `fts_index`,
-///   `geo_index`, `driver_pool`, `driver_sessions`, `distributed_cache`,
-///   `cache_snapshot_path`, `runtime_config`.
-///
-/// All fields are `Arc`-wrapped, so `clone()` is a cheap reference-count bump.
+// ─── AR-1: AppState sub-state structs ────────────────────────────────────────
+// Each sub-struct groups logically related fields that were previously scattered
+// flat on AppState. AppState now holds one field per group plus four
+// top-level identity/config fields that every handler touches.
+
+/// Authentication, RBAC, KMS, and user-session management state.
 #[derive(Clone)]
-pub(crate) struct AppState {
-    pub(crate) node_id: String,
-    pub(crate) cluster_mode: String,
+pub(crate) struct AuthState {
     pub(crate) admin_api_key: Option<String>,
     pub(crate) security_config: Arc<SecurityConfigContract>,
     pub(crate) allowed_operator_roles: Arc<HashSet<OperatorRole>>,
@@ -708,24 +673,78 @@ pub(crate) struct AppState {
     pub(crate) tenant_user_bindings: Arc<HashMap<String, TenantUserBinding>>,
     pub(crate) rbac_privilege_matrix: Arc<RbacPrivilegeMatrix>,
     pub(crate) kms_runtime: Arc<Mutex<KmsRuntimeState>>,
+    pub(crate) db_grants: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    pub(crate) user_store: Arc<Mutex<crate::user_store::UserStore>>,
+    pub(crate) session_store: Arc<Mutex<crate::user_store::SessionStore>>,
+    pub(crate) session_signer: Arc<Mutex<crate::user_store::SessionSigner>>,
+}
+
+/// Raft consensus, cluster topology, replication, and sync state.
+#[derive(Clone)]
+pub(crate) struct ClusterState {
     pub(crate) leader_node_id: Arc<Mutex<String>>,
     pub(crate) cluster_nodes: Arc<Mutex<HashMap<String, ClusterNodeRuntime>>>,
-    pub(crate) audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
-    pub(crate) action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
-    pub(crate) dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
-    pub(crate) dr_hook_policy_state: Arc<Mutex<DrHookPolicyState>>,
-    pub(crate) dr_hook_policy_config: Arc<DrHookPolicyConfig>,
-    pub(crate) dr_hook_state_path: Option<String>,
-    pub(crate) dr_hook_queue: Arc<Mutex<VecDeque<DrHookScheduledTask>>>,
     pub(crate) cluster_failure_signals: Arc<Mutex<Vec<ClusterFailureSignal>>>,
+    /// S7-WS6-02: Raft consensus node state (elections, log replication, snapshots).
+    pub(crate) raft_state: Arc<Mutex<RaftNode>>,
+    /// Raft peer base URLs loaded from `VNG_RAFT_PEERS`. Empty on single-node deployments.
+    pub(crate) raft_peers: Arc<Vec<String>>,
+    /// Shared secret for intra-cluster Raft RPCs, loaded from `VNG_CLUSTER_TOKEN`.
+    pub(crate) cluster_token: Arc<Option<String>>,
+    /// Watch channel that broadcasts the latest `last_applied` Raft index.
+    pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    /// URL of the current Raft leader, learned from AppendEntries headers.
+    pub(crate) current_leader_url: Arc<Mutex<Option<String>>>,
+    /// In-progress chunked snapshot transfer sessions keyed by `session_id`.
+    #[allow(dead_code)]
+    pub(crate) snapshot_chunk_sessions: Arc<Mutex<HashMap<String, SnapshotChunkSession>>>,
     pub(crate) sync_origin: Arc<Mutex<RowStoreSyncOrigin>>,
     pub(crate) replication_transport: Arc<Mutex<InMemoryReplicationTransport>>,
     pub(crate) replica_replay_states: Arc<Mutex<HashMap<String, ReplicaReplayState>>>,
+}
+
+/// Storage engine, MVCC, SQL catalog, transaction management, and locking.
+#[derive(Clone)]
+pub(crate) struct StorageState {
+    /// MVCC page-based row store (S2-WS2-04: PagedRowStore).
+    pub(crate) row_store: Arc<Mutex<PagedRowStore>>,
+    /// S2-WS2-02: WAL durability engine — records every committed DML mutation.
+    pub(crate) wal_engine: Arc<Mutex<BoxedDurabilityEngine>>,
+    /// S4-WS3-04: In-memory OLAP replica.
+    pub(crate) olap_store: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
+    pub(crate) ddl_catalog: Arc<Mutex<DdlCatalog>>,
+    /// Phase 1.3 — first-class `Database` catalog.
+    pub(crate) database_catalog: Arc<Mutex<voltnuerongrid_meta::DatabaseCatalog>>,
+    pub(crate) acid_transactions: Arc<Mutex<AcidTransactionRegistry>>,
+    pub(crate) index_manager: Arc<Mutex<IndexManager>>,
+    pub(crate) constraint_manager: Arc<Mutex<ConstraintManager>>,
+    /// Gap #3: Per-connection undo log for ROLLBACK support.
+    pub(crate) tx_undo_log: Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, Option<voltnuerongrid_store::mvcc::RowData>)>>>>,
+    /// Gap #9: Per-database connection semaphores.
+    pub(crate) db_semaphores: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>>,
+    /// Gap #6/#7: Per-table row count statistics.
+    pub(crate) table_stats: Arc<Mutex<std::collections::HashMap<String, u64>>>,
+    /// H-1: Table statistics registry for the cost-based query optimizer.
+    pub(crate) stats_registry: Arc<Mutex<voltnuerongrid_exec::StatsRegistry>>,
+    /// C-3: connection_id → tx_id for repeatable-read transaction tracking.
+    pub(crate) connection_tx_active: Arc<Mutex<HashMap<String, String>>>,
+    /// L-2: Stored-procedure registry, pre-populated with built-ins at boot.
+    pub(crate) proc_registry: Arc<Mutex<helpers::stored_proc::ProcedureRegistry>>,
+    /// ISSUE-03: DML trigger registry.
+    pub(crate) trigger_registry: Arc<Mutex<TriggerRegistry>>,
+    pub(crate) trigger_emitter: Arc<dyn TriggerEmitter>,
+    /// PART-1: partition registry — maps table_name → partition column.
+    pub(crate) partition_registry: Arc<Mutex<HashMap<String, String>>>,
     pub(crate) pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
     pub(crate) pessimistic_lock_waits: Arc<Mutex<HashMap<String, String>>>,
     pub(crate) pessimistic_lock_metrics: PessimisticLockContentionMetrics,
-    pub(crate) index_manager: Arc<Mutex<IndexManager>>,
-    pub(crate) constraint_manager: Arc<Mutex<ConstraintManager>>,
+    /// S10-WS15-02: Per-table CDC cursor positions.
+    pub(crate) cdc_cursors: Arc<Mutex<HashMap<String, u64>>>,
+}
+
+/// Data ingestion pipelines, CDC connectors, and outbox state.
+#[derive(Clone)]
+pub(crate) struct IngestState {
     pub(crate) ingest_csv_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
     pub(crate) ingest_json_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
     pub(crate) ingest_parquet_records: Arc<Mutex<HashMap<String, Vec<voltnuerongrid_ingest::IngestRecord>>>>,
@@ -733,131 +752,24 @@ pub(crate) struct AppState {
     pub(crate) ingest_outbox_streams: Arc<Mutex<HashMap<String, String>>>,
     pub(crate) ingest_event_bus: Arc<Mutex<ManagedEventBusTransport>>,
     pub(crate) ingest_outbox_cursors: Arc<Mutex<ManagedReplayCursorStore>>,
-    pub(crate) distributed_cache: Arc<Mutex<DistributedCacheManager>>,
-    pub(crate) driver_pool: Arc<Mutex<ConnectionPoolManager>>,
-    pub(crate) plugin_lifecycle: Arc<Mutex<PluginLifecycleManager>>,
+    /// S5-WS4A-02: Broker adapter flush counters (broker_type → flush_count).
+    pub(crate) broker_flush_counts: Arc<Mutex<HashMap<String, u64>>>,
+    /// S5-E4A-01: Connector SDK runtime registry.
+    pub(crate) connector_registry: Arc<Mutex<Vec<ConnectorPlugin>>>,
+}
+
+/// AI / autonomous operations, self-healing, and rate limiting state.
+#[derive(Clone)]
+pub(crate) struct AiState {
     pub(crate) autonomous_mode: AutonomousMode,
     pub(crate) emergency_stop: Arc<AtomicEmergencyStop>,
     pub(crate) guardrails: Arc<Vec<GuardrailRule>>,
-    pub(crate) ddl_catalog: Arc<Mutex<DdlCatalog>>,
-    pub(crate) acid_transactions: Arc<Mutex<AcidTransactionRegistry>>,
-    /// MVCC page-based row store (S2-WS2-04: PagedRowStore).
-    pub(crate) row_store: Arc<Mutex<PagedRowStore>>,
     /// S9-WS8-02: AI model gateway isolation policy.
     pub(crate) model_gateway_policy: Arc<Mutex<ModelGatewayPolicy>>,
-    /// S4-WS3-04: In-memory OLAP replica — receives mutations via `POST /api/v1/store/htap/apply`.
-    /// Maps primary_key → row data (last-writer-wins).
-    pub(crate) olap_store: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
-    /// S9-WS8A-02: Optional path to a JSON-lines audit log file.
-    /// Resolved from `VNG_AUDIT_LOG_PATH` env var at start-up.
-    pub(crate) audit_log_path: Option<String>,
-    /// S7-WS6-02: Raft consensus node state (elections, log replication, snapshots).
-    pub(crate) raft_state: Arc<Mutex<RaftNode>>,
-    /// Raft peer base URLs loaded from `VNG_RAFT_PEERS`. Empty on single-node deployments.
-    pub(crate) raft_peers: Arc<Vec<String>>,
-    /// Shared secret for intra-cluster Raft RPCs, loaded from `VNG_CLUSTER_TOKEN`.
-    /// `None` means no auth is required (single-node / dev).
-    pub(crate) cluster_token: Arc<Option<String>>,
-    /// Watch channel that broadcasts the latest `last_applied` Raft index.
-    pub(crate) raft_last_applied_tx: Arc<tokio::sync::watch::Sender<u64>>,
-    /// This node's own advertised base URL, loaded from `VNG_NODE_URL`.
-    /// Sent in AppendEntries so followers can forward DML writes to the leader.
-    #[allow(dead_code)] // will be read when follower-→-leader DML forwarding is wired in
-    pub(crate) node_url: Arc<Option<String>>,
-    /// URL of the current Raft leader, learned from `x-vng-leader-url` headers.
-    /// Updated on every accepted AppendEntries. Used by follower DML forwarding.
-    pub(crate) current_leader_url: Arc<Mutex<Option<String>>>,
-    /// In-progress chunked snapshot transfer sessions keyed by `session_id`.
-    /// Each entry accumulates row chunks from the leader until `is_last = true`.
-    #[allow(dead_code)] // will be read when the chunked snapshot handler consumes sessions
-    pub(crate) snapshot_chunk_sessions: Arc<Mutex<HashMap<String, SnapshotChunkSession>>>,
-    /// S9-WS8-02: Per-model-identity request counters for rate limiting.
-    /// Maps model_id → request count in current window.
+    /// S9-WS8-02: Per-model request counters for rate limiting.
     pub(crate) ai_request_counters: Arc<Mutex<HashMap<String, u64>>>,
-    /// S2-WS2-02: WAL durability engine — records every committed DML mutation.
-    pub(crate) wal_engine: Arc<Mutex<BoxedDurabilityEngine>>,
-    /// S7-WS6-04: Chaos/game-day fault injection state.
-    pub(crate) chaos_state: Arc<Mutex<ChaosState>>,
-    /// S8-WS10-02: Driver wire protocol session registry.
-    pub(crate) driver_sessions: Arc<Mutex<HashMap<String, DriverSession>>>,
-    /// S5-WS4A-02: Broker adapter flush counters (broker_type → flush_count).
-    pub(crate) broker_flush_counts: Arc<Mutex<HashMap<String, u64>>>,
     /// S9-WS8-02: Sliding-window rate limiter — per-model window start timestamp (ms).
     pub(crate) ai_rate_window_starts: Arc<Mutex<HashMap<String, u64>>>,
-    /// S5-E4A-01: Connector SDK runtime registry.
-    pub(crate) connector_registry: Arc<Mutex<Vec<ConnectorPlugin>>>,
-    /// UDF runtime: registered WASM/JS/Python user-defined functions.
-    pub(crate) udf_registry: Arc<Mutex<UdfRegistry>>,
-    /// S6-WS5-04: TDE runtime toggle override.
-    pub(crate) tde_override: Arc<Mutex<Option<bool>>>,
-    /// S10-WS15-02: Per-table CDC cursor positions (table_name → last consumed sequence).
-    pub(crate) cdc_cursors: Arc<Mutex<HashMap<String, u64>>>,
-    /// Phase 1.3 — first-class `Database` catalog. Replaces the implicit
-    /// `database_name` string fragment used in `DdlCatalog` keys. New code
-    /// should consult this for existence/uniqueness checks; legacy code
-    /// continues to use `DdlCatalog` keys until the multi-database migration
-    /// completes (see `remaining.md` Phase 1.3).
-    pub(crate) database_catalog: Arc<Mutex<voltnuerongrid_meta::DatabaseCatalog>>,
-    /// Phase 0 — runtime config selected at boot. Read-only after startup.
-    pub(crate) runtime_config: Arc<voltnuerongrid_config::RuntimeConfig>,
-    /// Gap #7: in-memory user account store (replayed from DDL WAL at boot).
-    pub(crate) user_store: Arc<Mutex<crate::user_store::UserStore>>,
-    /// Gap #7: active session store.
-    pub(crate) session_store: Arc<Mutex<crate::user_store::SessionStore>>,
-    /// Gap #7: HMAC-SHA256 session token signer.
-    pub(crate) session_signer: Arc<Mutex<crate::user_store::SessionSigner>>,
-    /// Gap #6/#7: Basic per-table row count statistics, updated on DML commits.
-    /// Key: "db.table" (or just "table" for no-db scope). Value: approximate row count.
-    pub(crate) table_stats: Arc<Mutex<std::collections::HashMap<String, u64>>>,
-    /// Gap #9: Per-database connection semaphore. Capacity = database's
-    /// max_connections setting (or DEFAULT_DB_MAX_CONNECTIONS if unset).
-    /// Held for the duration of each SQL request.
-    pub(crate) db_semaphores: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>>,
-    /// Gap #3: Per-connection undo log for ROLLBACK support.
-    /// Maps connection_id → ordered list of (prefixed_row_key, before_data).
-    /// before_data = Some(RowData) means the row existed before (restore on rollback).
-    /// before_data = None means the row was fresh INSERT (delete on rollback).
-    pub(crate) tx_undo_log: Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, Option<voltnuerongrid_store::mvcc::RowData>)>>>>,
-    /// Tier 3 #1: Per-database role grants.
-    /// Maps database_name → set of role names that have access.
-    /// Empty set means no grants (access denied for non-DBA users).
-    pub(crate) db_grants: Arc<Mutex<HashMap<String, HashSet<String>>>>,
-    /// C-3: Maps connection_id → tx_id for connections inside an active
-    /// repeatable-read transaction.  Set on BEGIN, cleared on COMMIT/ROLLBACK.
-    /// Used by sql_execute to find the correct read snapshot for standalone
-    /// SELECTs that are part of an ongoing repeatable-read transaction.
-    pub(crate) connection_tx_active: Arc<Mutex<HashMap<String, String>>>,
-    /// H-1: Table statistics registry for the cost-based query optimizer.
-    /// Updated asynchronously after each DML commit.  The `StatsRegistry`
-    /// is the hook point for future selectivity-driven routing decisions in
-    /// `HtapQueryRouter` (see `crates/voltnuerongrid-exec`).
-    pub(crate) stats_registry: Arc<Mutex<voltnuerongrid_exec::StatsRegistry>>,
-    /// L-2: Stored-procedure registry.
-    /// Maps lower-case procedure name → registered `StoredProcedure`.
-    /// Pre-populated with built-ins at boot; extended at runtime via
-    /// `CREATE [OR REPLACE] PROCEDURE … AS $$ … $$` DDL.
-    pub(crate) proc_registry: Arc<Mutex<helpers::stored_proc::ProcedureRegistry>>,
-    /// ISSUE-03: DML trigger registry — stores `CREATE TRIGGER` definitions and
-    /// fires matching triggers on INSERT / UPDATE / DELETE operations.
-    /// The emitter (LoggingTriggerEmitter by default) is swappable for testing.
-    pub(crate) trigger_registry: Arc<Mutex<TriggerRegistry>>,
-    pub(crate) trigger_emitter: Arc<dyn TriggerEmitter>,
-    // PLUG-1: flat-scan cosine-similarity vector index.
-    pub(crate) vector_index: Arc<Mutex<helpers::vector::VectorIndex>>,
-    // PLUG-2: in-memory inverted full-text search index.
-    pub(crate) fts_index: Arc<Mutex<helpers::fts::FtsIndex>>,
-    // PLUG-3: R-tree geospatial index.
-    pub(crate) geo_index: Arc<Mutex<helpers::geo::GeoIndex>>,
-    // PLUG-4: versioned plugin marketplace registry.
-    pub(crate) plugin_registry: Arc<Mutex<helpers::plugins::PluginRegistry>>,
-    // PART-1: partition registry — maps table_name → partition column.
-    // Populated on `CREATE TABLE ... PARTITION BY RANGE(col)`.
-    pub(crate) partition_registry: Arc<Mutex<HashMap<String, String>>>,
-    // CACHE-1: path to the on-disk cache snapshot file (loaded at boot, saved on SET/DEL).
-    pub(crate) cache_snapshot_path: Arc<String>,
-    // SCALE-1: autoscale policy + current status (in-memory; no external orchestrator required).
-    pub(crate) autoscale_policy: Arc<Mutex<handlers::autoscale::AutoscalePolicy>>,
-    pub(crate) autoscale_status: Arc<Mutex<handlers::autoscale::AutoscaleStatus>>,
     // AI-3: Self-heal rate-limiter counters.
     pub(crate) self_heal_counters: Arc<Mutex<SelfHealCounters>>,
     // AI-4: Slow-query ring buffer (max 1000 most-recent entries).
@@ -872,6 +784,79 @@ pub(crate) struct AppState {
     pub(crate) diagnosis_rules: Arc<Mutex<Vec<DiagnosisRule>>>,
     // AI-1: Per-operator Chat-to-SQL request counters for rate limiting.
     pub(crate) chat_sql_counters: Arc<Mutex<HashMap<String, u64>>>,
+    pub(crate) action_records: Arc<Mutex<Vec<AutonomousActionExecutionRecord>>>,
+}
+
+/// Observability, DR hooks, plugins, extensions, drivers, autoscale, and audit.
+#[derive(Clone)]
+pub(crate) struct OpsState {
+    pub(crate) audit_sink: Arc<Mutex<AppendOnlyAuditSink>>,
+    /// S9-WS8A-02: Optional path to a JSON-lines audit log file.
+    pub(crate) audit_log_path: Option<String>,
+    pub(crate) dr_hook_records: Arc<Mutex<Vec<DrHookExecutionRecord>>>,
+    pub(crate) dr_hook_policy_state: Arc<Mutex<DrHookPolicyState>>,
+    pub(crate) dr_hook_policy_config: Arc<DrHookPolicyConfig>,
+    pub(crate) dr_hook_state_path: Option<String>,
+    pub(crate) dr_hook_queue: Arc<Mutex<VecDeque<DrHookScheduledTask>>>,
+    /// S7-WS6-04: Chaos/game-day fault injection state.
+    pub(crate) chaos_state: Arc<Mutex<ChaosState>>,
+    // SCALE-1: autoscale policy + current status.
+    pub(crate) autoscale_policy: Arc<Mutex<handlers::autoscale::AutoscalePolicy>>,
+    pub(crate) autoscale_status: Arc<Mutex<handlers::autoscale::AutoscaleStatus>>,
+    pub(crate) plugin_lifecycle: Arc<Mutex<PluginLifecycleManager>>,
+    // PLUG-4: versioned plugin marketplace registry.
+    pub(crate) plugin_registry: Arc<Mutex<helpers::plugins::PluginRegistry>>,
+    /// UDF runtime: registered WASM/JS/Python user-defined functions.
+    pub(crate) udf_registry: Arc<Mutex<UdfRegistry>>,
+    pub(crate) distributed_cache: Arc<Mutex<DistributedCacheManager>>,
+    // CACHE-1: path to the on-disk cache snapshot file.
+    pub(crate) cache_snapshot_path: Arc<String>,
+    pub(crate) driver_pool: Arc<Mutex<ConnectionPoolManager>>,
+    /// S8-WS10-02: Driver wire protocol session registry.
+    pub(crate) driver_sessions: Arc<Mutex<HashMap<String, DriverSession>>>,
+    /// S6-WS5-04: TDE runtime toggle override.
+    pub(crate) tde_override: Arc<Mutex<Option<bool>>>,
+    // PLUG-1: flat-scan cosine-similarity vector index.
+    pub(crate) vector_index: Arc<Mutex<helpers::vector::VectorIndex>>,
+    // PLUG-2: in-memory inverted full-text search index.
+    pub(crate) fts_index: Arc<Mutex<helpers::fts::FtsIndex>>,
+    // PLUG-3: R-tree geospatial index.
+    pub(crate) geo_index: Arc<Mutex<helpers::geo::GeoIndex>>,
+}
+
+/// Shared, cheaply-clonable application state injected into every axum handler.
+///
+/// Fields are decomposed into six logical sub-structs (AR-1):
+/// - `auth`    — authentication, RBAC, KMS, user/session stores
+/// - `cluster` — Raft consensus, cluster topology, replication
+/// - `storage` — MVCC row-store, WAL, SQL catalog, transactions, locking
+/// - `ingest`  — ingestion pipelines, CDC connectors, outbox
+/// - `ai`      — autonomous operations, self-healing, rate limiting
+/// - `ops`     — audit, DR hooks, plugins, drivers, autoscale, cache
+///
+/// Four top-level fields (`node_id`, `cluster_mode`, `node_url`,
+/// `runtime_config`) are kept flat because they are read on every request.
+#[derive(Clone)]
+pub(crate) struct AppState {
+    pub(crate) node_id: String,
+    pub(crate) cluster_mode: String,
+    /// This node's own advertised base URL, loaded from `VNG_NODE_URL`.
+    #[allow(dead_code)]
+    pub(crate) node_url: Arc<Option<String>>,
+    /// Phase 0 — runtime config selected at boot. Read-only after startup.
+    pub(crate) runtime_config: Arc<voltnuerongrid_config::RuntimeConfig>,
+    /// Authentication, RBAC, KMS, and user-session management.
+    pub(crate) auth: AuthState,
+    /// Raft consensus, cluster topology, and replication.
+    pub(crate) cluster: ClusterState,
+    /// Storage engine, MVCC, SQL catalog, transactions, and locking.
+    pub(crate) storage: StorageState,
+    /// Data ingestion pipelines and CDC.
+    pub(crate) ingest: IngestState,
+    /// AI / autonomous operations and self-healing.
+    pub(crate) ai: AiState,
+    /// Observability, DR, plugins, drivers, and autoscale.
+    pub(crate) ops: OpsState,
 }
 
 #[derive(Clone, Default)]
@@ -1761,199 +1746,174 @@ async fn main() {
     let state = AppState {
         node_id: node_id.clone(),
         cluster_mode,
-        admin_api_key,
-        security_config,
-        allowed_operator_roles,
-        operator_role_bindings,
-        tenant_user_bindings,
-        rbac_privilege_matrix,
-        kms_runtime,
-        leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
-        cluster_nodes: Arc::new(Mutex::new(initial_cluster_nodes(&node_id))),
-        audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
-        action_records: Arc::new(Mutex::new(Vec::new())),
-        dr_hook_records: Arc::new(Mutex::new(Vec::new())),
-        dr_hook_policy_state: Arc::new(Mutex::new(loaded_policy_state)),
-        dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
-        dr_hook_state_path,
-        dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
-        cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
-        sync_origin: Arc::new(Mutex::new(RowStoreSyncOrigin::new())),
-        replication_transport: Arc::new(Mutex::new(InMemoryReplicationTransport::new())),
-        replica_replay_states: Arc::new(Mutex::new(HashMap::new())),
-        pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
-        pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
-        pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
-        index_manager: Arc::new(Mutex::new(IndexManager::new())),
-        constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
-        ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
-        ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
-        ingest_parquet_records: Arc::new(Mutex::new(HashMap::new())),
-        ingest_excel_records: Arc::new(Mutex::new(HashMap::new())),
-        ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
-        ingest_event_bus: Arc::new(Mutex::new(load_ingest_event_bus())),
-        ingest_outbox_cursors: Arc::new(Mutex::new(load_ingest_outbox_cursor_store())),
-        distributed_cache: Arc::new(Mutex::new(DistributedCacheManager::with_default_policy())),
-        driver_pool: Arc::new(Mutex::new(ConnectionPoolManager::with_default_policy())),
-        plugin_lifecycle: Arc::new(Mutex::new(PluginLifecycleManager::new(256))),
-        autonomous_mode,
-        emergency_stop: Arc::new(emergency_stop),
-        guardrails: Arc::new(default_guardrail_rules()),
-        ddl_catalog: Arc::new(Mutex::new({
-            let mut cat = DdlCatalog::new();
-            replay_ddl_into(&mut cat, &wal_engine);
-            cat
-        })),
-        acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
-        row_store: Arc::new(Mutex::new({
-            let mut rs = PagedRowStore::default();
-            // C-1: configure write-back cache cap when RocksDB is primary so
-            // PagedRowStore doesn't grow unbounded in RAM.  Set via env var
-            // VNG_ROW_STORE_MAX_ROWS (0 = unlimited, the default).
-            let row_cap: usize = std::env::var("VNG_ROW_STORE_MAX_ROWS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-            if row_cap > 0 {
-                rs.set_max_rows_cap(row_cap);
-            }
-            // P1 fix: skip DML SQL text replay into PagedRowStore when RocksDB
-            // is the durability engine (persists_rows() == true). When RocksDB
-            // is active, rows are written via store_row() on every DML commit
-            // and read via scan_rows_for_db() on every SELECT — re-executing
-            // WAL SQL text would double-populate the in-memory cache and waste
-            // RAM. Only replay DML into PagedRowStore when using the in-memory
-            // durability engine (persists_rows() == false).
-            let (use_rocksdb, max_xid) = {
-                let guard = wal_engine.lock().expect("wal_engine lock for boot persists_rows");
-                (guard.persists_rows(), guard.max_row_xid())
-            };
-            if use_rocksdb {
-                // P1: fast-forward XID counter past any rows persisted in the
-                // previous session.  Without this, current_xid() = 0 after
-                // restart and scan_rows_for_db would filter out all rows with
-                // xid > 0, making them invisible to SELECT queries.
-                rs.fast_forward_xid(max_xid + 1);
-            } else {
-                replay_dml_into(&mut rs, &wal_engine);
-            }
-            rs
-        })),
-        model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
-        wal_engine,
-        chaos_state: Arc::new(Mutex::new(ChaosState::default())),
-        olap_store: Arc::new(Mutex::new(HashMap::new())),
-        audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
-        raft_state: Arc::new(Mutex::new(RaftNode::new(&node_id))),
-        raft_peers: Arc::new(load_raft_peers()),
-        cluster_token: Arc::new(load_cluster_token()),
-        raft_last_applied_tx: raft_last_applied_tx.clone(),
         node_url: Arc::new(std::env::var("VNG_NODE_URL").ok()),
-        current_leader_url: Arc::new(Mutex::new(None)),
-        snapshot_chunk_sessions: Arc::new(Mutex::new(HashMap::new())),
-        ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
-        driver_sessions: Arc::new(Mutex::new(HashMap::new())),
-        broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
-        ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
-        connector_registry: Arc::new(Mutex::new(Vec::new())),
-        udf_registry: Arc::new(Mutex::new(UdfRegistry::new())),
-        tde_override: Arc::new(Mutex::new(None)),
-        cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
-        // Phase 1.3 — first-class DatabaseCatalog. Restored from WAL at boot
-        // by replaying CREATE DATABASE / DROP DATABASE statements recorded when
-        // each database was created.
-        database_catalog: Arc::new(Mutex::new({
-            let mut db_cat = voltnuerongrid_meta::DatabaseCatalog::new();
-            replay_database_catalog_into(&mut db_cat, &wal_engine_for_catalog);
-            db_cat
-        })),
-        // Phase 0 — read-only runtime config selected at boot.
         runtime_config: Arc::new(runtime_config),
-        // Gap #7: user store, session store, session signer.
-        user_store: Arc::new(Mutex::new({
-            let mut us = crate::user_store::UserStore::new();
-            crate::helpers::boot::replay_user_store_into(&mut us, &wal_engine_for_users);
-            us
-        })),
-        session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
-        session_signer: Arc::new(Mutex::new({
-            let secret = std::env::var("VNG_SESSION_SECRET")
-                .or_else(|_| std::env::var("VNG_CLUSTER_TOKEN"))
-                .unwrap_or_else(|_| "vng-default-session-secret".to_string());
-            crate::user_store::SessionSigner::new(&secret, 86_400) // 24-hour TTL
-        })),
-        // Gap #6/#7: per-table row count statistics.
-        table_stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        // Gap #9: per-database connection semaphores (lazily created on first request).
-        db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        // Gap #3: per-connection undo log for ROLLBACK support.
-        tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        // Tier 3 #1: per-database role grants (empty = no explicit grants yet).
-        db_grants: Arc::new(Mutex::new(HashMap::new())),
-        connection_tx_active: Arc::new(Mutex::new(HashMap::new())),
-        // H-1: table statistics registry (cost-based optimizer foundation).
-        stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
-        // L-2: stored-procedure registry — pre-populated with built-ins.
-        proc_registry: {
-            let mut reg = helpers::stored_proc::ProcedureRegistry::new();
-            reg.register_builtins();
-            Arc::new(Mutex::new(reg))
+        auth: AuthState {
+            admin_api_key,
+            security_config,
+            allowed_operator_roles,
+            operator_role_bindings,
+            tenant_user_bindings,
+            rbac_privilege_matrix,
+            kms_runtime,
+            db_grants: Arc::new(Mutex::new(HashMap::new())),
+            user_store: Arc::new(Mutex::new({
+                let mut us = crate::user_store::UserStore::new();
+                crate::helpers::boot::replay_user_store_into(&mut us, &wal_engine_for_users);
+                us
+            })),
+            session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
+            session_signer: Arc::new(Mutex::new({
+                let secret = std::env::var("VNG_SESSION_SECRET")
+                    .or_else(|_| std::env::var("VNG_CLUSTER_TOKEN"))
+                    .unwrap_or_else(|_| "vng-default-session-secret".to_string());
+                crate::user_store::SessionSigner::new(&secret, 86_400)
+            })),
         },
-        // ISSUE-03: trigger registry + emitter.
-        // Q-3: replay persisted CREATE/DROP TRIGGER DDL so triggers survive restart.
-        trigger_registry: Arc::new(Mutex::new({
-            let mut reg = TriggerRegistry::new();
-            replay_triggers_into(&mut reg, &wal_engine_for_triggers);
-            reg
-        })),
-        trigger_emitter: Arc::new(LoggingTriggerEmitter),
-        vector_index: Arc::new(Mutex::new(helpers::vector::VectorIndex::new())),
-        fts_index: Arc::new(Mutex::new(helpers::fts::FtsIndex::new())),
-        geo_index: Arc::new(Mutex::new(helpers::geo::GeoIndex::new())),
-        plugin_registry: Arc::new(Mutex::new(helpers::plugins::PluginRegistry::new())),
-        // PART-1: partition registry (table → partition column).
-        partition_registry: Arc::new(Mutex::new(HashMap::new())),
-        // CACHE-1: on-disk cache snapshot path.
-        cache_snapshot_path: Arc::new(
-            std::env::var("VNG_CACHE_SNAPSHOT_PATH")
-                .unwrap_or_else(|_| "state/cache-snapshot.json".to_string())
-        ),
-        // SCALE-1: autoscale policy and current status.
-        autoscale_policy: Arc::new(Mutex::new(handlers::autoscale::AutoscalePolicy::default())),
-        autoscale_status: Arc::new(Mutex::new(handlers::autoscale::AutoscaleStatus::default())),
-        // AI-3: Self-heal rate-limiter (max actions/hour from env, default 10).
-        self_heal_counters: Arc::new(Mutex::new(SelfHealCounters {
-            actions_this_hour: 0,
-            window_start_ms: 0,
-            max_per_hour: env::var("VNG_MAX_SELF_HEAL_PER_HOUR")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10),
-        })),
-        // AI-4: Slow-query ring buffer (empty at start).
-        slow_query_log: Arc::new(Mutex::new(VecDeque::with_capacity(1000))),
-        // AI-4: Tune recommendations (empty at start; generated on demand).
-        tune_recommendations: Arc::new(Mutex::new(Vec::new())),
-        // AI-5: DEK version history (empty; populated on first KMS rotation).
-        dek_versions: Arc::new(Mutex::new(Vec::new())),
-        // AI-5: TLS cert fingerprint (resolved from VNG_TLS_CERT_PATH at startup if present).
-        cert_fingerprint: Arc::new(Mutex::new(
-            env::var("VNG_TLS_CERT_PATH").ok()
-                .filter(|v| !v.trim().is_empty())
-                .and_then(|p| std::fs::read(&p).ok())
-                .map(|bytes| compute_sha256_fingerprint(&bytes)),
-        )),
-        // AI-6: Diagnosis rules from dr-hook-runtime.json extended schema (empty if not configured).
-        diagnosis_rules: Arc::new(Mutex::new(
-            load_diagnosis_rules_from_state(
-                env::var("VNG_DR_HOOK_STATE_PATH")
+        cluster: ClusterState {
+            leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
+            cluster_nodes: Arc::new(Mutex::new(initial_cluster_nodes(&node_id))),
+            cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
+            raft_state: Arc::new(Mutex::new(RaftNode::new(&node_id))),
+            raft_peers: Arc::new(load_raft_peers()),
+            cluster_token: Arc::new(load_cluster_token()),
+            raft_last_applied_tx: raft_last_applied_tx.clone(),
+            current_leader_url: Arc::new(Mutex::new(None)),
+            snapshot_chunk_sessions: Arc::new(Mutex::new(HashMap::new())),
+            sync_origin: Arc::new(Mutex::new(RowStoreSyncOrigin::new())),
+            replication_transport: Arc::new(Mutex::new(InMemoryReplicationTransport::new())),
+            replica_replay_states: Arc::new(Mutex::new(HashMap::new())),
+        },
+        storage: StorageState {
+            row_store: Arc::new(Mutex::new({
+                let mut rs = PagedRowStore::default();
+                let row_cap: usize = std::env::var("VNG_ROW_STORE_MAX_ROWS")
                     .ok()
-                    .or_else(|| Some("state/dr-hook-runtime.json".to_string()))
-                    .as_deref(),
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                if row_cap > 0 {
+                    rs.set_max_rows_cap(row_cap);
+                }
+                let (use_rocksdb, max_xid) = {
+                    let guard = wal_engine.lock().expect("wal_engine lock for boot persists_rows");
+                    (guard.persists_rows(), guard.max_row_xid())
+                };
+                if use_rocksdb {
+                    rs.fast_forward_xid(max_xid + 1);
+                } else {
+                    replay_dml_into(&mut rs, &wal_engine);
+                }
+                rs
+            })),
+            wal_engine: Arc::clone(&wal_engine),
+            olap_store: Arc::new(Mutex::new(HashMap::new())),
+            ddl_catalog: Arc::new(Mutex::new({
+                let mut cat = DdlCatalog::new();
+                replay_ddl_into(&mut cat, &wal_engine);
+                cat
+            })),
+            database_catalog: Arc::new(Mutex::new({
+                let mut db_cat = voltnuerongrid_meta::DatabaseCatalog::new();
+                replay_database_catalog_into(&mut db_cat, &wal_engine_for_catalog);
+                db_cat
+            })),
+            acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
+            index_manager: Arc::new(Mutex::new(IndexManager::new())),
+            constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
+            tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            table_stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
+            connection_tx_active: Arc::new(Mutex::new(HashMap::new())),
+            proc_registry: {
+                let mut reg = helpers::stored_proc::ProcedureRegistry::new();
+                reg.register_builtins();
+                Arc::new(Mutex::new(reg))
+            },
+            trigger_registry: Arc::new(Mutex::new({
+                let mut reg = TriggerRegistry::new();
+                replay_triggers_into(&mut reg, &wal_engine_for_triggers);
+                reg
+            })),
+            trigger_emitter: Arc::new(LoggingTriggerEmitter),
+            partition_registry: Arc::new(Mutex::new(HashMap::new())),
+            pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
+            pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
+            pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
+            cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
+        },
+        ingest: IngestState {
+            ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_parquet_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_excel_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
+            ingest_event_bus: Arc::new(Mutex::new(load_ingest_event_bus())),
+            ingest_outbox_cursors: Arc::new(Mutex::new(load_ingest_outbox_cursor_store())),
+            broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
+            connector_registry: Arc::new(Mutex::new(Vec::new())),
+        },
+        ai: AiState {
+            autonomous_mode,
+            emergency_stop: Arc::new(emergency_stop),
+            guardrails: Arc::new(default_guardrail_rules()),
+            model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
+            ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
+            ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
+            self_heal_counters: Arc::new(Mutex::new(SelfHealCounters {
+                actions_this_hour: 0,
+                window_start_ms: 0,
+                max_per_hour: env::var("VNG_MAX_SELF_HEAL_PER_HOUR")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(10),
+            })),
+            slow_query_log: Arc::new(Mutex::new(VecDeque::with_capacity(1000))),
+            tune_recommendations: Arc::new(Mutex::new(Vec::new())),
+            dek_versions: Arc::new(Mutex::new(Vec::new())),
+            cert_fingerprint: Arc::new(Mutex::new(
+                env::var("VNG_TLS_CERT_PATH").ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .and_then(|p| std::fs::read(&p).ok())
+                    .map(|bytes| compute_sha256_fingerprint(&bytes)),
+            )),
+            diagnosis_rules: Arc::new(Mutex::new(
+                load_diagnosis_rules_from_state(
+                    env::var("VNG_DR_HOOK_STATE_PATH")
+                        .ok()
+                        .or_else(|| Some("state/dr-hook-runtime.json".to_string()))
+                        .as_deref(),
+                ),
+            )),
+            chat_sql_counters: Arc::new(Mutex::new(HashMap::new())),
+            action_records: Arc::new(Mutex::new(Vec::new())),
+        },
+        ops: OpsState {
+            audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
+            audit_log_path: std::env::var("VNG_AUDIT_LOG_PATH").ok(),
+            dr_hook_records: Arc::new(Mutex::new(Vec::new())),
+            dr_hook_policy_state: Arc::new(Mutex::new(loaded_policy_state)),
+            dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
+            dr_hook_state_path,
+            dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
+            chaos_state: Arc::new(Mutex::new(ChaosState::default())),
+            autoscale_policy: Arc::new(Mutex::new(handlers::autoscale::AutoscalePolicy::default())),
+            autoscale_status: Arc::new(Mutex::new(handlers::autoscale::AutoscaleStatus::default())),
+            plugin_lifecycle: Arc::new(Mutex::new(PluginLifecycleManager::new(256))),
+            plugin_registry: Arc::new(Mutex::new(helpers::plugins::PluginRegistry::new())),
+            udf_registry: Arc::new(Mutex::new(UdfRegistry::new())),
+            distributed_cache: Arc::new(Mutex::new(DistributedCacheManager::with_default_policy())),
+            cache_snapshot_path: Arc::new(
+                std::env::var("VNG_CACHE_SNAPSHOT_PATH")
+                    .unwrap_or_else(|_| "state/cache-snapshot.json".to_string())
             ),
-        )),
-        // AI-1: Chat-to-SQL rate-limit counters (per operator).
-        chat_sql_counters: Arc::new(Mutex::new(HashMap::new())),
+            driver_pool: Arc::new(Mutex::new(ConnectionPoolManager::with_default_policy())),
+            driver_sessions: Arc::new(Mutex::new(HashMap::new())),
+            tde_override: Arc::new(Mutex::new(None)),
+            vector_index: Arc::new(Mutex::new(helpers::vector::VectorIndex::new())),
+            fts_index: Arc::new(Mutex::new(helpers::fts::FtsIndex::new())),
+            geo_index: Arc::new(Mutex::new(helpers::geo::GeoIndex::new())),
+        },
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
@@ -1972,13 +1932,13 @@ async fn main() {
     // - In-memory engine (persists_rows() == false): load from legacy WAL text
     //   files (scan_persisted_rows scans the in-memory accumulated record set).
     {
-        let persists_rows = state.wal_engine
+        let persists_rows = state.storage.wal_engine
             .lock()
             .expect("wal_engine lock for boot persists_rows check")
             .persists_rows();
         // Both paths call load_persisted_rows_into — for RocksDB it reads from
         // per-DB CFs; for in-memory it reads the accumulated legacy records.
-        helpers::boot::load_persisted_rows_into(&state.row_store, &state.wal_engine);
+        helpers::boot::load_persisted_rows_into(&state.storage.row_store, &state.storage.wal_engine);
         if persists_rows {
             tracing::info!(target: "vng.durability", "P1: warm row cache loaded from RocksDB per-DB CFs");
         }
@@ -1992,7 +1952,7 @@ async fn main() {
         let data_dir = state.runtime_config.storage.data_dir.clone();
         let sets = helpers::raft_loop::load_committed_write_sets(&data_dir);
         if !sets.is_empty() {
-            let mut acid = state.acid_transactions.lock().expect("acid restore lock");
+            let mut acid = state.storage.acid_transactions.lock().expect("acid restore lock");
             let restored = sets.len();
             for ws in sets {
                 acid.transactions.insert(
@@ -2029,7 +1989,7 @@ async fn main() {
     {
         let data_dir = state.runtime_config.storage.data_dir.clone();
         if let Some(durable) = helpers::raft_loop::load_raft_state(&data_dir) {
-            let mut node = state.raft_state.lock().expect("raft restore lock");
+            let mut node = state.cluster.raft_state.lock().expect("raft restore lock");
             let log_len = durable.log.len();
             let restored_term = durable.current_term;
             node.restore_durable(durable);
@@ -2058,7 +2018,7 @@ async fn main() {
         // L-5: immediate startup flush — populates Parquet before the first OLAP query.
         if !data_dir.is_empty() {
             let startup_rows = {
-                let rs = state.row_store.lock().expect("row_store parquet startup flush");
+                let rs = state.storage.row_store.lock().expect("row_store parquet startup flush");
                 let xid = rs.current_xid();
                 rs.scan_at_snapshot(xid)
                     .into_iter()
@@ -2083,7 +2043,7 @@ async fn main() {
             loop {
                 interval.tick().await;
                 let rows = {
-                    let rs = flush_state.row_store.lock().expect("row_store parquet flush");
+                    let rs = flush_state.storage.row_store.lock().expect("row_store parquet flush");
                     let xid = rs.current_xid();
                     rs.scan_at_snapshot(xid)
                         .into_iter()
@@ -2333,7 +2293,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
     // Lock acquisition uses match-on-Result so a poisoned mutex returns 503
     // instead of taking the whole service down (fixes pattern from .cursorrules).
     let scan_prefix = crate::helpers::sql_parse::make_table_scan_prefix(db, &table_name);
-    let existing_max: usize = match state.row_store.lock() {
+    let existing_max: usize = match state.storage.row_store.lock() {
         Ok(rs) => {
             let snap = rs.current_xid();
             rs.scan_at_snapshot(snap)
@@ -2345,7 +2305,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
         }
         Err(_) => return Some(Ok(svc_unavailable_sql_response("row_store mutex poisoned"))),
     };
-    let ddl_cols = match state.ddl_catalog.lock() {
+    let ddl_cols = match state.storage.ddl_catalog.lock() {
         Ok(catalog) => catalog
             .get(&table_name)
             .map(|e| extract_column_names_from_ddl(&e.original_statement))
@@ -2364,7 +2324,7 @@ pub(crate) fn try_handle_call_insert_rows_demo(
             let val = synthesize_demo_value(&col_name, &table_name, row_id);
             row_data.insert(col_name, val);
         }
-        match state.row_store.lock() {
+        match state.storage.row_store.lock() {
             Ok(mut rs) => {
                 let xid = rs.begin_xid();
                 rs.insert(xid, &key, row_data);
@@ -2452,7 +2412,7 @@ pub(crate) fn route_path_name(path: QueryPath) -> &'static str {
 }
 
 pub(crate) fn latest_dr_hook_records(state: &AppState, max_items: usize) -> Vec<DrHookExecutionRecord> {
-    match state.dr_hook_records.lock() {
+    match state.ops.dr_hook_records.lock() {
         Ok(records) => {
             let len = records.len();
             let start = len.saturating_sub(max_items);

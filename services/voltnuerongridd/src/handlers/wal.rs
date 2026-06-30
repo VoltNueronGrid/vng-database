@@ -1003,7 +1003,7 @@ pub(crate) async fn wal_status(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let records = wal.wal_records();
     let wal_len = records.len();
     let latest_seq = records.last().map(|r| r.sequence).unwrap_or(0);
@@ -1025,7 +1025,7 @@ pub(crate) async fn wal_force_checkpoint(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalForceCheckpointResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let mut wal = state.wal_engine.lock().expect("wal_engine lock");
+    let mut wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let wal_len_before = wal.wal_records().len();
     wal.force_checkpoint();
     let wal_len_after = wal.wal_records().len();
@@ -1045,7 +1045,7 @@ pub(crate) async fn wal_stats(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let record_count = wal.wal_records().len();
     let checkpoint_count = wal.checkpoint_count();
     drop(wal);
@@ -1066,15 +1066,15 @@ pub(crate) async fn wal_compact(
 ) -> Result<(StatusCode, Json<WalCompactResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let records_before = {
-        let wal = state.wal_engine.lock().expect("wal_engine wal_compact lock");
+        let wal = state.storage.wal_engine.lock().expect("wal_engine wal_compact lock");
         wal.wal_records().len()
     };
     {
-        let mut wal = state.wal_engine.lock().expect("wal_engine compact_checkpoint");
+        let mut wal = state.storage.wal_engine.lock().expect("wal_engine compact_checkpoint");
         wal.force_checkpoint();
     }
     let (records_after, checkpoint_count) = {
-        let wal = state.wal_engine.lock().expect("wal_engine compact_post");
+        let wal = state.storage.wal_engine.lock().expect("wal_engine compact_post");
         (wal.wal_records().len(), wal.checkpoint_count())
     };
     let compacted = records_before > records_after;
@@ -1096,7 +1096,7 @@ pub(crate) async fn wal_bounds(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalBoundsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine wal_bounds lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine wal_bounds lock");
     let records = wal.wal_records();
     let record_count = records.len();
     let checkpoint_count = wal.checkpoint_count();
@@ -1124,7 +1124,7 @@ pub(crate) async fn wal_replay(
     Query(params): Query<WalReplayQuery>,
 ) -> Result<(StatusCode, Json<WalReplayResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let all_records = wal.wal_records().to_vec();
     drop(wal);
     let total_records = all_records.len();
@@ -1160,7 +1160,7 @@ pub(crate) async fn wal_tail(
 ) -> Result<(StatusCode, Json<WalTailResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let limit_applied = params.limit.unwrap_or(10).max(1).min(1_000);
-    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let all_records = wal.wal_records().to_vec();
     drop(wal);
     let total = all_records.len();
@@ -1190,7 +1190,7 @@ pub(crate) async fn wal_mutations(
 ) -> Result<(StatusCode, Json<WalMutationsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let limit_applied = params.limit.unwrap_or(50).max(1).min(10_000);
-    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let all_records = wal.wal_records().to_vec();
     drop(wal);
     let total = all_records.len();
@@ -1218,7 +1218,7 @@ pub(crate) async fn wal_checkpoint_history(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalCheckpointHistoryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock checkpoint_history");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock checkpoint_history");
     let total_checkpoints = wal.checkpoint_count();
     drop(wal);
     let entries: Vec<WalCheckpointEntry> = (1..=(total_checkpoints as u64))
@@ -1243,7 +1243,7 @@ pub(crate) async fn wal_segment_list(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalSegmentListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let completed = wal.checkpoint_count();
     let active_records = wal.wal_records().to_vec();
     drop(wal);
@@ -1284,7 +1284,7 @@ pub(crate) async fn wal_replay_count(
     axum::extract::Query(query): axum::extract::Query<WalReplayCountQuery>,
 ) -> Result<(StatusCode, Json<WalReplayCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let records = wal.wal_records().to_vec();
     drop(wal);
     let total_records = records.len();
@@ -1313,12 +1313,12 @@ pub(crate) async fn wal_recover(
     axum::extract::Json(req): axum::extract::Json<WalRecoverRequest>,
 ) -> (StatusCode, Json<WalRecoverResponse>) {
     let dry_run = req.dry_run.unwrap_or(false);
-    let wal = state.wal_engine.lock().expect("wal_engine lock");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock");
     let records = wal.wal_records().to_vec();
     drop(wal);
     let mut replayed: usize = 0;
     if !dry_run {
-        let mut rs = state.row_store.lock().expect("row_store lock wal_recover");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock wal_recover");
         let xid = rs.begin_xid();
         for rec in &records {
             if rec.value == "__deleted__" {
@@ -1353,22 +1353,22 @@ pub(crate) async fn wal_truncate(
 ) -> Result<(StatusCode, Json<WalTruncateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let records_before = {
-        let wal = state.wal_engine.lock().expect("wal_engine lock wal_truncate_before");
+        let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_truncate_before");
         wal.wal_records().len()
     };
     let latest_seq = {
-        let wal = state.wal_engine.lock().expect("wal_engine lock wal_truncate_seq");
+        let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_truncate_seq");
         wal.latest_sequence()
     };
     let truncated = if latest_seq >= req.up_to_sequence && records_before > 0 {
-        let mut wal = state.wal_engine.lock().expect("wal_engine lock wal_truncate_cp");
+        let mut wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_truncate_cp");
         wal.force_checkpoint();
         true
     } else {
         false
     };
     let new_record_count = {
-        let wal = state.wal_engine.lock().expect("wal_engine lock wal_truncate_after");
+        let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_truncate_after");
         wal.wal_records().len()
     };
     let records_removed = records_before.saturating_sub(new_record_count);
@@ -1392,7 +1392,7 @@ pub(crate) async fn wal_seq(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalSeqResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_seq");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_seq");
     let latest_sequence = wal.latest_sequence();
     let wal_len = wal.wal_records().len();
     let checkpoint_count = wal.checkpoint_count();
@@ -1415,7 +1415,7 @@ pub(crate) async fn wal_head(
     Query(params): Query<WalHeadQuery>,
 ) -> Result<(StatusCode, Json<WalHeadResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_head");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_head");
     let all_records = wal.wal_records();
     let limit_applied = params.limit.unwrap_or(10).min(all_records.len());
     let entries: Vec<WalHeadEntry> = all_records[..limit_applied]
@@ -1446,7 +1446,7 @@ pub(crate) async fn wal_range(
     Query(params): Query<WalRangeQuery>,
 ) -> Result<(StatusCode, Json<WalRangeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_range");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_range");
     let all_records = wal.wal_records();
     let to_seq = params.to_seq.unwrap_or(u64::MAX);
     let entries: Vec<WalRangeEntry> = all_records
@@ -1478,7 +1478,7 @@ pub(crate) async fn wal_size(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalSizeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_size");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_size");
     let records = wal.wal_records();
     let record_count = records.len();
     // Estimate: 8 bytes (sequence) + avg key + avg value; 64 bytes per record estimate.
@@ -1502,7 +1502,7 @@ pub(crate) async fn wal_latest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_latest");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_latest");
     let records = wal.wal_records();
     let resp = if let Some(r) = records.last() {
         WalLatestResponse {
@@ -1535,7 +1535,7 @@ pub(crate) async fn wal_by_key(
     Query(params): Query<WalByKeyQuery>,
 ) -> Result<(StatusCode, Json<WalByKeyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_by_key");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_by_key");
     let entries: Vec<WalByKeyEntry> = wal.wal_records()
         .iter()
         .filter(|r| r.key.starts_with(params.key_prefix.as_str()))
@@ -1565,7 +1565,7 @@ pub(crate) async fn wal_checkpoint_latest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalCheckpointLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_checkpoint_latest");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_checkpoint_latest");
     let total = wal.checkpoint_count();
     let record_count = wal.wal_records().len();
     drop(wal);
@@ -1586,7 +1586,7 @@ pub(crate) async fn wal_delta(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalDeltaResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_delta");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_delta");
     let records = wal.wal_records().to_vec();
     drop(wal);
     let total_records = records.len();
@@ -1611,7 +1611,7 @@ pub(crate) async fn wal_unique_keys(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalUniqueKeysResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_unique_keys");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_unique_keys");
     let records = wal.wal_records().to_vec();
     drop(wal);
     let unique_key_count = {
@@ -1636,7 +1636,7 @@ pub(crate) async fn wal_age(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalAgeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_age");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_age");
     let records = wal.wal_records();
     let oldest_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
     let newest_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
@@ -1659,7 +1659,7 @@ pub(crate) async fn wal_keys_list(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalKeysListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_keys_list");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_keys_list");
     let records = wal.wal_records().to_vec();
     drop(wal);
     let mut keys: Vec<String> = records.into_iter().map(|r| r.key).collect();
@@ -1680,7 +1680,7 @@ pub(crate) async fn wal_record_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalRecordCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_record_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_record_count");
     let record_count = wal.wal_records().len();
     drop(wal);
     Ok((StatusCode::OK, Json(WalRecordCountResponse {
@@ -1696,7 +1696,7 @@ pub(crate) async fn wal_checkpoint_age(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalCheckpointAgeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_checkpoint_age");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_checkpoint_age");
     let records = wal.wal_records();
     let oldest_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
     let newest_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
@@ -1717,7 +1717,7 @@ pub(crate) async fn wal_flush_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalFlushCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_flush_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_flush_count");
     let flush_count = wal.wal_records().len();
     drop(wal);
     Ok((StatusCode::OK, Json(WalFlushCountResponse {
@@ -1733,7 +1733,7 @@ pub(crate) async fn wal_entry_latest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalEntryLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_entry_latest");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_entry_latest");
     let records = wal.wal_records();
     let entry_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
     let has_entry = !records.is_empty();
@@ -1748,7 +1748,7 @@ pub(crate) async fn wal_write_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalWriteCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_write_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_write_count");
     let records = wal.wal_records().to_vec();
     drop(wal);
     let total_records = records.len();
@@ -1763,7 +1763,7 @@ pub(crate) async fn wal_min_seq(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalMinSeqResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_min_seq");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_min_seq");
     let records = wal.wal_records();
     let min_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
     let has_records = !records.is_empty();
@@ -1778,7 +1778,7 @@ pub(crate) async fn wal_max_seq(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalMaxSeqResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_max_seq");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_max_seq");
     let records = wal.wal_records();
     let max_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
     let has_records = !records.is_empty();
@@ -1793,7 +1793,7 @@ pub(crate) async fn wal_entry_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalEntryCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_entry_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_entry_count");
     let entry_count = wal.wal_records().len();
     drop(wal);
     Ok((StatusCode::OK, Json(WalEntryCountResponse { status: "ok", entry_count })))
@@ -1806,7 +1806,7 @@ pub(crate) async fn wal_size_bytes(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalSizeBytesResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_size_bytes");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_size_bytes");
     let size_bytes = wal.wal_records().len() * std::mem::size_of::<u64>();
     drop(wal);
     Ok((StatusCode::OK, Json(WalSizeBytesResponse { status: "ok", size_bytes })))
@@ -1819,7 +1819,7 @@ pub(crate) async fn wal_delete_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalDeleteCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_delete_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_delete_count");
     let delete_count = wal.wal_records().iter().filter(|r| r.value == "__deleted__").count();
     drop(wal);
     Ok((StatusCode::OK, Json(WalDeleteCountResponse { status: "ok", delete_count })))
@@ -1832,7 +1832,7 @@ pub(crate) async fn wal_validate(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalValidateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_validate");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_validate");
     let records = wal.wal_records();
     let valid = records.windows(2).all(|w| w[0].sequence <= w[1].sequence);
     let record_count = records.len();
@@ -1847,7 +1847,7 @@ pub(crate) async fn wal_entry_oldest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalEntryOldestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_entry_oldest");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_entry_oldest");
     let records = wal.wal_records();
     let has_entry = !records.is_empty();
     let entry_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
@@ -1862,7 +1862,7 @@ pub(crate) async fn wal_seq_span(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalSeqSpanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_seq_span");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_seq_span");
     let records = wal.wal_records();
     let oldest_sequence = records.first().map(|r| r.sequence).unwrap_or(0);
     let newest_sequence = records.last().map(|r| r.sequence).unwrap_or(0);
@@ -1878,7 +1878,7 @@ pub(crate) async fn wal_record_active(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalRecordActiveResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_record_active");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_record_active");
     let active_count = wal.wal_records().iter().filter(|r| r.value != "__deleted__").count();
     drop(wal);
     Ok((StatusCode::OK, Json(WalRecordActiveResponse { status: "ok", active_count })))
@@ -1891,7 +1891,7 @@ pub(crate) async fn wal_record_mutations(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalRecordMutationsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_record_mutations");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_record_mutations");
     let mutation_count = wal.wal_records().len();
     drop(wal);
     Ok((StatusCode::OK, Json(WalRecordMutationsResponse { status: "ok", mutation_count })))
@@ -1904,7 +1904,7 @@ pub(crate) async fn wal_record_deleted(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalRecordDeletedResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_record_deleted");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_record_deleted");
     let deleted_count = wal.wal_records().iter().filter(|r| r.value == "__deleted__").count();
     drop(wal);
     Ok((StatusCode::OK, Json(WalRecordDeletedResponse { status: "ok", deleted_count })))
@@ -1917,7 +1917,7 @@ pub(crate) async fn wal_mutation_span(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalMutationSpanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_mutation_span");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_mutation_span");
     let mut seqs: Vec<u64> = wal
         .wal_records()
         .iter()
@@ -1948,7 +1948,7 @@ pub(crate) async fn wal_mutation_non_deleted_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalMutationNonDeletedCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_mutation_non_deleted_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_mutation_non_deleted_count");
     let non_deleted_count = wal.wal_records().iter().filter(|r| r.value != "__deleted__").count();
     drop(wal);
     Ok((StatusCode::OK, Json(WalMutationNonDeletedCountResponse { status: "ok", non_deleted_count })))
@@ -1961,7 +1961,7 @@ pub(crate) async fn wal_non_deleted_span(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalNonDeletedSpanResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_non_deleted_span");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_non_deleted_span");
     let mut seqs: Vec<u64> = wal
         .wal_records()
         .iter()
@@ -1992,7 +1992,7 @@ pub(crate) async fn wal_non_deleted_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalNonDeletedCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_non_deleted_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_non_deleted_count");
     let non_deleted_count = wal.wal_records().iter().filter(|r| r.value != "__deleted__").count();
     drop(wal);
     Ok((StatusCode::OK, Json(WalNonDeletedCountResponse {
@@ -2008,7 +2008,7 @@ pub(crate) async fn wal_non_deleted_latest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalNonDeletedLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_non_deleted_latest");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_non_deleted_latest");
     let latest_non_deleted_sequence = wal
         .wal_records()
         .iter()
@@ -2030,7 +2030,7 @@ pub(crate) async fn wal_non_deleted_oldest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalNonDeletedOldestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_non_deleted_oldest");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_non_deleted_oldest");
     let oldest_non_deleted_sequence = wal
         .wal_records()
         .iter()
@@ -2052,7 +2052,7 @@ pub(crate) async fn wal_non_deleted_newest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalNonDeletedNewestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_non_deleted_newest");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_non_deleted_newest");
     let newest_non_deleted_sequence = wal
         .wal_records()
         .iter()
@@ -2074,7 +2074,7 @@ pub(crate) async fn wal_record_total(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalRecordTotalResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_record_total");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_record_total");
     let total_record_count = wal.wal_records().len();
     drop(wal);
     Ok((StatusCode::OK, Json(WalRecordTotalResponse {
@@ -2090,7 +2090,7 @@ pub(crate) async fn wal_value_duplicates_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalValueDuplicatesCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_value_duplicates_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_value_duplicates_count");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for rec in wal.wal_records() {
         *counts.entry(rec.value.clone()).or_insert(0) += 1;
@@ -2110,7 +2110,7 @@ pub(crate) async fn wal_value_distinct_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalValueDistinctCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_value_distinct_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_value_distinct_count");
     let mut distinct_values = std::collections::BTreeSet::new();
     for rec in wal.wal_records() {
         distinct_values.insert(rec.value.clone());
@@ -2129,7 +2129,7 @@ pub(crate) async fn wal_value_unique_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalValueUniqueCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_value_unique_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_value_unique_count");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for rec in wal.wal_records() {
         *counts.entry(rec.value.clone()).or_insert(0) += 1;
@@ -2149,7 +2149,7 @@ pub(crate) async fn wal_value_trimmed_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalValueTrimmedCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_value_trimmed_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_value_trimmed_count");
     let trimmed_value_count = wal
         .wal_records()
         .iter()
@@ -2169,7 +2169,7 @@ pub(crate) async fn wal_value_case_variant_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalValueCaseVariantCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_value_case_variant_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_value_case_variant_count");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for rec in wal.wal_records() {
         *counts.entry(rec.value.to_ascii_lowercase()).or_insert(0) += 1;
@@ -2189,7 +2189,7 @@ pub(crate) async fn wal_order_by_desc_direction_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalOrderByDescDirectionCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_order_by_desc_direction_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_order_by_desc_direction_count");
     let mut desc_count = 0;
     for rec in wal.wal_records() {
         if rec.value.to_ascii_uppercase().contains(" DESC") || rec.value.to_ascii_uppercase().starts_with("DESC") {
@@ -2210,7 +2210,7 @@ pub(crate) async fn wal_order_by_random_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalOrderByRandomCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_order_by_random_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_order_by_random_count");
     let mut random_order_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2232,7 +2232,7 @@ pub(crate) async fn wal_order_by_random_seeded_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalOrderByRandomSeededCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_order_by_random_seeded_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_order_by_random_seeded_count");
     let mut random_seeded_order_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2254,7 +2254,7 @@ pub(crate) async fn wal_order_by_asc_direction_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalOrderByAscDirectionCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_order_by_asc_direction_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_order_by_asc_direction_count");
     let mut asc_direction_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2276,7 +2276,7 @@ pub(crate) async fn wal_order_by_rand_alias_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalOrderByRandAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_order_by_rand_alias_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_order_by_rand_alias_count");
     let mut rand_alias_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2298,7 +2298,7 @@ pub(crate) async fn wal_order_by_multi_column_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalOrderByMultiColumnCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_order_by_multi_column_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_order_by_multi_column_count");
     let mut multi_column_order_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2323,7 +2323,7 @@ pub(crate) async fn wal_pagination_limit_offset_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalPaginationLimitOffsetCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_pagination_limit_offset_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_pagination_limit_offset_count");
     let mut limit_offset_pagination_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2345,7 +2345,7 @@ pub(crate) async fn wal_pagination_offset_only_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalPaginationOffsetOnlyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_pagination_offset_only_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_pagination_offset_only_count");
     let mut offset_only_pagination_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2367,7 +2367,7 @@ pub(crate) async fn wal_having_without_group_by_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalHavingWithoutGroupByCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_having_without_group_by_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_having_without_group_by_count");
     let mut having_without_group_by_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2389,7 +2389,7 @@ pub(crate) async fn wal_having_with_group_by_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalHavingWithGroupByCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_having_with_group_by_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_having_with_group_by_count");
     let mut having_with_group_by_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2411,7 +2411,7 @@ pub(crate) async fn wal_group_by_rollup_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalGroupByRollupCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_group_by_rollup_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_group_by_rollup_count");
     let mut group_by_rollup_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2433,7 +2433,7 @@ pub(crate) async fn wal_group_by_cube_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalGroupByCubeCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_group_by_cube_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_group_by_cube_count");
     let mut group_by_cube_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2455,7 +2455,7 @@ pub(crate) async fn wal_select_distinct_on_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalSelectDistinctOnCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_select_distinct_on_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_select_distinct_on_count");
     let mut select_distinct_on_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2477,7 +2477,7 @@ pub(crate) async fn wal_for_update_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalForUpdateCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_for_update_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_for_update_count");
     let mut for_update_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2499,7 +2499,7 @@ pub(crate) async fn wal_left_join_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalLeftJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_left_join_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_left_join_count");
     let mut left_join_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2521,7 +2521,7 @@ pub(crate) async fn wal_right_join_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<WalRightJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock wal_right_join_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock wal_right_join_count");
     let mut right_join_count = 0;
     for rec in wal.wal_records() {
         let value_up = rec.value.to_ascii_uppercase();
@@ -2544,7 +2544,7 @@ pub(crate) async fn wal_full_outer_join_count(
 ) -> Result<(StatusCode, Json<WalFullOuterJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_full_outer_join_count");
     let mut full_outer_join_count = 0;
@@ -2569,7 +2569,7 @@ pub(crate) async fn wal_inner_join_count(
 ) -> Result<(StatusCode, Json<WalInnerJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_inner_join_count");
     let mut inner_join_count = 0;
@@ -2594,7 +2594,7 @@ pub(crate) async fn wal_straight_join_count(
 ) -> Result<(StatusCode, Json<WalStraightJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_straight_join_count");
     let mut straight_join_count = 0;
@@ -2619,7 +2619,7 @@ pub(crate) async fn wal_semi_join_count(
 ) -> Result<(StatusCode, Json<WalSemiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_semi_join_count");
     let mut semi_join_count = 0;
@@ -2644,7 +2644,7 @@ pub(crate) async fn wal_anti_join_count(
 ) -> Result<(StatusCode, Json<WalAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_anti_join_count");
     let mut anti_join_count = 0;
@@ -2669,7 +2669,7 @@ pub(crate) async fn wal_cross_apply_count(
 ) -> Result<(StatusCode, Json<WalCrossApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_cross_apply_count");
     let mut cross_apply_count = 0;
@@ -2694,7 +2694,7 @@ pub(crate) async fn wal_outer_apply_count(
 ) -> Result<(StatusCode, Json<WalOuterApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_outer_apply_count");
     let mut outer_apply_count = 0;
@@ -2719,7 +2719,7 @@ pub(crate) async fn wal_apply_count(
 ) -> Result<(StatusCode, Json<WalApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_apply_count");
     let mut apply_count = 0;
@@ -2744,7 +2744,7 @@ pub(crate) async fn wal_left_semi_join_count(
 ) -> Result<(StatusCode, Json<WalLeftSemiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_left_semi_join_count");
     let mut left_semi_join_count = 0;
@@ -2769,7 +2769,7 @@ pub(crate) async fn wal_left_anti_join_count(
 ) -> Result<(StatusCode, Json<WalLeftAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_left_anti_join_count");
     let mut left_anti_join_count = 0;
@@ -2794,7 +2794,7 @@ pub(crate) async fn wal_right_semi_join_count(
 ) -> Result<(StatusCode, Json<WalRightSemiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_right_semi_join_count");
     let mut right_semi_join_count = 0;
@@ -2819,7 +2819,7 @@ pub(crate) async fn wal_right_anti_join_count(
 ) -> Result<(StatusCode, Json<WalRightAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_right_anti_join_count");
     let mut right_anti_join_count = 0;
@@ -2844,7 +2844,7 @@ pub(crate) async fn wal_full_semi_join_count(
 ) -> Result<(StatusCode, Json<WalFullSemiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_full_semi_join_count");
     let mut full_semi_join_count = 0;
@@ -2869,7 +2869,7 @@ pub(crate) async fn wal_full_anti_join_count(
 ) -> Result<(StatusCode, Json<WalFullAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_full_anti_join_count");
     let mut full_anti_join_count = 0;
@@ -2894,7 +2894,7 @@ pub(crate) async fn wal_union_all_count(
 ) -> Result<(StatusCode, Json<WalUnionAllCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_union_all_count");
     let mut union_all_count = 0;
@@ -2919,7 +2919,7 @@ pub(crate) async fn wal_aggregate_distinct_count(
 ) -> Result<(StatusCode, Json<WalAggregateDistinctCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_aggregate_distinct_count");
     let mut aggregate_distinct_count = 0;
@@ -2949,7 +2949,7 @@ pub(crate) async fn wal_table_alias_count(
 ) -> Result<(StatusCode, Json<WalTableAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_table_alias_count");
     let mut table_alias_count = 0;
@@ -2974,7 +2974,7 @@ pub(crate) async fn wal_column_alias_count(
 ) -> Result<(StatusCode, Json<WalColumnAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let wal = state
-        .wal_engine
+        .storage.wal_engine
         .lock()
         .expect("wal_engine lock wal_column_alias_count");
     let mut column_alias_count = 0;

@@ -87,7 +87,7 @@ pub(crate) async fn udf_register_handler(
                 .map_err(|e| format!("wasm_base64_decode_error: {e}"));
             match bytes {
                 Ok(b) => state
-                    .udf_registry
+                    .ops.udf_registry
                     .lock()
                     .expect("udf_registry lock")
                     .register_wasm(&name, b, wasm_memory_limit_mb(), wasm_fuel_limit()),
@@ -107,7 +107,7 @@ pub(crate) async fn udf_register_handler(
                 }
             };
             state
-                .udf_registry
+                .ops.udf_registry
                 .lock()
                 .expect("udf_registry lock")
                 .register_js(&name, &src, js_timeout_ms())
@@ -125,7 +125,7 @@ pub(crate) async fn udf_register_handler(
                 }
             };
             state
-                .udf_registry
+                .ops.udf_registry
                 .lock()
                 .expect("udf_registry lock")
                 .register_python(&name, &src, python_timeout_ms())
@@ -163,7 +163,7 @@ pub(crate) async fn udf_list_handler(
     }
 
     let entries: Vec<UdfListEntry> = state
-        .udf_registry
+        .ops.udf_registry
         .lock()
         .expect("udf_registry lock")
         .list()
@@ -195,7 +195,7 @@ pub(crate) async fn udf_call_handler(
 
     let args_ref: Vec<&str> = req.args.iter().map(|s| s.as_str()).collect();
     let result = state
-        .udf_registry
+        .ops.udf_registry
         .lock()
         .expect("udf_registry lock")
         .call(&req.name, &args_ref);

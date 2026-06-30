@@ -206,7 +206,7 @@ pub(crate) fn next_action_trace_id() -> String {
 }
 
 pub(crate) fn latest_action_records(state: &AppState, max_items: usize) -> Vec<AutonomousActionExecutionRecord> {
-    match state.action_records.lock() {
+    match state.ai.action_records.lock() {
         Ok(records) => {
             let len = records.len();
             let start = len.saturating_sub(max_items);
@@ -217,7 +217,7 @@ pub(crate) fn latest_action_records(state: &AppState, max_items: usize) -> Vec<A
 }
 
 pub(crate) fn append_action_record(state: &AppState, record: AutonomousActionExecutionRecord) {
-    if let Ok(mut records) = state.action_records.lock() {
+    if let Ok(mut records) = state.ai.action_records.lock() {
         records.push(record);
     }
 }
@@ -358,9 +358,9 @@ pub(crate) async fn autonomous_guardrails(
     )?;
     Ok(Json(AutonomousGuardrailsResponse {
         status: "ok",
-        autonomous_mode: state.autonomous_mode,
-        emergency_stop_enabled: state.emergency_stop.get(),
-        policy_matrix: state.guardrails.as_ref().clone(),
+        autonomous_mode: state.ai.autonomous_mode,
+        emergency_stop_enabled: state.ai.emergency_stop.get(),
+        policy_matrix: state.ai.guardrails.as_ref().clone(),
     }))
 }
 
@@ -377,7 +377,7 @@ pub(crate) async fn autonomous_emergency_stop(
         "autonomous/emergency_stop",
         PrivilegeAction::Manage,
     )?;
-    state.emergency_stop.set(req.enabled);
+    state.ai.emergency_stop.set(req.enabled);
     let reason = req
         .reason
         .clone()
@@ -420,7 +420,7 @@ pub(crate) async fn authorize_autonomous_action(
     let requested_by = operator.operator_id;
     let action = req.action;
     let trace_id = next_action_trace_id();
-    if state.emergency_stop.get() {
+    if state.ai.emergency_stop.get() {
         return Ok(build_authorize_action_response(
             &state,
             StatusCode::SERVICE_UNAVAILABLE,
@@ -434,7 +434,7 @@ pub(crate) async fn authorize_autonomous_action(
         ));
     }
 
-    if state.autonomous_mode == AutonomousMode::Disabled {
+    if state.ai.autonomous_mode == AutonomousMode::Disabled {
         return Ok(build_authorize_action_response(
             &state,
             StatusCode::FORBIDDEN,
@@ -449,12 +449,12 @@ pub(crate) async fn authorize_autonomous_action(
     }
 
     let matching_rule = state
-        .guardrails
+        .ai.guardrails
         .iter()
         .find(|r| r.action.eq_ignore_ascii_case(&action));
 
     Ok(match matching_rule {
-        Some(rule) if state.autonomous_mode.rank() >= rule.required_mode.rank() => {
+        Some(rule) if state.ai.autonomous_mode.rank() >= rule.required_mode.rank() => {
             build_authorize_action_response(
                 &state,
                 StatusCode::OK,
@@ -463,7 +463,7 @@ pub(crate) async fn authorize_autonomous_action(
                 "allow",
                 format!(
                     "mode {:?} satisfies required mode {:?}",
-                    state.autonomous_mode, rule.required_mode
+                    state.ai.autonomous_mode, rule.required_mode
                 ),
                 &trace_id,
                 &requested_by,
@@ -478,7 +478,7 @@ pub(crate) async fn authorize_autonomous_action(
             "deny",
             format!(
                 "required mode {:?} exceeds current mode {:?}",
-                rule.required_mode, state.autonomous_mode
+                rule.required_mode, state.ai.autonomous_mode
             ),
             &trace_id,
             &requested_by,
@@ -513,7 +513,7 @@ pub(crate) async fn ai_policy(
         PrivilegeAction::Read,
     )?;
     let principal = RuntimeAccessPrincipal::Operator(operator);
-    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock").clone();
+    let policy = state.ai.model_gateway_policy.lock().expect("model_gateway_policy lock").clone();
     append_runtime_audit_event(
         &state,
         AuditEventKind::Security,
@@ -540,7 +540,7 @@ pub(crate) async fn ai_policy_update(
     )?;
     let principal = RuntimeAccessPrincipal::Operator(operator);
     let policy = {
-        let mut p = state.model_gateway_policy.lock().expect("model_gateway_policy lock");
+        let mut p = state.ai.model_gateway_policy.lock().expect("model_gateway_policy lock");
         if let Some(v) = req.isolation_enabled { p.isolation_enabled = v; }
         if let Some(v) = req.allowed_models { p.allowed_models = v; }
         if let Some(v) = req.max_tokens_per_request { p.max_tokens_per_request = v; }
@@ -570,7 +570,7 @@ pub(crate) async fn ai_rate_check(
     Json(req): Json<AiRequestBody>,
 ) -> Result<(StatusCode, Json<AiRequestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock").clone();
+    let policy = state.ai.model_gateway_policy.lock().expect("model_gateway_policy lock").clone();
     if !policy.allowed_models.is_empty() && !policy.allowed_models.contains(&req.model_id) {
         return Err((
             StatusCode::FORBIDDEN,
@@ -601,18 +601,18 @@ pub(crate) async fn ai_rate_check(
     let request_count = {
         let now_ms = crate::now_epoch_ms_chaos();
         let window_ms: u64 = 60_000;
-        let mut w_starts = state.ai_rate_window_starts.lock().expect("ai_rate_window_starts lock");
+        let mut w_starts = state.ai.ai_rate_window_starts.lock().expect("ai_rate_window_starts lock");
         let start = w_starts.entry(req.model_id.clone()).or_insert(now_ms);
         if now_ms.saturating_sub(*start) >= window_ms {
             *start = now_ms;
             drop(w_starts);
-            let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock");
+            let mut counters = state.ai.ai_request_counters.lock().expect("ai_request_counters lock");
             let cnt = counters.entry(req.model_id.clone()).or_insert(0);
             *cnt = 1;
             1u64
         } else {
             drop(w_starts);
-            let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock");
+            let mut counters = state.ai.ai_request_counters.lock().expect("ai_request_counters lock");
             let cnt = counters.entry(req.model_id.clone()).or_insert(0);
             *cnt += 1;
             *cnt
@@ -643,8 +643,8 @@ pub(crate) async fn ai_policy_stats(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<AiPolicyStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let policy = state.model_gateway_policy.lock().expect("model_gateway_policy lock stats").clone();
-    let counters = state.ai_request_counters.lock().expect("ai_request_counters lock stats");
+    let policy = state.ai.model_gateway_policy.lock().expect("model_gateway_policy lock stats").clone();
+    let counters = state.ai.ai_request_counters.lock().expect("ai_request_counters lock stats");
     let per_model: Vec<ModelRequestStat> = counters
         .iter()
         .map(|(k, v)| ModelRequestStat { model_id: k.clone(), request_count: *v })
@@ -667,7 +667,7 @@ pub(crate) async fn ai_policy_reset(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<AiPolicyResetResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let mut counters = state.ai_request_counters.lock().expect("ai_request_counters lock reset");
+    let mut counters = state.ai.ai_request_counters.lock().expect("ai_request_counters lock reset");
     let models_cleared = counters.len();
     counters.clear();
     drop(counters);
@@ -682,7 +682,7 @@ pub(crate) async fn ai_governance_audit(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<AiGovernanceAuditResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let counters = state.ai_request_counters.lock().expect("ai_request_counters audit lock");
+    let counters = state.ai.ai_request_counters.lock().expect("ai_request_counters audit lock");
     let mut entries: Vec<AiGovernanceAuditEntry> = counters
         .iter()
         .map(|(model_id, &count)| AiGovernanceAuditEntry {
@@ -794,9 +794,9 @@ pub(crate) async fn ai_chat_sql(
     )?;
 
     // Rate-limit per operator using model_gateway_policy.rate_limit_rpm.
-    let rpm_limit = state.model_gateway_policy.lock().expect("mgp lock").rate_limit_rpm;
+    let rpm_limit = state.ai.model_gateway_policy.lock().expect("mgp lock").rate_limit_rpm;
     {
-        let mut counters = state.chat_sql_counters.lock().expect("chat_sql lock");
+        let mut counters = state.ai.chat_sql_counters.lock().expect("chat_sql lock");
         let cnt = counters.entry(operator.operator_id.clone()).or_insert(0);
         *cnt += 1;
         if rpm_limit > 0 && *cnt > rpm_limit as u64 {
@@ -811,7 +811,7 @@ pub(crate) async fn ai_chat_sql(
 
     // Collect known table names from DDL catalog.
     let known_tables: Vec<String> = {
-        let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+        let catalog = state.storage.ddl_catalog.lock().expect("ddl_catalog lock");
         catalog.active_entries()
             .into_iter()
             .filter(|e| e.object_kind == "table")
@@ -946,7 +946,7 @@ pub(crate) async fn ai_ingest_suggest(
     )?;
 
     let table_exists = {
-        let catalog = state.ddl_catalog.lock().expect("ddl lock");
+        let catalog = state.storage.ddl_catalog.lock().expect("ddl lock");
         catalog.get(&req.table_name).is_some()
     };
 
@@ -999,7 +999,7 @@ pub(crate) async fn ai_export_query(
     )?;
 
     let known_tables: Vec<String> = {
-        let catalog = state.ddl_catalog.lock().expect("ddl lock");
+        let catalog = state.storage.ddl_catalog.lock().expect("ddl lock");
         catalog.active_entries().into_iter()
             .filter(|e| e.object_kind == "table")
             .map(|e| e.object_name.clone())
@@ -1088,7 +1088,7 @@ pub(crate) async fn autonomous_self_heal_run(
     )?;
 
     // Check emergency stop.
-    if state.emergency_stop.get() {
+    if state.ai.emergency_stop.get() {
         return Ok((StatusCode::SERVICE_UNAVAILABLE, Json(SelfHealRunResponse {
             status: "blocked_emergency_stop",
             signals_detected: 0,
@@ -1102,7 +1102,7 @@ pub(crate) async fn autonomous_self_heal_run(
     // Check and update rate limiter.
     let (actions_taken_so_far, max_per_hour) = {
         let now_ms = crate::now_epoch_ms_chaos();
-        let mut c = state.self_heal_counters.lock().expect("self_heal_counters lock");
+        let mut c = state.ai.self_heal_counters.lock().expect("self_heal_counters lock");
         let window_ms: u64 = 3_600_000;
         if now_ms.saturating_sub(c.window_start_ms) >= window_ms || c.window_start_ms == 0 {
             c.actions_this_hour = 0;
@@ -1113,7 +1113,7 @@ pub(crate) async fn autonomous_self_heal_run(
 
     // Collect unresolved failure signals.
     let unresolved_signals: Vec<(String, String, String)> = {
-        let sigs = state.cluster_failure_signals.lock().expect("cfs lock");
+        let sigs = state.cluster.cluster_failure_signals.lock().expect("cfs lock");
         sigs.iter()
             .filter(|s| !s.resolved)
             .map(|s| (s.signal_id.clone(), s.failure_type.clone(), s.message.clone()))
@@ -1164,12 +1164,12 @@ pub(crate) async fn autonomous_self_heal_run(
 
     // Update rate limiter counter.
     {
-        let mut c = state.self_heal_counters.lock().expect("self_heal_counters lock 2");
+        let mut c = state.ai.self_heal_counters.lock().expect("self_heal_counters lock 2");
         c.actions_this_hour += actions_taken as u64;
     }
 
     let rate_limit_remaining = {
-        let c = state.self_heal_counters.lock().expect("self_heal_counters lock 3");
+        let c = state.ai.self_heal_counters.lock().expect("self_heal_counters lock 3");
         if c.max_per_hour > 0 { c.max_per_hour.saturating_sub(c.actions_this_hour) } else { 999 }
     };
 
@@ -1193,7 +1193,7 @@ pub(crate) async fn autonomous_self_heal_status(
     )?;
 
     let (actions_this_hour, max_per_hour) = {
-        let c = state.self_heal_counters.lock().expect("self_heal_counters lock status");
+        let c = state.ai.self_heal_counters.lock().expect("self_heal_counters lock status");
         (c.actions_this_hour, c.max_per_hour)
     };
     let rate_limit_remaining = if max_per_hour > 0 {
@@ -1205,8 +1205,8 @@ pub(crate) async fn autonomous_self_heal_status(
         actions_this_hour,
         max_per_hour,
         rate_limit_remaining,
-        autonomous_mode: state.autonomous_mode,
-        emergency_stop_enabled: state.emergency_stop.get(),
+        autonomous_mode: state.ai.autonomous_mode,
+        emergency_stop_enabled: state.ai.emergency_stop.get(),
     })))
 }
 
@@ -1265,7 +1265,7 @@ pub(crate) fn append_slow_query(
         table_name: table_name.map(|t| t.to_string()),
         timestamp_ms: ts,
     };
-    if let Ok(mut log) = state.slow_query_log.lock() {
+    if let Ok(mut log) = state.ai.slow_query_log.lock() {
         if log.len() >= 1000 { log.pop_front(); }
         log.push_back(entry);
     }
@@ -1277,7 +1277,7 @@ pub(crate) fn build_tune_recommendations(state: &AppState) -> Vec<crate::TuneRec
 
     // Gather slow-query table mentions.
     let slow_tables: Vec<String> = {
-        let log = state.slow_query_log.lock().expect("slow_query_log lock");
+        let log = state.ai.slow_query_log.lock().expect("slow_query_log lock");
         log.iter()
             .filter_map(|e| e.table_name.clone())
             .collect()
@@ -1309,7 +1309,7 @@ pub(crate) fn build_tune_recommendations(state: &AppState) -> Vec<crate::TuneRec
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        if let Ok(pool) = state.driver_pool.lock() {
+        if let Ok(pool) = state.ops.driver_pool.lock() {
             let stats = pool.pool_stats(now_ms);
             if stats.total_connections > 0 {
                 let utilization = stats.active_connections as f64 / stats.total_connections as f64;
@@ -1352,14 +1352,14 @@ pub(crate) async fn ai_tune_recommendations(
         &headers, &state, "ai.tune", "ai/tune/recommendations", PrivilegeAction::Read,
     )?;
 
-    let slow_query_count = state.slow_query_log.lock()
+    let slow_query_count = state.ai.slow_query_log.lock()
         .map(|l| l.len())
         .unwrap_or(0);
 
     let recommendations = build_tune_recommendations(&state);
 
     // Persist computed recommendations.
-    if let Ok(mut recs) = state.tune_recommendations.lock() {
+    if let Ok(mut recs) = state.ai.tune_recommendations.lock() {
         *recs = recommendations.clone();
     }
 
@@ -1381,7 +1381,7 @@ pub(crate) async fn ai_tune_apply(
     )?;
 
     // Guardrail check.
-    if state.emergency_stop.get() {
+    if state.ai.emergency_stop.get() {
         return Ok((StatusCode::SERVICE_UNAVAILABLE, Json(TuneApplyResponse {
             status: "blocked_emergency_stop",
             applied: false,
@@ -1392,7 +1392,7 @@ pub(crate) async fn ai_tune_apply(
         })));
     }
 
-    let recs = state.tune_recommendations.lock().expect("tune_recs lock").clone();
+    let recs = state.ai.tune_recommendations.lock().expect("tune_recs lock").clone();
     let Some(rec) = recs.get(req.recommendation_index).cloned() else {
         return Ok((StatusCode::NOT_FOUND, Json(TuneApplyResponse {
             status: "not_found",
@@ -1467,7 +1467,7 @@ pub(crate) async fn ai_slow_query_report(
         append_slow_query(&state, &req.query, req.duration_ms, req.table_name.as_deref());
     }
 
-    let log_size = state.slow_query_log.lock().map(|l| l.len()).unwrap_or(0);
+    let log_size = state.ai.slow_query_log.lock().map(|l| l.len()).unwrap_or(0);
 
     Ok((StatusCode::OK, Json(SlowQueryReportResponse {
         status: "ok",

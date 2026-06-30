@@ -143,7 +143,7 @@ pub(crate) async fn catalog_schemas(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<CatalogSchemasResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/catalog/schemas")?;
-    let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+    let catalog = state.storage.ddl_catalog.lock().expect("ddl_catalog lock");
     let active = catalog.active_entries();
     let entries: Vec<CatalogEntryView> = active
         .iter()
@@ -173,7 +173,7 @@ pub(crate) async fn catalog_table_columns(
 
     let normalized_name = table_name.trim().to_ascii_lowercase();
     let entry = {
-        let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
+        let catalog = state.storage.ddl_catalog.lock().expect("ddl_catalog lock");
         catalog.get(&normalized_name).cloned()
     };
 
@@ -216,7 +216,7 @@ pub(crate) async fn catalog_table_columns(
     };
 
     let indexes = {
-        let mgr = state.index_manager.lock().expect("index lock");
+        let mgr = state.storage.index_manager.lock().expect("index lock");
         mgr.list_indexes()
             .iter()
             .filter(|idx| idx.table.eq_ignore_ascii_case(&entry.object_name))
@@ -254,8 +254,8 @@ pub(crate) async fn admin_schema_tree(
 ) -> Result<(StatusCode, Json<AdminSchemaTreeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
 
-    let catalog = state.ddl_catalog.lock().expect("ddl_catalog lock");
-    let index_mgr = state.index_manager.lock().expect("index lock");
+    let catalog = state.storage.ddl_catalog.lock().expect("ddl_catalog lock");
+    let index_mgr = state.storage.index_manager.lock().expect("index lock");
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

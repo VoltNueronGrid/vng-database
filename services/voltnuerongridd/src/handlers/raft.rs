@@ -16,7 +16,7 @@ fn check_cluster_token(
     headers: &HeaderMap,
     state: &AppState,
 ) -> Result<(), ()> {
-    let configured = match state.cluster_token.as_ref().as_deref() {
+    let configured = match state.cluster.cluster_token.as_ref().as_deref() {
         Some(t) => t,
         None => return Err(()), // no token configured — cannot satisfy
     };
@@ -183,7 +183,7 @@ pub(crate) async fn raft_log(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftLogResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let node = state.raft_state.lock().expect("raft_state lock");
+    let node = state.cluster.raft_state.lock().expect("raft_state lock");
     let log_length = node.log.len();
     let commit_index = node.commit_index;
     let entries = node.log.clone();
@@ -205,7 +205,7 @@ pub(crate) async fn raft_heartbeat(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftHeartbeatResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
-    let mut node = state.raft_state.lock().expect("raft_state lock");
+    let mut node = state.cluster.raft_state.lock().expect("raft_state lock");
     node.ticks_since_heartbeat = 0;
     let role = format!("{:?}", node.role);
     let term = node.current_term;
@@ -228,7 +228,7 @@ pub(crate) async fn raft_election_status(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftElectionStatusResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let node = state.raft_state.lock().expect("raft_state election_status lock");
+    let node = state.cluster.raft_state.lock().expect("raft_state election_status lock");
     let role = node.role;
     let ticks = node.ticks_since_heartbeat;
     let timeout = node.election_timeout_ticks;
@@ -253,7 +253,7 @@ pub(crate) async fn raft_commit_progress(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftCommitProgressResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let node = state.raft_state.lock().expect("raft_state lock");
+    let node = state.cluster.raft_state.lock().expect("raft_state lock");
     let commit_index = node.commit_index;
     let last_applied = node.last_applied;
     let log_length = node.log.len();
@@ -277,7 +277,7 @@ pub(crate) async fn raft_snapshot(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftSnapshotResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let snap = state.raft_state.lock().expect("raft_state snapshot lock").status();
+    let snap = state.cluster.raft_state.lock().expect("raft_state snapshot lock").status();
     Ok((StatusCode::OK, Json(RaftSnapshotResponse {
         status: "ok",
         node_id: snap.node_id,
@@ -298,7 +298,7 @@ pub(crate) async fn raft_member_list(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftMemberListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let node = state.raft_state.lock().expect("raft_state lock");
+    let node = state.cluster.raft_state.lock().expect("raft_state lock");
     let member = RaftMemberEntry {
         node_id: node.node_id.clone(),
         role: format!("{:?}", node.role),
@@ -322,7 +322,7 @@ pub(crate) async fn raft_leader(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftLeaderResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let node = state.raft_state.lock().expect("raft_state lock");
+    let node = state.cluster.raft_state.lock().expect("raft_state lock");
     let is_leader = matches!(node.role, RaftRole::Leader);
     let response = RaftLeaderResponse {
         status: "ok",
@@ -343,7 +343,7 @@ pub(crate) async fn raft_vote_stats(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftVoteStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let snap = state.raft_state.lock().expect("raft_state lock").status();
+    let snap = state.cluster.raft_state.lock().expect("raft_state lock").status();
     // Vote accumulation is tracked by the election loop in helpers::raft_loop;
     // expose current_term only and return zeroed counters.
     Ok((StatusCode::OK, Json(RaftVoteStatsResponse {
@@ -363,7 +363,7 @@ pub(crate) async fn raft_fence(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RaftFenceResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let snap = state.raft_state.lock().expect("raft_state lock").status();
+    let snap = state.cluster.raft_state.lock().expect("raft_state lock").status();
     Ok((
         StatusCode::OK,
         Json(RaftFenceResponse {
@@ -384,7 +384,7 @@ pub(crate) async fn raft_status(
     headers: HeaderMap,
 ) -> Result<Json<RaftStatusResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Read)?;
-    let snap = state.raft_state.lock().expect("raft_state lock").status();
+    let snap = state.cluster.raft_state.lock().expect("raft_state lock").status();
     Ok(Json(RaftStatusResponse { status: "ok", raft: snap }))
 }
 
@@ -403,7 +403,7 @@ pub(crate) async fn raft_vote(
         require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     }
     let resp = {
-        let mut node = state.raft_state.lock().expect("raft_state lock");
+        let mut node = state.cluster.raft_state.lock().expect("raft_state lock");
         let r = node.handle_vote_request(&req);
         let data_dir = state.runtime_config.storage.data_dir.clone();
         crate::helpers::raft_loop::persist_raft_state(&data_dir, &node);
@@ -427,7 +427,7 @@ pub(crate) async fn raft_append(
         require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
     }
     let resp = {
-        let mut node = state.raft_state.lock().expect("raft_state lock");
+        let mut node = state.cluster.raft_state.lock().expect("raft_state lock");
         let r = node.handle_append_entries(&req);
         let data_dir = state.runtime_config.storage.data_dir.clone();
         crate::helpers::raft_loop::persist_raft_state(&data_dir, &node);
@@ -442,7 +442,7 @@ pub(crate) async fn raft_tick(
     headers: HeaderMap,
 ) -> Result<Json<RaftTickResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     let _operator = require_cluster_failover_privilege(&headers, &state, PrivilegeAction::Execute)?;
-    let mut node = state.raft_state.lock().expect("raft_state lock");
+    let mut node = state.cluster.raft_state.lock().expect("raft_state lock");
     let role_before = node.role;
     node.tick();
     let election_triggered = node.role != role_before;
@@ -475,7 +475,7 @@ pub(crate) async fn raft_install_snapshot(
     // H-2: persist durable state immediately after applying the snapshot so
     // snapshot_index / snapshot_term survive a crash.
     let resp = {
-        let mut node = state.raft_state.lock().expect("raft install_snapshot lock");
+        let mut node = state.cluster.raft_state.lock().expect("raft install_snapshot lock");
         let r = node.handle_install_snapshot(&req);
         let data_dir = state.runtime_config.storage.data_dir.clone();
         crate::helpers::raft_loop::persist_raft_state(&data_dir, &node);
@@ -486,7 +486,7 @@ pub(crate) async fn raft_install_snapshot(
         // Atomically replace the entire row-store with the leader's snapshot.
         // replace_all clears existing data before inserting, so the follower's
         // diverged state is fully overwritten rather than merged.
-        let mut rs = state.row_store.lock().expect("row_store install_snapshot lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store install_snapshot lock");
         rs.replace_all(req.rows.into_iter());
     }
 

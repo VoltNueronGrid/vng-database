@@ -40,123 +40,116 @@ fn state_with_key(key: Option<&str>) -> AppState {
     AppState {
         node_id: "node-1".to_string(),
         cluster_mode: "single".to_string(),
-        admin_api_key: key.map(|v| v.to_string()),
-        security_config: security_config.clone(),
-        allowed_operator_roles: allowed_operator_roles.clone(),
-        operator_role_bindings: Arc::new(default_operator_role_bindings()),
-        tenant_user_bindings: Arc::new(default_tenant_user_bindings()),
-        rbac_privilege_matrix: Arc::new(default_rbac_privilege_matrix()),
-        kms_runtime: Arc::new(Mutex::new(load_kms_runtime_state(&security_config))),
-        leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
-        cluster_nodes: Arc::new(Mutex::new(initial_cluster_nodes("node-1"))),
-        audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
-        action_records: Arc::new(Mutex::new(Vec::new())),
-        dr_hook_records: Arc::new(Mutex::new(Vec::new())),
-        dr_hook_policy_state: Arc::new(Mutex::new(DrHookPolicyState::default())),
-        dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
-        dr_hook_state_path: None,
-        dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
-        cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
-        sync_origin: Arc::new(Mutex::new(RowStoreSyncOrigin::new())),
-        replication_transport: Arc::new(Mutex::new(InMemoryReplicationTransport::new())),
-        replica_replay_states: Arc::new(Mutex::new(HashMap::new())),
-        pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
-        pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
-        pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
-        index_manager: Arc::new(Mutex::new(IndexManager::new())),
-        constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
-        ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
-        ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
-        ingest_parquet_records: Arc::new(Mutex::new(HashMap::new())),
-        ingest_excel_records: Arc::new(Mutex::new(HashMap::new())),
-        ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
-        ingest_event_bus: Arc::new(Mutex::new(ManagedEventBusTransport::in_memory())),
-        ingest_outbox_cursors: Arc::new(Mutex::new(ManagedReplayCursorStore::in_memory())),
-        distributed_cache: Arc::new(Mutex::new(DistributedCacheManager::with_default_policy())),
-        driver_pool: Arc::new(Mutex::new(ConnectionPoolManager::with_default_policy())),
-        plugin_lifecycle: Arc::new(Mutex::new(PluginLifecycleManager::new(256))),
-        autonomous_mode: AutonomousMode::Supervised,
-        emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
-        guardrails: Arc::new(default_guardrail_rules()),
-        ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
-        acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
-        row_store: Arc::new(Mutex::new(PagedRowStore::default())),
-        model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
-        wal_engine: Arc::new(Mutex::new(BoxedDurabilityEngine::in_memory(DurabilityConfig::default()))),
-        chaos_state: Arc::new(Mutex::new(ChaosState::default())),
-        olap_store: Arc::new(Mutex::new(HashMap::new())),
-        audit_log_path: None,
-        raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
-        raft_peers: Arc::new(Vec::new()),
-        cluster_token: Arc::new(None),
-        raft_last_applied_tx: Arc::new(tokio::sync::watch::channel(0u64).0),
         node_url: Arc::new(None),
-        current_leader_url: Arc::new(Mutex::new(None)),
-        snapshot_chunk_sessions: Arc::new(Mutex::new(HashMap::new())),
-        ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
-        driver_sessions: Arc::new(Mutex::new(HashMap::new())),
-        broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
-        ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
-        connector_registry: Arc::new(Mutex::new(Vec::new())),
-        udf_registry: Arc::new(Mutex::new(UdfRegistry::new())),
-        vector_index: Arc::new(Mutex::new(helpers::vector::VectorIndex::new())),
-        fts_index: Arc::new(Mutex::new(helpers::fts::FtsIndex::new())),
-        geo_index: Arc::new(Mutex::new(helpers::geo::GeoIndex::new())),
-        plugin_registry: Arc::new(Mutex::new(helpers::plugins::PluginRegistry::new_empty())),
-        tde_override: Arc::new(Mutex::new(None)),
-        cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
-        // Phase 1.3 — DatabaseCatalog (test default: empty).
-        database_catalog: Arc::new(Mutex::new(voltnuerongrid_meta::DatabaseCatalog::new())),
-        // Phase 0 — runtime config (test default).
         runtime_config: Arc::new(voltnuerongrid_config::RuntimeConfig::default()),
-        // Gap #7 — user store, session store, signer (test defaults: empty).
-        user_store: Arc::new(Mutex::new(crate::user_store::UserStore::new())),
-        session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
-        session_signer: Arc::new(Mutex::new(crate::user_store::SessionSigner::new("test-secret", 3600))),
-        // Gap #6/#7: per-table row count statistics.
-        table_stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        // Gap #9: per-database connection semaphores (lazily created on first request).
-        db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        // Gap #3: per-connection undo log for ROLLBACK support.
-        tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        // Tier 3 #1: per-database role grants (empty for tests).
-        db_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        // C-3: connection → tx_id map for repeatable-read tracking (empty for tests).
-        connection_tx_active: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        // H-1: table statistics registry (empty for tests).
-        stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
-        // L-2: stored-procedure registry (pre-populated with built-ins for tests).
-        proc_registry: {
-            let mut reg = helpers::stored_proc::ProcedureRegistry::new();
-            reg.register_builtins();
-            Arc::new(Mutex::new(reg))
+        auth: AuthState {
+            admin_api_key: key.map(|v| v.to_string()),
+            security_config: security_config.clone(),
+            allowed_operator_roles: allowed_operator_roles.clone(),
+            operator_role_bindings: Arc::new(default_operator_role_bindings()),
+            tenant_user_bindings: Arc::new(default_tenant_user_bindings()),
+            rbac_privilege_matrix: Arc::new(default_rbac_privilege_matrix()),
+            kms_runtime: Arc::new(Mutex::new(load_kms_runtime_state(&security_config))),
+            db_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            user_store: Arc::new(Mutex::new(crate::user_store::UserStore::new())),
+            session_store: Arc::new(Mutex::new(crate::user_store::SessionStore::new())),
+            session_signer: Arc::new(Mutex::new(crate::user_store::SessionSigner::new("test-secret", 3600))),
         },
-        // ISSUE-03: trigger registry + no-op emitter for tests.
-        trigger_registry: Arc::new(Mutex::new(voltnuerongrid_store::triggers::TriggerRegistry::new())),
-        trigger_emitter: Arc::new(voltnuerongrid_store::trigger_emitter::NoOpTriggerEmitter),
-        // PART-1: partition registry (empty for tests).
-        partition_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        // CACHE-1: test uses in-memory only (no snapshot path).
-        cache_snapshot_path: Arc::new("state/cache-snapshot-test.json".to_string()),
-        // SCALE-1: autoscale policy and status (default for tests).
-        autoscale_policy: Arc::new(Mutex::new(crate::handlers::autoscale::AutoscalePolicy::default())),
-        autoscale_status: Arc::new(Mutex::new(crate::handlers::autoscale::AutoscaleStatus::default())),
-        // AI-3: self-heal counters (max 10/hour for tests).
-        self_heal_counters: Arc::new(Mutex::new(crate::SelfHealCounters {
-            actions_this_hour: 0,
-            window_start_ms: 0,
-            max_per_hour: 10,
-        })),
-        // AI-4: slow-query ring buffer + empty recommendations.
-        slow_query_log: Arc::new(Mutex::new(std::collections::VecDeque::new())),
-        tune_recommendations: Arc::new(Mutex::new(Vec::new())),
-        // AI-5: DEK versions + no cert fingerprint for tests.
-        dek_versions: Arc::new(Mutex::new(Vec::new())),
-        cert_fingerprint: Arc::new(Mutex::new(None)),
-        // AI-6: no pre-loaded diagnosis rules for tests.
-        diagnosis_rules: Arc::new(Mutex::new(Vec::new())),
-        // AI-1: per-operator chat-sql counters.
-        chat_sql_counters: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        cluster: ClusterState {
+            leader_node_id: Arc::new(Mutex::new("node-1".to_string())),
+            cluster_nodes: Arc::new(Mutex::new(initial_cluster_nodes("node-1"))),
+            cluster_failure_signals: Arc::new(Mutex::new(Vec::new())),
+            raft_state: Arc::new(Mutex::new(RaftNode::new("node-1"))),
+            raft_peers: Arc::new(Vec::new()),
+            cluster_token: Arc::new(None),
+            raft_last_applied_tx: Arc::new(tokio::sync::watch::channel(0u64).0),
+            current_leader_url: Arc::new(Mutex::new(None)),
+            snapshot_chunk_sessions: Arc::new(Mutex::new(HashMap::new())),
+            sync_origin: Arc::new(Mutex::new(RowStoreSyncOrigin::new())),
+            replication_transport: Arc::new(Mutex::new(InMemoryReplicationTransport::new())),
+            replica_replay_states: Arc::new(Mutex::new(HashMap::new())),
+        },
+        storage: StorageState {
+            row_store: Arc::new(Mutex::new(PagedRowStore::default())),
+            wal_engine: Arc::new(Mutex::new(BoxedDurabilityEngine::in_memory(DurabilityConfig::default()))),
+            olap_store: Arc::new(Mutex::new(HashMap::new())),
+            ddl_catalog: Arc::new(Mutex::new(DdlCatalog::new())),
+            database_catalog: Arc::new(Mutex::new(voltnuerongrid_meta::DatabaseCatalog::new())),
+            acid_transactions: Arc::new(Mutex::new(AcidTransactionRegistry::default())),
+            index_manager: Arc::new(Mutex::new(IndexManager::new())),
+            constraint_manager: Arc::new(Mutex::new(ConstraintManager::new())),
+            tx_undo_log: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            db_semaphores: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            table_stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            stats_registry: Arc::new(Mutex::new(voltnuerongrid_exec::StatsRegistry::new())),
+            connection_tx_active: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            proc_registry: {
+                let mut reg = helpers::stored_proc::ProcedureRegistry::new();
+                reg.register_builtins();
+                Arc::new(Mutex::new(reg))
+            },
+            trigger_registry: Arc::new(Mutex::new(voltnuerongrid_store::triggers::TriggerRegistry::new())),
+            trigger_emitter: Arc::new(voltnuerongrid_store::trigger_emitter::NoOpTriggerEmitter),
+            partition_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
+            pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
+            pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
+            cdc_cursors: Arc::new(Mutex::new(HashMap::new())),
+        },
+        ingest: IngestState {
+            ingest_csv_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_json_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_parquet_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_excel_records: Arc::new(Mutex::new(HashMap::new())),
+            ingest_outbox_streams: Arc::new(Mutex::new(HashMap::new())),
+            ingest_event_bus: Arc::new(Mutex::new(ManagedEventBusTransport::in_memory())),
+            ingest_outbox_cursors: Arc::new(Mutex::new(ManagedReplayCursorStore::in_memory())),
+            broker_flush_counts: Arc::new(Mutex::new(HashMap::new())),
+            connector_registry: Arc::new(Mutex::new(Vec::new())),
+        },
+        ai: AiState {
+            autonomous_mode: AutonomousMode::Supervised,
+            emergency_stop: Arc::new(AtomicEmergencyStop::new(false)),
+            guardrails: Arc::new(default_guardrail_rules()),
+            model_gateway_policy: Arc::new(Mutex::new(ModelGatewayPolicy::default())),
+            ai_request_counters: Arc::new(Mutex::new(HashMap::new())),
+            ai_rate_window_starts: Arc::new(Mutex::new(HashMap::new())),
+            self_heal_counters: Arc::new(Mutex::new(crate::SelfHealCounters {
+                actions_this_hour: 0,
+                window_start_ms: 0,
+                max_per_hour: 10,
+            })),
+            slow_query_log: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            tune_recommendations: Arc::new(Mutex::new(Vec::new())),
+            dek_versions: Arc::new(Mutex::new(Vec::new())),
+            cert_fingerprint: Arc::new(Mutex::new(None)),
+            diagnosis_rules: Arc::new(Mutex::new(Vec::new())),
+            chat_sql_counters: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            action_records: Arc::new(Mutex::new(Vec::new())),
+        },
+        ops: OpsState {
+            audit_sink: Arc::new(Mutex::new(AppendOnlyAuditSink::new())),
+            audit_log_path: None,
+            dr_hook_records: Arc::new(Mutex::new(Vec::new())),
+            dr_hook_policy_state: Arc::new(Mutex::new(DrHookPolicyState::default())),
+            dr_hook_policy_config: Arc::new(default_dr_hook_policy_config()),
+            dr_hook_state_path: None,
+            dr_hook_queue: Arc::new(Mutex::new(VecDeque::new())),
+            chaos_state: Arc::new(Mutex::new(ChaosState::default())),
+            autoscale_policy: Arc::new(Mutex::new(crate::handlers::autoscale::AutoscalePolicy::default())),
+            autoscale_status: Arc::new(Mutex::new(crate::handlers::autoscale::AutoscaleStatus::default())),
+            plugin_lifecycle: Arc::new(Mutex::new(PluginLifecycleManager::new(256))),
+            plugin_registry: Arc::new(Mutex::new(helpers::plugins::PluginRegistry::new_empty())),
+            udf_registry: Arc::new(Mutex::new(UdfRegistry::new())),
+            distributed_cache: Arc::new(Mutex::new(DistributedCacheManager::with_default_policy())),
+            cache_snapshot_path: Arc::new("state/cache-snapshot-test.json".to_string()),
+            driver_pool: Arc::new(Mutex::new(ConnectionPoolManager::with_default_policy())),
+            driver_sessions: Arc::new(Mutex::new(HashMap::new())),
+            tde_override: Arc::new(Mutex::new(None)),
+            vector_index: Arc::new(Mutex::new(helpers::vector::VectorIndex::new())),
+            fts_index: Arc::new(Mutex::new(helpers::fts::FtsIndex::new())),
+            geo_index: Arc::new(Mutex::new(helpers::geo::GeoIndex::new())),
+        },
     }
 }
 
@@ -359,7 +352,7 @@ fn store_create_index_appends_tenant_storage_audit_event() {
         .expect("tenant admin should create audited index");
 
     assert_eq!(response.0, StatusCode::CREATED);
-    let events = state.audit_sink.lock().expect("audit lock").latest(1);
+    let events = state.ops.audit_sink.lock().expect("audit lock").latest(1);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, AuditEventKind::Storage);
     assert_eq!(events[0].actor, "admin-acme");
@@ -384,7 +377,7 @@ fn ingest_csv_appends_tenant_ingest_audit_event() {
         .expect("tenant admin should ingest csv");
 
     assert_eq!(response.0, StatusCode::OK);
-    let events = state.audit_sink.lock().expect("audit lock").latest(1);
+    let events = state.ops.audit_sink.lock().expect("audit lock").latest(1);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, AuditEventKind::Ingest);
     assert_eq!(events[0].actor, "admin-acme");
@@ -406,7 +399,7 @@ fn o2_ddl_execute_emits_audit_event() {
     };
     rt.block_on(sql_execute(State(state.clone()), headers, Json(req)))
         .expect("ddl ok");
-    let events = state.audit_sink.lock().expect("audit lock").latest(50);
+    let events = state.ops.audit_sink.lock().expect("audit lock").latest(50);
     let ddl = events.iter().find(|e| e.action == "ddl_execute")
         .expect("a ddl_execute audit event must be emitted");
     assert_eq!(ddl.kind, AuditEventKind::Sql);
@@ -426,7 +419,7 @@ fn o2_insert_user(state: &AppState, username: &str, password: &str) -> String {
         created_ms: 0,
         password_hash: hash,
     };
-    state.user_store.lock().expect("user lock").insert(account);
+    state.auth.user_store.lock().expect("user lock").insert(account);
     user_id
 }
 
@@ -438,7 +431,7 @@ fn o2_login_failure_emits_security_audit() {
     let req = crate::handlers::user_mgmt::LoginRequest { username: "alice".to_string(), password: "wrong".to_string() };
     let res = rt.block_on(crate::handlers::user_mgmt::auth_login(State(state.clone()), Json(req)));
     assert!(res.is_err(), "bad password must be rejected");
-    let events = state.audit_sink.lock().expect("audit lock").latest(5);
+    let events = state.ops.audit_sink.lock().expect("audit lock").latest(5);
     let ev = events.iter().find(|e| e.action == "auth_login" && e.outcome == "rejected")
         .expect("login failure must emit a rejected Security audit event");
     assert_eq!(ev.kind, AuditEventKind::Security);
@@ -452,7 +445,7 @@ fn o2_login_unknown_user_emits_security_audit() {
     let req = crate::handlers::user_mgmt::LoginRequest { username: "ghost".to_string(), password: "x".to_string() };
     let res = rt.block_on(crate::handlers::user_mgmt::auth_login(State(state.clone()), Json(req)));
     assert!(res.is_err());
-    let events = state.audit_sink.lock().expect("audit lock").latest(5);
+    let events = state.ops.audit_sink.lock().expect("audit lock").latest(5);
     let ev = events.iter().find(|e| e.action == "auth_login" && e.outcome == "rejected")
         .expect("unknown-user login must emit a rejected Security audit event");
     assert!(ev.details_json.contains("unknown_user"));
@@ -466,7 +459,7 @@ fn o2_login_success_emits_security_audit() {
     let req = crate::handlers::user_mgmt::LoginRequest { username: "bob".to_string(), password: "s3cret".to_string() };
     let res = rt.block_on(crate::handlers::user_mgmt::auth_login(State(state.clone()), Json(req)));
     assert!(res.is_ok(), "valid login must succeed");
-    let events = state.audit_sink.lock().expect("audit lock").latest(5);
+    let events = state.ops.audit_sink.lock().expect("audit lock").latest(5);
     let ev = events.iter().find(|e| e.action == "auth_login" && e.outcome == "ok")
         .expect("successful login must emit an ok Security audit event");
     assert_eq!(ev.kind, AuditEventKind::Security);
@@ -628,7 +621,7 @@ fn h07_sql_data_plane_pool_acquire_release_on_sql_handlers() {
         .expect("sql execute response");
 
     let stats = state
-        .driver_pool
+        .ops.driver_pool
         .lock()
         .expect("driver pool lock")
         .pool_stats(now_unix_ms_u64());
@@ -641,7 +634,7 @@ fn h07_sql_data_plane_pool_acquire_release_on_sql_handlers() {
 fn h07_sql_data_plane_pool_rejects_when_pool_exhausted() {
     let state = state_with_key(None);
     {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        let mut pool = state.ops.driver_pool.lock().expect("driver pool lock");
         for _ in 0..50 {
             let _ = pool.acquire(1_000).expect("pre-acquire should succeed");
         }
@@ -700,10 +693,9 @@ fn ingest_runtime_denies_tenant_role_without_grant() {
             role: "tenant_viewer".to_string(),
         },
     );
-    let state = AppState {
-        tenant_user_bindings: Arc::new(bindings),
-        ..state_with_key(None)
-    };
+    let mut state = state_with_key(None);
+    state.auth.tenant_user_bindings = Arc::new(bindings);
+    let state = state;
     let headers = tenant_user_headers("viewer-acme", "acme");
 
     let auth = require_ingest_runtime_privilege(
@@ -783,7 +775,7 @@ fn store_list_indexes_filters_to_tenant_namespace() {
 
     let state = state_with_key(None);
     {
-        let mut mgr = state.index_manager.lock().expect("index lock");
+        let mut mgr = state.storage.index_manager.lock().expect("index lock");
         mgr.create_index(IndexDescriptor {
             name: "idx_acme_orders".to_string(),
             table: "tenant/acme/orders".to_string(),
@@ -821,7 +813,7 @@ fn store_index_lookup_denies_cross_tenant_index_lookup() {
 
     let state = state_with_key(None);
     {
-        let mut mgr = state.index_manager.lock().expect("index lock");
+        let mut mgr = state.storage.index_manager.lock().expect("index lock");
         mgr.create_index(IndexDescriptor {
             name: "idx_globex_orders".to_string(),
             table: "tenant/globex/orders".to_string(),
@@ -858,7 +850,7 @@ fn store_validate_constraint_accepts_tenant_scoped_table() {
 
     let state = state_with_key(None);
     state
-        .constraint_manager
+        .storage.constraint_manager
         .lock()
         .expect("constraint lock")
         .add_constraint(ConstraintDescriptor {
@@ -908,7 +900,7 @@ fn store_create_index_accepts_tenant_admin_for_tenant_table() {
         .expect("tenant admin should create index");
 
     assert_eq!(response.0, StatusCode::CREATED);
-    let mgr = state.index_manager.lock().expect("index lock");
+    let mgr = state.storage.index_manager.lock().expect("index lock");
     assert!(mgr.get("idx_acme_orders_admin").is_some());
 }
 
@@ -985,7 +977,7 @@ fn store_drop_index_accepts_tenant_admin_for_tenant_table() {
 
     let state = state_with_key(None);
     {
-        let mut mgr = state.index_manager.lock().expect("index lock");
+        let mut mgr = state.storage.index_manager.lock().expect("index lock");
         mgr.create_index(IndexDescriptor {
             name: "idx_acme_drop".to_string(),
             table: "tenant/acme/orders".to_string(),
@@ -1008,7 +1000,7 @@ fn store_drop_index_accepts_tenant_admin_for_tenant_table() {
         .expect("tenant admin should drop own index");
 
     assert_eq!(response.0, StatusCode::OK);
-    let mgr = state.index_manager.lock().expect("index lock");
+    let mgr = state.storage.index_manager.lock().expect("index lock");
     assert!(mgr.get("idx_acme_drop").is_none());
 }
 
@@ -1016,12 +1008,12 @@ fn store_drop_index_accepts_tenant_admin_for_tenant_table() {
 fn ingest_status_scopes_counts_to_tenant_records() {
     let state = state_with_key(None);
     state
-        .ingest_csv_records
+        .ingest.ingest_csv_records
         .lock()
         .expect("csv lock")
         .insert("tenant/acme/c1".to_string(), vec![]);
     state
-        .ingest_csv_records
+        .ingest.ingest_csv_records
         .lock()
         .expect("csv lock")
         .insert("tenant/acme/c2".to_string(), vec![voltnuerongrid_ingest::IngestRecord {
@@ -1029,7 +1021,7 @@ fn ingest_status_scopes_counts_to_tenant_records() {
             payload: "{\"id\":\"1\"}".to_string(),
         }]);
     state
-        .ingest_json_records
+        .ingest.ingest_json_records
         .lock()
         .expect("json lock")
         .insert("tenant/globex/j1".to_string(), vec![voltnuerongrid_ingest::IngestRecord {
@@ -1085,7 +1077,7 @@ fn failover_status_reports_healthy_without_critical_signals() {
 fn failover_status_reports_degraded_with_unresolved_critical_signal() {
     let state = state_with_key(Some("secret"));
     let headers = operator_headers("secret", "platform-admin");
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
         signals.push(ClusterFailureSignal {
             signal_id: "sig-status-critical".to_string(),
             node_id: "node-2".to_string(),
@@ -1113,7 +1105,7 @@ fn failover_status_reports_degraded_with_unresolved_critical_signal() {
 #[test]
 fn h03_control_plane_chaos_cycle_recovers_after_failover_and_reconcile() {
     let state = state_with_key(Some("secret"));
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
         signals.push(ClusterFailureSignal {
             signal_id: "sig-h03-chaos".to_string(),
             node_id: "node-2".to_string(),
@@ -1257,7 +1249,7 @@ fn h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotatio
     let state = state_with_key(None);
 
     let (_, leader_after_first_rotation) =
-        rotate_leader(&state.leader_node_id, "node-2", &state.node_id);
+        rotate_leader(&state.cluster.leader_node_id, "node-2", &state.node_id);
     assert_eq!(leader_after_first_rotation, "node-2");
 
     record_transport_mutation(
@@ -1298,7 +1290,7 @@ fn h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotatio
     assert_eq!(node_2_handoff.last_applied_sequence_after, 2);
 
     let (_, leader_after_second_rotation) =
-        rotate_leader(&state.leader_node_id, "node-3", &state.node_id);
+        rotate_leader(&state.cluster.leader_node_id, "node-3", &state.node_id);
     assert_eq!(leader_after_second_rotation, "node-3");
 
     let node_3_handoff = build_failover_handoff_report(&state, "node-2", "node-3");
@@ -1332,7 +1324,7 @@ fn h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotatio
     );
 
     let (_, leader_after_third_rotation) =
-        rotate_leader(&state.leader_node_id, "node-2", &state.node_id);
+        rotate_leader(&state.cluster.leader_node_id, "node-2", &state.node_id);
     assert_eq!(leader_after_third_rotation, "node-2");
 
     let node_2_rejoin = build_failover_handoff_report(&state, "node-3", "node-2");
@@ -1345,7 +1337,7 @@ fn h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotatio
     assert_eq!(node_2_rejoin.gaps[0].expected, 3);
     assert_eq!(node_2_rejoin.gaps[0].actual, 4);
 
-    let replicas = state.replica_replay_states.lock().expect("replica lock");
+    let replicas = state.cluster.replica_replay_states.lock().expect("replica lock");
     let node_2_replica = replicas.get("node-2").expect("node-2 replica");
     let node_2_sequences: Vec<u64> = node_2_replica
         .applied
@@ -1363,15 +1355,15 @@ fn h03_multi_node_cluster_runtime_chaos_replays_targeted_handoffs_across_rotatio
 fn failover_handoff_report_replays_only_unapplied_sequences_for_new_leader() {
     let state = state_with_key(None);
     {
-        let mut origin = state.sync_origin.lock().expect("origin lock");
+        let mut origin = state.cluster.sync_origin.lock().expect("origin lock");
         origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
         origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
         origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
         origin.append("orders", "4", "{\"amount\":110}", MutationOp::Update);
     }
     {
-        let origin = state.sync_origin.lock().expect("origin lock");
-        let mut replicas = state.replica_replay_states.lock().expect("replica lock");
+        let origin = state.cluster.sync_origin.lock().expect("origin lock");
+        let mut replicas = state.cluster.replica_replay_states.lock().expect("replica lock");
         let replica = replicas
             .entry("node-2".to_string())
             .or_insert_with(|| ReplicaReplayState::new("node-2"));
@@ -1425,7 +1417,7 @@ fn failover_transport_mutations_feed_runtime_handoff_report() {
 fn failover_handoff_report_detects_gap_for_target_leader() {
     let state = state_with_key(None);
     {
-        let mut origin = state.sync_origin.lock().expect("origin lock");
+        let mut origin = state.cluster.sync_origin.lock().expect("origin lock");
         origin.append("orders", "1", "{\"amount\":100}", MutationOp::Insert);
         origin.append("orders", "2", "{\"amount\":80}", MutationOp::Insert);
         origin.append("orders", "3", "{\"amount\":90}", MutationOp::Insert);
@@ -1433,8 +1425,8 @@ fn failover_handoff_report_detects_gap_for_target_leader() {
         origin.remove_sequence_for_fault_injection(3);
     }
     {
-        let origin = state.sync_origin.lock().expect("origin lock");
-        let mut replicas = state.replica_replay_states.lock().expect("replica lock");
+        let origin = state.cluster.sync_origin.lock().expect("origin lock");
+        let mut replicas = state.cluster.replica_replay_states.lock().expect("replica lock");
         let replica = replicas
             .entry("node-2".to_string())
             .or_insert_with(|| ReplicaReplayState::new("node-2"));
@@ -1466,7 +1458,7 @@ fn audit_append_event_writes_to_sink() {
         "{\"enabled\":true}",
     );
     let count = state
-        .audit_sink
+        .ops.audit_sink
         .lock()
         .expect("sink lock")
         .len();
@@ -1576,7 +1568,7 @@ fn authorize_action_response_tags_tenant_scope_record_and_audit() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].tenant_id.as_deref(), Some("acme"));
 
-    let events = state.audit_sink.lock().expect("audit lock").latest(1);
+    let events = state.ops.audit_sink.lock().expect("audit lock").latest(1);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, AuditEventKind::Autonomous);
     assert!(events[0].details_json.contains("\"tenant_id\":\"acme\""));
@@ -2406,7 +2398,7 @@ fn ws12_retry_backoff_growth_is_capped() {
 #[test]
 fn ws12_dr_hook_denies_when_mode_below_policy() {
     let mut state = state_with_key(None);
-    state.autonomous_mode = AutonomousMode::Advisory;
+    state.ai.autonomous_mode = AutonomousMode::Advisory;
     let execution = execute_dr_hook(&state, "failover_drill", Some("cluster"), false);
     assert_eq!(execution.status, "rejected");
     assert_eq!(execution.policy_decision, "deny_mode");
@@ -2425,12 +2417,11 @@ fn ws12_retry_plan_builds_monotonic_backoff() {
 #[test]
 fn ws12_persistent_policy_state_roundtrip() {
     let temp = std::env::temp_dir().join(format!("vng-ws12-{}.json", now_unix_ms()));
-    let state = AppState {
-        dr_hook_state_path: Some(temp.to_string_lossy().to_string()),
-        ..state_with_key(None)
-    };
+    let mut state = state_with_key(None);
+    state.ops.dr_hook_state_path = Some(temp.to_string_lossy().to_string());
+    let state = state;
     let _ = execute_dr_hook(&state, "failover_drill", Some("cluster"), true);
-    let loaded = load_dr_hook_policy_state(state.dr_hook_state_path.as_deref());
+    let loaded = load_dr_hook_policy_state(state.ops.dr_hook_state_path.as_deref());
     assert!(loaded.hooks.contains_key("failover_drill"));
     let persisted = fs::read_to_string(&temp).expect("state file readable");
     assert!(persisted.contains("\"schema_version\": 1"));
@@ -2444,10 +2435,9 @@ fn ws12_policy_state_falls_back_to_backup_when_primary_corrupted() {
     let temp_str = temp.to_string_lossy().to_string();
     let backup = format!("{temp_str}.bak");
 
-    let state = AppState {
-        dr_hook_state_path: Some(temp_str.clone()),
-        ..state_with_key(None)
-    };
+    let mut state = state_with_key(None);
+    state.ops.dr_hook_state_path = Some(temp_str.clone());
+    let state = state;
 
     let _ = execute_dr_hook(&state, "failover_drill", Some("cluster"), true);
     // Trigger a second persist so backup file is created.
@@ -2495,14 +2485,14 @@ fn ws12_scheduler_queue_enqueues_tasks() {
         "unit_test",
     );
     assert_eq!(task.hook, "failover_drill");
-    let depth = state.dr_hook_queue.lock().expect("queue lock").len();
+    let depth = state.ops.dr_hook_queue.lock().expect("queue lock").len();
     assert_eq!(depth, 1);
 }
 
 #[test]
 fn ws12_failure_signal_queues_auto_remediation() {
     let state = state_with_key(None);
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
         signals.push(ClusterFailureSignal {
             signal_id: "sig-1".to_string(),
             node_id: "node-2".to_string(),
@@ -2530,11 +2520,10 @@ fn ws12_failure_signal_queues_auto_remediation() {
 
 #[test]
 fn ws12_gate_criteria_detects_critical_signal() {
-    let state = AppState {
-        dr_hook_state_path: Some("state/test.json".to_string()),
-        ..state_with_key(None)
-    };
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+    let mut state = state_with_key(None);
+    state.ops.dr_hook_state_path = Some("state/test.json".to_string());
+    let state = state;
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
         signals.push(ClusterFailureSignal {
             signal_id: "sig-critical".to_string(),
             node_id: "node-3".to_string(),
@@ -2556,7 +2545,7 @@ fn ws12_gate_criteria_detects_critical_signal() {
 #[test]
 fn ws12_reconcile_marks_critical_resolved() {
     let state = state_with_key(None);
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
         signals.push(ClusterFailureSignal {
             signal_id: "sig-reconcile".to_string(),
             node_id: "node-4".to_string(),
@@ -2571,7 +2560,7 @@ fn ws12_reconcile_marks_critical_resolved() {
             resolution_note: None,
         });
     }
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
         for signal in signals.iter_mut() {
             if signal.signal_id == "sig-reconcile" {
                 signal.resolved = true;
@@ -2581,7 +2570,7 @@ fn ws12_reconcile_marks_critical_resolved() {
         }
     }
     let unresolved = state
-        .cluster_failure_signals
+        .cluster.cluster_failure_signals
         .lock()
         .expect("signal lock")
         .iter()
@@ -2609,7 +2598,7 @@ fn ws2_index_create_lookup_drop_lifecycle() {
 
     let state = state_with_key(None);
     {
-        let mut mgr = state.index_manager.lock().expect("lock");
+        let mut mgr = state.storage.index_manager.lock().expect("lock");
         mgr.create_index(IndexDescriptor {
             name: "idx_orders_customer".to_string(),
             table: "orders".to_string(),
@@ -2625,7 +2614,7 @@ fn ws2_index_create_lookup_drop_lifecycle() {
         idx.insert("C200", "row-3").expect("insert");
     }
     {
-        let mgr = state.index_manager.lock().expect("lock");
+        let mgr = state.storage.index_manager.lock().expect("lock");
         let idx = mgr.get("idx_orders_customer").expect("get idx");
         assert_eq!(idx.lookup("C100").len(), 2);
         assert_eq!(idx.lookup("C200").len(), 1);
@@ -2633,7 +2622,7 @@ fn ws2_index_create_lookup_drop_lifecycle() {
         assert_eq!(mgr.index_count(), 1);
     }
     {
-        let mut mgr = state.index_manager.lock().expect("lock");
+        let mut mgr = state.storage.index_manager.lock().expect("lock");
         let dropped = mgr.drop_index("idx_orders_customer").expect("drop");
         assert_eq!(dropped.name, "idx_orders_customer");
         assert_eq!(mgr.index_count(), 0);
@@ -2645,7 +2634,7 @@ fn ws2_unique_index_rejects_duplicate_via_appstate() {
     use voltnuerongrid_store::index::{IndexDescriptor, IndexKind, IndexError};
 
     let state = state_with_key(None);
-    let mut mgr = state.index_manager.lock().expect("lock");
+    let mut mgr = state.storage.index_manager.lock().expect("lock");
     mgr.create_index(IndexDescriptor {
         name: "idx_pk".to_string(),
         table: "users".to_string(),
@@ -2665,7 +2654,7 @@ fn ws2_constraint_pk_not_null_via_appstate() {
     use voltnuerongrid_store::constraints::{ConstraintDescriptor, ConstraintKind};
 
     let state = state_with_key(None);
-    let mut mgr = state.constraint_manager.lock().expect("lock");
+    let mut mgr = state.storage.constraint_manager.lock().expect("lock");
     mgr.add_constraint(ConstraintDescriptor {
         name: "pk_users".to_string(),
         table: "users".to_string(),
@@ -2716,12 +2705,12 @@ fn ws4_csv_ingest_via_appstate() {
 
     let records = conn.read_batch(usize::MAX);
     state
-        .ingest_csv_records
+        .ingest.ingest_csv_records
         .lock()
         .expect("lock")
         .insert("csv-orders".to_string(), records);
 
-    let map = state.ingest_csv_records.lock().expect("lock");
+    let map = state.ingest.ingest_csv_records.lock().expect("lock");
     assert_eq!(map.get("csv-orders").expect("get").len(), 2);
 }
 
@@ -2737,12 +2726,12 @@ fn ws4_json_ingest_via_appstate() {
 
     let records = conn.read_batch(usize::MAX);
     state
-        .ingest_json_records
+        .ingest.ingest_json_records
         .lock()
         .expect("lock")
         .insert("json-users".to_string(), records);
 
-    let map = state.ingest_json_records.lock().expect("lock");
+    let map = state.ingest.ingest_json_records.lock().expect("lock");
     assert_eq!(map.get("json-users").expect("get").len(), 2);
 }
 
@@ -2778,12 +2767,12 @@ fn ws4_parquet_ingest_via_appstate() {
     assert_eq!(count, 2);
     let records = conn.read_batch(usize::MAX);
     state
-        .ingest_parquet_records
+        .ingest.ingest_parquet_records
         .lock()
         .expect("lock")
         .insert("pq-orders".to_string(), records);
 
-    let map = state.ingest_parquet_records.lock().expect("lock");
+    let map = state.ingest.ingest_parquet_records.lock().expect("lock");
     assert_eq!(map.get("pq-orders").expect("get").len(), 2);
 }
 
@@ -2807,12 +2796,12 @@ fn ws4_excel_ingest_via_appstate() {
     assert_eq!(count, 1);
     let records = conn.read_batch(usize::MAX);
     state
-        .ingest_excel_records
+        .ingest.ingest_excel_records
         .lock()
         .expect("lock")
         .insert("xlsx-stock".to_string(), records);
 
-    let map = state.ingest_excel_records.lock().expect("lock");
+    let map = state.ingest.ingest_excel_records.lock().expect("lock");
     assert_eq!(map.get("xlsx-stock").expect("get").len(), 1);
     assert_eq!(map.get("xlsx-stock").expect("get")[0].key, "100");
 }
@@ -2827,7 +2816,7 @@ fn ws4_ingest_status_counts_loaded_records() {
     let mut csv_conn = CsvConnector::new("c1", "C1");
     csv_conn.load_csv("id,v\n1,a\n2,b\n");
     state
-        .ingest_csv_records
+        .ingest.ingest_csv_records
         .lock()
         .expect("lock")
         .insert("c1".to_string(), csv_conn.read_batch(usize::MAX));
@@ -2835,13 +2824,13 @@ fn ws4_ingest_status_counts_loaded_records() {
     let mut json_conn = JsonConnector::new("j1", "J1", "id");
     json_conn.load_ndjson("{\"id\":\"x\"}\n");
     state
-        .ingest_json_records
+        .ingest.ingest_json_records
         .lock()
         .expect("lock")
         .insert("j1".to_string(), json_conn.read_batch(usize::MAX));
 
-    let csv_map = state.ingest_csv_records.lock().expect("lock");
-    let json_map = state.ingest_json_records.lock().expect("lock");
+    let csv_map = state.ingest.ingest_csv_records.lock().expect("lock");
+    let json_map = state.ingest.ingest_json_records.lock().expect("lock");
     let csv_total: usize = csv_map.values().map(|v| v.len()).sum();
     let json_total: usize = json_map.values().map(|v| v.len()).sum();
     assert_eq!(csv_total + json_total, 3);
@@ -2850,8 +2839,8 @@ fn ws4_ingest_status_counts_loaded_records() {
 #[test]
 fn h05_security_kms_status_prefers_primary_env() {
     let mut state = state_with_key(Some("secret"));
-    state.security_config = Arc::new(kms_test_config());
-    state.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
+    state.auth.security_config = Arc::new(kms_test_config());
+    state.auth.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
         providers: vec![{
             let mut provider = ConfiguredKmsProviderAdapter::from_key_ref("kms://region-a/key-primary");
             provider.register_key_ref("VNG_KMS_KEY_URI", "kms://region-a/key-primary");
@@ -2879,8 +2868,8 @@ fn h05_security_kms_status_prefers_primary_env() {
 #[test]
 fn h05_security_kms_outage_simulation_fails_over_and_recovers() {
     let mut state = state_with_key(Some("secret"));
-    state.security_config = Arc::new(kms_test_config());
-    state.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
+    state.auth.security_config = Arc::new(kms_test_config());
+    state.auth.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
         providers: vec![{
             let mut provider = ConfiguredKmsProviderAdapter::from_key_ref("kms://region-a/key-primary");
             provider.register_key_ref("VNG_KMS_KEY_URI", "kms://region-a/key-primary");
@@ -2926,8 +2915,8 @@ fn h05_security_kms_outage_simulation_fails_over_and_recovers() {
 #[test]
 fn h05_security_kms_status_reports_unresolved_when_all_regions_out() {
     let mut state = state_with_key(Some("secret"));
-    state.security_config = Arc::new(kms_test_config());
-    state.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
+    state.auth.security_config = Arc::new(kms_test_config());
+    state.auth.kms_runtime = Arc::new(Mutex::new(KmsRuntimeState {
         providers: vec![{
             let mut provider = ConfiguredKmsProviderAdapter::from_key_ref("kms://region-a/key-primary");
             provider.register_key_ref("VNG_KMS_KEY_URI", "kms://region-a/key-primary");
@@ -3163,7 +3152,7 @@ fn ws3_sql_execute_routes_and_executes_olap_query() {
     assert!(response.1.olap.is_some());
     assert_eq!(response.1.transaction, None);
 
-    let audit_events = state.audit_sink.lock().expect("audit lock").latest(1);
+    let audit_events = state.ops.audit_sink.lock().expect("audit lock").latest(1);
     assert_eq!(audit_events[0].kind, AuditEventKind::Sql);
     assert!(audit_events[0].details_json.contains("sql/execute"));
 }
@@ -4113,7 +4102,7 @@ fn ws4_chunked_http_endpoint_stores_records() {
     assert_eq!(response.1.status, "ok");
     assert_eq!(response.1.total_records, 3);
     // Verify records were persisted in json store
-    let json_map = state.ingest_json_records.lock().unwrap();
+    let json_map = state.ingest.ingest_json_records.lock().unwrap();
     let stored = json_map.values().next().expect("should have stored records");
     assert_eq!(stored.len(), 3, "all 3 records should be in the store");
 }
@@ -4260,7 +4249,7 @@ fn ws2_ddl_catalog_create_table_wires_through_sql_execute() {
         .expect("sql execute should succeed");
     assert_eq!(response.0, StatusCode::OK);
     // The catalog should now have the entry (touches_catalog = true for CREATE TABLE)
-    let catalog = state.ddl_catalog.lock().unwrap();
+    let catalog = state.storage.ddl_catalog.lock().unwrap();
     assert_eq!(catalog.active_count(), 1);
     let entries = catalog.active_entries();
     assert_eq!(entries[0].object_name, "orders");
@@ -4281,7 +4270,7 @@ fn ws2_ddl_catalog_drop_table_removes_active_entry() {
     rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(create_req)))
         .expect("create should succeed");
     {
-        let catalog = state.ddl_catalog.lock().unwrap();
+        let catalog = state.storage.ddl_catalog.lock().unwrap();
         assert_eq!(catalog.active_count(), 1, "table should be active after create");
     }
     let drop_req = SqlExecuteRequest {
@@ -4291,7 +4280,7 @@ fn ws2_ddl_catalog_drop_table_removes_active_entry() {
     };
     rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(drop_req)))
         .expect("drop should succeed");
-    let catalog = state.ddl_catalog.lock().unwrap();
+    let catalog = state.storage.ddl_catalog.lock().unwrap();
     assert_eq!(catalog.active_count(), 0, "table should be gone after drop");
     assert_eq!(catalog.total_count(), 1, "total should include dropped entry");
 }
@@ -4390,7 +4379,7 @@ fn q3_create_trigger_ddl_registers_and_fires_on_insert() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let recorder = RecordingTriggerEmitter::new();
     let mut state = state_with_key(None);
-    state.trigger_emitter = std::sync::Arc::new(recorder.clone());
+    state.storage.trigger_emitter = std::sync::Arc::new(recorder.clone());
     let headers = tenant_user_headers("analyst-acme", "acme");
 
     // CREATE TABLE then CREATE TRIGGER via SQL.
@@ -4407,7 +4396,7 @@ fn q3_create_trigger_ddl_registers_and_fires_on_insert() {
 
     // The DDL must have registered the trigger in the live registry.
     {
-        let reg = state.trigger_registry.lock().expect("trigger lock");
+        let reg = state.storage.trigger_registry.lock().expect("trigger lock");
         let found = reg.find_triggers("orders", "public", &TriggerEvent::AfterInsert);
         assert_eq!(found.len(), 1, "CREATE TRIGGER must register into the registry");
         assert_eq!(found[0].name, "orders_audit");
@@ -4434,7 +4423,7 @@ fn q3_drop_trigger_ddl_stops_firing() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let recorder = RecordingTriggerEmitter::new();
     let mut state = state_with_key(None);
-    state.trigger_emitter = std::sync::Arc::new(recorder.clone());
+    state.storage.trigger_emitter = std::sync::Arc::new(recorder.clone());
     let headers = tenant_user_headers("analyst-acme", "acme");
 
     for sql in [
@@ -4449,7 +4438,7 @@ fn q3_drop_trigger_ddl_stops_firing() {
 
     // Registry must no longer contain the trigger.
     {
-        let reg = state.trigger_registry.lock().expect("trigger lock");
+        let reg = state.storage.trigger_registry.lock().expect("trigger lock");
         assert!(
             reg.find_triggers("orders", "public", &TriggerEvent::AfterInsert).is_empty(),
             "DROP TRIGGER must remove the trigger from the registry"
@@ -4570,7 +4559,7 @@ fn q1_small_table_aggregate_reports_oltp_route() {
     let headers = tenant_user_headers("analyst-acme", "acme");
     // Seed StatsRegistry with a tiny row count for the target table.
     {
-        let mut stats = state.stats_registry.lock().expect("stats lock");
+        let mut stats = state.storage.stats_registry.lock().expect("stats lock");
         stats.update_table("orders", 5, std::collections::HashMap::new());
     }
     let req = SqlExecuteRequest {
@@ -4594,7 +4583,7 @@ fn q1_large_table_aggregate_reports_olap_route() {
     let state = state_with_key(None);
     let headers = tenant_user_headers("analyst-acme", "acme");
     {
-        let mut stats = state.stats_registry.lock().expect("stats lock");
+        let mut stats = state.storage.stats_registry.lock().expect("stats lock");
         stats.update_table("orders", 5_000_000, std::collections::HashMap::new());
     }
     let req = SqlExecuteRequest {
@@ -4750,7 +4739,7 @@ fn cc1_rule7_set_level_update_affects_all_matching_rows() {
     let (s, body) = cc1_exec(&rt, &state, &headers, "UPDATE cc_set SET status = 'done' WHERE status = 'open'");
     assert_eq!(s, StatusCode::OK, "set-level UPDATE must succeed: {}", body.reason);
     // Both 'open' rows must now be 'done'; the 'closed' row unchanged.
-    let rs = state.row_store.lock().expect("row_store");
+    let rs = state.storage.row_store.lock().expect("row_store");
     let snap = rs.current_xid();
     let rows = rs.scan_at_snapshot(snap);
     let status_of = |id: &str| rows.iter()
@@ -4788,7 +4777,7 @@ fn cc1_rule2_guaranteed_access_by_pk() {
     let (s, body) = cc1_exec(&rt, &state, &headers, "SELECT v FROM cc_acc WHERE id = 7");
     assert_eq!(s, StatusCode::OK, "PK access must succeed: {}", body.reason);
     // The row is reachable by PK in the store.
-    let rs = state.row_store.lock().expect("row_store");
+    let rs = state.storage.row_store.lock().expect("row_store");
     let snap = rs.current_xid();
     let found = rs.scan_at_snapshot(snap).into_iter()
         .any(|(k, d)| k.ends_with("cc_acc:7") && d.get("v").map(|s| s == "seven").unwrap_or(false));
@@ -4856,7 +4845,7 @@ fn ws23_acid_tx_begin_commit_tracked_in_registry() {
         .block_on(sql_transaction(State(state.clone()), headers, Json(req)))
         .expect("transaction should succeed");
     assert_eq!(response.0, StatusCode::OK);
-    let acid = state.acid_transactions.lock().unwrap();
+    let acid = state.storage.acid_transactions.lock().unwrap();
     assert_eq!(acid.all_transactions().len(), 1, "should have 1 tracked transaction");
     let tx = acid.all_transactions()[0];
     assert!(matches!(tx.state, AcidTxState::Committed), "state should be Committed");
@@ -4878,7 +4867,7 @@ fn ws23_acid_tx_rollback_tracked_in_registry() {
     };
     rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
         .expect("transaction should succeed");
-    let acid = state.acid_transactions.lock().unwrap();
+    let acid = state.storage.acid_transactions.lock().unwrap();
     let tx = acid.all_transactions()[0];
     assert!(matches!(tx.state, AcidTxState::RolledBack), "state should be RolledBack");
 }
@@ -4901,7 +4890,7 @@ fn ws23_acid_savepoint_create_and_release() {
     };
     rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
         .expect("transaction should succeed");
-    let acid = state.acid_transactions.lock().unwrap();
+    let acid = state.storage.acid_transactions.lock().unwrap();
     let tx = acid.all_transactions()[0];
     assert!(matches!(tx.state, AcidTxState::Committed), "state should be Committed after COMMIT");
     // RELEASE SAVEPOINT removes sp1 from the list
@@ -4926,7 +4915,7 @@ fn ws23_acid_rollback_to_savepoint_records_marker() {
     };
     rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
         .expect("transaction should succeed");
-    let acid = state.acid_transactions.lock().unwrap();
+    let acid = state.storage.acid_transactions.lock().unwrap();
     let tx = acid.all_transactions()[0];
     assert!(matches!(tx.state, AcidTxState::Committed), "should commit after ROLLBACK TO + COMMIT");
     let has_marker = tx.savepoints.iter().any(|s| s.contains("rolled_back_to:before_risky"));
@@ -4937,7 +4926,7 @@ fn ws23_acid_rollback_to_savepoint_records_marker() {
 
 /// Count rows whose key starts with `table:` in the row store.
 fn t1_count_rows(state: &AppState, table_prefix: &str) -> usize {
-    let rs = state.row_store.lock().expect("row_store lock");
+    let rs = state.storage.row_store.lock().expect("row_store lock");
     let xid = rs.current_xid();
     rs.scan_at_snapshot(xid)
         .into_iter()
@@ -4946,7 +4935,7 @@ fn t1_count_rows(state: &AppState, table_prefix: &str) -> usize {
 }
 
 fn t1_row_exists(state: &AppState, key: &str) -> bool {
-    let rs = state.row_store.lock().expect("row_store lock");
+    let rs = state.storage.row_store.lock().expect("row_store lock");
     rs.read_latest(key).is_some()
 }
 
@@ -5086,7 +5075,7 @@ fn ws23_acid_isolation_level_from_request_field() {
     };
     rt.block_on(sql_transaction(State(state.clone()), headers, Json(req)))
         .expect("serializable transaction should succeed");
-    let acid = state.acid_transactions.lock().unwrap();
+    let acid = state.storage.acid_transactions.lock().unwrap();
     let tx = acid.all_transactions()[0];
     assert_eq!(
         tx.isolation_level, "serializable",
@@ -5101,7 +5090,7 @@ fn ws23_acid_serializable_conflict_returns_409() {
     // Row-level OCC only conflicts against committed peers, not active ones.
     let state = state_with_key(None);
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin("tx-concurrent", "node-1", "serializable", 1_000_u128, None);
         acid.record_statement("tx-concurrent", Some("inventory".to_string()));
         // Record the specific row key written and then commit the peer transaction.
@@ -5137,7 +5126,7 @@ fn ws3_legacy_agg_uses_real_ingest_data_when_available() {
     let state = state_with_key(None);
     // Pre-populate ingest JSON store with numeric payload
     {
-        let mut guard = state.ingest_json_records.lock().unwrap();
+        let mut guard = state.ingest.ingest_json_records.lock().unwrap();
         guard.insert(
             "connector-metrics".to_string(),
             vec![
@@ -5227,7 +5216,7 @@ fn ws21_concurrent_ingest_no_data_corruption() {
                     })
                     .collect();
                 state
-                    .ingest_json_records
+                    .ingest.ingest_json_records
                     .lock()
                     .expect("ingest lock")
                     .insert(connector_id.clone(), records);
@@ -5238,7 +5227,7 @@ fn ws21_concurrent_ingest_no_data_corruption() {
 
     for handle in handles {
         let connector_id = handle.join().expect("thread panicked");
-        let guard = state.ingest_json_records.lock().unwrap();
+        let guard = state.ingest.ingest_json_records.lock().unwrap();
         let records = guard.get(&connector_id);
         assert!(
             records.is_some(),
@@ -5268,13 +5257,13 @@ fn ws21_concurrent_cache_set_get_no_cross_partition_leak() {
                 let value = serde_json::json!(i as u64 * 100);
                 let now_ms = now_unix_ms_u64();
                 {
-                    let mut guard = state.distributed_cache.lock().unwrap();
+                    let mut guard = state.ops.distributed_cache.lock().unwrap();
                     guard
                         .set(&partition_id, key.clone(), value.clone(), None, now_ms)
                         .expect("cache set should succeed");
                 }
                 let retrieved = {
-                    let mut guard = state.distributed_cache.lock().unwrap();
+                    let mut guard = state.ops.distributed_cache.lock().unwrap();
                     guard.get(&partition_id, &key, now_ms).unwrap()
                 };
                 assert_eq!(
@@ -5895,7 +5884,7 @@ fn ws23_acid_repeatable_read_records_snapshot_timestamp() {
     rt.block_on(sql_transaction(State(state.clone()), headers.clone(), Json(req_rr)))
         .expect("repeatable_read tx should succeed");
 
-    let acid = state.acid_transactions.lock().unwrap();
+    let acid = state.storage.acid_transactions.lock().unwrap();
     let txs = acid.all_transactions();
     let rr_tx = txs.iter().find(|t| t.isolation_level == "repeatable_read")
         .expect("repeatable_read tx should be in registry");
@@ -5917,7 +5906,7 @@ fn ws23_acid_repeatable_read_records_snapshot_timestamp() {
     rt.block_on(sql_transaction(State(state.clone()), headers, Json(req_rc)))
         .expect("read_committed tx should succeed");
 
-    let acid2 = state.acid_transactions.lock().unwrap();
+    let acid2 = state.storage.acid_transactions.lock().unwrap();
     let rc_tx = acid2.all_transactions().into_iter()
         .find(|t| t.isolation_level == "read_committed")
         .expect("read_committed tx should be in registry");
@@ -5947,7 +5936,7 @@ fn ws23_acid_wal_records_write_sequence() {
     rt.block_on(sql_transaction(State(state.clone()), headers.clone(), Json(req)))
         .expect("transaction should succeed");
 
-    let acid = state.acid_transactions.lock().unwrap();
+    let acid = state.storage.acid_transactions.lock().unwrap();
     let txs = acid.all_transactions();
     // The most recently completed transaction
     let tx = txs.iter().max_by_key(|t| t.started_at_unix_ms)
@@ -5970,7 +5959,7 @@ fn ws23_acid_wal_accumulates_during_active_tx() {
     let now_ms = 1_000_000_u128;
 
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin(tx_id, "node-1", "read_committed", now_ms, None);
         acid.record_statement(tx_id, Some("orders".to_string()));
         acid.record_statement(tx_id, Some("inventory".to_string()));
@@ -5988,7 +5977,7 @@ fn ws23_acid_wal_accumulates_during_active_tx() {
 
     // After rollback, wal_log must be cleared
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         let rolled = acid.rollback(tx_id, now_ms + 1);
         assert!(rolled, "rollback must succeed");
 
@@ -6388,7 +6377,7 @@ fn ws23_acid_read_uncommitted_does_not_record_snapshot() {
     let tx_id = "test-ru-no-snapshot";
     let now_ms = 2_000_000_u128;
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin(tx_id, "node-1", "read_uncommitted", now_ms, None);
         let entry = acid.all_transactions().into_iter()
             .find(|t| t.transaction_id == tx_id)
@@ -6408,7 +6397,7 @@ fn ws23_acid_serializable_uses_write_lock_not_snapshot() {
     let tx_id = "test-serializable-no-snapshot";
     let now_ms = 3_000_000_u128;
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin(tx_id, "node-1", "serializable", now_ms, None);
         let entry = acid.all_transactions().into_iter()
             .find(|t| t.transaction_id == tx_id)
@@ -6703,7 +6692,7 @@ fn s2_ws2_mvcc_row_store_delete_creates_tombstone() {
 fn s2_ws2_mvcc_row_store_wired_in_appstate() {
     // Verify the row_store field is accessible via AppState and can be used.
     let state = state_with_key(None);
-    let mut store = state.row_store.lock().unwrap();
+    let mut store = state.storage.row_store.lock().unwrap();
     let xid = store.begin_xid();
     let mut data = std::collections::HashMap::new();
     data.insert("key".to_string(), "value".to_string());
@@ -6760,7 +6749,7 @@ fn s2_ws2_commit_flush_writes_inserts_to_row_store() {
         "INSERT INTO products VALUES ('prod-2', 149)".to_string(),
     ];
     {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         for stmt in &stmts {
             if let Some((k, d)) = extract_insert_row_from_sql(stmt) {
@@ -6768,7 +6757,7 @@ fn s2_ws2_commit_flush_writes_inserts_to_row_store() {
             }
         }
     }
-    let rs = state.row_store.lock().expect("row_store lock");
+    let rs = state.storage.row_store.lock().expect("row_store lock");
     let snap = rs.scan_at_snapshot(rs.current_xid());
     assert_eq!(snap.len(), 2, "both inserted rows should be visible");
     let tables: Vec<&str> = snap
@@ -6950,7 +6939,7 @@ fn s5_ws4_store_rows_scan_returns_committed_rows() {
     let state = state_with_key(Some("test-key"));
     // Write two rows into the row store directly
     {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         let mut d1 = std::collections::HashMap::new();
         d1.insert("source".to_string(), "test".to_string());
@@ -6983,7 +6972,7 @@ fn s5_ws4_store_rows_scan_returns_committed_rows() {
 fn s5_ws4_store_rows_scan_key_prefix_filters_rows() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         let mut d = std::collections::HashMap::new();
         d.insert("x".to_string(), "1".to_string());
@@ -7010,7 +6999,7 @@ fn s5_ws4_store_rows_scan_key_prefix_filters_rows() {
 fn s5_ws4_store_rows_scan_respects_limit() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         for i in 0..10 {
             let xid = rs.begin_xid();
             let mut d = std::collections::HashMap::new();
@@ -7040,7 +7029,7 @@ async fn s4_ws3_sql_execute_oltp_path_returns_rows_from_row_store() {
     // the `id` predicate both fire correctly.
     let state = state_with_key(Some("test-key"));
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         let mut d = std::collections::HashMap::new();
         d.insert("value".to_string(), "42".to_string());
@@ -7101,7 +7090,7 @@ async fn s4_ws3_04_commit_publishes_insert_to_sync_origin() {
     let resp = sql_transaction(State(state.clone()), headers, Json(req)).await.unwrap();
     assert_eq!(resp.1.0.status, "committed");
     // Sync origin should have at least one pending mutation
-    let origin = state.sync_origin.lock().unwrap();
+    let origin = state.cluster.sync_origin.lock().unwrap();
     assert!(origin.pending_len() >= 1, "commit should have published at least one mutation");
 }
 
@@ -7154,7 +7143,7 @@ async fn s9_ws8a_02_audit_chain_events_have_non_empty_hashes() {
     let req = SqlExecuteRequest { sql_batch: "SELECT now()".to_string(), max_rows: None, ..Default::default() };
     sql_execute(State(state.clone()), headers.clone(), Json(req)).await.unwrap();
     // Retrieve events and check chain_hash populated
-    let sink = state.audit_sink.lock().unwrap();
+    let sink = state.ops.audit_sink.lock().unwrap();
     let events = sink.all().to_vec();
     drop(sink);
     assert!(!events.is_empty());
@@ -7172,7 +7161,7 @@ async fn s4_ws3_03_columnar_scan_returns_typed_columns_for_committed_rows() {
     let headers = operator_headers("test-key", "admin");
     // Insert rows directly into PagedRowStore so they are visible
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         rs.insert(xid, "user-1", [("age".to_string(), "30".to_string()), ("name".to_string(), "alice".to_string())].into_iter().collect());
         rs.insert(xid, "user-2", [("age".to_string(), "25".to_string()), ("name".to_string(), "bob".to_string())].into_iter().collect());
@@ -7342,7 +7331,7 @@ async fn s9_ws8a_02_audit_export_returns_buffered_events() {
     // Call a handler that emits an audit event (health just needs the route)
     // We can directly append via the sink for isolation.
     {
-        let mut sink = state.audit_sink.lock().unwrap();
+        let mut sink = state.ops.audit_sink.lock().unwrap();
         sink.append(
             voltnuerongrid_audit::AuditEventKind::Sql,
             "test-actor",
@@ -7425,7 +7414,7 @@ async fn s2_ws2_02_wal_recover_dry_run_does_not_change_row_store() {
         isolation_level: None,
     };
     sql_transaction(State(state.clone()), headers, Json(tx_req)).await.ok();
-    let rows_before = { let rs = state.row_store.lock().unwrap(); rs.visible_row_count(rs.current_xid()) };
+    let rows_before = { let rs = state.storage.row_store.lock().unwrap(); rs.visible_row_count(rs.current_xid()) };
     let recover_req = WalRecoverRequest { dry_run: Some(true) };
     let (_, Json(body)) = wal_recover(
         State(state.clone()),
@@ -7433,7 +7422,7 @@ async fn s2_ws2_02_wal_recover_dry_run_does_not_change_row_store() {
     ).await;
     assert!(body.dry_run);
     assert!(body.records_replayed >= 1);
-    let rows_after = { let rs = state.row_store.lock().unwrap(); rs.visible_row_count(rs.current_xid()) };
+    let rows_after = { let rs = state.storage.row_store.lock().unwrap(); rs.visible_row_count(rs.current_xid()) };
     assert_eq!(rows_before, rows_after, "dry_run must not modify row store");
 }
 
@@ -7594,7 +7583,7 @@ async fn s2_ws2_05_isolation_stats_empty_on_fresh_state() {
 async fn s2_ws2_05_isolation_stats_shows_active_transaction() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin("tx-iso-1", "node-1", "serializable", 0u128, None);
     }
     let headers = operator_headers("test-key", "admin");
@@ -7689,7 +7678,7 @@ async fn s7_ws6_03_raft_tick_triggers_election_after_timeout() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     // Read the node's actual election timeout (randomised per node_id).
-    let timeout = state.raft_state.lock().unwrap().election_timeout_ticks;
+    let timeout = state.cluster.raft_state.lock().unwrap().election_timeout_ticks;
     // Fire (timeout - 1) ticks without triggering an election.
     for _ in 0..timeout - 1 {
         raft_tick(State(state.clone()), headers.clone()).await.unwrap();
@@ -7755,7 +7744,7 @@ async fn s9_ws8_02_ai_request_rate_check_rejects_over_token_limit() {
     let state = state_with_key(Some("test-key"));
     // Set a tight token limit.
     {
-        let mut p = state.model_gateway_policy.lock().unwrap();
+        let mut p = state.ai.model_gateway_policy.lock().unwrap();
         p.max_tokens_per_request = 50;
     }
     let headers = operator_headers("test-key", "admin");
@@ -7798,7 +7787,7 @@ async fn s8_ws10_02_driver_connect_issues_session_token() {
     // unknown_cap should be filtered out; only batch_execute negotiated
     assert_eq!(body.negotiated_capabilities, vec!["batch_execute".to_string()]);
     // Session should be stored
-    let sessions = state.driver_sessions.lock().unwrap();
+    let sessions = state.ops.driver_sessions.lock().unwrap();
     assert!(sessions.contains_key(&body.session_token));
 }
 
@@ -7812,7 +7801,7 @@ async fn s8_ws10_02_driver_connect_acquires_pool_connection() {
     };
 
     let (_, Json(body)) = driver_connect(State(state.clone()), Json(req)).await;
-    let sessions = state.driver_sessions.lock().unwrap();
+    let sessions = state.ops.driver_sessions.lock().unwrap();
     let session = sessions
         .get(&body.session_token)
         .expect("connected session must exist");
@@ -7872,7 +7861,7 @@ async fn s5_ws4_03_ingest_schema_reflects_csv_connector() {
     use voltnuerongrid_ingest::IngestRecord;
     let state = state_with_key(Some("test-key"));
     {
-        let mut csv = state.ingest_csv_records.lock().unwrap();
+        let mut csv = state.ingest.ingest_csv_records.lock().unwrap();
         csv.insert("csv-orders".to_string(), vec![
             IngestRecord { key: "r1".to_string(), payload: "id=1".to_string() },
             IngestRecord { key: "r2".to_string(), payload: "id=2".to_string() },
@@ -7895,11 +7884,11 @@ async fn s5_ws4_03_ingest_schema_list_no_filter_returns_all_formats() {
     use voltnuerongrid_ingest::IngestRecord;
     let state = state_with_key(Some("test-key"));
     {
-        let mut csv = state.ingest_csv_records.lock().unwrap();
+        let mut csv = state.ingest.ingest_csv_records.lock().unwrap();
         csv.insert("csv-orders".to_string(), vec![
             IngestRecord { key: "r1".to_string(), payload: "id=1".to_string() },
         ]);
-        let mut json = state.ingest_json_records.lock().unwrap();
+        let mut json = state.ingest.ingest_json_records.lock().unwrap();
         json.insert("json-events".to_string(), vec![
             IngestRecord { key: "e1".to_string(), payload: r#"{"id":1}"#.to_string() },
         ]);
@@ -7918,11 +7907,11 @@ async fn s5_ws4_03_ingest_schema_list_csv_filter_excludes_json() {
     use voltnuerongrid_ingest::IngestRecord;
     let state = state_with_key(Some("test-key"));
     {
-        let mut csv = state.ingest_csv_records.lock().unwrap();
+        let mut csv = state.ingest.ingest_csv_records.lock().unwrap();
         csv.insert("csv-orders".to_string(), vec![
             IngestRecord { key: "r1".to_string(), payload: "id=1".to_string() },
         ]);
-        let mut json = state.ingest_json_records.lock().unwrap();
+        let mut json = state.ingest.ingest_json_records.lock().unwrap();
         json.insert("json-events".to_string(), vec![
             IngestRecord { key: "e1".to_string(), payload: r#"{"id":1}"#.to_string() },
         ]);
@@ -8105,7 +8094,7 @@ async fn s7_ws6_02_raft_commit_progress_after_log_append() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.log.push(raft::RaftLogEntry { index: 1, term: 1, command: "SET x=1".to_string() });
     }
     let (status, Json(body)) = raft_commit_progress(State(state), headers).await.unwrap();
@@ -8134,7 +8123,7 @@ async fn s7_ws6_02_raft_snapshot_reflects_term_update() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.current_term = 5;
         node.commit_index = 3;
     }
@@ -8160,7 +8149,7 @@ async fn s7_ws6_03_raft_leader_fresh_state_is_follower() {
 async fn s7_ws6_03_raft_leader_reflects_term_after_vote() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.current_term = 5;
     }
     let headers = operator_headers("test-key", "admin");
@@ -8186,7 +8175,7 @@ async fn s7_ws6_01_raft_vote_stats_fresh_state_shows_zero_counts() {
 async fn s7_ws6_01_raft_vote_stats_reflects_current_term() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.current_term = 7;
     }
     let headers = operator_headers("test-key", "admin");
@@ -8212,7 +8201,7 @@ async fn s7_ws6_03_fencing_token_advances_on_election() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut raft = state.raft_state.lock().unwrap();
+        let mut raft = state.cluster.raft_state.lock().unwrap();
         raft.become_candidate();
         raft.become_leader();
     }
@@ -8228,7 +8217,7 @@ async fn s9_ws8a_02_audit_export_pagination_limit_respected() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut sink = state.audit_sink.lock().unwrap();
+        let mut sink = state.ops.audit_sink.lock().unwrap();
         for i in 0..5 {
             sink.append(
                 voltnuerongrid_audit::AuditEventKind::Sql,
@@ -8252,7 +8241,7 @@ async fn s9_ws8a_02_audit_export_pagination_cursor_advances() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut sink = state.audit_sink.lock().unwrap();
+        let mut sink = state.ops.audit_sink.lock().unwrap();
         for i in 0..4 {
             sink.append(
                 voltnuerongrid_audit::AuditEventKind::Security,
@@ -8281,7 +8270,7 @@ async fn s6_ws5_04_tde_toggle_enables_tde() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.tde_active);
     assert!(body.override_applied);
-    let stored = *state.tde_override.lock().unwrap();
+    let stored = *state.ops.tde_override.lock().unwrap();
     assert_eq!(stored, Some(true));
 }
 
@@ -8294,7 +8283,7 @@ async fn s6_ws5_04_tde_toggle_disables_tde() {
     assert_eq!(status, StatusCode::OK);
     assert!(!body.tde_active);
     assert!(body.override_applied);
-    let stored = *state.tde_override.lock().unwrap();
+    let stored = *state.ops.tde_override.lock().unwrap();
     assert_eq!(stored, Some(false));
 }
 
@@ -8351,7 +8340,7 @@ async fn s9_ws8_02_rate_window_counter_increments_within_window() {
 async fn s9_ws8_02_ai_request_allowlist_rejects_unlisted_model() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut p = state.model_gateway_policy.lock().unwrap();
+        let mut p = state.ai.model_gateway_policy.lock().unwrap();
         p.allowed_models = vec!["gpt-4o".to_string()];
     }
     let headers = operator_headers("test-key", "admin");
@@ -8365,7 +8354,7 @@ async fn s9_ws8_02_ai_request_allowlist_rejects_unlisted_model() {
 async fn s9_ws8_02_ai_request_allowlist_permits_listed_model() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut p = state.model_gateway_policy.lock().unwrap();
+        let mut p = state.ai.model_gateway_policy.lock().unwrap();
         p.allowed_models = vec!["gpt-4o".to_string(), "claude-3-opus".to_string()];
     }
     let headers = operator_headers("test-key", "admin");
@@ -8450,7 +8439,7 @@ async fn s10_ws15_02_cdc_metrics_empty_state_returns_zero_counts() {
 async fn s10_ws15_02_cdc_metrics_after_mutations_counts_inserts() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("orders:1", "val1");
         wal.append_mutation("orders:2", "val2");
         wal.append_mutation("users:1", "val3");
@@ -8492,7 +8481,7 @@ async fn s2_ws2_04_row_store_stats_fresh_state() {
 async fn s2_ws2_04_row_store_stats_reflects_inserted_rows() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         let mut d = std::collections::HashMap::new();
         d.insert("col".to_string(), "val".to_string());
@@ -8527,7 +8516,7 @@ async fn s2_ws2_04_row_count_empty_store_returns_zero() {
 async fn s2_ws2_04_row_count_with_prefix_filters_correctly() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         rs.insert(xid, "orders:1", std::collections::HashMap::from([("v".to_string(), "a".to_string())]));
         rs.insert(xid, "orders:2", std::collections::HashMap::from([("v".to_string(), "b".to_string())]));
@@ -8557,7 +8546,7 @@ async fn s2_ws2_04_row_count_with_prefix_filters_correctly() {
 async fn s2_ws2_04_row_delete_existing_key_returns_deleted_true() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         rs.insert(xid, "orders:99", std::collections::HashMap::from([("v".to_string(), "x".to_string())]));
     }
@@ -8584,7 +8573,7 @@ async fn s2_ws2_04_row_snapshot_shows_inserted_rows() {
     let state = state_with_key(Some("test-key"));
     // Insert two rows directly into the store.
     {
-        let mut store = state.row_store.lock().unwrap();
+        let mut store = state.storage.row_store.lock().unwrap();
         let xid = store.begin_xid();
         store.insert(xid, "tenant:1", std::collections::HashMap::from([
             ("name".to_string(), "acme".to_string()),
@@ -8617,7 +8606,7 @@ async fn s8_ws10_02_driver_disconnect_removes_session() {
     let (_, Json(conn_body)) = driver_connect(State(state.clone()), Json(connect_req)).await;
     let token = conn_body.session_token.clone();
     // Verify session exists.
-    assert!(state.driver_sessions.lock().unwrap().contains_key(&token));
+    assert!(state.ops.driver_sessions.lock().unwrap().contains_key(&token));
     // Disconnect.
     let headers = operator_headers("test-key", "admin");
     let (status, Json(body)) = driver_disconnect(
@@ -8628,7 +8617,7 @@ async fn s8_ws10_02_driver_disconnect_removes_session() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.disconnected);
     assert_eq!(body.session_token, token);
-    assert!(!state.driver_sessions.lock().unwrap().contains_key(&token));
+    assert!(!state.ops.driver_sessions.lock().unwrap().contains_key(&token));
 }
 
 #[tokio::test]
@@ -8682,7 +8671,7 @@ async fn s8_ws10_02_driver_disconnect_releases_pool_connection() {
     assert!(disconnect_body.disconnected);
 
     let pool_stats = state
-        .driver_pool
+        .ops.driver_pool
         .lock()
         .unwrap()
         .pool_stats(now_unix_ms_u64());
@@ -8710,7 +8699,7 @@ async fn s7_ws6_02_raft_log_after_append_has_entries() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.log.push(crate::raft::RaftLogEntry { index: 1, term: 1, command: "INSERT INTO t VALUES (1)".to_string() });
         node.commit_index = 1;
     }
@@ -8728,7 +8717,7 @@ async fn s2_ws2_02_wal_force_checkpoint_increments_count() {
     let state = state_with_key(Some("test-key"));
     // Add some WAL records.
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "v2");
     }
@@ -8768,7 +8757,7 @@ async fn s2_ws2_02_wal_compact_empty_wal_returns_compacted_false() {
 async fn s2_ws2_02_wal_compact_after_mutations_clears_wal() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "v2");
     }
@@ -8797,7 +8786,7 @@ async fn s2_ws2_02_wal_bounds_empty_state_shows_none_sequences() {
 async fn s2_ws2_02_wal_bounds_after_mutations_shows_sequences() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "v2");
     }
@@ -8829,7 +8818,7 @@ async fn s2_ws2_02_wal_tail_empty_returns_zero_entries() {
 async fn s2_ws2_02_wal_tail_respects_limit() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "v2");
         wal.append_mutation("k3", "v3");
@@ -8853,7 +8842,7 @@ async fn s2_ws2_02_wal_tail_respects_limit() {
 async fn s2_ws2_03_wal_mutations_returns_keys_and_values() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("user:101", "alice@example.com");
         wal.append_mutation("user:102", "bob@example.com");
     }
@@ -8875,7 +8864,7 @@ async fn s2_ws2_03_wal_mutations_returns_keys_and_values() {
 async fn s2_ws2_03_wal_mutations_respects_limit() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         for i in 0..100u64 {
             wal.append_mutation(&format!("k{}", i), &format!("v{}", i));
         }
@@ -8908,7 +8897,7 @@ async fn s2_ws2_02_wal_segment_list_empty_returns_one_active_segment() {
 async fn s2_ws2_02_wal_segment_list_shows_active_segment_record_count() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "v2");
     }
@@ -8938,7 +8927,7 @@ async fn s2_ws2_02_wal_checkpoint_history_empty_on_fresh_state() {
 async fn s2_ws2_02_wal_checkpoint_history_reflects_checkpoint_count() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.force_checkpoint();
         wal.append_mutation("k2", "v2");
@@ -8972,7 +8961,7 @@ async fn s2_ws2_02_wal_replay_count_empty_state_returns_zero() {
 async fn s2_ws2_02_wal_replay_count_filters_by_op() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "__deleted__");
         wal.append_mutation("k3", "v3");
@@ -9038,7 +9027,7 @@ async fn s7_ws6_04_chaos_health_with_faults_is_unhealthy() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut cs = state.chaos_state.lock().unwrap();
+        let mut cs = state.ops.chaos_state.lock().unwrap();
         cs.active_faults.push(ChaosEvent {
             fault_type: "node_crash".to_string(),
             target_node: Some("node-1".to_string()),
@@ -9070,7 +9059,7 @@ async fn s4_ws3_04_htap_lag_fresh_state_zero() {
 async fn s4_ws3_04_htap_lag_after_olap_apply_shows_rows() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut olap = state.olap_store.lock().unwrap();
+        let mut olap = state.storage.olap_store.lock().unwrap();
         let mut row = std::collections::HashMap::new();
         row.insert("k".to_string(), "v".to_string());
         olap.insert("row-1".to_string(), row);
@@ -9100,7 +9089,7 @@ async fn s4_ws3_04_htap_force_sync_drains_pending_mutations() {
     let state = state_with_key(Some("test-key"));
     // Seed the sync_origin with one pending insert mutation.
     {
-        let mut origin = state.sync_origin.lock().unwrap();
+        let mut origin = state.cluster.sync_origin.lock().unwrap();
         origin.append(
             "products",
             "prod:1",
@@ -9114,7 +9103,7 @@ async fn s4_ws3_04_htap_force_sync_drains_pending_mutations() {
     assert_eq!(body.mutations_applied, 1, "one pending mutation must be applied");
     assert_eq!(body.olap_row_count_after, 1, "olap_store must have 1 row after sync");
     // Verify sync_origin was drained.
-    let pending = state.sync_origin.lock().unwrap().pending_len();
+    let pending = state.cluster.sync_origin.lock().unwrap().pending_len();
     assert_eq!(pending, 0, "sync_origin must be empty after force-sync");
 }
 
@@ -9133,7 +9122,7 @@ async fn s5_ws4a_02_broker_health_fresh_state_lists_three_brokers() {
 async fn s5_ws4a_02_broker_health_after_flush_shows_count() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut counts = state.broker_flush_counts.lock().unwrap();
+        let mut counts = state.ingest.broker_flush_counts.lock().unwrap();
         counts.insert("kafka".to_string(), 3);
     }
     let (status, Json(body)) = outbox_broker_health(State(state)).await;
@@ -9162,7 +9151,7 @@ async fn s9_ws8_02_ai_policy_reset_clears_counters() {
     let state = state_with_key(Some("test-key"));
     // Seed a counter directly.
     {
-        let mut counters = state.ai_request_counters.lock().unwrap();
+        let mut counters = state.ai.ai_request_counters.lock().unwrap();
         counters.insert("gpt-4".to_string(), 42);
         counters.insert("llama-3".to_string(), 7);
     }
@@ -9172,7 +9161,7 @@ async fn s9_ws8_02_ai_policy_reset_clears_counters() {
     assert_eq!(body.status, "ok");
     assert_eq!(body.models_cleared, 2, "two models were cleared");
     // Verify counters are actually empty.
-    let counters = state.ai_request_counters.lock().unwrap();
+    let counters = state.ai.ai_request_counters.lock().unwrap();
     assert!(counters.is_empty(), "counters must be empty after reset");
 }
 
@@ -9202,7 +9191,7 @@ async fn s9_ws8_02_ai_governance_audit_empty_state_returns_zero() {
 async fn s9_ws8_02_ai_governance_audit_reflects_request_counts() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut counters = state.ai_request_counters.lock().unwrap();
+        let mut counters = state.ai.ai_request_counters.lock().unwrap();
         counters.insert("model-a".to_string(), 10);
         counters.insert("model-b".to_string(), 5);
     }
@@ -9218,7 +9207,7 @@ async fn s9_ws8_02_ai_governance_audit_reflects_request_counts() {
 async fn s9_ws8_02_ai_policy_stats_after_request_shows_count() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut counters = state.ai_request_counters.lock().unwrap();
+        let mut counters = state.ai.ai_request_counters.lock().unwrap();
         counters.insert("gpt-4".to_string(), 5);
         counters.insert("gpt-3.5".to_string(), 2);
     }
@@ -9308,7 +9297,7 @@ async fn s8_ws10_02_driver_session_list_fresh_state_empty() {
 async fn s8_ws10_02_driver_session_list_shows_connected_session() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut sessions = state.driver_sessions.lock().unwrap();
+        let mut sessions = state.ops.driver_sessions.lock().unwrap();
         sessions.insert("drv-sess-42".to_string(), DriverSession {
             driver_name: "test-driver".to_string(),
             driver_version: "1.0".to_string(),
@@ -9344,7 +9333,7 @@ async fn s8_ws10_02_driver_health_fresh_state_no_sessions() {
 async fn s8_ws10_02_driver_health_reflects_active_sessions() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut sessions = state.driver_sessions.lock().unwrap();
+        let mut sessions = state.ops.driver_sessions.lock().unwrap();
         sessions.insert("sess-1".to_string(), DriverSession {
             driver_name: "rust-driver".to_string(),
             driver_version: "1.0.0".to_string(),
@@ -9379,7 +9368,7 @@ async fn s8_ws10_02_driver_query_invalid_session_returns_401() {
 async fn s8_ws10_02_driver_query_valid_session_returns_ok() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut sessions = state.driver_sessions.lock().unwrap();
+        let mut sessions = state.ops.driver_sessions.lock().unwrap();
         sessions.insert("drv-sess-99".to_string(), DriverSession {
             driver_name: "test-drv".to_string(),
             driver_version: "2.0.0".to_string(),
@@ -9416,7 +9405,7 @@ async fn s8_ws10_02_driver_ping_invalid_session_returns_401() {
 async fn s8_ws10_02_driver_ping_valid_session_returns_pong() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut sessions = state.driver_sessions.lock().unwrap();
+        let mut sessions = state.ops.driver_sessions.lock().unwrap();
         sessions.insert("drv-sess-42".to_string(), DriverSession {
             driver_name: "test-drv".to_string(),
             driver_version: "1.0.0".to_string(),
@@ -9470,7 +9459,7 @@ async fn s10_ws15_02_cdc_cursor_list_empty_on_fresh_state() {
 async fn s10_ws15_02_cdc_cursor_list_reflects_advanced_cursors() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut cursors = state.cdc_cursors.lock().unwrap();
+        let mut cursors = state.storage.cdc_cursors.lock().unwrap();
         cursors.insert("orders".to_string(), 42);
         cursors.insert("users".to_string(), 7);
     }
@@ -9487,7 +9476,7 @@ async fn s10_ws15_02_cdc_cursor_list_reflects_advanced_cursors() {
 async fn s10_ws15_02_cdc_stream_filter_matching_table_returns_events() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "v2");
     }
@@ -9516,7 +9505,7 @@ async fn s10_ws15_02_cdc_stream_latest_respects_limit() {
     let state = state_with_key(Some("test-key"));
     // Add 5 WAL mutations.
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         for i in 0..5 {
             wal.append_mutation(&format!("k{i}"), &format!("v{i}"));
         }
@@ -9534,7 +9523,7 @@ async fn s10_ws15_02_cdc_stream_latest_respects_limit() {
 async fn s10_ws15_02_cdc_stream_filter_unknown_table_returns_empty() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
     }
     let query = CdcStreamFilterQuery { table: Some("nonexistent_table".to_string()) };
@@ -9558,7 +9547,7 @@ async fn s2_ws2_02_wal_stats_fresh_state_empty() {
 async fn s2_ws2_02_wal_stats_reflects_appended_records() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "v2");
         wal.append_mutation("k3", "v3");
@@ -9590,7 +9579,7 @@ async fn s2_ws2_02_wal_replay_empty_on_fresh_state() {
 async fn s2_ws2_02_wal_replay_filters_by_op_type() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut wal = state.wal_engine.lock().unwrap();
+        let mut wal = state.storage.wal_engine.lock().unwrap();
         wal.append_mutation("k1", "v1");
         wal.append_mutation("k2", "__deleted__");
     }
@@ -9612,7 +9601,7 @@ async fn s7_ws6_02_raft_heartbeat_resets_tick_counter() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.ticks_since_heartbeat = 5;
     }
     let (status, Json(body)) = raft_heartbeat(State(state), headers).await.unwrap();
@@ -9626,7 +9615,7 @@ async fn s7_ws6_02_raft_heartbeat_returns_current_term() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.current_term = 3;
     }
     let (status, Json(body)) = raft_heartbeat(State(state), headers).await.unwrap();
@@ -9652,7 +9641,7 @@ async fn s7_ws6_02_raft_election_status_remaining_ticks_decrements() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.ticks_since_heartbeat = 3;
     }
     let (status, Json(body)) = raft_election_status(State(state), headers).await.unwrap();
@@ -9681,7 +9670,7 @@ async fn s4_ws3_04_htap_status_empty_state_is_synchronized() {
 async fn s4_ws3_04_htap_status_reflects_olap_row_count() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut olap = state.olap_store.lock().unwrap();
+        let mut olap = state.storage.olap_store.lock().unwrap();
         olap.insert("k1".to_string(), std::collections::HashMap::new());
         olap.insert("k2".to_string(), std::collections::HashMap::new());
     }
@@ -9707,7 +9696,7 @@ async fn s9_ws8a_02_audit_snapshot_fresh_state_valid_chain() {
 async fn s9_ws8a_02_audit_snapshot_reflects_appended_events() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut sink = state.audit_sink.lock().unwrap();
+        let mut sink = state.ops.audit_sink.lock().unwrap();
         sink.append(voltnuerongrid_audit::AuditEventKind::Sql, "actor", "action", "ok", "{}");
         sink.append(voltnuerongrid_audit::AuditEventKind::Security, "actor", "action2", "ok", "{}");
     }
@@ -9728,7 +9717,7 @@ async fn s7_ws6_04_chaos_fire_drill_adds_to_history() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.status, "ok");
     assert_eq!(body.faults_injected, 1);
-    let cs = state.chaos_state.lock().unwrap();
+    let cs = state.ops.chaos_state.lock().unwrap();
     assert_eq!(cs.event_history.len(), 1, "fire drill must appear in history");
     assert!(cs.active_faults.is_empty(), "fire drill must not leave active faults");
 }
@@ -9763,7 +9752,7 @@ async fn s9_ws8a_02_audit_purge_empty_returns_zero() {
 async fn s9_ws8a_02_audit_purge_clears_events() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut sink = state.audit_sink.lock().unwrap();
+        let mut sink = state.ops.audit_sink.lock().unwrap();
         sink.append(voltnuerongrid_audit::AuditEventKind::Sql, "actor", "q1", "ok", "{}");
         sink.append(voltnuerongrid_audit::AuditEventKind::Sql, "actor", "q2", "ok", "{}");
     }
@@ -9773,7 +9762,7 @@ async fn s9_ws8a_02_audit_purge_clears_events() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.events_purged, 2, "must report 2 events purged");
     assert!(body.chain_reset);
-    let sink = state.audit_sink.lock().unwrap();
+    let sink = state.ops.audit_sink.lock().unwrap();
     assert!(sink.is_empty(), "audit sink must be empty after purge");
 }
 
@@ -9794,7 +9783,7 @@ async fn s9_ws8a_01_audit_cli_summary_empty_state() {
 async fn s9_ws8a_01_audit_cli_summary_reflects_appended_events() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut sink = state.audit_sink.lock().unwrap();
+        let mut sink = state.ops.audit_sink.lock().unwrap();
         sink.append(voltnuerongrid_audit::AuditEventKind::Sql, "actor", "q1", "ok", "{}");
         sink.append(voltnuerongrid_audit::AuditEventKind::Security, "actor", "auth", "ok", "{}");
     }
@@ -9825,7 +9814,7 @@ async fn s7_ws6_03_raft_member_list_reflects_term() {
     let state = state_with_key(Some("test-key"));
     let headers = operator_headers("test-key", "admin");
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.current_term = 7;
     }
     let (status, Json(body)) = raft_member_list(State(state), headers).await.unwrap();
@@ -9874,11 +9863,11 @@ fn linearisable_write_apply_loop_applies_committed_entry_to_row_store() {
     let state = state_with_key(Some("test-key"));
 
     // Subscribe a receiver so send() can succeed.
-    let rx = state.raft_last_applied_tx.subscribe();
+    let rx = state.cluster.raft_last_applied_tx.subscribe();
 
     // Promote the node to Leader with 0 peers (single-node cluster).
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.become_candidate();
         node.become_leader();
     }
@@ -9886,7 +9875,7 @@ fn linearisable_write_apply_loop_applies_committed_entry_to_row_store() {
     // Append a pending command — commit_index advances immediately (single-node),
     // but last_applied does NOT advance.
     let idx = {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.append_command_pending(
             "INSERT INTO lin_test VALUES ('key1', '{\"v\":\"hello\"}')"
                 .to_string(),
@@ -9896,7 +9885,7 @@ fn linearisable_write_apply_loop_applies_committed_entry_to_row_store() {
 
     // Verify pre-apply invariants.
     {
-        let node = state.raft_state.lock().unwrap();
+        let node = state.cluster.raft_state.lock().unwrap();
         assert_eq!(node.commit_index, idx, "commit_index must equal idx before apply");
         assert_eq!(node.last_applied, 0, "last_applied must not advance before apply loop");
     }
@@ -9907,7 +9896,7 @@ fn linearisable_write_apply_loop_applies_committed_entry_to_row_store() {
 
     // After apply: last_applied must equal commit_index == idx.
     {
-        let node = state.raft_state.lock().unwrap();
+        let node = state.cluster.raft_state.lock().unwrap();
         assert_eq!(node.last_applied, idx,
             "apply loop must advance last_applied to commit_index");
     }
@@ -9928,30 +9917,30 @@ fn linearisable_write_two_pending_commands_both_applied() {
     let state = state_with_key(Some("test-key"));
 
     // Subscribe before appending so send() sees at least one receiver.
-    let rx = state.raft_last_applied_tx.subscribe();
+    let rx = state.cluster.raft_last_applied_tx.subscribe();
 
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.become_candidate();
         node.become_leader();
     }
 
     // Append two commands; both commit immediately on a single-node cluster.
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.append_command_pending("INSERT INTO lin_test VALUES ('ka', '{\"seq\":\"1\"}')"
             .to_string(), 0);
         node.append_command_pending("INSERT INTO lin_test VALUES ('kb', '{\"seq\":\"2\"}')"
             .to_string(), 0);
     }
 
-    let commit_idx = state.raft_state.lock().unwrap().commit_index;
+    let commit_idx = state.cluster.raft_state.lock().unwrap().commit_index;
     assert_eq!(commit_idx, 2, "two commands must yield commit_index == 2");
 
     // Single apply call must handle both entries.
     apply_committed_entries(&state);
 
-    let final_applied = state.raft_state.lock().unwrap().last_applied;
+    let final_applied = state.cluster.raft_state.lock().unwrap().last_applied;
     assert_eq!(final_applied, 2,
         "apply loop must advance last_applied to 2 after applying two entries");
     let watch_val = *rx.borrow();
@@ -9981,9 +9970,9 @@ fn t3_encode_raft_batch_command_groups_dml() {
 fn t3_batch_command_applied_atomically_as_single_entry() {
     use crate::helpers::raft_loop::apply_committed_entries;
     let state = state_with_key(Some("test-key"));
-    let _rx = state.raft_last_applied_tx.subscribe();
+    let _rx = state.cluster.raft_last_applied_tx.subscribe();
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.become_candidate();
         node.become_leader();
     }
@@ -9998,19 +9987,19 @@ fn t3_batch_command_applied_atomically_as_single_entry() {
     )
     .expect("batch");
     let idx = {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.append_command_pending(batch, 0)
     };
     // Exactly one log entry was appended for the whole transaction.
     assert_eq!(idx, 1, "transaction must occupy a single Raft log index");
-    assert_eq!(state.raft_state.lock().unwrap().commit_index, 1);
+    assert_eq!(state.cluster.raft_state.lock().unwrap().commit_index, 1);
 
     apply_committed_entries(&state);
 
     // last_applied advanced by exactly one (atomic batch), and ALL rows landed.
-    assert_eq!(state.raft_state.lock().unwrap().last_applied, 1,
+    assert_eq!(state.cluster.raft_state.lock().unwrap().last_applied, 1,
         "atomic batch is a single apply unit → one last_applied increment");
-    let rs = state.row_store.lock().unwrap();
+    let rs = state.storage.row_store.lock().unwrap();
     assert!(rs.read_latest("t3:1").is_some(), "row 1 applied");
     assert!(rs.read_latest("t3:2").is_some(), "row 2 applied");
     assert!(rs.read_latest("t3:3").is_some(), "row 3 applied — all-or-nothing");
@@ -10023,7 +10012,7 @@ fn t3_transaction_commit_appends_single_batch_to_raft_log() {
     let headers = tenant_user_headers("analyst-acme", "acme");
     // Promote to leader so the transaction replicates.
     {
-        let mut node = state.raft_state.lock().unwrap();
+        let mut node = state.cluster.raft_state.lock().unwrap();
         node.become_candidate();
         node.become_leader();
     }
@@ -10040,7 +10029,7 @@ fn t3_transaction_commit_appends_single_batch_to_raft_log() {
         .expect("transaction should succeed");
     // The whole transaction must occupy exactly one Raft log entry (batched),
     // not one entry per statement.
-    let node = state.raft_state.lock().unwrap();
+    let node = state.cluster.raft_state.lock().unwrap();
     let batch_entries = node.log.iter()
         .filter(|e| e.command.starts_with(crate::RAFT_BATCH_PREFIX))
         .count();
@@ -10064,7 +10053,7 @@ async fn s4_ws3_02_columnar_project_returns_all_when_no_filter() {
     let state = state_with_key(Some("test-key"));
     // Insert a row so there are columns to materialise.
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         let mut data = std::collections::HashMap::new();
         data.insert("source".to_string(), "test".to_string());
@@ -10097,7 +10086,7 @@ async fn s4_ws3_03_columnar_aggregate_count_on_empty_store() {
 async fn s4_ws3_03_columnar_aggregate_count_reflects_inserted_rows() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         for i in 0..3 {
             let mut d = std::collections::HashMap::new();
@@ -10136,7 +10125,7 @@ async fn s5_e4a_01_deregister_known_connector_returns_removed_true() {
     assert!(body.removed, "known connector must report removed = true");
     assert_eq!(body.connector_id, "conn-x");
     // Registry should now be empty.
-    let reg = state.connector_registry.lock().unwrap();
+    let reg = state.ingest.connector_registry.lock().unwrap();
     assert_eq!(reg.len(), 0);
 }
 
@@ -10192,7 +10181,7 @@ async fn s5_e4a_01_connector_get_unknown_returns_not_found() {
 async fn s5_e4a_01_connector_update_existing_changes_version() {
     let state = state_with_key(Some("test-key"));
     {
-        let mut reg = state.connector_registry.lock().unwrap();
+        let mut reg = state.ingest.connector_registry.lock().unwrap();
         reg.push(ConnectorPlugin {
             connector_id: "conn-1".to_string(),
             connector_type: "kafka".to_string(),
@@ -10210,7 +10199,7 @@ async fn s5_e4a_01_connector_update_existing_changes_version() {
     let (status, Json(body)) = connector_update(State(state.clone()), headers, Json(req)).await.unwrap();
     assert_eq!(status, StatusCode::OK);
     assert!(body.updated, "existing connector must be updated");
-    let reg = state.connector_registry.lock().unwrap();
+    let reg = state.ingest.connector_registry.lock().unwrap();
     let plugin = reg.iter().find(|c| c.connector_id == "conn-1").unwrap();
     assert_eq!(plugin.version, "2.0.0");
     assert!(plugin.signed);
@@ -10336,14 +10325,14 @@ fn q2_execute_olap_query_reports_paged_store_fallback() {
     let state = state_with_key(None);
     // Seed a couple of rows directly into the in-memory PagedRowStore.
     {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         let mut r1 = std::collections::HashMap::new();
         r1.insert("__table".to_string(), "orders".to_string());
         r1.insert("id".to_string(), "1".to_string());
         rs.insert(xid, "orders:1", r1);
     }
-    let rs = state.row_store.lock().expect("row_store lock");
+    let rs = state.storage.row_store.lock().expect("row_store lock");
     // rocksdb_rows = None forces the in-memory fallback path.
     let resp = execute_olap_query(
         "SELECT * FROM orders".to_string(),
@@ -10365,7 +10354,7 @@ fn q2_execute_olap_query_reports_paged_store_fallback() {
 fn q2_execute_olap_query_reports_rocksdb_when_rows_supplied() {
     use crate::helpers::execution::execute_olap_query;
     let state = state_with_key(None);
-    let rs = state.row_store.lock().expect("row_store lock");
+    let rs = state.storage.row_store.lock().expect("row_store lock");
     let mut row = std::collections::HashMap::new();
     row.insert("__table".to_string(), "orders".to_string());
     row.insert("id".to_string(), "7".to_string());
@@ -13793,7 +13782,7 @@ async fn s11_ws1_88_rows_column_alias_count_missing_auth() {
 async fn admin_cluster_topology_reports_runtime_counts() {
     let state = state_with_key(Some("secret"));
     {
-        let mut sessions = state.driver_sessions.lock().unwrap();
+        let mut sessions = state.ops.driver_sessions.lock().unwrap();
         sessions.insert("sess-a".to_string(), DriverSession {
             driver_name: "rust".to_string(),
             driver_version: "1.0.0".to_string(),
@@ -13803,7 +13792,7 @@ async fn admin_cluster_topology_reports_runtime_counts() {
         });
     }
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin("tx-1", "node-1", "read_committed", now_unix_ms(), None);
     }
     let (status, Json(body)) = admin_cluster_topology(State(state), admin_headers("secret")).await.unwrap();
@@ -13818,11 +13807,11 @@ async fn admin_cluster_topology_reports_runtime_counts() {
 async fn admin_transaction_control_can_rollback_and_release_locks() {
     let state = state_with_key(Some("secret"));
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin("tx-admin-1", "node-1", "serializable", now_unix_ms(), None);
     }
     {
-        let mut locks = state.pessimistic_locks.lock().unwrap();
+        let mut locks = state.storage.pessimistic_locks.lock().unwrap();
         locks.insert("lock-1".to_string(), PessimisticLockRecord {
             lock_id: "lock-1".to_string(),
             transaction_id: "tx-admin-1".to_string(),
@@ -13840,18 +13829,18 @@ async fn admin_transaction_control_can_rollback_and_release_locks() {
     let (status, Json(body)) = admin_sql_transaction_control(State(state.clone()), admin_headers("secret"), Json(req)).await.unwrap();
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.affected_count, 1);
-    assert!(state.pessimistic_locks.lock().unwrap().is_empty());
+    assert!(state.storage.pessimistic_locks.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn admin_lock_control_can_kill_deadlock_victim() {
     let state = state_with_key(Some("secret"));
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin("tx-dead", "node-1", "read_committed", now_unix_ms(), None);
     }
     {
-        let mut locks = state.pessimistic_locks.lock().unwrap();
+        let mut locks = state.storage.pessimistic_locks.lock().unwrap();
         locks.insert("lock-dead".to_string(), PessimisticLockRecord {
             lock_id: "lock-dead".to_string(),
             transaction_id: "tx-dead".to_string(),
@@ -13877,7 +13866,7 @@ async fn admin_lock_control_can_kill_deadlock_victim() {
 async fn admin_cluster_node_manage_removes_node_and_migrates_work() {
     let state = state_with_key(Some("secret"));
     {
-        let mut nodes = state.cluster_nodes.lock().unwrap();
+        let mut nodes = state.cluster.cluster_nodes.lock().unwrap();
         nodes.insert("node-2".to_string(), ClusterNodeRuntime {
             node_id: "node-2".to_string(),
             role: "follower".to_string(),
@@ -13889,7 +13878,7 @@ async fn admin_cluster_node_manage_removes_node_and_migrates_work() {
         });
     }
     {
-        let mut sessions = state.driver_sessions.lock().unwrap();
+        let mut sessions = state.ops.driver_sessions.lock().unwrap();
         sessions.insert("sess-node-2".to_string(), DriverSession {
             driver_name: "rust".to_string(),
             driver_version: "1.0.0".to_string(),
@@ -13899,7 +13888,7 @@ async fn admin_cluster_node_manage_removes_node_and_migrates_work() {
         });
     }
     {
-        let mut acid = state.acid_transactions.lock().unwrap();
+        let mut acid = state.storage.acid_transactions.lock().unwrap();
         acid.begin("tx-node-2", "node-2", "read_committed", now_unix_ms(), None);
     }
     let req = AdminClusterNodeManageRequest {
@@ -13916,8 +13905,8 @@ async fn admin_cluster_node_manage_removes_node_and_migrates_work() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.migrated_transactions, 1);
     assert_eq!(body.migrated_sessions, 1);
-    assert!(!state.cluster_nodes.lock().unwrap().contains_key("node-2"));
-    let acid = state.acid_transactions.lock().unwrap();
+    assert!(!state.cluster.cluster_nodes.lock().unwrap().contains_key("node-2"));
+    let acid = state.storage.acid_transactions.lock().unwrap();
     assert_eq!(acid.transactions.get("tx-node-2").unwrap().assigned_node_id, "node-1");
 }
 
@@ -14340,7 +14329,7 @@ fn r4_drop_database_purges_all_rows() {
     let state = state_with_key(None);
     // Seed rows for two databases directly into the row store.
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         let mut row1 = HashMap::new();
         row1.insert("id".to_string(), "1".to_string());
@@ -14353,15 +14342,15 @@ fn r4_drop_database_purges_all_rows() {
         rs.insert(xid, "keepdb.items:1", other);
     }
     let pre = {
-        let rs = state.row_store.lock().unwrap();
+        let rs = state.storage.row_store.lock().unwrap();
         let xid = rs.current_xid();
         rs.scan_at_snapshot(xid).iter().filter(|(k, _)| k.starts_with("dropdb.")).count()
     };
     assert_eq!(pre, 2, "two dropdb rows should exist before purge");
 
-    crate::helpers::boot::purge_database_rows("dropdb", &state.row_store, &state.wal_engine);
+    crate::helpers::boot::purge_database_rows("dropdb", &state.storage.row_store, &state.storage.wal_engine);
 
-    let rs = state.row_store.lock().unwrap();
+    let rs = state.storage.row_store.lock().unwrap();
     let xid = rs.current_xid();
     let snap = rs.scan_at_snapshot(xid);
     let dropdb_remaining = snap.iter().filter(|(k, _)| k.starts_with("dropdb.")).count();
@@ -14390,7 +14379,7 @@ fn r5_rollback_insert_rows_not_visible() {
         .expect("transaction should succeed");
 
     // The row must not be visible in the row store after rollback.
-    let rs = state.row_store.lock().unwrap();
+    let rs = state.storage.row_store.lock().unwrap();
     let xid = rs.current_xid();
     let snap = rs.scan_at_snapshot(xid);
     let found = snap.iter().any(|(k, _)| k.contains("r5_orders"));
@@ -14406,7 +14395,7 @@ fn r5_rollback_update_restores_original_row() {
     // Seed the original row directly into the row store.
     let original_key = "r5_items:99".to_string();
     {
-        let mut rs = state.row_store.lock().unwrap();
+        let mut rs = state.storage.row_store.lock().unwrap();
         let xid = rs.begin_xid();
         let mut original = HashMap::new();
         original.insert("id".to_string(), "99".to_string());
@@ -14428,7 +14417,7 @@ fn r5_rollback_update_restores_original_row() {
         .expect("transaction should succeed");
 
     // After ROLLBACK the row should be restored with the original price.
-    let rs = state.row_store.lock().unwrap();
+    let rs = state.storage.row_store.lock().unwrap();
     let xid = rs.current_xid();
     let snap = rs.scan_at_snapshot(xid);
     let row = snap.iter().find(|(k, _)| *k == original_key.as_str());
@@ -14471,7 +14460,7 @@ fn q1_alter_table_add_column_updates_catalog() {
     assert_eq!(resp.1.status, "ok");
 
     // alteration_count must be 1.
-    let catalog = state.ddl_catalog.lock().unwrap();
+    let catalog = state.storage.ddl_catalog.lock().unwrap();
     let entry = catalog.get("q1_products");
     assert!(entry.is_some(), "catalog entry must exist");
     assert_eq!(entry.unwrap().alteration_count, 1, "alteration_count must be 1 after ADD COLUMN");
@@ -14505,7 +14494,7 @@ fn q1_alter_table_drop_column_updates_catalog() {
     assert_eq!(resp.0, StatusCode::OK);
     assert_eq!(resp.1.status, "ok");
 
-    let catalog = state.ddl_catalog.lock().unwrap();
+    let catalog = state.storage.ddl_catalog.lock().unwrap();
     let entry = catalog.get("q1_inventory").expect("entry must exist");
     assert_eq!(entry.alteration_count, 1, "alteration_count must be 1 after DROP COLUMN");
     // The column should no longer appear in the stored DDL.
@@ -14543,7 +14532,7 @@ fn q1_alter_table_increments_alteration_count_across_multiple_alters() {
         .expect("ALTER TABLE");
     }
 
-    let catalog = state.ddl_catalog.lock().unwrap();
+    let catalog = state.storage.ddl_catalog.lock().unwrap();
     let entry = catalog.get("q1_counters").expect("entry must exist");
     assert_eq!(entry.alteration_count, 2, "two ALTERs must yield alteration_count == 2");
 }
@@ -14568,7 +14557,7 @@ fn q2_grant_role_on_database_populates_db_grants() {
     assert_eq!(resp.0, StatusCode::OK);
     assert_eq!(resp.1.status, "ok");
 
-    let grants = state.db_grants.lock().unwrap();
+    let grants = state.auth.db_grants.lock().unwrap();
     let roles = grants.get("analytics").expect("db_grants must have analytics entry");
     assert!(roles.contains("reader"), "GRANT must insert 'reader' role for analytics db");
 }
@@ -14602,7 +14591,7 @@ fn q2_revoke_role_removes_from_db_grants() {
     assert_eq!(resp.0, StatusCode::OK);
     assert_eq!(resp.1.status, "ok");
 
-    let grants = state.db_grants.lock().unwrap();
+    let grants = state.auth.db_grants.lock().unwrap();
     let roles_opt = grants.get("reports");
     let still_has = roles_opt.map(|r| r.contains("writer")).unwrap_or(false);
     assert!(!still_has, "REVOKE must remove 'writer' role from reports db");
@@ -14643,7 +14632,7 @@ fn q3_call_insert_rows_inserts_records_in_demo_mode() {
     assert_eq!(resp.1.status, "ok", "CALL insert_rows must return status ok");
 
     // Row store must contain 3 rows for q3_demo.
-    let rs = state.row_store.lock().unwrap();
+    let rs = state.storage.row_store.lock().unwrap();
     let xid = rs.current_xid();
     let count = rs.scan_at_snapshot(xid).iter()
         .filter(|(k, _)| k.contains("q3_demo"))
@@ -14802,7 +14791,7 @@ fn r3_per_db_rbac_denies_cross_db_access() {
     let state = state_with_key(None);
     // Grant "tenant_analyst" role access to "db-a" only.
     {
-        let mut grants = state.db_grants.lock().expect("db_grants");
+        let mut grants = state.auth.db_grants.lock().expect("db_grants");
         grants.entry("db-a".to_string()).or_default().insert("tenant_analyst".to_string());
     }
 
@@ -14832,7 +14821,7 @@ fn r3_per_db_rbac_allows_granted_database_access() {
     let state = state_with_key(None);
     // Grant "tenant_analyst" role access to "db-a".
     {
-        let mut grants = state.db_grants.lock().expect("db_grants");
+        let mut grants = state.auth.db_grants.lock().expect("db_grants");
         grants.entry("db-a".to_string()).or_default().insert("tenant_analyst".to_string());
     }
 
@@ -14891,7 +14880,7 @@ fn r3_sql_grant_syntax_adds_db_grants() {
     assert_eq!(resp.0, StatusCode::OK, "GRANT statement should return 200");
 
     // Verify the grant was persisted in-memory.
-    let grants = state.db_grants.lock().expect("db_grants");
+    let grants = state.auth.db_grants.lock().expect("db_grants");
     let roles = grants.get("db-test").expect("db-test should have a grants entry after GRANT");
     assert!(roles.contains("tenant_analyst"), "tenant_analyst role must be in db-test grants after GRANT");
 }
@@ -14903,7 +14892,7 @@ fn r3_sql_revoke_syntax_removes_db_grants() {
 
     // Pre-seed the grant.
     {
-        let mut grants = state.db_grants.lock().expect("db_grants");
+        let mut grants = state.auth.db_grants.lock().expect("db_grants");
         grants.entry("db-test".to_string()).or_default().insert("tenant_analyst".to_string());
     }
 
@@ -14920,7 +14909,7 @@ fn r3_sql_revoke_syntax_removes_db_grants() {
     assert_eq!(resp.0, StatusCode::OK, "REVOKE statement should return 200");
 
     // Verify the grant was removed.
-    let grants = state.db_grants.lock().expect("db_grants");
+    let grants = state.auth.db_grants.lock().expect("db_grants");
     let roles_empty = grants
         .get("db-test")
         .map(|s| !s.contains("tenant_analyst"))
@@ -14935,7 +14924,7 @@ fn r3_grant_endpoint_updates_db_grants() {
 
     // Pre-register the database in the catalog so the endpoint finds it.
     {
-        let mut catalog = state.database_catalog.lock().expect("catalog");
+        let mut catalog = state.storage.database_catalog.lock().expect("catalog");
         let _ = catalog.create("grantdb", 0, None, None);
     }
 
@@ -14951,7 +14940,7 @@ fn r3_grant_endpoint_updates_db_grants() {
     assert!(resp.1.granted_roles.contains(&"tenant_analyst".to_string()), "response should list tenant_analyst");
 
     // Confirm the grant is reflected in db_grants.
-    let grants = state.db_grants.lock().expect("db_grants");
+    let grants = state.auth.db_grants.lock().expect("db_grants");
     let has_role = grants
         .get("grantdb")
         .map(|s| s.contains("tenant_analyst"))
@@ -14966,7 +14955,7 @@ fn r3_revoke_endpoint_removes_db_grants() {
 
     // Pre-seed state.
     {
-        let mut grants = state.db_grants.lock().expect("db_grants");
+        let mut grants = state.auth.db_grants.lock().expect("db_grants");
         grants.entry("revoke-db".to_string()).or_default().insert("tenant_analyst".to_string());
     }
 
@@ -14980,7 +14969,7 @@ fn r3_revoke_endpoint_removes_db_grants() {
     assert_eq!(resp.0, StatusCode::OK, "revoke endpoint should return 200");
 
     // Confirm the grant was removed from db_grants.
-    let grants = state.db_grants.lock().expect("db_grants");
+    let grants = state.auth.db_grants.lock().expect("db_grants");
     let still_has_role = grants
         .get("revoke-db")
         .map(|s| s.contains("tenant_analyst"))
@@ -14994,7 +14983,7 @@ fn r3_cross_db_isolation_separate_grants() {
     let state = state_with_key(None);
     // Grant access to "warehouse" only.
     {
-        let mut grants = state.db_grants.lock().expect("db_grants");
+        let mut grants = state.auth.db_grants.lock().expect("db_grants");
         grants.entry("warehouse".to_string()).or_default().insert("tenant_analyst".to_string());
         grants.entry("finance".to_string()).or_default().insert("tenant_admin".to_string());
     }
@@ -15404,13 +15393,13 @@ fn r10_htap_sync_origin_in_appstate() {
     let state = state_with_key(Some("secret"));
     // Verify the sync_origin field is present and functional.
     {
-        let origin = state.sync_origin.lock().expect("sync_origin lock");
+        let origin = state.cluster.sync_origin.lock().expect("sync_origin lock");
         let exported = origin.export_since(0, 10);
         assert!(exported.is_empty(), "fresh state must have no mutations");
     }
     // Verify replication_transport field is present.
     {
-        let _transport = state.replication_transport.lock().expect("replication_transport lock");
+        let _transport = state.cluster.replication_transport.lock().expect("replication_transport lock");
     }
 }
 
@@ -15631,7 +15620,7 @@ fn udf3_python_source_validates_blocked_sysexec_pattern() {
 #[test]
 fn udf_registry_in_app_state_is_accessible() {
     let state = state_with_key(Some("secret"));
-    let mut reg = state.udf_registry.lock().expect("udf_registry lock");
+    let mut reg = state.ops.udf_registry.lock().expect("udf_registry lock");
     reg.register_js("upper", "function upper(s) { return s.toUpperCase(); }", 500)
         .expect("register via AppState should succeed");
     let names: Vec<String> = reg.list().into_iter().map(|(n, _)| n).collect();
@@ -15679,7 +15668,7 @@ fn plug1_vector_insert_and_search_returns_nearest() {
 #[test]
 fn plug1_vector_index_in_app_state_is_accessible() {
     let state = state_with_key(Some("secret"));
-    let mut idx = state.vector_index.lock().expect("vector_index lock");
+    let mut idx = state.ops.vector_index.lock().expect("vector_index lock");
     idx.insert("t", "col", "k1", vec![1.0, 2.0, 3.0]);
     let r = idx.search_cosine("t", "col", &[1.0, 2.0, 3.0], 1);
     assert_eq!(r.len(), 1);
@@ -15729,7 +15718,7 @@ fn plug2_fts_index_search_returns_ranked_results() {
 #[test]
 fn plug2_fts_index_in_app_state_is_accessible() {
     let state = state_with_key(Some("secret"));
-    let mut idx = state.fts_index.lock().expect("fts_index lock");
+    let mut idx = state.ops.fts_index.lock().expect("fts_index lock");
     idx.index_document("blog", "post:1", "Rust is fast and safe");
     let hits = idx.search("blog", "fast safe", 10);
     assert!(!hits.is_empty(), "should find indexed document");
@@ -15773,7 +15762,7 @@ fn plug3_geo_rtree_within_envelope_correct() {
 #[test]
 fn plug3_geo_index_in_app_state_is_accessible() {
     let state = state_with_key(Some("secret"));
-    let mut idx = state.geo_index.lock().expect("geo_index lock");
+    let mut idx = state.ops.geo_index.lock().expect("geo_index lock");
     idx.insert_point("places", "eiffel", "POINT(2.294481 48.858370)");
     assert_eq!(idx.point_count("places"), 1);
 }
@@ -15857,7 +15846,7 @@ fn plug4_plugin_uninstall_removes_from_active() {
 fn plug4_plugin_registry_in_app_state_is_accessible() {
     use crate::helpers::plugins::{PluginEntry, PluginState};
     let state = state_with_key(Some("secret"));
-    let mut reg = state.plugin_registry.lock().expect("plugin_registry lock");
+    let mut reg = state.ops.plugin_registry.lock().expect("plugin_registry lock");
     let entry = PluginEntry {
         id: "via-state".to_string(), name: "State Test".to_string(), version: "0.1.0".to_string(),
         checksum_sha256: "q".to_string(), signed: true, installed_at_ms: 0,
@@ -15953,7 +15942,7 @@ fn mv2_incremental_matview_created_with_flag_stored_in_catalog() {
             resp.status()
         );
         // The catalog should record either materialized_view or incremental_matview.
-        let cat = state.ddl_catalog.lock().unwrap();
+        let cat = state.storage.ddl_catalog.lock().unwrap();
         let entry = cat.get("mv_orders");
         assert!(entry.is_some(), "mv_orders should be in catalog after CREATE");
     });
@@ -15982,7 +15971,7 @@ fn mv2_delta_records_written_after_insert_dml() {
         // Just verify the INSERT completes successfully.
         assert_eq!(resp.status(), StatusCode::OK, "INSERT should succeed");
         // The __delta:events: key should now exist in row_store.
-        let rs = state.row_store.lock().unwrap();
+        let rs = state.storage.row_store.lock().unwrap();
         let xid = rs.current_xid();
         let delta_rows: Vec<_> = rs
             .scan_at_snapshot(xid)
@@ -16045,7 +16034,7 @@ fn con1_update_unique_violation_returns_conflict() {
 
     // Register a UNIQUE constraint on `users.email`
     {
-        let mut mgr = state.constraint_manager.lock().unwrap();
+        let mut mgr = state.storage.constraint_manager.lock().unwrap();
         mgr.add_constraint(ConstraintDescriptor {
             name: "uq_users_email".to_string(),
             table: "users".to_string(),
@@ -16065,7 +16054,7 @@ fn con1_update_unique_violation_returns_conflict() {
     assert!(r.is_ok(), "first INSERT should succeed");
     // Record the committed value
     {
-        let mut mgr = state.constraint_manager.lock().unwrap();
+        let mut mgr = state.storage.constraint_manager.lock().unwrap();
         mgr.record_committed_value("users", "email", "a@b.com");
     }
 
@@ -16107,7 +16096,7 @@ fn part1_create_partition_table_stored_in_registry() {
     let r = rt.block_on(sql_execute(State(state.clone()), headers, Json(ddl)));
     assert!(r.is_ok(), "CREATE TABLE PARTITION BY should succeed");
 
-    let reg = state.partition_registry.lock().unwrap();
+    let reg = state.storage.partition_registry.lock().unwrap();
     assert!(reg.contains_key("orders"), "partition_registry should contain 'orders'");
     assert_eq!(reg.get("orders").map(|s| s.as_str()), Some("amount"));
 }
@@ -16200,7 +16189,7 @@ fn cache1_evict_by_prefix_removes_matching_entries() {
 
     // Add 3 entries: 2 with prefix "table:orders:", 1 with different prefix
     {
-        let mut cache = state.distributed_cache.lock().unwrap();
+        let mut cache = state.ops.distributed_cache.lock().unwrap();
         let _ = cache.set("default", "table:orders:1".to_string(), serde_json::json!("r1"), None, now);
         let _ = cache.set("default", "table:orders:2".to_string(), serde_json::json!("r2"), None, now);
         let _ = cache.set("default", "table:users:1".to_string(), serde_json::json!("u1"), None, now);
@@ -16208,13 +16197,13 @@ fn cache1_evict_by_prefix_removes_matching_entries() {
 
     // Evict prefix "table:orders:"
     {
-        let mut cache = state.distributed_cache.lock().unwrap();
+        let mut cache = state.ops.distributed_cache.lock().unwrap();
         cache.evict_by_prefix("table:orders:");
     }
 
     // Verify only table:users:1 remains
     {
-        let mut cache = state.distributed_cache.lock().unwrap();
+        let mut cache = state.ops.distributed_cache.lock().unwrap();
         let keys = cache.keys_in_partition("default", now).unwrap_or_default();
         assert!(!keys.contains(&"table:orders:1".to_string()), "prefix-matched key should be evicted");
         assert!(!keys.contains(&"table:orders:2".to_string()), "prefix-matched key should be evicted");
@@ -16396,7 +16385,7 @@ fn scale1_set_policy_updates_thresholds() {
     };
     let r = rt.block_on(autoscale_set_policy(State(state.clone()), headers, Json(req)));
     assert!(r.is_ok());
-    let policy = state.autoscale_policy.lock().unwrap();
+    let policy = state.ops.autoscale_policy.lock().unwrap();
     assert_eq!(policy.min_replicas, 2);
     assert_eq!(policy.max_replicas, 10);
     assert_eq!(policy.scale_up_queue_threshold, 200);
@@ -16768,7 +16757,7 @@ async fn ai1_chat_sql_rate_limit_per_operator() {
     use crate::handlers::autonomous::{ai_chat_sql, ChatSqlRequest};
     let state = state_with_key(Some("secret"));
     // Set a very tight RPM limit (1 request).
-    state.model_gateway_policy.lock().unwrap().rate_limit_rpm = 1;
+    state.ai.model_gateway_policy.lock().unwrap().rate_limit_rpm = 1;
     let headers = operator_headers("secret", "platform-admin");
     // First request should succeed.
     let r1 = ai_chat_sql(State(state.clone()), headers.clone(), Json(ChatSqlRequest { query: "q".to_string(), context: None })).await;
@@ -16869,7 +16858,7 @@ async fn ai3_self_heal_status_returns_ok() {
 async fn ai3_self_heal_blocked_by_emergency_stop() {
     use crate::handlers::autonomous::autonomous_self_heal_run;
     let state = state_with_key(Some("secret"));
-    state.emergency_stop.set(true);
+    state.ai.emergency_stop.set(true);
     let headers = operator_headers("secret", "platform-admin");
     let r = autonomous_self_heal_run(State(state), headers).await;
     assert!(r.is_ok());
@@ -16883,7 +16872,7 @@ async fn ai3_self_heal_processes_unresolved_signal() {
     use crate::handlers::sre::ClusterFailureSignal;
     let state = state_with_key(Some("secret"));
     {
-        let mut sigs = state.cluster_failure_signals.lock().unwrap();
+        let mut sigs = state.cluster.cluster_failure_signals.lock().unwrap();
         sigs.push(ClusterFailureSignal {
             signal_id: "sig-1".to_string(),
             node_id: "node-1".to_string(),
@@ -16934,7 +16923,7 @@ async fn ai4_slow_query_stored_in_ring_buffer() {
     };
     let r = ai_slow_query_report(State(state.clone()), headers, Json(req)).await;
     assert!(r.is_ok());
-    let log_size = state.slow_query_log.lock().unwrap().len();
+    let log_size = state.ai.slow_query_log.lock().unwrap().len();
     assert_eq!(log_size, 1, "slow query should be in ring buffer");
     std::env::remove_var("VNG_SLOW_QUERY_THRESHOLD_MS");
 }
@@ -16983,7 +16972,7 @@ async fn ai5_kms_rotate_creates_dek_version() {
     assert_eq!(resp.status, "ok");
     assert_eq!(resp.new_dek_version, 1);
 
-    let versions = state.dek_versions.lock().unwrap();
+    let versions = state.ai.dek_versions.lock().unwrap();
     assert_eq!(versions.len(), 1, "should have 1 DEK version");
     assert!(versions[0].active, "new version should be active");
 }
@@ -17004,7 +16993,7 @@ async fn ai5_kms_rotate_retains_old_dek_version() {
     assert_eq!(resp.new_dek_version, 2, "second rotation = version 2");
     assert!(resp.old_dek_version_retained, "old version must be retained");
 
-    let versions = state.dek_versions.lock().unwrap();
+    let versions = state.ai.dek_versions.lock().unwrap();
     assert_eq!(versions.len(), 2, "two DEK versions total");
     assert!(!versions[0].active, "old version is inactive");
     assert!(versions[1].active, "new version is active");
@@ -17050,7 +17039,7 @@ async fn ai6_diagnosis_custom_rule_overrides_builtin() {
     let state = state_with_key(Some("secret"));
     // Inject a custom diagnosis rule.
     {
-        let mut rules = state.diagnosis_rules.lock().unwrap();
+        let mut rules = state.ai.diagnosis_rules.lock().unwrap();
         rules.push(crate::DiagnosisRule {
             failure_type: Some("network".to_string()),
             keywords: vec![],
@@ -17076,7 +17065,7 @@ async fn ai6_diagnosis_custom_keyword_rule_matches() {
     use crate::handlers::sre::{sre_incident_diagnose, IncidentDiagnoseRequest};
     let state = state_with_key(Some("secret"));
     {
-        let mut rules = state.diagnosis_rules.lock().unwrap();
+        let mut rules = state.ai.diagnosis_rules.lock().unwrap();
         rules.push(crate::DiagnosisRule {
             failure_type: None, // matches any failure_type
             keywords: vec!["quota".to_string()],

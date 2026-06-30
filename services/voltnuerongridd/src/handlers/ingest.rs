@@ -360,8 +360,8 @@ fn ingest_infer_columns(
 }
 
 pub(crate) fn collect_ingest_schema_registry_response(state: &AppState) -> IngestSchemaRegistryResponse {
-    let csv_map = state.ingest_csv_records.lock().expect("csv schema lock");
-    let json_map = state.ingest_json_records.lock().expect("json schema lock");
+    let csv_map = state.ingest.ingest_csv_records.lock().expect("csv schema lock");
+    let json_map = state.ingest.ingest_json_records.lock().expect("json schema lock");
     let mut entries: Vec<IngestSchemaEntry> = Vec::new();
     for (connector_id, records) in csv_map.iter() {
         let columns = ingest_infer_columns(records);
@@ -401,11 +401,11 @@ fn append_ingest_outbox_events(
     let storage_key = ingest_storage_key(principal, connector_id);
     let stream_name = ingest_outbox_stream_name(&storage_key);
 
-    if let Ok(mut stream_map) = state.ingest_outbox_streams.lock() {
+    if let Ok(mut stream_map) = state.ingest.ingest_outbox_streams.lock() {
         stream_map.insert(storage_key.clone(), stream_name.clone());
     }
 
-    let mut event_bus = match state.ingest_event_bus.lock() {
+    let mut event_bus = match state.ingest.ingest_event_bus.lock() {
         Ok(guard) => guard,
         Err(_) => return 0,
     };
@@ -450,7 +450,7 @@ fn append_ingest_outbox_events(
 pub(crate) async fn outbox_broker_status(
     State(state): State<AppState>,
 ) -> (StatusCode, Json<BrokerAdapterStatus>) {
-    let counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock");
+    let counts = state.ingest.broker_flush_counts.lock().expect("broker_flush_counts lock");
     let adapters: Vec<BrokerAdapterInfo> = ["kafka", "nats", "event_hubs"]
         .iter()
         .map(|b| BrokerAdapterInfo {
@@ -480,11 +480,11 @@ pub(crate) async fn outbox_broker_flush(
         }));
     }
     let max_events = req.max_events.unwrap_or(100).min(10_000);
-    let wal = state.wal_engine.lock().expect("wal_engine lock broker_flush");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock broker_flush");
     let events_available = wal.wal_records().len();
     drop(wal);
     let events_flushed = events_available.min(max_events);
-    let mut counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock flush");
+    let mut counts = state.ingest.broker_flush_counts.lock().expect("broker_flush_counts lock flush");
     let cnt = counts.entry(req.broker_type.clone()).or_insert(0);
     *cnt += 1;
     let total_flush_count = *cnt;
@@ -501,8 +501,8 @@ pub(crate) async fn outbox_broker_flush(
 pub(crate) async fn outbox_broker_health(
     State(state): State<AppState>,
 ) -> (StatusCode, Json<BrokerHealthResponse>) {
-    let wal_len = state.wal_engine.lock().expect("wal_engine lock health").wal_records().len();
-    let counts = state.broker_flush_counts.lock().expect("broker_flush_counts lock health");
+    let wal_len = state.storage.wal_engine.lock().expect("wal_engine lock health").wal_records().len();
+    let counts = state.ingest.broker_flush_counts.lock().expect("broker_flush_counts lock health");
     let brokers: Vec<BrokerHealthEntry> = ["kafka", "nats", "event_hubs"].iter().map(|bt| {
         let flush_count = counts.get(*bt).copied().unwrap_or(0);
         BrokerHealthEntry {
@@ -528,8 +528,8 @@ pub(crate) async fn ingest_schema_fields(
     Query(params): Query<IngestSchemaFieldsQuery>,
 ) -> Result<(StatusCode, Json<IngestSchemaFieldsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let csv_map = state.ingest_csv_records.lock().expect("csv_records lock ingest_schema_fields");
-    let json_map = state.ingest_json_records.lock().expect("json_records lock ingest_schema_fields");
+    let csv_map = state.ingest.ingest_csv_records.lock().expect("csv_records lock ingest_schema_fields");
+    let json_map = state.ingest.ingest_json_records.lock().expect("json_records lock ingest_schema_fields");
     let columns = if let Some(records) = csv_map.get(params.schema_id.as_str()) {
         ingest_infer_columns(records)
     } else if let Some(records) = json_map.get(params.schema_id.as_str()) {
@@ -566,8 +566,8 @@ pub(crate) async fn ingest_schema_list(
     Query(params): Query<IngestSchemaListQuery>,
 ) -> Result<(StatusCode, Json<IngestSchemaListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_ingest_runtime_privilege(&headers, &state, PrivilegeAction::Read, "ingest/schema")?;
-    let csv_map = state.ingest_csv_records.lock().expect("csv schema list lock");
-    let json_map = state.ingest_json_records.lock().expect("json schema list lock");
+    let csv_map = state.ingest.ingest_csv_records.lock().expect("csv schema list lock");
+    let json_map = state.ingest.ingest_json_records.lock().expect("json schema list lock");
     let mut entries: Vec<IngestSchemaEntry> = Vec::new();
     let fmt = params.format.as_deref();
     if fmt.is_none() || fmt == Some("csv") {
@@ -683,7 +683,7 @@ pub(crate) async fn ingest_csv(
         (record.key.clone(), data)
     }).collect();
     let batch_xid = {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         for (key, data) in &row_entries {
             rs.insert(xid, key, data.clone());
@@ -691,14 +691,14 @@ pub(crate) async fn ingest_csv(
         xid
     };
     // M-8 Rule 12: persist ingest rows to RocksDB so they survive restarts.
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         for (key, data) in &row_entries {
             wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
-        .ingest_csv_records
+        .ingest.ingest_csv_records
         .lock()
         .expect("csv lock")
         .insert(storage_key, records);
@@ -708,7 +708,7 @@ pub(crate) async fn ingest_csv(
         &req.connector_id,
         "csv",
         state
-            .ingest_csv_records
+            .ingest.ingest_csv_records
             .lock()
             .expect("csv lock")
             .get(&ingest_storage_key(&principal, &req.connector_id))
@@ -763,7 +763,7 @@ pub(crate) async fn ingest_json(
         (record.key.clone(), data)
     }).collect();
     let batch_xid = {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         for (key, data) in &row_entries {
             rs.insert(xid, key, data.clone());
@@ -771,14 +771,14 @@ pub(crate) async fn ingest_json(
         xid
     };
     // M-8 Rule 12: persist ingest rows to RocksDB so they survive restarts.
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         for (key, data) in &row_entries {
             wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
-        .ingest_json_records
+        .ingest.ingest_json_records
         .lock()
         .expect("json lock")
         .insert(storage_key, records);
@@ -788,7 +788,7 @@ pub(crate) async fn ingest_json(
         &req.connector_id,
         "json",
         state
-            .ingest_json_records
+            .ingest.ingest_json_records
             .lock()
             .expect("json lock")
             .get(&ingest_storage_key(&principal, &req.connector_id))
@@ -848,7 +848,7 @@ pub(crate) async fn ingest_parquet(
         (record.key.clone(), data)
     }).collect();
     let batch_xid = {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         for (key, data) in &row_entries {
             rs.insert(xid, key, data.clone());
@@ -856,14 +856,14 @@ pub(crate) async fn ingest_parquet(
         xid
     };
     // M-8 Rule 12: persist ingest rows to RocksDB so they survive restarts.
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         for (key, data) in &row_entries {
             wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
-        .ingest_parquet_records
+        .ingest.ingest_parquet_records
         .lock()
         .expect("parquet lock")
         .insert(storage_key, records);
@@ -873,7 +873,7 @@ pub(crate) async fn ingest_parquet(
         &req.connector_id,
         "parquet",
         state
-            .ingest_parquet_records
+            .ingest.ingest_parquet_records
             .lock()
             .expect("parquet lock")
             .get(&ingest_storage_key(&principal, &req.connector_id))
@@ -932,7 +932,7 @@ pub(crate) async fn ingest_excel(
         (record.key.clone(), data)
     }).collect();
     let batch_xid = {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         for (key, data) in &row_entries {
             rs.insert(xid, key, data.clone());
@@ -940,14 +940,14 @@ pub(crate) async fn ingest_excel(
         xid
     };
     // M-8 Rule 12: persist ingest rows to RocksDB so they survive restarts.
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         for (key, data) in &row_entries {
             wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
-        .ingest_excel_records
+        .ingest.ingest_excel_records
         .lock()
         .expect("excel lock")
         .insert(storage_key, records);
@@ -957,7 +957,7 @@ pub(crate) async fn ingest_excel(
         &req.connector_id,
         "excel",
         state
-            .ingest_excel_records
+            .ingest.ingest_excel_records
             .lock()
             .expect("excel lock")
             .get(&ingest_storage_key(&principal, &req.connector_id))
@@ -1058,7 +1058,7 @@ pub(crate) async fn ingest_chunked(
 
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
     state
-        .ingest_json_records
+        .ingest.ingest_json_records
         .lock()
         .expect("json lock")
         .insert(storage_key, records);
@@ -1100,10 +1100,10 @@ pub(crate) async fn ingest_status(
         PrivilegeAction::Read,
         ingest_status_scope(),
     )?;
-    let csv_map = state.ingest_csv_records.lock().expect("csv lock");
-    let json_map = state.ingest_json_records.lock().expect("json lock");
-    let parquet_map = state.ingest_parquet_records.lock().expect("parquet lock");
-    let excel_map = state.ingest_excel_records.lock().expect("excel lock");
+    let csv_map = state.ingest.ingest_csv_records.lock().expect("csv lock");
+    let json_map = state.ingest.ingest_json_records.lock().expect("json lock");
+    let parquet_map = state.ingest.ingest_parquet_records.lock().expect("parquet lock");
+    let excel_map = state.ingest.ingest_excel_records.lock().expect("excel lock");
     let (csv_connectors, csv_total) = match &principal {
         RuntimeAccessPrincipal::Operator(_) => (
             csv_map.len(),
@@ -1176,7 +1176,7 @@ pub(crate) async fn ingest_outbox_status(
         PrivilegeAction::Read,
         &ingest_outbox_scope(None),
     )?;
-    let stream_map = state.ingest_outbox_streams.lock().expect("outbox stream map lock");
+    let stream_map = state.ingest.ingest_outbox_streams.lock().expect("outbox stream map lock");
     let accessible_streams = match &principal {
         RuntimeAccessPrincipal::Operator(_) => stream_map.values().cloned().collect::<Vec<_>>(),
         RuntimeAccessPrincipal::TenantUser(user) => {
@@ -1191,7 +1191,7 @@ pub(crate) async fn ingest_outbox_status(
     drop(stream_map);
 
     let accessible_set = accessible_streams.iter().cloned().collect::<HashSet<_>>();
-    let event_bus = state.ingest_event_bus.lock().expect("event bus lock");
+    let event_bus = state.ingest.ingest_event_bus.lock().expect("event bus lock");
     let broker_mode = event_bus.broker_kind().to_string();
     let broker_target = event_bus.broker_target();
     let visible_events = event_bus
@@ -1247,13 +1247,13 @@ pub(crate) async fn ingest_outbox_replay(
     let acknowledge = req.acknowledge.unwrap_or(true);
 
     let cursor_before_ack = state
-        .ingest_outbox_cursors
+        .ingest.ingest_outbox_cursors
         .lock()
         .expect("outbox cursor lock")
         .load(&cursor_key);
     let last_acknowledged_event_id = cursor_before_ack.unwrap_or(0);
     let delivered = state
-        .ingest_event_bus
+        .ingest.ingest_event_bus
         .lock()
         .expect("event bus lock")
         .export_for_stream_since(&stream_name, last_acknowledged_event_id, max_items)
@@ -1267,7 +1267,7 @@ pub(crate) async fn ingest_outbox_replay(
             .map(|event| event.event_id)
             .expect("delivered last event");
         let mut cursor_store = state
-            .ingest_outbox_cursors
+            .ingest.ingest_outbox_cursors
             .lock()
             .expect("outbox cursor lock");
         let _ = cursor_store.save(&cursor_key, last_event_id);
@@ -1361,20 +1361,20 @@ pub(crate) async fn ingest_csv_parallel(
     }).collect();
 
     let batch_xid = {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         for (key, data) in &row_entries {
             rs.insert(xid, key, data.clone());
         }
         xid
     };
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         for (key, data) in &row_entries {
             wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
-    state.ingest_csv_records.lock().expect("csv lock").insert(storage_key, valid_records);
+    state.ingest.ingest_csv_records.lock().expect("csv lock").insert(storage_key, valid_records);
 
     append_runtime_audit_event(
         &state, AuditEventKind::Ingest, &principal, "ingest_csv_parallel", "ok",
@@ -1428,20 +1428,20 @@ pub(crate) async fn ingest_json_parallel(
     }).collect();
 
     let batch_xid = {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         for (key, data) in &row_entries {
             rs.insert(xid, key, data.clone());
         }
         xid
     };
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         for (key, data) in &row_entries {
             wal.store_row(&req.connector_id, key, batch_xid, Some(data));
         }
     }
     let storage_key = ingest_storage_key(&principal, &req.connector_id);
-    state.ingest_json_records.lock().expect("json lock").insert(storage_key, valid_records);
+    state.ingest.ingest_json_records.lock().expect("json lock").insert(storage_key, valid_records);
 
     append_runtime_audit_event(
         &state, AuditEventKind::Ingest, &principal, "ingest_json_parallel", "ok",
@@ -1536,14 +1536,14 @@ pub(crate) async fn ingest_excel_parallel(
 
     // Bulk insert
     let batch_xid = {
-        let mut rs = state.row_store.lock().expect("row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("row_store lock");
         let xid = rs.begin_xid();
         for (key, data) in &all_row_entries {
             rs.insert(xid, key, data.clone());
         }
         xid
     };
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         for (key, data) in &all_row_entries {
             wal.store_row(&connector_id, key, batch_xid, Some(data));
         }

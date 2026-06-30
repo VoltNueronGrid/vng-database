@@ -188,10 +188,10 @@ pub(crate) fn load_dr_hook_policy_state(path: Option<&str>) -> DrHookPolicyState
 
 
 pub(crate) fn persist_dr_hook_policy_state(state: &AppState) {
-    let Some(path_value) = state.dr_hook_state_path.as_deref() else {
+    let Some(path_value) = state.ops.dr_hook_state_path.as_deref() else {
         return;
     };
-    let snapshot = state.dr_hook_policy_state.lock().ok().map(|guard| DrHookPolicyStateSnapshot {
+    let snapshot = state.ops.dr_hook_policy_state.lock().ok().map(|guard| DrHookPolicyStateSnapshot {
         hooks: guard.hooks.clone(),
     });
     let Some(snapshot) = snapshot else {
@@ -243,7 +243,7 @@ pub(crate) fn enqueue_dr_hook_task(
         reason: reason.trim().to_string(),
         enqueued_unix_ms: now_unix_ms(),
     };
-    if let Ok(mut queue) = state.dr_hook_queue.lock() {
+    if let Ok(mut queue) = state.ops.dr_hook_queue.lock() {
         queue.push_back(task.clone());
     }
     record_transport_mutation(
@@ -269,7 +269,7 @@ pub(crate) fn enqueue_dr_hook_task(
 
 pub(crate) fn dequeue_dr_hook_task(state: &AppState) -> Option<DrHookScheduledTask> {
     state
-        .dr_hook_queue
+        .ops.dr_hook_queue
         .lock()
         .ok()
         .and_then(|mut queue| queue.pop_front())
@@ -284,7 +284,7 @@ pub(crate) fn execute_dr_hook(
 ) -> DrHookExecutionRecord {
     let execution_id = format!("drh-{}", DR_HOOK_COUNTER.fetch_add(1, Ordering::Relaxed));
     let now_ms = now_unix_ms();
-    let policy = state.dr_hook_policy_config.as_ref();
+    let policy = state.ops.dr_hook_policy_config.as_ref();
     let normalized_scope = scope.unwrap_or("cluster").trim();
     let normalized_scope = if normalized_scope.is_empty() {
         "cluster"
@@ -299,12 +299,12 @@ pub(crate) fn execute_dr_hook(
     let mut status: &'static str;
     let mut details: String;
 
-    if state.autonomous_mode.rank() < policy.min_mode.rank() {
+    if state.ai.autonomous_mode.rank() < policy.min_mode.rank() {
         policy_decision = "deny_mode";
         status = "rejected";
         details = format!(
             "autonomous_mode {:?} below required {:?}",
-            state.autonomous_mode, policy.min_mode
+            state.ai.autonomous_mode, policy.min_mode
         );
     } else if !policy
         .allowed_hooks
@@ -314,7 +314,7 @@ pub(crate) fn execute_dr_hook(
         policy_decision = "deny_unsupported_hook";
         status = "rejected";
         details = format!("unsupported_dr_hook={normalized_hook}");
-    } else if let Ok(mut guard) = state.dr_hook_policy_state.lock() {
+    } else if let Ok(mut guard) = state.ops.dr_hook_policy_state.lock() {
         let runtime = guard
             .hooks
             .entry(normalized_hook.clone())
@@ -354,7 +354,7 @@ pub(crate) fn execute_dr_hook(
                         )
                     } else {
                         let (previous, current) =
-                            rotate_leader(&state.leader_node_id, "node-dr-failover", &state.node_id);
+                            rotate_leader(&state.cluster.leader_node_id, "node-dr-failover", &state.node_id);
                         record_transport_mutation(
                             state,
                             &previous,
@@ -469,7 +469,7 @@ pub(crate) fn execute_dr_hook(
 
 
 pub(crate) fn append_dr_hook_record(state: &AppState, record: DrHookExecutionRecord) {
-    if let Ok(mut records) = state.dr_hook_records.lock() {
+    if let Ok(mut records) = state.ops.dr_hook_records.lock() {
         records.push(record);
     }
 }

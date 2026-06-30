@@ -50,7 +50,7 @@ pub(crate) fn acquire_sql_data_plane_connection(
 ) -> Result<String, (StatusCode, Json<AuthErrorResponse>)> {
     let now_ms = now_unix_ms_u64();
     let acquire_result = state
-        .driver_pool
+        .ops.driver_pool
         .lock()
         .expect("driver pool lock")
         .acquire(now_ms);
@@ -86,7 +86,7 @@ pub(crate) fn acquire_sql_data_plane_connection(
 pub(crate) fn release_sql_data_plane_connection(state: &AppState, connection_id: &str) {
     let now_ms = now_unix_ms_u64();
     let _ = state
-        .driver_pool
+        .ops.driver_pool
         .lock()
         .expect("driver pool lock")
         .release(connection_id, now_ms);
@@ -126,7 +126,7 @@ pub(crate) fn record_transport_mutation(
     op: MutationOp,
     payload: serde_json::Value,
 ) -> Option<u64> {
-    let Ok(mut transport_state) = state.replication_transport.lock() else {
+    let Ok(mut transport_state) = state.cluster.replication_transport.lock() else {
         return None;
     };
     let encoded = serde_json::to_string(&payload).ok()?;
@@ -152,7 +152,7 @@ pub(crate) fn build_failover_handoff_report(
     source_node_id: &str,
     target_node_id: &str,
 ) -> FailoverHandoffReportResponse {
-    let mut replicas = match state.replica_replay_states.lock() {
+    let mut replicas = match state.cluster.replica_replay_states.lock() {
         Ok(guard) => guard,
         Err(_) => {
             return FailoverHandoffReportResponse {
@@ -173,7 +173,7 @@ pub(crate) fn build_failover_handoff_report(
         .entry(target_node_id.to_string())
         .or_insert_with(|| ReplicaReplayState::new(target_node_id));
     let last_applied_sequence_before = replica.last_applied_sequence;
-    let batch = match state.replication_transport.lock() {
+    let batch = match state.cluster.replication_transport.lock() {
         Ok(transport) => transport.export_for_target_since(
             target_node_id,
             last_applied_sequence_before,
@@ -194,7 +194,7 @@ pub(crate) fn build_failover_handoff_report(
         }
     };
     let batch = if batch.is_empty() {
-        match state.sync_origin.lock() {
+        match state.cluster.sync_origin.lock() {
             Ok(origin) => replica.build_failover_handoff_batch(&origin, 64),
             Err(_) => Vec::new(),
         }

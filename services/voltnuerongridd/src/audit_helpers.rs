@@ -10,10 +10,10 @@ pub(crate) fn append_audit_event(
     outcome: &str,
     details_json: &str,
 ) {
-    if let Ok(mut sink) = state.audit_sink.lock() {
+    if let Ok(mut sink) = state.ops.audit_sink.lock() {
         let event = sink.append(kind, actor, action, outcome, details_json);
         // S9-WS8A-02: write to file-backed audit log if configured.
-        if let Some(ref path) = state.audit_log_path {
+        if let Some(ref path) = state.ops.audit_log_path {
             if let Ok(line) = serde_json::to_string(&event) {
                 use std::io::Write;
                 if let Ok(mut f) = std::fs::OpenOptions::new()

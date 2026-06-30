@@ -1,18 +1,27 @@
 {
   "history": {
-    "p1": [
+    "p2": [
       {
-        "id": "p1",
-        "name": "P1",
+        "id": "p2",
+        "name": "P2",
         "version": "1.0.0",
-        "checksum_sha256": "x",
+        "checksum_sha256": "a",
         "signed": true,
         "installed_at_ms": 0,
+        "state": "active"
+      },
+      {
+        "id": "p2",
+        "name": "P2",
+        "version": "2.0.0",
+        "checksum_sha256": "b",
+        "signed": true,
+        "installed_at_ms": 1,
         "state": "active"
       }
     ]
   },
   "current": {
-    "p1": "1.0.0"
+    "p2": "1.0.0"
   }
 }

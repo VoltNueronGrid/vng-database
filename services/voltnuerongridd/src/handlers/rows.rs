@@ -651,7 +651,7 @@ pub(crate) async fn rows_page_stats(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsPageStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_page_stats");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_page_stats");
     let page_count = rs.page_count();
     let total_rows = rs.total_row_count();
     let current_xid = rs.current_xid();
@@ -676,7 +676,7 @@ pub(crate) async fn rows_modified(
     Query(params): Query<RowsModifiedQuery>,
 ) -> Result<(StatusCode, Json<RowsModifiedResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_modified");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_modified");
     let snapshot = rs.export_rows_snapshot();
     let keys: Vec<String> = snapshot
         .iter()
@@ -702,7 +702,7 @@ pub(crate) async fn rows_xid(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsXidResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_xid");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_xid");
     let current_xid = rs.current_xid();
     drop(rs);
     Ok((StatusCode::OK, Json(RowsXidResponse {
@@ -721,7 +721,7 @@ pub(crate) async fn rows_visible(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsVisibleResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_visible");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_visible");
     let snapshot_xid = rs.current_xid();
     let visible_row_count = rs.visible_row_count(snapshot_xid);
     drop(rs);
@@ -741,7 +741,7 @@ pub(crate) async fn rows_total(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsTotalResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_total");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_total");
     let total_row_count = rs.total_row_count();
     drop(rs);
     Ok((StatusCode::OK, Json(RowsTotalResponse {
@@ -759,7 +759,7 @@ pub(crate) async fn rows_keys_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeysCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_keys_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_keys_count");
     let snapshot = rs.export_rows_snapshot();
     let key_count = snapshot.len();
     drop(rs);
@@ -779,7 +779,7 @@ pub(crate) async fn rows_scan_visible(
     Query(params): Query<RowsScanVisibleQuery>,
 ) -> Result<(StatusCode, Json<RowsScanVisibleResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_scan_visible");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_scan_visible");
     let snapshot_xid = rs.current_xid();
     let all_rows = rs.scan_at_snapshot(snapshot_xid);
     let rows: Vec<RowScanEntry> = all_rows
@@ -806,7 +806,7 @@ pub(crate) async fn rows_tombstone_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsTombstoneCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock rows_tombstone_count");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock rows_tombstone_count");
     let tombstone_count = wal.wal_records().iter().filter(|r| r.value == "__deleted__").count();
     drop(wal);
     Ok((StatusCode::OK, Json(RowsTombstoneCountResponse {
@@ -824,7 +824,7 @@ pub(crate) async fn rows_xid_history(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsXidHistoryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_xid_history");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_xid_history");
     let current_xid = rs.current_xid();
     let next_xid = current_xid + 1;
     let total_transactions = current_xid;
@@ -846,7 +846,7 @@ pub(crate) async fn rows_first_key(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsFirstKeyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_first_key");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_first_key");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let mut keys: Vec<String> = snapshot.into_iter().map(|(k, _)| k).collect();
@@ -869,7 +869,7 @@ pub(crate) async fn rows_last_key(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsLastKeyResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_last_key");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_last_key");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let mut keys: Vec<String> = snapshot.into_iter().map(|(k, _)| k).collect();
@@ -892,7 +892,7 @@ pub(crate) async fn rows_count_distinct(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsCountDistinctResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_count_distinct");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_count_distinct");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let mut distinct_values: Vec<String> = snapshot.into_iter().flat_map(|(_, payload)| payload.into_values()).collect();
@@ -915,7 +915,7 @@ pub(crate) async fn rows_key_exists(
     Query(params): Query<RowsKeyExistsQuery>,
 ) -> Result<(StatusCode, Json<RowsKeyExistsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_exists");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_exists");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let exists = snapshot.iter().any(|(k, _)| k == &params.key);
@@ -935,7 +935,7 @@ pub(crate) async fn rows_value_search(
     Query(params): Query<RowsValueSearchQuery>,
 ) -> Result<(StatusCode, Json<RowsValueSearchResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_search");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_search");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let needle = params.value.to_lowercase();
@@ -960,7 +960,7 @@ pub(crate) async fn rows_count_range(
     Query(params): Query<RowsCountRangeQuery>,
 ) -> Result<(StatusCode, Json<RowsCountRangeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_count_range");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_count_range");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let row_count = match &params.prefix {
@@ -981,7 +981,7 @@ pub(crate) async fn rows_payload_size(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsPayloadSizeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_payload_size");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_payload_size");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let row_count = snapshot.len();
@@ -1002,7 +1002,7 @@ pub(crate) async fn rows_field_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsFieldCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_field_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_field_count");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let row_count = snapshot.len();
@@ -1017,7 +1017,7 @@ pub(crate) async fn rows_key_longest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyLongestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_longest");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_longest");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let row_count = snapshot.len();
@@ -1037,7 +1037,7 @@ pub(crate) async fn rows_key_shortest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyShortestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_shortest");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_shortest");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let row_count = snapshot.len();
@@ -1057,7 +1057,7 @@ pub(crate) async fn rows_count_all(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsCountAllResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_count_all");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_count_all");
     let total_count = rs.total_row_count();
     drop(rs);
     Ok((StatusCode::OK, Json(RowsCountAllResponse { status: "ok", total_count })))
@@ -1070,7 +1070,7 @@ pub(crate) async fn rows_snapshot_size(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsSnapshotSizeResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_snapshot_size");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_snapshot_size");
     let snapshot_row_count = rs.total_row_count();
     drop(rs);
     Ok((StatusCode::OK, Json(RowsSnapshotSizeResponse { status: "ok", snapshot_row_count })))
@@ -1083,7 +1083,7 @@ pub(crate) async fn rows_version_latest(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsVersionLatestResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let wal = state.wal_engine.lock().expect("wal_engine lock rows_version_latest");
+    let wal = state.storage.wal_engine.lock().expect("wal_engine lock rows_version_latest");
     let latest_version = wal.wal_records().last().map(|r| r.sequence).unwrap_or(0);
     drop(wal);
     Ok((StatusCode::OK, Json(RowsVersionLatestResponse { status: "ok", latest_version })))
@@ -1096,7 +1096,7 @@ pub(crate) async fn rows_distinct_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsDistinctCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_distinct_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_distinct_count");
     let distinct_count = rs.total_row_count();
     drop(rs);
     Ok((StatusCode::OK, Json(RowsDistinctCountResponse { status: "ok", distinct_count })))
@@ -1109,7 +1109,7 @@ pub(crate) async fn rows_key_median(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyMedianResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_median");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_median");
     let mut keys: Vec<String> = rs.export_rows_snapshot().into_iter().map(|(k, _)| k).collect();
     drop(rs);
     keys.sort();
@@ -1129,7 +1129,7 @@ pub(crate) async fn rows_checksum(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsChecksumResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_checksum");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_checksum");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let mut keys: Vec<String> = snapshot.iter().map(|(k, _)| k.clone()).collect();
@@ -1148,7 +1148,7 @@ pub(crate) async fn rows_field_types(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsFieldTypesResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_field_types");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_field_types");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let field_count: usize = snapshot.iter().map(|(_, fields)| fields.len()).sum();
@@ -1163,7 +1163,7 @@ pub(crate) async fn rows_key_empty_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyEmptyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_empty_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_empty_count");
     let snapshot = rs.export_rows_snapshot();
     drop(rs);
     let empty_key_count = snapshot.iter().filter(|(k, _)| k.is_empty()).count();
@@ -1177,7 +1177,7 @@ pub(crate) async fn rows_key_min(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyMinResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_min");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_min");
     let min_key = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1196,7 +1196,7 @@ pub(crate) async fn rows_field_cardinality(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsFieldCardinalityResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_field_cardinality");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_field_cardinality");
     let mut fields = std::collections::BTreeSet::new();
     for (_, row) in rs.export_rows_snapshot() {
         for key in row.keys() {
@@ -1218,7 +1218,7 @@ pub(crate) async fn rows_key_max(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyMaxResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_max");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_max");
     let max_key = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1237,7 +1237,7 @@ pub(crate) async fn rows_value_non_null_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueNonNullCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_non_null_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_non_null_count");
     let non_null_value_count = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1258,7 +1258,7 @@ pub(crate) async fn rows_value_empty_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueEmptyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_empty_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_empty_count");
     let empty_value_count = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1279,7 +1279,7 @@ pub(crate) async fn rows_value_non_empty_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueNonEmptyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_non_empty_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_non_empty_count");
     let non_empty_value_count = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1300,7 +1300,7 @@ pub(crate) async fn rows_key_non_empty_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyNonEmptyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_non_empty_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_non_empty_count");
     let non_empty_key_count = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1320,7 +1320,7 @@ pub(crate) async fn rows_value_non_blank_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueNonBlankCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_non_blank_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_non_blank_count");
     let non_blank_value_count = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1341,7 +1341,7 @@ pub(crate) async fn rows_key_non_blank_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyNonBlankCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_non_blank_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_non_blank_count");
     let non_blank_key_count = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1361,7 +1361,7 @@ pub(crate) async fn rows_value_blank_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueBlankCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_blank_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_blank_count");
     let blank_value_count = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1382,7 +1382,7 @@ pub(crate) async fn rows_key_duplicates_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsKeyDuplicatesCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_key_duplicates_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_key_duplicates_count");
     let snapshot = rs.export_rows_snapshot();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for (key, _) in snapshot {
@@ -1403,7 +1403,7 @@ pub(crate) async fn rows_value_duplicates_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueDuplicatesCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_duplicates_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_duplicates_count");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1425,7 +1425,7 @@ pub(crate) async fn rows_value_distinct_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueDistinctCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_distinct_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_distinct_count");
     let mut distinct_values = std::collections::BTreeSet::new();
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1446,7 +1446,7 @@ pub(crate) async fn rows_value_unique_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueUniqueCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_unique_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_unique_count");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1468,7 +1468,7 @@ pub(crate) async fn rows_value_trimmed_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueTrimmedCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_trimmed_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_trimmed_count");
     let trimmed_value_count = rs
         .export_rows_snapshot()
         .into_iter()
@@ -1489,7 +1489,7 @@ pub(crate) async fn rows_value_case_variant_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsValueCaseVariantCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_value_case_variant_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_value_case_variant_count");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1511,7 +1511,7 @@ pub(crate) async fn rows_order_by_desc_direction_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsOrderByDescDirectionCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_order_by_desc_direction_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_order_by_desc_direction_count");
     let mut desc_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1534,7 +1534,7 @@ pub(crate) async fn rows_order_by_random_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsOrderByRandomCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_order_by_random_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_order_by_random_count");
     let mut random_order_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1558,7 +1558,7 @@ pub(crate) async fn rows_order_by_random_seeded_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsOrderByRandomSeededCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_order_by_random_seeded_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_order_by_random_seeded_count");
     let mut random_seeded_order_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1582,7 +1582,7 @@ pub(crate) async fn rows_order_by_asc_direction_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsOrderByAscDirectionCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_order_by_asc_direction_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_order_by_asc_direction_count");
     let mut asc_direction_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1606,7 +1606,7 @@ pub(crate) async fn rows_order_by_rand_alias_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsOrderByRandAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_order_by_rand_alias_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_order_by_rand_alias_count");
     let mut rand_alias_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1630,7 +1630,7 @@ pub(crate) async fn rows_order_by_multi_column_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsOrderByMultiColumnCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_order_by_multi_column_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_order_by_multi_column_count");
     let mut multi_column_order_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1657,7 +1657,7 @@ pub(crate) async fn rows_pagination_limit_offset_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsPaginationLimitOffsetCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_pagination_limit_offset_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_pagination_limit_offset_count");
     let mut limit_offset_pagination_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1681,7 +1681,7 @@ pub(crate) async fn rows_pagination_offset_only_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsPaginationOffsetOnlyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_pagination_offset_only_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_pagination_offset_only_count");
     let mut offset_only_pagination_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1705,7 +1705,7 @@ pub(crate) async fn rows_having_without_group_by_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsHavingWithoutGroupByCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_having_without_group_by_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_having_without_group_by_count");
     let mut having_without_group_by_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1729,7 +1729,7 @@ pub(crate) async fn rows_having_with_group_by_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsHavingWithGroupByCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_having_with_group_by_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_having_with_group_by_count");
     let mut having_with_group_by_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1753,7 +1753,7 @@ pub(crate) async fn rows_group_by_rollup_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsGroupByRollupCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_group_by_rollup_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_group_by_rollup_count");
     let mut group_by_rollup_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1777,7 +1777,7 @@ pub(crate) async fn rows_group_by_cube_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsGroupByCubeCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_group_by_cube_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_group_by_cube_count");
     let mut group_by_cube_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1801,7 +1801,7 @@ pub(crate) async fn rows_select_distinct_on_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsSelectDistinctOnCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_select_distinct_on_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_select_distinct_on_count");
     let mut select_distinct_on_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1825,7 +1825,7 @@ pub(crate) async fn rows_for_update_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsForUpdateCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_for_update_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_for_update_count");
     let mut for_update_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1849,7 +1849,7 @@ pub(crate) async fn rows_left_join_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsLeftJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_left_join_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_left_join_count");
     let mut left_join_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1873,7 +1873,7 @@ pub(crate) async fn rows_right_join_count(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<RowsRightJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let rs = state.row_store.lock().expect("row_store lock rows_right_join_count");
+    let rs = state.storage.row_store.lock().expect("row_store lock rows_right_join_count");
     let mut right_join_count = 0;
     for (_, row) in rs.export_rows_snapshot() {
         for value in row.into_values() {
@@ -1898,7 +1898,7 @@ pub(crate) async fn rows_full_outer_join_count(
 ) -> Result<(StatusCode, Json<RowsFullOuterJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_full_outer_join_count");
     let mut full_outer_join_count = 0;
@@ -1925,7 +1925,7 @@ pub(crate) async fn rows_inner_join_count(
 ) -> Result<(StatusCode, Json<RowsInnerJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_inner_join_count");
     let mut inner_join_count = 0;
@@ -1952,7 +1952,7 @@ pub(crate) async fn rows_straight_join_count(
 ) -> Result<(StatusCode, Json<RowsStraightJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_straight_join_count");
     let mut straight_join_count = 0;
@@ -1979,7 +1979,7 @@ pub(crate) async fn rows_semi_join_count(
 ) -> Result<(StatusCode, Json<RowsSemiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_semi_join_count");
     let mut semi_join_count = 0;
@@ -2006,7 +2006,7 @@ pub(crate) async fn rows_anti_join_count(
 ) -> Result<(StatusCode, Json<RowsAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_anti_join_count");
     let mut anti_join_count = 0;
@@ -2033,7 +2033,7 @@ pub(crate) async fn rows_cross_apply_count(
 ) -> Result<(StatusCode, Json<RowsCrossApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_cross_apply_count");
     let mut cross_apply_count = 0;
@@ -2060,7 +2060,7 @@ pub(crate) async fn rows_outer_apply_count(
 ) -> Result<(StatusCode, Json<RowsOuterApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_outer_apply_count");
     let mut outer_apply_count = 0;
@@ -2087,7 +2087,7 @@ pub(crate) async fn rows_apply_count(
 ) -> Result<(StatusCode, Json<RowsApplyCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_apply_count");
     let mut apply_count = 0;
@@ -2114,7 +2114,7 @@ pub(crate) async fn rows_left_semi_join_count(
 ) -> Result<(StatusCode, Json<RowsLeftSemiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_left_semi_join_count");
     let mut left_semi_join_count = 0;
@@ -2141,7 +2141,7 @@ pub(crate) async fn rows_left_anti_join_count(
 ) -> Result<(StatusCode, Json<RowsLeftAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_left_anti_join_count");
     let mut left_anti_join_count = 0;
@@ -2168,7 +2168,7 @@ pub(crate) async fn rows_right_semi_join_count(
 ) -> Result<(StatusCode, Json<RowsRightSemiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_right_semi_join_count");
     let mut right_semi_join_count = 0;
@@ -2195,7 +2195,7 @@ pub(crate) async fn rows_right_anti_join_count(
 ) -> Result<(StatusCode, Json<RowsRightAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_right_anti_join_count");
     let mut right_anti_join_count = 0;
@@ -2222,7 +2222,7 @@ pub(crate) async fn rows_full_semi_join_count(
 ) -> Result<(StatusCode, Json<RowsFullSemiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_full_semi_join_count");
     let mut full_semi_join_count = 0;
@@ -2249,7 +2249,7 @@ pub(crate) async fn rows_full_anti_join_count(
 ) -> Result<(StatusCode, Json<RowsFullAntiJoinCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_full_anti_join_count");
     let mut full_anti_join_count = 0;
@@ -2276,7 +2276,7 @@ pub(crate) async fn rows_union_all_count(
 ) -> Result<(StatusCode, Json<RowsUnionAllCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_union_all_count");
     let mut union_all_count = 0;
@@ -2303,7 +2303,7 @@ pub(crate) async fn rows_aggregate_distinct_count(
 ) -> Result<(StatusCode, Json<RowsAggregateDistinctCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_aggregate_distinct_count");
     let mut aggregate_distinct_count = 0;
@@ -2335,7 +2335,7 @@ pub(crate) async fn rows_table_alias_count(
 ) -> Result<(StatusCode, Json<RowsTableAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_table_alias_count");
     let mut table_alias_count = 0;
@@ -2362,7 +2362,7 @@ pub(crate) async fn rows_column_alias_count(
 ) -> Result<(StatusCode, Json<RowsColumnAliasCountResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let rs = state
-        .row_store
+        .storage.row_store
         .lock()
         .expect("row_store lock rows_column_alias_count");
     let mut column_alias_count = 0;

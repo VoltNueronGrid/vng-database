@@ -202,7 +202,7 @@ impl<'a> voltnuerongrid_meta::MetadataDataProvider for AppStateMetadataProvider<
 
         match table {
             MetadataTable::Databases => {
-                if let Ok(catalog) = self.state.database_catalog.lock() {
+                if let Ok(catalog) = self.state.storage.database_catalog.lock() {
                     for db in catalog.list() {
                         let mut row = MetadataRow::new();
                         row.insert("name".to_string(), db.name.as_str().to_string());
@@ -221,7 +221,7 @@ impl<'a> voltnuerongrid_meta::MetadataDataProvider for AppStateMetadataProvider<
             }
 
             MetadataTable::Tables => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                if let Ok(catalog) = self.state.storage.ddl_catalog.lock() {
                     for entry in catalog.active_entries() {
                         if entry.database_name != db_str {
                             continue;
@@ -244,7 +244,7 @@ impl<'a> voltnuerongrid_meta::MetadataDataProvider for AppStateMetadataProvider<
             }
 
             MetadataTable::Schemas => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                if let Ok(catalog) = self.state.storage.ddl_catalog.lock() {
                     let mut schemas: std::collections::BTreeSet<String> = Default::default();
                     for entry in catalog.active_entries() {
                         if entry.database_name == db_str {
@@ -262,7 +262,7 @@ impl<'a> voltnuerongrid_meta::MetadataDataProvider for AppStateMetadataProvider<
             }
 
             MetadataTable::Views => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                if let Ok(catalog) = self.state.storage.ddl_catalog.lock() {
                     for entry in catalog.active_entries() {
                         if entry.database_name != db_str {
                             continue;
@@ -281,7 +281,7 @@ impl<'a> voltnuerongrid_meta::MetadataDataProvider for AppStateMetadataProvider<
             }
 
             MetadataTable::Routines => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                if let Ok(catalog) = self.state.storage.ddl_catalog.lock() {
                     for entry in catalog.active_entries() {
                         if entry.database_name != db_str {
                             continue;
@@ -301,7 +301,7 @@ impl<'a> voltnuerongrid_meta::MetadataDataProvider for AppStateMetadataProvider<
             }
 
             MetadataTable::Triggers => {
-                if let Ok(catalog) = self.state.ddl_catalog.lock() {
+                if let Ok(catalog) = self.state.storage.ddl_catalog.lock() {
                     for entry in catalog.active_entries() {
                         if entry.database_name != db_str {
                             continue;
@@ -451,15 +451,15 @@ fn migrate_driver_sessions(
 
 fn cluster_topology_snapshot(state: &AppState) -> AdminClusterTopologyResponse {
     let leader_node_id = state
-        .leader_node_id
+        .cluster.leader_node_id
         .lock()
         .map(|value| value.clone())
         .unwrap_or_else(|_| state.node_id.clone());
-    let cluster_nodes = state.cluster_nodes.lock().expect("cluster_nodes lock topology");
-    let sessions = state.driver_sessions.lock().expect("driver_sessions lock topology");
-    let transactions = state.acid_transactions.lock().expect("acid_transactions lock topology");
-    let locks = state.pessimistic_locks.lock().expect("pessimistic_locks lock topology");
-    let failure_signals = state.cluster_failure_signals.lock().expect("cluster_failure_signals lock topology");
+    let cluster_nodes = state.cluster.cluster_nodes.lock().expect("cluster_nodes lock topology");
+    let sessions = state.ops.driver_sessions.lock().expect("driver_sessions lock topology");
+    let transactions = state.storage.acid_transactions.lock().expect("acid_transactions lock topology");
+    let locks = state.storage.pessimistic_locks.lock().expect("pessimistic_locks lock topology");
+    let failure_signals = state.cluster.cluster_failure_signals.lock().expect("cluster_failure_signals lock topology");
 
     let mut active_nodes = 0usize;
     let mut passive_nodes = 0usize;
@@ -590,7 +590,7 @@ pub(crate) async fn admin_sql_transaction_control(
                 })));
             };
 
-            let mut acid = state.acid_transactions.lock().expect("acid_transactions admin control lock");
+            let mut acid = state.storage.acid_transactions.lock().expect("acid_transactions admin control lock");
             affected_count = if action == "commit" {
                 usize::from(acid.commit(transaction_id, now_ms))
             } else {
@@ -599,11 +599,11 @@ pub(crate) async fn admin_sql_transaction_control(
             drop(acid);
 
             if action == "rollback" {
-                let mut lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin rollback lock");
-                let mut wait_graph = state.pessimistic_lock_waits.lock().expect("pessimistic_lock_waits admin rollback lock");
+                let mut lock_table = state.storage.pessimistic_locks.lock().expect("pessimistic_locks admin rollback lock");
+                let mut wait_graph = state.storage.pessimistic_lock_waits.lock().expect("pessimistic_lock_waits admin rollback lock");
                 let released = release_locks_for_transaction(&mut lock_table, &mut wait_graph, transaction_id);
                 if released > 0 {
-                    state.pessimistic_lock_metrics.lock_releases.fetch_add(released as u64, Ordering::Relaxed);
+                    state.storage.pessimistic_lock_metrics.lock_releases.fetch_add(released as u64, Ordering::Relaxed);
                 }
             }
 
@@ -633,7 +633,7 @@ pub(crate) async fn admin_sql_transaction_control(
         }
     }
 
-    let acid = state.acid_transactions.lock().expect("acid_transactions admin response lock");
+    let acid = state.storage.acid_transactions.lock().expect("acid_transactions admin response lock");
     let active_transactions: Vec<AcidTxEntry> = acid.active_transactions().into_iter().map(|entry| entry.clone()).collect();
     let active_count = active_transactions.len();
     Ok((StatusCode::OK, Json(AdminTransactionControlResponse {
@@ -656,8 +656,8 @@ pub(crate) async fn admin_sql_lock_control(
     let mut affected_transactions = Vec::new();
 
     {
-        let mut lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin control lock");
-        let mut wait_graph = state.pessimistic_lock_waits.lock().expect("pessimistic_lock_waits admin control lock");
+        let mut lock_table = state.storage.pessimistic_locks.lock().expect("pessimistic_locks admin control lock");
+        let mut wait_graph = state.storage.pessimistic_lock_waits.lock().expect("pessimistic_lock_waits admin control lock");
 
         match action.as_str() {
             "list" => {}
@@ -699,7 +699,7 @@ pub(crate) async fn admin_sql_lock_control(
                 if released_lock_count > 0 {
                     affected_transactions.push(transaction_id.to_string());
                 }
-                let mut acid = state.acid_transactions.lock().expect("acid_transactions deadlock victim lock");
+                let mut acid = state.storage.acid_transactions.lock().expect("acid_transactions deadlock victim lock");
                 let _ = acid.rollback(transaction_id, now_unix_ms());
             }
             _ => {
@@ -715,11 +715,11 @@ pub(crate) async fn admin_sql_lock_control(
         }
 
         if released_lock_count > 0 {
-            state.pessimistic_lock_metrics.lock_releases.fetch_add(released_lock_count as u64, Ordering::Relaxed);
+            state.storage.pessimistic_lock_metrics.lock_releases.fetch_add(released_lock_count as u64, Ordering::Relaxed);
         }
     }
 
-    let lock_table = state.pessimistic_locks.lock().expect("pessimistic_locks admin control response lock");
+    let lock_table = state.storage.pessimistic_locks.lock().expect("pessimistic_locks admin control response lock");
     let locks: Vec<PessimisticLockRecord> = lock_table.values().cloned().collect();
     drop(lock_table);
     append_audit_event(
@@ -758,7 +758,7 @@ pub(crate) async fn admin_cluster_node_manage(
 
     match action.as_str() {
         "add" => {
-            let mut nodes = state.cluster_nodes.lock().expect("cluster_nodes add lock");
+            let mut nodes = state.cluster.cluster_nodes.lock().expect("cluster_nodes add lock");
             let entry = nodes.entry(req.node_id.clone()).or_insert(ClusterNodeRuntime {
                 node_id: req.node_id.clone(),
                 role: req.role.clone().unwrap_or_else(|| "follower".to_string()),
@@ -770,12 +770,12 @@ pub(crate) async fn admin_cluster_node_manage(
             });
             entry.last_heartbeat_ms = now_unix_ms_u64();
             drop(nodes);
-            let mut replicas = state.replica_replay_states.lock().expect("replica_replay_states add lock");
+            let mut replicas = state.cluster.replica_replay_states.lock().expect("replica_replay_states add lock");
             replicas.entry(req.node_id.clone()).or_insert_with(|| ReplicaReplayState::new(&req.node_id));
         }
         "remove" => {
             let target_node_id = {
-                let nodes = state.cluster_nodes.lock().expect("cluster_nodes remove select lock");
+                let nodes = state.cluster.cluster_nodes.lock().expect("cluster_nodes remove select lock");
                 choose_migration_target(&nodes, &req.node_id, req.target_node_id.as_deref())
             };
 
@@ -792,30 +792,30 @@ pub(crate) async fn admin_cluster_node_manage(
             };
 
             {
-                let mut acid = state.acid_transactions.lock().expect("acid_transactions node manage lock");
+                let mut acid = state.storage.acid_transactions.lock().expect("acid_transactions node manage lock");
                 migrated_transactions = acid.reassign_active_node(&req.node_id, &target_node_id);
             }
             {
-                let mut sessions = state.driver_sessions.lock().expect("driver_sessions node manage lock");
+                let mut sessions = state.ops.driver_sessions.lock().expect("driver_sessions node manage lock");
                 migrated_sessions = migrate_driver_sessions(&mut sessions, &req.node_id, &target_node_id);
             }
             {
-                let mut nodes = state.cluster_nodes.lock().expect("cluster_nodes remove lock");
+                let mut nodes = state.cluster.cluster_nodes.lock().expect("cluster_nodes remove lock");
                 nodes.remove(&req.node_id);
                 if let Some(target) = nodes.get_mut(&target_node_id) {
                     target.status = "active".to_string();
                     target.draining = false;
-                    if *state.leader_node_id.lock().expect("leader_node_id remove lock") == req.node_id {
+                    if *state.cluster.leader_node_id.lock().expect("leader_node_id remove lock") == req.node_id {
                         target.role = "leader".to_string();
                     }
                 }
             }
             {
-                let mut replicas = state.replica_replay_states.lock().expect("replica_replay_states remove lock");
+                let mut replicas = state.cluster.replica_replay_states.lock().expect("replica_replay_states remove lock");
                 replicas.remove(&req.node_id);
             }
             {
-                let mut leader = state.leader_node_id.lock().expect("leader_node_id node manage lock");
+                let mut leader = state.cluster.leader_node_id.lock().expect("leader_node_id node manage lock");
                 if *leader == req.node_id {
                     *leader = target_node_id;
                 }
@@ -834,7 +834,7 @@ pub(crate) async fn admin_cluster_node_manage(
         }
     }
 
-    let cluster_size = state.cluster_nodes.lock().expect("cluster_nodes count lock").len();
+    let cluster_size = state.cluster.cluster_nodes.lock().expect("cluster_nodes count lock").len();
     append_audit_event(
         &state,
         AuditEventKind::Failover,
@@ -868,7 +868,7 @@ pub(crate) async fn admin_databases_list(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<AdminDatabasesListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
-    let catalog = match state.database_catalog.lock() {
+    let catalog = match state.storage.database_catalog.lock() {
         Ok(g) => g,
         Err(_) => {
             tracing::error!(target: "vng.handler", resource = "database_catalog", "mutex poisoned");
@@ -903,7 +903,7 @@ pub(crate) async fn admin_databases_create(
     Json(req): Json<AdminCreateDatabaseRequest>,
 ) -> Result<(StatusCode, Json<AdminCreateDatabaseResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
-    let mut catalog = match state.database_catalog.lock() {
+    let mut catalog = match state.storage.database_catalog.lock() {
         Ok(g) => g,
         Err(_) => {
             tracing::error!(target: "vng.handler", resource = "database_catalog", "mutex poisoned");
@@ -934,7 +934,7 @@ pub(crate) async fn admin_databases_create(
                 "database created"
             );
             // Persist to WAL so the database catalog survives restarts
-            if let Ok(mut wal) = state.wal_engine.lock() {
+            if let Ok(mut wal) = state.storage.wal_engine.lock() {
                 let _ = wal.append_sql(
                     voltnuerongrid_store::SqlWalKind::Ddl,
                     &format!("CREATE DATABASE {}", record.name),
@@ -1019,7 +1019,7 @@ pub(crate) async fn admin_databases_drop(
     Query(q): Query<AdminDropDatabaseQuery>,
 ) -> Result<(StatusCode, Json<AdminDropDatabaseResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
-    let mut catalog = match state.database_catalog.lock() {
+    let mut catalog = match state.storage.database_catalog.lock() {
         Ok(g) => g,
         Err(_) => {
             return Err((
@@ -1038,13 +1038,13 @@ pub(crate) async fn admin_databases_drop(
             let record = AdminDatabaseRecord::from(&db);
             tracing::info!(target: "vng.database", name = %record.name, "database dropped");
             // Persist DROP to WAL so the catalog stays consistent across restarts
-            if let Ok(mut wal) = state.wal_engine.lock() {
+            if let Ok(mut wal) = state.storage.wal_engine.lock() {
                 let _ = wal.append_sql(
                     voltnuerongrid_store::SqlWalKind::Ddl,
                     &format!("DROP DATABASE {}", record.name),
                 );
             }
-            crate::helpers::boot::purge_database_rows(&record.name, &state.row_store, &state.wal_engine);
+            crate::helpers::boot::purge_database_rows(&record.name, &state.storage.row_store, &state.storage.wal_engine);
             metrics::counter!(
                 "vng_database_lifecycle_total",
                 "operation" => "drop",
@@ -1114,7 +1114,7 @@ pub(crate) async fn admin_databases_metadata(
     Path(name): Path<String>,
 ) -> Result<(StatusCode, Json<AdminMetadataLayoutResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
-    let catalog = match state.database_catalog.lock() {
+    let catalog = match state.storage.database_catalog.lock() {
         Ok(g) => g,
         Err(_) => {
             return Err((
@@ -1174,7 +1174,7 @@ pub(crate) async fn admin_databases_metadata_rows(
                 ));
             }
         };
-        let catalog = match state.database_catalog.lock() {
+        let catalog = match state.storage.database_catalog.lock() {
             Ok(g) => g,
             Err(_) => {
                 return Err((
@@ -1280,7 +1280,7 @@ pub(crate) async fn admin_db_grant_add(
 
     // Verify the database exists.
     {
-        let catalog = state.database_catalog.lock().map_err(|_| (
+        let catalog = state.storage.database_catalog.lock().map_err(|_| (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(AuthErrorResponse {
                 status: "error",
@@ -1316,7 +1316,7 @@ pub(crate) async fn admin_db_grant_add(
     }
 
     let granted_roles = {
-        let mut grants = state.db_grants.lock().expect("db_grants lock");
+        let mut grants = state.auth.db_grants.lock().expect("db_grants lock");
         let roles_set = grants.entry(name.clone()).or_default();
         roles_set.insert(role);
         let mut roles: Vec<String> = roles_set.iter().cloned().collect();
@@ -1325,7 +1325,7 @@ pub(crate) async fn admin_db_grant_add(
     };
 
     // Persist to WAL so the grant survives restarts.
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         let _ = wal.append_sql(
             voltnuerongrid_store::SqlWalKind::Ddl,
             &format!("GRANT ALL ON DATABASE {} TO {}", name, granted_roles.join(",")),
@@ -1353,7 +1353,7 @@ pub(crate) async fn admin_db_grant_revoke(
     let role = role.trim().to_ascii_lowercase();
 
     let granted_roles = {
-        let mut grants = state.db_grants.lock().expect("db_grants lock");
+        let mut grants = state.auth.db_grants.lock().expect("db_grants lock");
         if let Some(set) = grants.get_mut(&name) {
             set.remove(&role);
         }
@@ -1366,7 +1366,7 @@ pub(crate) async fn admin_db_grant_revoke(
     };
 
     // Persist revoke to WAL.
-    if let Ok(mut wal) = state.wal_engine.lock() {
+    if let Ok(mut wal) = state.storage.wal_engine.lock() {
         let _ = wal.append_sql(
             voltnuerongrid_store::SqlWalKind::Ddl,
             &format!("REVOKE ALL ON DATABASE {} FROM {}", name, role),
@@ -1392,7 +1392,7 @@ pub(crate) async fn admin_db_grants_list(
     require_admin_api_key(&headers, &state)?;
 
     let granted_roles = {
-        let grants = state.db_grants.lock().expect("db_grants lock");
+        let grants = state.auth.db_grants.lock().expect("db_grants lock");
         let mut roles: Vec<String> = grants
             .get(&name)
             .map(|s| s.iter().cloned().collect())

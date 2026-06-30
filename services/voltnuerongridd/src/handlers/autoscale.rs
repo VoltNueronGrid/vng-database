@@ -83,7 +83,7 @@ fn current_queue_depth(state: &AppState) -> usize {
     // Approximate: sum of in-flight connections across all DB semaphores.
     // In a real implementation this would be an atomic counter updated by
     // acquire/release helpers.
-    if let Ok(semaphores) = state.db_semaphores.lock() {
+    if let Ok(semaphores) = state.storage.db_semaphores.lock() {
         semaphores
             .values()
             .map(|sem| {
@@ -145,7 +145,7 @@ pub(crate) async fn autoscale_status(
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
 
-    let status = state.autoscale_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let status = state.ops.autoscale_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let queue_depth = current_queue_depth(&state);
 
     Ok((StatusCode::OK, Json(serde_json::json!({
@@ -167,7 +167,7 @@ pub(crate) async fn autoscale_set_policy(
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<AuthErrorResponse>)> {
     require_admin_api_key(&headers, &state)?;
 
-    let mut policy = state.autoscale_policy.lock().unwrap_or_else(|e| e.into_inner());
+    let mut policy = state.ops.autoscale_policy.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(min) = req.min_replicas { policy.min_replicas = min; }
     if let Some(max) = req.max_replicas { policy.max_replicas = max; }
     if let Some(up) = req.scale_up_queue_threshold { policy.scale_up_queue_threshold = up; }
@@ -196,8 +196,8 @@ pub(crate) async fn autoscale_tick(
         .as_secs();
     let queue_depth = current_queue_depth(&state);
 
-    let policy = state.autoscale_policy.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let mut status = state.autoscale_status.lock().unwrap_or_else(|e| e.into_inner());
+    let policy = state.ops.autoscale_policy.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut status = state.ops.autoscale_status.lock().unwrap_or_else(|e| e.into_inner());
 
     let (scaled, direction, new_replicas) = evaluate_autoscale(&mut status, &policy, queue_depth, now_secs);
 

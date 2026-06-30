@@ -206,7 +206,7 @@ pub(crate) fn native_auth_payload_matches_runtime(
     config: &NativeListenerConfig,
     auth_payload: &serde_json::Value,
 ) -> bool {
-    let has_admin_key_cfg = state.admin_api_key.is_some();
+    let has_admin_key_cfg = state.auth.admin_api_key.is_some();
     let has_bearer_token_cfg = config.bearer_token.is_some();
 
     // No credentials configured → open listener, always accept.
@@ -215,7 +215,7 @@ pub(crate) fn native_auth_payload_matches_runtime(
     }
 
     // Check admin_api_key field
-    if let Some(expected) = &state.admin_api_key {
+    if let Some(expected) = &state.auth.admin_api_key {
         if let Some(key) = auth_payload.get("admin_api_key").and_then(|v| v.as_str()) {
             if key == expected.as_str() {
                 return true;

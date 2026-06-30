@@ -11,7 +11,7 @@ pub(crate) fn require_admin_api_key(
     headers: &HeaderMap,
     state: &AppState,
 ) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
-    let Some(required_key) = state.admin_api_key.as_ref() else {
+    let Some(required_key) = state.auth.admin_api_key.as_ref() else {
         return Err(auth_error(headers, "missing_or_invalid_admin_key"));
     };
 
@@ -31,7 +31,7 @@ pub(crate) fn require_operator_auth(
     headers: &HeaderMap,
     state: &AppState,
 ) -> Result<(), (StatusCode, Json<AuthErrorResponse>)> {
-    let Some(required_key) = state.admin_api_key.as_ref() else {
+    let Some(required_key) = state.auth.admin_api_key.as_ref() else {
         return Err(auth_error(headers, "missing_or_invalid_admin_key"));
     };
 
@@ -46,7 +46,7 @@ pub(crate) fn require_operator_auth(
 
     let operator = operator_identity_from_headers(headers, state)
         .ok_or_else(|| auth_error(headers, "missing_or_invalid_operator_identity"))?;
-    if !state.allowed_operator_roles.contains(&operator.role) {
+    if !state.auth.allowed_operator_roles.contains(&operator.role) {
         return Err(auth_error(headers, "operator_role_not_allowed"));
     }
     if !CONTROL_PLANE_OPERATOR_ROLES.contains(&operator.role) {
@@ -75,7 +75,7 @@ pub(crate) fn require_operator_privilege(
     let operator = operator_identity_from_headers(headers, state)
         .ok_or_else(|| auth_error(headers, "missing_or_invalid_operator_identity"))?;
     if state
-        .rbac_privilege_matrix
+        .auth.rbac_privilege_matrix
         .allows(operator.role.as_str(), resource, scope, action)
     {
         Ok(operator)
@@ -173,7 +173,7 @@ pub(crate) fn session_identity_from_headers(
         return None;
     }
     let fingerprint = crate::user_store::SessionSigner::fingerprint(token);
-    let sessions = state.session_store.lock().ok()?;
+    let sessions = state.auth.session_store.lock().ok()?;
     let entry = sessions.lookup(&fingerprint)?.clone();
     drop(sessions);
 
@@ -233,7 +233,7 @@ pub(crate) fn require_tenant_user_privilege(
         .ok_or_else(|| auth_error(headers, "missing_or_invalid_user_identity"))?;
     let expected_scope = tenant_scoped_scope(&user.tenant_id, scope);
     if state
-        .rbac_privilege_matrix
+        .auth.rbac_privilege_matrix
         .allows(user.role.as_str(), resource, &expected_scope, action)
     {
         Ok(user)
@@ -253,7 +253,7 @@ pub(crate) fn operator_identity_from_headers(
     if operator_id.is_empty() {
         return None;
     }
-    let role = state.operator_role_bindings.get(operator_id).copied()?;
+    let role = state.auth.operator_role_bindings.get(operator_id).copied()?;
     Some(OperatorIdentity {
         operator_id: operator_id.to_string(),
         role,
@@ -275,7 +275,7 @@ pub(crate) fn tenant_user_identity_from_headers(
     if user_id.is_empty() || tenant_id.is_empty() {
         return None;
     }
-    let binding = state.tenant_user_bindings.get(user_id)?;
+    let binding = state.auth.tenant_user_bindings.get(user_id)?;
     if !binding.tenant_id.eq_ignore_ascii_case(tenant_id) {
         return None;
     }
@@ -372,13 +372,13 @@ pub(crate) fn principal_has_database_access(
             }
             // Check database-specific grant
             let db_resource = format!("database/{}", database);
-            state.rbac_privilege_matrix.allows(op.role.as_str(), &db_resource, "sql", PrivilegeAction::Execute)
-                || state.rbac_privilege_matrix.allows(op.role.as_str(), "database/*", "sql", PrivilegeAction::Execute)
+            state.auth.rbac_privilege_matrix.allows(op.role.as_str(), &db_resource, "sql", PrivilegeAction::Execute)
+                || state.auth.rbac_privilege_matrix.allows(op.role.as_str(), "database/*", "sql", PrivilegeAction::Execute)
         }
         crate::RuntimeAccessPrincipal::TenantUser(user) => {
             // Tenant users must be explicitly granted access to the database via db_grants.
             // Deny on poisoned mutex rather than silently allowing access.
-            if let Ok(grants) = state.db_grants.lock() {
+            if let Ok(grants) = state.auth.db_grants.lock() {
                 grants.get(database).map_or(false, |roles| roles.contains(&user.role))
             } else {
                 false

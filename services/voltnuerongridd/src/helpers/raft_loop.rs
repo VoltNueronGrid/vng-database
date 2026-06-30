@@ -197,7 +197,7 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
 
         // Snapshot the state we need for this tick outside the lock.
         let tick_info = {
-            let mut node = state.raft_state.lock().expect("raft tick lock");
+            let mut node = state.cluster.raft_state.lock().expect("raft tick lock");
             let role_before = node.role;
             node.tick();
             let became_candidate =
@@ -215,7 +215,7 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
             // H-1: prev_log_term must be the actual term of the entry at prev_log_index,
             // not a hard-coded 0.  We use RaftNode::term_at() which handles the snapshot
             // boundary (prev_log_index == snapshot_index → snapshot_term) correctly.
-            let peers: Vec<String> = state.raft_peers.as_ref().clone();
+            let peers: Vec<String> = state.cluster.raft_peers.as_ref().clone();
             let per_peer: Vec<(String, u64, u64, Vec<RaftLogEntry>, bool)> = peers
                 .iter()
                 .map(|peer| {
@@ -272,7 +272,7 @@ pub(crate) async fn run_raft_tick_loop(state: AppState) {
         // per tick.  This covers state changes from tick(), compact_if_needed(),
         // and fanout_heartbeat() responses without holding any lock during I/O.
         if !data_dir.is_empty() {
-            let node = state.raft_state.lock().expect("raft persist lock");
+            let node = state.cluster.raft_state.lock().expect("raft persist lock");
             persist_raft_state(&data_dir, &node);
         }
     }
@@ -291,10 +291,10 @@ async fn run_election(
     last_log_index: u64,
     last_log_term: u64,
 ) {
-    let peers = state.raft_peers.as_slice();
+    let peers = state.cluster.raft_peers.as_slice();
     let total_nodes = peers.len() + 1;
     let quorum = (total_nodes + 1) / 2;
-    let token = state.cluster_token.as_deref().map(str::to_string);
+    let token = state.cluster.cluster_token.as_deref().map(str::to_string);
 
     let mut votes_granted: usize = 1; // self-vote already cast in become_candidate()
 
@@ -336,12 +336,12 @@ async fn run_election(
     }
 
     if votes_granted >= quorum {
-        let mut node = state.raft_state.lock().expect("raft leader lock");
+        let mut node = state.cluster.raft_state.lock().expect("raft leader lock");
         // Guard: only promote if we're still in the same term as a Candidate.
         if node.role == RaftRole::Candidate && node.current_term == term {
             node.become_leader();
             // Initialise per-peer progress indices (§5.3).
-            let peer_urls: Vec<String> = state.raft_peers.as_ref().clone();
+            let peer_urls: Vec<String> = state.cluster.raft_peers.as_ref().clone();
             node.init_leader_indices(&peer_urls);
             let node_id = node.node_id.clone();
             let new_term = node.current_term;
@@ -383,14 +383,14 @@ async fn fanout_heartbeat(
     if per_peer.is_empty() {
         return;
     }
-    let token = state.cluster_token.as_deref().map(str::to_string);
+    let token = state.cluster.cluster_token.as_deref().map(str::to_string);
     let total_nodes = total_peers + 1; // including self
 
     // Snapshot the row-store once — only if any peer needs a full snapshot transfer.
     let needs_any_snapshot = per_peer.iter().any(|(_, _, _, _, ns)| *ns);
     let snapshot_rows: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
         if needs_any_snapshot {
-            let rs = state.row_store.lock().expect("row_store snapshot export lock");
+            let rs = state.storage.row_store.lock().expect("row_store snapshot export lock");
             rs.export_rows_snapshot()
                 .into_iter()
                 .map(|(k, v)| (k, v))
@@ -463,7 +463,7 @@ async fn fanout_heartbeat(
     // Process AppendEntries responses.
     while let Some(join_result) = append_set.join_next().await {
         let Ok((peer_url, rpc_result)) = join_result else { continue };
-        let mut node = state.raft_state.lock().expect("raft fanout response lock");
+        let mut node = state.cluster.raft_state.lock().expect("raft fanout response lock");
         if node.role != RaftRole::Leader || node.current_term != term {
             break;
         }
@@ -482,7 +482,7 @@ async fn fanout_heartbeat(
     // snapshot_index + 1 so the next heartbeat resumes normal log replication.
     while let Some(join_result) = snapshot_set.join_next().await {
         let Ok((peer_url, rpc_result)) = join_result else { continue };
-        let mut node = state.raft_state.lock().expect("raft snapshot response lock");
+        let mut node = state.cluster.raft_state.lock().expect("raft snapshot response lock");
         if node.role != RaftRole::Leader || node.current_term != term {
             break;
         }
@@ -510,7 +510,7 @@ pub(crate) fn apply_committed_entries(state: &AppState) {
 
     // Step 1: collect the entries we need to apply (brief lock on raft_state).
     let entries_to_apply: Vec<crate::RaftLogEntry> = {
-        let node = state.raft_state.lock().expect("raft apply read lock");
+        let node = state.cluster.raft_state.lock().expect("raft apply read lock");
         let from = node.last_applied + 1;
         let to = node.commit_index;
         if from > to {
@@ -532,7 +532,7 @@ pub(crate) fn apply_committed_entries(state: &AppState) {
 
     // Step 2: apply each command to the row store (holds row_store lock per entry).
     {
-        let mut rs = state.row_store.lock().expect("raft apply row_store lock");
+        let mut rs = state.storage.row_store.lock().expect("raft apply row_store lock");
         let xid = rs.begin_xid();
         for entry in &entries_to_apply {
             apply_dml_command(&entry.command, &mut rs, xid, state);
@@ -550,7 +550,7 @@ pub(crate) fn apply_committed_entries(state: &AppState) {
     // Step 3: advance last_applied (re-acquire raft_state lock briefly).
     if let Some(last) = entries_to_apply.last() {
         let new_last_applied = {
-            let mut node = state.raft_state.lock().expect("raft apply update lock");
+            let mut node = state.cluster.raft_state.lock().expect("raft apply update lock");
             // Guard: only advance if still monotone (another path could have updated it).
             if last.index > node.last_applied {
                 node.last_applied = last.index;
@@ -558,7 +558,7 @@ pub(crate) fn apply_committed_entries(state: &AppState) {
             node.last_applied
         };
         // Notify any handlers waiting for linearisable confirmation.
-        let _ = state.raft_last_applied_tx.send(new_last_applied);
+        let _ = state.cluster.raft_last_applied_tx.send(new_last_applied);
     }
 }
 
@@ -627,20 +627,20 @@ fn apply_single_dml(
     if upper.starts_with("INSERT") {
         for (k, d, _) in extract_all_insert_rows(sql) {
             let _ = rs.begin_write_intent(xid, &k);
-            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, Some(&d)); }
+            { let mut wal = state.storage.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, Some(&d)); }
             rs.insert(xid, &k, d);
         }
     } else if upper.starts_with("UPDATE") {
         if let Some((k, d)) = extract_update_row_from_sql(sql) {
             let _ = rs.begin_write_intent(xid, &k);
-            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, Some(&d)); }
+            { let mut wal = state.storage.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, Some(&d)); }
             rs.insert(xid, &k, d);
         }
     } else if upper.starts_with("DELETE") {
         if let Some(k) = extract_delete_key_from_sql(sql) {
             let _ = rs.begin_write_intent(xid, &k);
             rs.delete(xid, &k);
-            { let mut wal = state.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, None); }
+            { let mut wal = state.storage.wal_engine.lock().expect("wal store_row"); wal.store_row(db, &k, xid, None); }
         }
     }
     // SELECT / DDL / unknown — no-op.
@@ -652,7 +652,7 @@ fn apply_single_dml(
 /// been applied to the state machine.  The current `PagedRowStore` contents
 /// serve as the implicit snapshot.
 fn compact_if_needed(state: &AppState) {
-    let mut node = state.raft_state.lock().expect("raft compact lock");
+    let mut node = state.cluster.raft_state.lock().expect("raft compact lock");
     if node.log.len() < COMPACT_LOG_THRESHOLD {
         return;
     }

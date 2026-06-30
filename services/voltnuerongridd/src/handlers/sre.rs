@@ -446,7 +446,7 @@ pub(crate) async fn sre_reliability_status(
         "sre/reliability",
         PrivilegeAction::Read,
     )?;
-    let node_count = state.raft_peers.len() + 1;
+    let node_count = state.cluster.raft_peers.len() + 1;
     let uptime_ms = get_uptime_ms();
     Ok(Json(SreReliabilityStatusResponse {
         status: "ok",
@@ -533,11 +533,11 @@ pub(crate) async fn sre_dr_hook_policy(
         PrivilegeAction::Read,
     )?;
     let tracked_hooks = state
-        .dr_hook_policy_state
+        .ops.dr_hook_policy_state
         .lock()
         .map(|value| value.hooks.len())
         .unwrap_or(0);
-    let policy = state.dr_hook_policy_config.as_ref();
+    let policy = state.ops.dr_hook_policy_config.as_ref();
     Ok(Json(DrHookPolicyResponse {
         status: "ok",
         policy: DrHookPolicyContract {
@@ -565,7 +565,7 @@ pub(crate) async fn sre_dr_hook_retry_plan(
         "dr_hooks/retry_plan",
         PrivilegeAction::Read,
     )?;
-    let policy = state.dr_hook_policy_config.as_ref();
+    let policy = state.ops.dr_hook_policy_config.as_ref();
     let attempts = query.attempts.unwrap_or(5).clamp(1, 10);
     let hook = query.hook.trim().to_ascii_lowercase();
     let accepted = policy
@@ -627,7 +627,7 @@ pub(crate) async fn sre_dr_hook_schedule(
         })
         .to_string(),
     );
-    let queue_depth = state.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(0);
+    let queue_depth = state.ops.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(0);
     Ok(Json(DrHookScheduleResponse {
         status: "ok",
         task,
@@ -732,7 +732,7 @@ pub(crate) async fn sre_failure_signal(
         resolved_unix_ms: None,
         resolution_note: None,
     };
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
         signals.push(signal.clone());
     }
     record_transport_mutation(
@@ -807,7 +807,7 @@ pub(crate) async fn sre_failure_reconcile(
     let now = now_unix_ms();
     let selected_ids = req.signal_ids.unwrap_or_default();
     let resolve_all_critical = req.resolve_all_critical.unwrap_or(false);
-    if let Ok(mut signals) = state.cluster_failure_signals.lock() {
+    if let Ok(mut signals) = state.cluster.cluster_failure_signals.lock() {
         for signal in signals.iter_mut() {
             if signal.resolved {
                 continue;
@@ -827,7 +827,7 @@ pub(crate) async fn sre_failure_reconcile(
         }
     }
     let unresolved_critical_count = state
-        .cluster_failure_signals
+        .cluster.cluster_failure_signals
         .lock()
         .map(|signals| {
             signals
@@ -929,7 +929,7 @@ pub(crate) async fn sre_cache_set(
 
     let now_ms = now_unix_ms_u64();
     let result = state
-        .distributed_cache
+        .ops.distributed_cache
         .lock()
         .expect("cache manager lock")
         .set(
@@ -981,7 +981,7 @@ pub(crate) async fn sre_cache_get(
 
     let now_ms = now_unix_ms_u64();
     let result = state
-        .distributed_cache
+        .ops.distributed_cache
         .lock()
         .expect("cache manager lock")
         .get(query.partition_id.as_str(), query.key.as_str(), now_ms);
@@ -1038,7 +1038,7 @@ pub(crate) async fn sre_cache_invalidate(
     )?;
 
     let result = state
-        .distributed_cache
+        .ops.distributed_cache
         .lock()
         .expect("cache manager lock")
         .invalidate(req.partition_id.as_str(), req.key.as_str());
@@ -1093,7 +1093,7 @@ pub(crate) async fn sre_cache_rebalance(
 
     let now_ms = now_unix_ms_u64();
     let results = state
-        .distributed_cache
+        .ops.distributed_cache
         .lock()
         .expect("cache manager lock")
         .rebalance_all(now_ms);
@@ -1135,7 +1135,7 @@ pub(crate) async fn sre_cache_metrics(
         PrivilegeAction::Read,
     )?;
 
-    let guard = state.distributed_cache.lock().expect("cache manager lock");
+    let guard = state.ops.distributed_cache.lock().expect("cache manager lock");
     let partitions = guard
         .all_stats()
         .into_iter()
@@ -1177,7 +1177,7 @@ pub(crate) async fn sre_driver_pool_acquire(
     let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
 
     let (acquire_state, connection_id, error, stats) = {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        let mut pool = state.ops.driver_pool.lock().expect("driver pool lock");
         let acquire_result = pool.acquire(now_ms);
         let (acquire_state, connection_id, error) = match acquire_result {
             Ok(connection_id) => ("acquired", Some(connection_id), None),
@@ -1230,7 +1230,7 @@ pub(crate) async fn sre_driver_pool_release(
     let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
 
     let (released, stats) = {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        let mut pool = state.ops.driver_pool.lock().expect("driver pool lock");
         let released = pool.release(req.connection_id.as_str(), now_ms);
         let stats = pool_stats_response(&pool.pool_stats(now_ms));
         (released, stats)
@@ -1272,7 +1272,7 @@ pub(crate) async fn sre_driver_pool_failure(
     let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
 
     let stats = {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        let mut pool = state.ops.driver_pool.lock().expect("driver pool lock");
         pool.mark_failed(
             req.connection_id.as_str(),
             req.error
@@ -1319,7 +1319,7 @@ pub(crate) async fn sre_driver_pool_recover(
     let now_ms = req.now_ms.unwrap_or_else(now_unix_ms_u64);
 
     let (circuit_recovered, pruned_unhealthy, stats) = {
-        let mut pool = state.driver_pool.lock().expect("driver pool lock");
+        let mut pool = state.ops.driver_pool.lock().expect("driver pool lock");
         let circuit_recovered = pool.check_circuit_recovery(now_ms);
         let pruned_unhealthy = if req.prune_unhealthy.unwrap_or(true) {
             pool.prune_unhealthy(now_ms)
@@ -1365,7 +1365,7 @@ pub(crate) async fn sre_driver_pool_stats(
     )?;
     let now_ms = now_unix_ms_u64();
     let stats = state
-        .driver_pool
+        .ops.driver_pool
         .lock()
         .expect("driver pool lock")
         .pool_stats(now_ms);
@@ -1376,9 +1376,9 @@ pub(crate) async fn sre_driver_pool_stats(
 
 pub(crate) fn build_sre_gate_evaluation(state: &AppState) -> SreGateEvaluationResponse {
     let failure_budget = failure_budget_snapshot(12.5);
-    let queue_depth = state.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(usize::MAX);
+    let queue_depth = state.ops.dr_hook_queue.lock().map(|q| q.len()).unwrap_or(usize::MAX);
     let unresolved_critical_signals = state
-        .cluster_failure_signals
+        .cluster.cluster_failure_signals
         .lock()
         .map(|signals| {
             signals
@@ -1388,7 +1388,7 @@ pub(crate) fn build_sre_gate_evaluation(state: &AppState) -> SreGateEvaluationRe
         })
         .unwrap_or(usize::MAX);
     let persistence_configured = state
-        .dr_hook_state_path
+        .ops.dr_hook_state_path
         .as_ref()
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
@@ -1412,7 +1412,7 @@ pub(crate) fn build_sre_gate_evaluation(state: &AppState) -> SreGateEvaluationRe
         SreGateCriterion {
             name: "dr_state_persistence_configured".to_string(),
             passed: persistence_configured,
-            detail: format!("state_path={:?}", state.dr_hook_state_path),
+            detail: format!("state_path={:?}", state.ops.dr_hook_state_path),
         },
     ];
     let failed: Vec<&SreGateCriterion> = criteria.iter().filter(|c| !c.passed).collect();
@@ -1466,7 +1466,7 @@ pub(crate) struct IncidentDiagnoseResponse {
 }
 
 /// AI-3/AI-6: Rules-based incident root cause classification.
-/// Checks configurable `state.diagnosis_rules` before falling back to built-in patterns.
+/// Checks configurable `state.ai.diagnosis_rules` before falling back to built-in patterns.
 #[tracing::instrument(skip_all, name = "sre.incident_diagnose")]
 pub(crate) async fn sre_incident_diagnose(
     State(state): State<AppState>,
@@ -1480,7 +1480,7 @@ pub(crate) async fn sre_incident_diagnose(
 
     // AI-6: Check configurable rules first.
     let custom_match: Option<(String, String, String)> = {
-        let rules = state.diagnosis_rules.lock().expect("diagnosis_rules lock");
+        let rules = state.ai.diagnosis_rules.lock().expect("diagnosis_rules lock");
         rules.iter().find(|rule| {
             let ft_match = rule.failure_type.as_deref()
                 .map(|ft| ft.to_ascii_lowercase() == failure_type)
@@ -1575,7 +1575,7 @@ pub(crate) async fn sre_incident_evidence(
     require_operator_auth(&headers, &state)?;
 
     let signals: Vec<serde_json::Value> = {
-        let sig = state.cluster_failure_signals.lock().unwrap_or_else(|e| e.into_inner());
+        let sig = state.cluster.cluster_failure_signals.lock().unwrap_or_else(|e| e.into_inner());
         sig.iter().map(|s| json!({
             "signal_id": s.signal_id, "node_id": s.node_id, "failure_type": s.failure_type,
             "severity": s.severity, "message": s.message,
@@ -1583,14 +1583,14 @@ pub(crate) async fn sre_incident_evidence(
         })).collect()
     };
     let dr_hooks: Vec<serde_json::Value> = {
-        let hooks = state.dr_hook_records.lock().unwrap_or_else(|e| e.into_inner());
+        let hooks = state.ops.dr_hook_records.lock().unwrap_or_else(|e| e.into_inner());
         hooks.iter().map(|h| json!({
             "execution_id": h.execution_id, "hook": h.hook,
             "scope": h.scope, "status": h.status, "details": h.details,
         })).collect()
     };
     let actions: Vec<serde_json::Value> = {
-        let acts = state.action_records.lock().unwrap_or_else(|e| e.into_inner());
+        let acts = state.ai.action_records.lock().unwrap_or_else(|e| e.into_inner());
         acts.iter().map(|a| json!({
             "trace_id": a.trace_id, "action": a.action,
             "scope": a.scope, "decision": format!("{:?}", a.decision),

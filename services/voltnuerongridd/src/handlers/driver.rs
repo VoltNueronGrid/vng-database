@@ -193,13 +193,13 @@ pub(crate) async fn driver_connect(
     let pooled_connection_id = {
         let now_ms = now_unix_ms_u64();
         state
-            .driver_pool
+            .ops.driver_pool
             .lock()
             .expect("driver pool lock")
             .acquire(now_ms)
             .ok()
     };
-    let mut sessions = state.driver_sessions.lock().expect("driver_sessions lock");
+    let mut sessions = state.ops.driver_sessions.lock().expect("driver_sessions lock");
     sessions.insert(session_token.clone(), DriverSession {
         driver_name: req.driver_name,
         driver_version: req.driver_version,
@@ -226,7 +226,7 @@ pub(crate) async fn driver_disconnect(
     Json(req): Json<DriverDisconnectRequest>,
 ) -> Result<(StatusCode, Json<DriverDisconnectResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let mut sessions = state.driver_sessions.lock().expect("driver_sessions lock");
+    let mut sessions = state.ops.driver_sessions.lock().expect("driver_sessions lock");
     let removed = sessions.remove(&req.session_token);
     drop(sessions);
 
@@ -261,7 +261,7 @@ pub(crate) async fn connector_register(
         signed: req.signed.unwrap_or(false),
         registered_at_ms,
     };
-    state.connector_registry.lock().expect("connector_registry lock").push(plugin);
+    state.ingest.connector_registry.lock().expect("connector_registry lock").push(plugin);
     Ok((
         StatusCode::OK,
         Json(ConnectorRegisterResponse {
@@ -278,7 +278,7 @@ pub(crate) async fn connector_list(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<ConnectorListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let connectors = state.connector_registry.lock().expect("connector_registry lock").clone();
+    let connectors = state.ingest.connector_registry.lock().expect("connector_registry lock").clone();
     let connector_count = connectors.len();
     Ok((StatusCode::OK, Json(ConnectorListResponse { status: "ok", connector_count, connectors })))
 }
@@ -290,7 +290,7 @@ pub(crate) async fn connector_deregister(
     Json(req): Json<ConnectorDeregisterRequest>,
 ) -> Result<(StatusCode, Json<ConnectorDeregisterResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let mut registry = state.connector_registry.lock().expect("connector_registry lock");
+    let mut registry = state.ingest.connector_registry.lock().expect("connector_registry lock");
     let before_len = registry.len();
     registry.retain(|c| c.connector_id != req.connector_id);
     let removed = registry.len() < before_len;
@@ -312,7 +312,7 @@ pub(crate) async fn connector_get(
     Query(params): Query<ConnectorGetQuery>,
 ) -> Result<(StatusCode, Json<ConnectorGetResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let registry = state.connector_registry.lock().expect("connector_registry lock");
+    let registry = state.ingest.connector_registry.lock().expect("connector_registry lock");
     let connector = registry.iter().find(|c| c.connector_id == params.id).cloned();
     let found = connector.is_some();
     Ok((StatusCode::OK, Json(ConnectorGetResponse {
@@ -329,7 +329,7 @@ pub(crate) async fn connector_update(
     Json(req): Json<ConnectorUpdateRequest>,
 ) -> Result<(StatusCode, Json<ConnectorUpdateResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let mut registry = state.connector_registry.lock().expect("connector_registry lock update");
+    let mut registry = state.ingest.connector_registry.lock().expect("connector_registry lock update");
     let entry = registry.iter_mut().find(|c| c.connector_id == req.connector_id);
     let updated = if let Some(plugin) = entry {
         if let Some(v) = req.version {
@@ -358,7 +358,7 @@ pub(crate) async fn driver_session_list(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<DriverSessionListResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let sessions = state.driver_sessions.lock().expect("driver_sessions lock list");
+    let sessions = state.ops.driver_sessions.lock().expect("driver_sessions lock list");
     let list: Vec<DriverSessionInfo> = sessions
         .iter()
         .map(|(token, sess)| DriverSessionInfo {
@@ -385,7 +385,7 @@ pub(crate) async fn driver_query(
     Json(req): Json<DriverQueryRequest>,
 ) -> Result<(StatusCode, Json<DriverQueryResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let sessions = state.driver_sessions.lock().expect("driver_sessions lock");
+    let sessions = state.ops.driver_sessions.lock().expect("driver_sessions lock");
     let session_exists = sessions.contains_key(&req.session_token);
     drop(sessions);
     if !session_exists {
@@ -411,7 +411,7 @@ pub(crate) async fn driver_ping(
     Json(req): Json<DriverPingRequest>,
 ) -> Result<(StatusCode, Json<DriverPingResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let sessions = state.driver_sessions.lock().expect("driver_sessions lock");
+    let sessions = state.ops.driver_sessions.lock().expect("driver_sessions lock");
     let session_exists = sessions.contains_key(&req.session_token);
     drop(sessions);
     if !session_exists {
@@ -440,7 +440,7 @@ pub(crate) async fn driver_pool_stats(
 ) -> Result<(StatusCode, Json<PoolStatsResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
     let now_ms = now_unix_ms_u64();
-    let stats = state.driver_pool.lock().expect("driver_pool stats lock").pool_stats(now_ms);
+    let stats = state.ops.driver_pool.lock().expect("driver_pool stats lock").pool_stats(now_ms);
     Ok((StatusCode::OK, Json(pool_stats_response(&stats))))
 }
 
@@ -449,9 +449,9 @@ pub(crate) async fn driver_health(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<DriverHealthResponse>), (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_auth(&headers, &state)?;
-    let active_sessions = state.driver_sessions.lock().expect("driver_sessions health lock").len();
+    let active_sessions = state.ops.driver_sessions.lock().expect("driver_sessions health lock").len();
     let now_ms = now_unix_ms_u64();
-    let pool_stats = state.driver_pool.lock().expect("driver_pool health lock").pool_stats(now_ms);
+    let pool_stats = state.ops.driver_pool.lock().expect("driver_pool health lock").pool_stats(now_ms);
     let healthy = pool_stats.circuit_breaker_state == "closed" && active_sessions < 1_000;
     Ok((StatusCode::OK, Json(DriverHealthResponse {
         status: "ok",

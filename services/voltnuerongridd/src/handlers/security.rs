@@ -231,7 +231,7 @@ pub(crate) async fn security_plugins_provenance_register(
                 sbom_license_violations: 0,
                 sbom_missing_checksums: 0,
                 audit_records_total: state
-                    .plugin_lifecycle
+                    .ops.plugin_lifecycle
                     .lock()
                     .map(|manager| manager.audit_trail().len())
                     .unwrap_or(0),
@@ -295,7 +295,7 @@ pub(crate) async fn security_plugins_provenance_register(
             sbom_license_violations: sbom_result.license_violations.len(),
             sbom_missing_checksums: sbom_result.missing_checksums.len(),
             audit_records_total: state
-                .plugin_lifecycle
+                .ops.plugin_lifecycle
                 .lock()
                 .map(|manager| manager.audit_trail().len())
                 .unwrap_or(0),
@@ -330,7 +330,7 @@ pub(crate) async fn security_plugins_provenance_register(
     };
 
     let register_result = state
-        .plugin_lifecycle
+        .ops.plugin_lifecycle
         .lock()
         .expect("plugin lifecycle lock")
         .register(
@@ -347,7 +347,7 @@ pub(crate) async fn security_plugins_provenance_register(
     };
 
     let audit_records_total = state
-        .plugin_lifecycle
+        .ops.plugin_lifecycle
         .lock()
         .map(|manager| manager.audit_trail().len())
         .unwrap_or(0);
@@ -419,7 +419,7 @@ pub(crate) async fn security_tls_rotate(
     let new_fingerprint = if cert_present {
         if let Ok(bytes) = std::fs::read(&cert_source) {
             let fp = crate::compute_sha256_fingerprint(&bytes);
-            *state.cert_fingerprint.lock().expect("cert_fp lock") = Some(fp.clone());
+            *state.ai.cert_fingerprint.lock().expect("cert_fp lock") = Some(fp.clone());
             Some(fp)
         } else { None }
     } else { None };
@@ -465,7 +465,7 @@ pub(crate) async fn security_tls_cert_info(
     let cert_present = cert_source != "not_configured" && std::path::Path::new(&cert_source).exists();
     let key_present = key_source != "not_configured" && std::path::Path::new(&key_source).exists();
     let preflight_ok = cert_present && key_present;
-    let sc = &*state.security_config;
+    let sc = &*state.auth.security_config;
     Ok((StatusCode::OK, Json(TlsCertInfoResponse {
         status: "ok",
         cert_source,
@@ -493,7 +493,7 @@ pub(crate) async fn security_tde_toggle(
         "security/tde/toggle",
         PrivilegeAction::Manage,
     )?;
-    *state.tde_override.lock().expect("tde_override lock") = Some(req.enable);
+    *state.ops.tde_override.lock().expect("tde_override lock") = Some(req.enable);
     Ok((
         StatusCode::OK,
         Json(TdeToggleResponse {
@@ -529,7 +529,7 @@ pub(crate) async fn security_tls_status(
     let cert_present = cert_source != "not_configured" && std::path::Path::new(&cert_source).exists();
     let key_present = key_source != "not_configured" && std::path::Path::new(&key_source).exists();
     let cert_pair_configured = cert_present && key_present;
-    let note = if state.security_config.tls_required {
+    let note = if state.auth.security_config.tls_required {
         "TLS required — server must be started with rustls/native-tls adapter"
     } else {
         "TLS not required — plaintext mode (development only)"
@@ -542,14 +542,14 @@ pub(crate) async fn security_tls_status(
         "ok",
         json!({
             "route_scope": "security/tls/status",
-            "tls_required": state.security_config.tls_required,
-            "mtls_required": state.security_config.mtls_required,
+            "tls_required": state.auth.security_config.tls_required,
+            "mtls_required": state.auth.security_config.mtls_required,
         }),
     );
     Ok(Json(SecurityTlsStatusResponse {
         status: "ok",
-        tls_required: state.security_config.tls_required,
-        mtls_required: state.security_config.mtls_required,
+        tls_required: state.auth.security_config.tls_required,
+        mtls_required: state.auth.security_config.mtls_required,
         cert_source,
         key_source,
         cert_present,
@@ -574,15 +574,15 @@ pub(crate) async fn security_tde_status(
         PrivilegeAction::Read,
     )?;
     let principal = RuntimeAccessPrincipal::Operator(operator);
-    let key_env_var = state.security_config.kms_key_ref_env.clone();
+    let key_env_var = state.auth.security_config.kms_key_ref_env.clone();
     let key_resolved = std::env::var(&key_env_var)
         .ok()
         .filter(|v| !v.trim().is_empty())
         .is_some();
-    let tde_active = state.security_config.encryption_at_rest_required && key_resolved;
+    let tde_active = state.auth.security_config.encryption_at_rest_required && key_resolved;
     let note = if tde_active {
         "TDE active: encryption-at-rest required and KMS key resolved"
-    } else if state.security_config.encryption_at_rest_required {
+    } else if state.auth.security_config.encryption_at_rest_required {
         "TDE contract requires encryption but KMS key env var is not set — data NOT encrypted at rest"
     } else {
         "TDE not required in current security contract"
@@ -595,14 +595,14 @@ pub(crate) async fn security_tde_status(
         "ok",
         json!({
             "route_scope": "security/tde/status",
-            "encryption_at_rest_required": state.security_config.encryption_at_rest_required,
+            "encryption_at_rest_required": state.auth.security_config.encryption_at_rest_required,
             "tde_active": tde_active,
             "key_env_var": key_env_var,
         }),
     );
     Ok(Json(SecurityTdeStatusResponse {
         status: "ok",
-        encryption_at_rest_required: state.security_config.encryption_at_rest_required,
+        encryption_at_rest_required: state.auth.security_config.encryption_at_rest_required,
         tde_active,
         key_env_var,
         key_resolved,
@@ -623,10 +623,10 @@ pub(crate) async fn security_tde_override_status(
         "security/tde/status",
         PrivilegeAction::Read,
     )?;
-    let override_value = *state.tde_override.lock().expect("tde_override lock override");
+    let override_value = *state.ops.tde_override.lock().expect("tde_override lock override");
     let override_set = override_value.is_some();
     let effective_tde_active = override_value
-        .unwrap_or(state.security_config.encryption_at_rest_required);
+        .unwrap_or(state.auth.security_config.encryption_at_rest_required);
     Ok((StatusCode::OK, Json(TdeOverrideStatusResponse {
         status: "ok",
         override_set,
@@ -682,7 +682,7 @@ pub(crate) async fn security_kms_outage_simulate(
     )?;
 
     let configured = state
-        .security_config
+        .auth.security_config
         .kms_key_candidates()
         .into_iter()
         .map(|value| value.to_ascii_lowercase())
@@ -701,7 +701,7 @@ pub(crate) async fn security_kms_outage_simulate(
         .unwrap_or_else(|| "manual_kms_region_outage_simulation".to_string());
 
     {
-        let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
+        let mut runtime = state.auth.kms_runtime.lock().expect("kms runtime lock");
         runtime.unavailable_envs = normalized;
         runtime.last_simulation_note = Some(note.clone());
     }
@@ -764,7 +764,7 @@ pub(crate) async fn security_kms_outage_reconcile(
         .unwrap_or_else(|| "manual_kms_region_outage_reconcile".to_string());
 
     {
-        let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
+        let mut runtime = state.auth.kms_runtime.lock().expect("kms runtime lock");
         runtime.unavailable_envs.clear();
         runtime.last_simulation_note = Some(note.clone());
     }
@@ -810,7 +810,7 @@ pub(crate) async fn security_kms_outage_reconcile(
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 fn evaluate_kms_runtime(state: &AppState) -> KmsEvaluationSnapshot {
-    let mut runtime = state.kms_runtime.lock().expect("kms runtime lock");
+    let mut runtime = state.auth.kms_runtime.lock().expect("kms runtime lock");
     let unavailable_envs = runtime.unavailable_envs.clone();
     for provider in &mut runtime.providers {
         provider.clear_unavailable();
@@ -829,7 +829,7 @@ fn evaluate_kms_runtime(state: &AppState) -> KmsEvaluationSnapshot {
         .collect::<Vec<_>>();
     let chain = KmsProviderChain::new(providers);
 
-    match state.security_config.resolve_kms_key_ref_with_provider(&chain) {
+    match state.auth.security_config.resolve_kms_key_ref_with_provider(&chain) {
         Ok(resolution) => {
             runtime.last_error = None;
             runtime.last_resolution = Some(resolution.clone());
@@ -868,8 +868,8 @@ fn build_security_kms_status_response(
     SecurityKmsStatusResponse {
         status: snapshot.status,
         resolution_state: snapshot.resolution_state,
-        encryption_at_rest_required: state.security_config.encryption_at_rest_required,
-        configured_envs: state.security_config.kms_key_candidates(),
+        encryption_at_rest_required: state.auth.security_config.encryption_at_rest_required,
+        configured_envs: state.auth.security_config.kms_key_candidates(),
         unavailable_envs: snapshot.unavailable_envs.clone(),
         selected_env: snapshot
             .resolution
@@ -946,7 +946,7 @@ pub(crate) async fn security_kms_rotate(
             .map(|d| d.as_millis())
             .unwrap_or(0);
 
-        let mut versions = state.dek_versions.lock().expect("dek_versions lock");
+        let mut versions = state.ai.dek_versions.lock().expect("dek_versions lock");
         // Mark all current active DEKs as inactive (retain for decryption).
         let old_retained = !versions.is_empty();
         for v in versions.iter_mut() { v.active = false; }

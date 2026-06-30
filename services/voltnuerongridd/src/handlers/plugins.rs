@@ -107,7 +107,7 @@ pub(crate) async fn plugin_install_handler(
     };
 
     let result = state
-        .plugin_registry
+        .ops.plugin_registry
         .lock()
         .expect("plugin_registry lock")
         .install(entry);
@@ -166,7 +166,7 @@ pub(crate) async fn plugin_upgrade_handler(
     }
 
     let name = {
-        let reg = state.plugin_registry.lock().expect("plugin_registry lock");
+        let reg = state.ops.plugin_registry.lock().expect("plugin_registry lock");
         req.name
             .clone()
             .or_else(|| reg.get_current(&req.id).map(|e| e.name.clone()))
@@ -184,7 +184,7 @@ pub(crate) async fn plugin_upgrade_handler(
     };
 
     let result = state
-        .plugin_registry
+        .ops.plugin_registry
         .lock()
         .expect("plugin_registry lock")
         .upgrade(&req.id, entry);
@@ -214,7 +214,7 @@ pub(crate) async fn plugin_downgrade_handler(
     }
 
     let result = state
-        .plugin_registry
+        .ops.plugin_registry
         .lock()
         .expect("plugin_registry lock")
         .downgrade(&req.id, &req.target_version);
@@ -248,7 +248,7 @@ pub(crate) async fn plugin_uninstall_handler(
     }
 
     let result = state
-        .plugin_registry
+        .ops.plugin_registry
         .lock()
         .expect("plugin_registry lock")
         .uninstall(&id);
@@ -277,7 +277,7 @@ pub(crate) async fn plugin_list_handler(
     }
 
     let active = state
-        .plugin_registry
+        .ops.plugin_registry
         .lock()
         .expect("plugin_registry lock")
         .list_active();
