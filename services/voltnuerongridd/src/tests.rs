@@ -18177,3 +18177,398 @@ fn c2_unsharded_table_route_reports_local() {
     assert!(!resp.1.sharded);
     assert!(resp.1.is_local);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tasks-7 group A — autonomous execution (A-3, A-4, A-1, A-2, A-5, A-6, A-7, A-8)
+//
+// Single-node unit simulation with state_with_key() (mode defaults to Supervised,
+// so supervised+ execution gates fire). Live multi-node docker validation is
+// tracked under E-5.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use crate::handlers::autonomous_ctl as actl;
+use crate::handlers::sre::ClusterFailureSignal;
+
+fn inject_signal(state: &AppState, signal_id: &str, failure_type: &str, message: &str) {
+    let mut sigs = state.cluster.cluster_failure_signals.lock().unwrap();
+    sigs.push(ClusterFailureSignal {
+        signal_id: signal_id.to_string(),
+        node_id: "node-1".to_string(),
+        transport: "tcp".to_string(),
+        failure_type: failure_type.to_string(),
+        severity: "high".to_string(),
+        message: message.to_string(),
+        observed_unix_ms: 1000,
+        resolved: false,
+        resolved_by: None,
+        resolved_unix_ms: None,
+        resolution_note: None,
+    });
+}
+
+// ── A-3 · performance tuning real execution ───────────────────────────────
+
+#[tokio::test]
+async fn a3_tune_apply_creates_index_visible_in_catalog() {
+    use crate::handlers::autonomous::{append_slow_query, ai_tune_recommendations, ai_tune_apply, TuneApplyRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    // Generate a CREATE INDEX recommendation from repeated slow queries.
+    for _ in 0..3 {
+        append_slow_query(&state, "SELECT * FROM customers WHERE id = 1", 2000, Some("customers"));
+    }
+    let (_c, _r) = ai_tune_recommendations(State(state.clone()), headers.clone()).await.unwrap();
+    let recs = state.ai.tune_recommendations.lock().unwrap().clone();
+    let idx = recs.iter().position(|r| r.action == "CREATE INDEX").expect("create index rec");
+
+    let count_before = state.storage.index_manager.lock().unwrap().index_count();
+    let (status, Json(resp)) = ai_tune_apply(
+        State(state.clone()), headers.clone(),
+        Json(TuneApplyRequest { recommendation_index: idx, target_db: None, add_permits: None }),
+    ).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(resp.applied, "index apply should execute in supervised mode");
+    let count_after = state.storage.index_manager.lock().unwrap().index_count();
+    assert_eq!(count_after, count_before + 1, "a new index must be registered");
+    assert!(state.storage.index_manager.lock().unwrap().get("idx_customers_id").is_some());
+}
+
+#[tokio::test]
+async fn a3_tune_apply_analyze_refreshes_stats_registry() {
+    use crate::handlers::autonomous::{ai_tune_apply, TuneApplyRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    // Seed rows for table "orders".
+    {
+        let mut rs = state.storage.row_store.lock().unwrap();
+        for i in 0..5 {
+            let xid = rs.begin_xid();
+            let mut d = std::collections::HashMap::new();
+            d.insert("id".to_string(), i.to_string());
+            rs.insert(xid, &format!("orders:{i}"), d);
+        }
+    }
+    // Stage an ANALYZE recommendation directly.
+    *state.ai.tune_recommendations.lock().unwrap() = vec![crate::TuneRecommendation {
+        action: "ANALYZE".to_string(),
+        table: Some("orders".to_string()),
+        column: None,
+        reason: "test".to_string(),
+        estimated_speedup: Some(1.5),
+    }];
+
+    let (_s, Json(resp)) = ai_tune_apply(
+        State(state.clone()), headers,
+        Json(TuneApplyRequest { recommendation_index: 0, target_db: None, add_permits: None }),
+    ).await.unwrap();
+    assert!(resp.applied);
+    let reg = state.storage.stats_registry.lock().unwrap();
+    let stats = reg.get("orders").expect("stats recorded for orders");
+    assert_eq!(stats.row_count, 5);
+}
+
+#[tokio::test]
+async fn a3_tune_apply_increase_connections_updates_semaphore() {
+    use crate::handlers::autonomous::{ai_tune_apply, TuneApplyRequest};
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    *state.ai.tune_recommendations.lock().unwrap() = vec![crate::TuneRecommendation {
+        action: "INCREASE_CONNECTIONS".to_string(),
+        table: None, column: None, reason: "test".to_string(), estimated_speedup: None,
+    }];
+    let (_s, Json(resp)) = ai_tune_apply(
+        State(state.clone()), headers,
+        Json(TuneApplyRequest { recommendation_index: 0, target_db: Some("appdb".to_string()), add_permits: Some(10) }),
+    ).await.unwrap();
+    assert!(resp.applied);
+    let sem = state.storage.db_semaphores.lock().unwrap().get("appdb").cloned().expect("semaphore created");
+    assert_eq!(sem.available_permits(), crate::DEFAULT_DB_MAX_CONNECTIONS + 10);
+}
+
+#[tokio::test]
+async fn a3_tune_apply_advisory_mode_only_logs() {
+    use crate::handlers::autonomous::{ai_tune_apply, TuneApplyRequest};
+    let mut state = state_with_key(Some("secret"));
+    state.ai.autonomous_mode = AutonomousMode::Advisory;
+    let headers = operator_headers("secret", "platform-admin");
+    *state.ai.tune_recommendations.lock().unwrap() = vec![crate::TuneRecommendation {
+        action: "ANALYZE".to_string(), table: Some("t".to_string()), column: None,
+        reason: "x".to_string(), estimated_speedup: None,
+    }];
+    let (_s, Json(resp)) = ai_tune_apply(
+        State(state.clone()), headers,
+        Json(TuneApplyRequest { recommendation_index: 0, target_db: None, add_permits: None }),
+    ).await.unwrap();
+    assert!(!resp.applied, "advisory mode must not execute");
+    assert_eq!(resp.status, "advisory_only");
+}
+
+// ── A-4 · self-heal real remediation ──────────────────────────────────────
+
+#[tokio::test]
+async fn a4_self_heal_cache_eviction_remediates_disk_signal() {
+    use crate::handlers::autonomous::autonomous_self_heal_run;
+    let state = state_with_key(Some("secret"));
+    // Seed a cache entry so eviction has something to report on.
+    {
+        let now = crate::now_unix_ms_u64();
+        state.ops.distributed_cache.lock().unwrap()
+            .set("p0", "k".to_string(), serde_json::json!(1), Some(1), now).unwrap();
+    }
+    inject_signal(&state, "sig-disk", "disk", "disk io error");
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = autonomous_self_heal_run(State(state.clone()), headers).await.unwrap();
+    assert_eq!(resp.signals_detected, 1);
+    assert_eq!(resp.actions_taken, 1);
+    assert_eq!(resp.actions[0].action_taken, "cache_eviction");
+    assert_eq!(resp.actions[0].outcome, "applied");
+}
+
+#[tokio::test]
+async fn a4_self_heal_leader_promotion_starts_election() {
+    use crate::handlers::autonomous::autonomous_self_heal_run;
+    let state = state_with_key(Some("secret"));
+    let term_before = state.cluster.raft_state.lock().unwrap().current_term;
+    inject_signal(&state, "sig-raft", "raft_election", "no leader elected");
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = autonomous_self_heal_run(State(state.clone()), headers).await.unwrap();
+    assert_eq!(resp.actions[0].action_taken, "leader_promotion");
+    let term_after = state.cluster.raft_state.lock().unwrap().current_term;
+    assert!(term_after > term_before, "election should advance the raft term");
+}
+
+#[tokio::test]
+async fn a4_self_heal_query_kill_releases_locks() {
+    use crate::handlers::autonomous::autonomous_self_heal_run;
+    let state = state_with_key(Some("secret"));
+    // Acquire a pessimistic lock so query_kill has a target.
+    {
+        let mut locks = state.storage.pessimistic_locks.lock().unwrap();
+        let mut waits = state.storage.pessimistic_lock_waits.lock().unwrap();
+        let now = crate::now_unix_ms() as u128;
+        let _ = crate::helpers::execution::acquire_pessimistic_lock(
+            &mut locks, &mut waits, "tx-1", "row:1", "tx-1", 60_000, 0, now,
+        );
+    }
+    inject_signal(&state, "sig-deadlock", "deadlock", "lock wait timeout");
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = autonomous_self_heal_run(State(state.clone()), headers).await.unwrap();
+    assert_eq!(resp.actions[0].action_taken, "query_kill");
+    assert_eq!(resp.actions[0].outcome, "applied");
+    assert!(state.storage.pessimistic_locks.lock().unwrap().is_empty(), "lock should be released");
+}
+
+#[tokio::test]
+async fn a4_self_heal_diagnostic_probe_for_network_signal() {
+    use crate::handlers::autonomous::autonomous_self_heal_run;
+    let state = state_with_key(Some("secret"));
+    inject_signal(&state, "sig-net", "network", "connection reset");
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = autonomous_self_heal_run(State(state.clone()), headers).await.unwrap();
+    assert_eq!(resp.actions[0].action_taken, "diagnostic_probe");
+    assert_eq!(resp.actions[0].outcome, "applied");
+}
+
+// ── A-1 · autonomous controller ───────────────────────────────────────────
+
+#[test]
+fn a1_decompose_goal_maps_keywords_to_actions() {
+    let steps = actl::decompose_goal("please tune slow queries and self-heal the cluster");
+    assert!(steps.contains(&"performance_tune"));
+    assert!(steps.contains(&"self_heal_failover"));
+    // Empty/unknown goal → default diagnostic plan.
+    let def = actl::decompose_goal("do something vague");
+    assert_eq!(def, vec!["performance_tune", "self_heal_failover"]);
+}
+
+#[tokio::test]
+async fn a1_controller_run_executes_correlated_plan() {
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let (status, Json(resp)) = actl::autonomous_controller_run(
+        State(state.clone()), headers,
+        Json(actl::ControllerRunRequest { goal: "tune performance".to_string(), dry_run: false }),
+    ).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(!resp.correlation_id.is_empty());
+    assert!(resp.executed_count >= 1);
+    // Every audit event from this run shares the single correlation id.
+    let events = state.ops.audit_sink.lock().unwrap().all().to_vec();
+    let corr = events.iter().filter(|e| e.action == "autonomous_controller_step")
+        .filter(|e| e.details_json.contains(&resp.correlation_id)).count();
+    assert_eq!(corr, resp.steps.len());
+}
+
+#[tokio::test]
+async fn a1_controller_dry_run_does_not_execute() {
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = actl::autonomous_controller_run(
+        State(state.clone()), headers,
+        Json(actl::ControllerRunRequest { goal: "tune performance".to_string(), dry_run: true }),
+    ).await.unwrap();
+    assert_eq!(resp.executed_count, 0);
+    assert!(resp.steps.iter().all(|s| s.outcome == "planned"));
+}
+
+#[tokio::test]
+async fn a1_controller_blocks_when_emergency_stop_enabled() {
+    let state = state_with_key(Some("secret"));
+    state.ai.emergency_stop.set(true);
+    let headers = operator_headers("secret", "platform-admin");
+    let (_s, Json(resp)) = actl::autonomous_controller_run(
+        State(state.clone()), headers,
+        Json(actl::ControllerRunRequest { goal: "tune performance".to_string(), dry_run: false }),
+    ).await.unwrap();
+    assert_eq!(resp.executed_count, 0);
+    assert!(resp.blocked_count >= 1);
+    assert!(resp.steps.iter().all(|s| s.guardrail_decision == "blocked"));
+}
+
+// ── A-2 · ops-agent orchestrator ──────────────────────────────────────────
+
+#[test]
+fn a2_ops_agent_disabled_by_default() {
+    // With no env set, the orchestrator config is disabled.
+    let cfg = crate::helpers::autonomous_exec::OpsAgentConfig::from_env();
+    assert!(!cfg.enabled, "ops agent must be disabled by default for safety");
+    let state = state_with_key(Some("secret"));
+    let results = crate::helpers::autonomous_exec::run_ops_agent_sweep_once(&state, &cfg);
+    assert!(results.is_empty(), "disabled config runs no agents");
+}
+
+#[test]
+fn a2_ops_agent_sweep_runs_enabled_agents_and_audits() {
+    use crate::helpers::autonomous_exec::{OpsAgentConfig, run_ops_agent_sweep_once};
+    let state = state_with_key(Some("secret"));
+    let cfg = OpsAgentConfig {
+        enabled: true,
+        tune_enabled: true,
+        self_heal_enabled: true,
+        compliance_enabled: true,
+        security_rotation_enabled: false,
+        tick_interval_secs: 1,
+        compliance_threshold: 80,
+    };
+    let results = run_ops_agent_sweep_once(&state, &cfg);
+    assert_eq!(results.len(), 3, "tune + self_heal + compliance should run");
+    let audit = state.ops.audit_sink.lock().unwrap().all().to_vec();
+    assert!(audit.iter().any(|e| e.action == "ops_agent_tune_sweep"));
+    assert!(audit.iter().any(|e| e.action == "ops_agent_self_heal_sweep"));
+    assert!(audit.iter().any(|e| e.action == "ops_agent_compliance_sweep"));
+}
+
+// ── A-5 · schema reconcile ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a5_schema_reconcile_detects_drift_and_provisions() {
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let req = actl::SchemaReconcileRequest {
+        desired_tables: vec![actl::DesiredTable {
+            name: "widgets".to_string(),
+            columns: vec!["id INT PRIMARY KEY".to_string(), "label TEXT".to_string()],
+            indexes: vec![actl::DesiredIndex { name: "idx_widgets_label".to_string(), column: "label".to_string() }],
+        }],
+    };
+    let (status, Json(resp)) = actl::autonomous_schema_reconcile(State(state.clone()), headers, Json(req)).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(resp.drift.missing_tables.contains(&"widgets".to_string()));
+    assert!(resp.applied);
+    assert!(resp.executed_steps >= 1, "missing table should be provisioned");
+    // Catalog now contains the table.
+    let cat = state.storage.ddl_catalog.lock().unwrap();
+    assert!(cat.active_entries().iter().any(|e| e.object_name.eq_ignore_ascii_case("widgets")));
+}
+
+// ── A-6 · plugin builder ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a6_plugin_build_signs_with_key_else_rejects_unsigned() {
+    // Both branches in one test to avoid racing on the process-global env var.
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+
+    // No signing key → rejected, nothing registered.
+    std::env::remove_var("VNG_PLUGIN_SIGNING_KEY");
+    let (status, Json(resp)) = actl::autonomous_plugin_build(
+        State(state.clone()), headers.clone(),
+        Json(actl::PluginBuildRequest { id: "c.kafka".into(), name: "Kafka".into(), version: "1.0.0".into(), template: None }),
+    ).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(!resp.signed);
+    assert!(!resp.registered);
+
+    // Signing key present → signed + registered.
+    std::env::set_var("VNG_PLUGIN_SIGNING_KEY", "test-signing-key");
+    let (status, Json(resp)) = actl::autonomous_plugin_build(
+        State(state.clone()), headers,
+        Json(actl::PluginBuildRequest { id: "c.s3".into(), name: "S3".into(), version: "2.1.0".into(), template: Some("connector".into()) }),
+    ).await.unwrap();
+    std::env::remove_var("VNG_PLUGIN_SIGNING_KEY");
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(resp.signed);
+    assert!(resp.registered);
+    assert!(!resp.checksum_sha256.is_empty());
+}
+
+// ── A-7 · security & compliance agent ─────────────────────────────────────
+
+#[tokio::test]
+async fn a7_security_sweep_enqueues_remediation_on_low_score() {
+    // Admin key present (so operator auth passes) but no TLS/KMS → score 60 < 80.
+    let state = state_with_key(Some("secret"));
+    let headers = operator_headers("secret", "platform-admin");
+    let before = state.ai.action_records.lock().unwrap().len();
+    let (status, Json(resp)) = actl::autonomous_security_sweep(State(state.clone()), headers).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let after = state.ai.action_records.lock().unwrap().len();
+    // Remediation enqueue is exactly gated on score < threshold.
+    assert_eq!(resp.remediation_enqueued, resp.compliance_score < resp.threshold);
+    if resp.remediation_enqueued {
+        assert_eq!(after, before + 1, "a governed remediation action should be enqueued");
+    }
+}
+
+#[test]
+fn a7_rotation_due_respects_age_threshold() {
+    use crate::helpers::autonomous_exec::rotation_due;
+    assert!(rotation_due(10_000, 0, 5_000));
+    assert!(!rotation_due(10_000, 8_000, 5_000));
+    assert!(!rotation_due(10_000, 0, 0), "zero max age disables rotation");
+}
+
+// ── A-8 · incident diagnosis → fix → evidence ─────────────────────────────
+
+#[tokio::test]
+async fn a8_incident_remediate_diagnoses_and_executes_fix() {
+    let state = state_with_key(Some("secret"));
+    // Seed a cache entry so the disk→cache_eviction fix has measurable effect.
+    {
+        let now = crate::now_unix_ms_u64();
+        state.ops.distributed_cache.lock().unwrap()
+            .set("p0", "k".to_string(), serde_json::json!(1), Some(1), now).unwrap();
+    }
+    let headers = operator_headers("secret", "platform-admin");
+    let (status, Json(resp)) = actl::autonomous_incident_remediate(
+        State(state.clone()), headers,
+        Json(actl::IncidentRemediateRequest {
+            failure_type: Some("disk".to_string()),
+            severity: Some("critical".to_string()),
+            message: Some("disk full".to_string()),
+            node_id: Some("node-1".to_string()),
+        }),
+    ).await.unwrap();
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(resp.root_cause, "disk_failure_or_full");
+    assert!(resp.executed);
+    assert_eq!(resp.remediation_action, "cache_eviction");
+    assert_eq!(resp.remediation_outcome, "applied");
+    assert!(resp.summary.contains(&resp.correlation_id));
+    // Diagnosis + fix audit events share the correlation id.
+    let events = state.ops.audit_sink.lock().unwrap().all().to_vec();
+    let linked = events.iter().filter(|e| e.details_json.contains(&resp.correlation_id)).count();
+    assert!(linked >= 2, "diagnosis and fix should both be correlated");
+}

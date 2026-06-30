@@ -1794,53 +1794,17 @@ pub(crate) async fn compliance_report(
 ) -> Result<axum::response::Response, (StatusCode, Json<AuthErrorResponse>)> {
     require_operator_privilege(&headers, &state, "compliance", "report", voltnuerongrid_auth::PrivilegeAction::Read)?;
 
-    let rbac_role_count = state.auth.rbac_privilege_matrix.grants_by_role.len();
-    let audit_event_count = {
-        let sink = state.ops.audit_sink.lock().unwrap_or_else(|e| e.into_inner());
-        sink.len()
-    };
-    let constraint_count = {
-        let mgr = state.storage.constraint_manager.lock().unwrap_or_else(|e| e.into_inner());
-        mgr.constraint_count()
-    };
-    let active_ddl_objects = {
-        let cat = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
-        cat.active_entries().len()
-    };
-    let active_operator_count = {
-        let um = state.auth.user_store.lock().unwrap_or_else(|e| e.into_inner());
-        um.all().count()
-    };
-
-    let encryption_at_rest_enabled = std::env::var("VNG_KMS_KEY_ID").is_ok()
-        || std::env::var("VNG_ENCRYPTION_KEY").is_ok();
-    let tls_enabled = std::env::var("VNG_TLS_CERT_PATH").is_ok()
-        || std::env::var("VNG_NATIVE_LISTENER_ENABLED")
-            .map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
-
-    let mut findings = Vec::new();
-    let mut score: u8 = 100;
-
-    if rbac_role_count == 0 {
-        findings.push("no_rbac_bindings: no role bindings configured".to_string());
-        score = score.saturating_sub(20);
-    }
-    if !encryption_at_rest_enabled {
-        findings.push("encryption_at_rest_disabled: VNG_KMS_KEY_ID/VNG_ENCRYPTION_KEY not set".to_string());
-        score = score.saturating_sub(25);
-    }
-    if !tls_enabled {
-        findings.push("tls_not_configured: VNG_TLS_CERT_PATH not set and native listener disabled".to_string());
-        score = score.saturating_sub(15);
-    }
-    if state.auth.admin_api_key.is_none() {
-        findings.push("admin_key_missing: VNG_ADMIN_API_KEY not set — server is unprotected".to_string());
-        score = score.saturating_sub(30);
-    }
-    if audit_event_count == 0 {
-        findings.push("no_audit_events: audit log is empty or not configured".to_string());
-        score = score.saturating_sub(10);
-    }
+    // Shared assessment (A-7 reuse): single source of truth for the score + findings.
+    let assessment = crate::helpers::autonomous_exec::compute_compliance_assessment(&state);
+    let rbac_role_count = assessment.rbac_role_count;
+    let audit_event_count = assessment.audit_event_count;
+    let constraint_count = assessment.constraint_count;
+    let active_ddl_objects = assessment.active_ddl_objects;
+    let active_operator_count = assessment.active_operator_count;
+    let encryption_at_rest_enabled = assessment.encryption_at_rest_enabled;
+    let tls_enabled = assessment.tls_enabled;
+    let findings = assessment.findings.clone();
+    let score: u8 = assessment.score;
 
     let generated_at_unix_ms = now_unix_ms_u64() as u128;
     let report = ComplianceReportResponse {

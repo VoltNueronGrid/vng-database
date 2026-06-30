@@ -1,6 +1,7 @@
 pub(crate) mod cdc;
 pub(crate) mod catalog;
 pub(crate) mod autonomous;
+pub(crate) mod autonomous_ctl;
 pub(crate) mod security;
 pub(crate) mod admin;
 pub(crate) mod driver;

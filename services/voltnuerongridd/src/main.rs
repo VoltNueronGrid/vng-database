@@ -1923,6 +1923,7 @@ async fn main() {
     };
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
+    tokio::spawn(crate::handlers::autonomous_ctl::run_ops_agent_scheduler(state.clone()));
 
     // CACHE-1: Restore distributed cache from on-disk snapshot (if available).
     crate::handlers::misc::load_cache_snapshot(&state);

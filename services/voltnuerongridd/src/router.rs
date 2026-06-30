@@ -526,6 +526,12 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/ai/tune/recommendations", get(ai_tune_recommendations))
         .route("/api/v1/ai/tune/apply", post(ai_tune_apply))
         .route("/api/v1/ai/tune/slow-query", post(ai_slow_query_report))
+        // Group A — autonomous controller + sub-agents (Tasks-7)
+        .route("/api/v1/autonomous/controller/run", post(crate::handlers::autonomous_ctl::autonomous_controller_run))
+        .route("/api/v1/autonomous/schema/reconcile", post(crate::handlers::autonomous_ctl::autonomous_schema_reconcile))
+        .route("/api/v1/autonomous/plugin/build", post(crate::handlers::autonomous_ctl::autonomous_plugin_build))
+        .route("/api/v1/autonomous/security/sweep", post(crate::handlers::autonomous_ctl::autonomous_security_sweep))
+        .route("/api/v1/autonomous/incident/remediate", post(crate::handlers::autonomous_ctl::autonomous_incident_remediate))
         // WS4 Ingest endpoints
         .route("/api/v1/ingest/csv", post(ingest_csv))
         .route("/api/v1/ingest/json", post(ingest_json))

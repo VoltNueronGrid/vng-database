@@ -6,6 +6,7 @@ pub(crate) mod execution;
 pub(crate) mod udf;
 pub(crate) mod cluster;
 pub(crate) mod dataplane;
+pub(crate) mod autonomous_exec;
 pub(crate) mod boot;
 pub(crate) mod native_protocol;
 pub(crate) mod raft_loop;

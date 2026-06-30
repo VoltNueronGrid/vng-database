@@ -121,6 +121,14 @@ impl AppendOnlyAuditSink {
     /// Verify that every event's `chain_hash` is consistent with the preceding event.
     /// Returns `true` when the chain is unbroken from genesis through all events.
     pub fn verify_chain(events: &[AuditEvent]) -> bool {
+        Self::verify_chain_tamper_point(events).is_none()
+    }
+
+    /// Walk the chain and return the `event_id` of the first event whose
+    /// `chain_hash` does not match the recomputed value, or `None` when the
+    /// chain is intact. Used by the audit companion CLI to surface the exact
+    /// tamper point.
+    pub fn verify_chain_tamper_point(events: &[AuditEvent]) -> Option<u64> {
         let mut expected = CHAIN_GENESIS.to_string();
         for event in events {
             let computed = chain_step(
@@ -132,11 +140,11 @@ impl AppendOnlyAuditSink {
                 &event.details_json,
             );
             if computed != event.chain_hash {
-                return false;
+                return Some(event.event_id);
             }
             expected = computed;
         }
-        true
+        None
     }
 }
 

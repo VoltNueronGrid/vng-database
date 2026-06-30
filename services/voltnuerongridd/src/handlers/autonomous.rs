@@ -1034,6 +1034,7 @@ pub(crate) struct SelfHealActionSummary {
     pub(crate) failure_type: String,
     pub(crate) action_taken: String,
     pub(crate) outcome: String,
+    pub(crate) reason: String,
     pub(crate) trace_id: String,
 }
 
@@ -1055,26 +1056,6 @@ pub(crate) struct SelfHealStatusResponse {
     pub(crate) rate_limit_remaining: u64,
     pub(crate) autonomous_mode: crate::AutonomousMode,
     pub(crate) emergency_stop_enabled: bool,
-}
-
-/// Map a failure_type signal to a remediation action name and outcome description.
-fn classify_and_remediate(failure_type: &str, message: &str) -> (&'static str, &'static str) {
-    let msg_lower = message.to_lowercase();
-    match failure_type.to_lowercase().as_str() {
-        "network" | "transport" | "connection_timeout" => ("network_diagnostic_probe", "initiated"),
-        "raft_election" | "leader_election" | "no_leader" => ("failover_leader_promotion", "triggered"),
-        "disk" | "storage" | "io_error" => ("disk_cleanup_evict_cache", "initiated"),
-        "memory" | "oom" | "allocation" => ("cache_eviction_request", "initiated"),
-        "sql_execution" | "query_timeout" | "deadlock" => ("kill_blocked_queries", "initiated"),
-        "auth" | "rbac" | "credential" => ("credential_rotation_alert", "logged"),
-        _ => {
-            if msg_lower.contains("crash") || msg_lower.contains("panic") {
-                ("process_restart_signal", "triggered")
-            } else {
-                ("generic_diagnostics_collect", "logged")
-            }
-        }
-    }
 }
 
 #[tracing::instrument(skip_all, name = "autonomous.self_heal_run")]
@@ -1131,7 +1112,9 @@ pub(crate) async fn autonomous_self_heal_run(
             continue;
         }
 
-        let (action_name, outcome) = classify_and_remediate(failure_type, message);
+        let remediation = crate::helpers::autonomous_exec::execute_remediation(&state, failure_type, message);
+        let action_name = remediation.action;
+        let outcome = remediation.outcome;
         let trace_id = next_action_trace_id();
 
         // Record the autonomous action.
@@ -1140,7 +1123,7 @@ pub(crate) async fn autonomous_self_heal_run(
             action_name,
             &format!("signal/{signal_id}"),
             &operator.operator_id,
-            AutonomousActionDecision::Allow,
+            if outcome == "failed" { AutonomousActionDecision::Deny } else { AutonomousActionDecision::Allow },
             &format!("self_heal_orchestrator:failure_type={failure_type}"),
         );
         append_action_record(&state, record);
@@ -1148,7 +1131,10 @@ pub(crate) async fn autonomous_self_heal_run(
         append_audit_event(
             &state, AuditEventKind::Autonomous,
             &operator.operator_id, "self_heal_action", outcome,
-            &json!({ "signal_id": signal_id, "action": action_name, "failure_type": failure_type }).to_string(),
+            &json!({
+                "signal_id": signal_id, "action": action_name, "failure_type": failure_type,
+                "outcome": outcome, "reason": remediation.reason, "evidence": remediation.evidence,
+            }).to_string(),
         );
 
         action_summaries.push(SelfHealActionSummary {
@@ -1156,6 +1142,7 @@ pub(crate) async fn autonomous_self_heal_run(
             failure_type: failure_type.clone(),
             action_taken: action_name.to_string(),
             outcome: outcome.to_string(),
+            reason: remediation.reason,
             trace_id,
         });
 
@@ -1228,6 +1215,12 @@ pub(crate) struct SlowQueryReportResponse {
 #[derive(Deserialize)]
 pub(crate) struct TuneApplyRequest {
     pub(crate) recommendation_index: usize,
+    /// Target database for pool-capacity changes (A-3 INCREASE_CONNECTIONS).
+    #[serde(default)]
+    pub(crate) target_db: Option<String>,
+    /// Permits to add for INCREASE_CONNECTIONS (default 25).
+    #[serde(default)]
+    pub(crate) add_permits: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -1245,6 +1238,9 @@ pub(crate) struct TuneApplyResponse {
     pub(crate) table: Option<String>,
     pub(crate) column: Option<String>,
     pub(crate) note: Option<String>,
+    /// Before/after evidence for the applied action (A-3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) evidence: Option<serde_json::Value>,
 }
 
 /// Append a slow-query entry to the ring buffer (max 1000 entries).
@@ -1389,6 +1385,7 @@ pub(crate) async fn ai_tune_apply(
             table: None,
             column: None,
             note: Some("emergency_stop is enabled".to_string()),
+            evidence: None,
         })));
     }
 
@@ -1401,49 +1398,106 @@ pub(crate) async fn ai_tune_apply(
             table: None,
             column: None,
             note: Some(format!("no recommendation at index {}", req.recommendation_index)),
+            evidence: None,
         })));
     };
 
-    // Execute the recommendation if it's an index or analyze action.
-    let note = match rec.action.as_str() {
+    // A-3: actual execution requires supervised+ mode; advisory/disabled only logs intent.
+    let execute = state.ai.autonomous_mode.rank() >= AutonomousMode::Supervised.rank();
+    if !execute {
+        append_audit_event(
+            &state, AuditEventKind::Autonomous, &operator.operator_id, "ai_tune_apply_advisory", "logged",
+            &json!({ "action": rec.action, "table": rec.table, "mode": format!("{:?}", state.ai.autonomous_mode) }).to_string(),
+        );
+        return Ok((StatusCode::OK, Json(TuneApplyResponse {
+            status: "advisory_only",
+            applied: false,
+            action: rec.action,
+            table: rec.table,
+            column: rec.column,
+            note: Some("advisory mode: recommendation logged, not executed (requires supervised+)".to_string()),
+            evidence: None,
+        })));
+    }
+
+    // Execute the recommendation against the real engine and capture before/after evidence.
+    let (applied, note, evidence) = match rec.action.as_str() {
         "CREATE INDEX" => {
             if let (Some(t), Some(c)) = (&rec.table, &rec.column) {
                 let idx_name = format!("idx_{}_{}", t, c);
                 let ddl = format!("CREATE INDEX IF NOT EXISTS {idx_name} ON {t}({c})");
-                // Record in audit trail; actual DDL execution requires sql_execute integration.
+                let count_before = state.storage.index_manager.lock().map(|m| m.index_count()).unwrap_or(0);
+                // Execute through the same DDL path the SQL engine uses.
+                crate::handlers::sql::handle_create_index_ddl(&state, &ddl, "");
+                let (count_after, index_present) = state
+                    .storage.index_manager.lock()
+                    .map(|m| (m.index_count(), m.get(&idx_name).is_some()))
+                    .unwrap_or((count_before, false));
+                let ev = json!({
+                    "ddl": ddl, "table": t, "column": c, "index": idx_name,
+                    "index_count_before": count_before, "index_count_after": count_after,
+                    "index_present": index_present,
+                });
                 append_audit_event(
-                    &state, AuditEventKind::Sql, &operator.operator_id, "ai_tune_apply_index", "ok",
-                    &json!({ "ddl": ddl, "table": t, "column": c }).to_string(),
+                    &state, AuditEventKind::Sql, &operator.operator_id, "ai_tune_apply_index",
+                    if index_present { "applied" } else { "failed" }, &ev.to_string(),
                 );
-                Some(format!("DDL queued: {ddl}"))
-            } else { None }
+                (index_present, Some(format!("index '{idx_name}' created and backfilled")), Some(ev))
+            } else { (false, Some("missing table/column for index".to_string()), None) }
         }
         "ANALYZE" => {
             if let Some(t) = &rec.table {
+                let row_count = crate::helpers::autonomous_exec::analyze_table_stats(&state, t);
+                let ev = json!({ "table": t, "row_count": row_count, "stats_refreshed": true });
                 append_audit_event(
-                    &state, AuditEventKind::Sql, &operator.operator_id, "ai_tune_apply_analyze", "ok",
-                    &json!({ "table": t }).to_string(),
+                    &state, AuditEventKind::Sql, &operator.operator_id, "ai_tune_apply_analyze", "applied",
+                    &ev.to_string(),
                 );
-                Some(format!("ANALYZE {t} queued in audit trail"))
-            } else { None }
+                (true, Some(format!("ANALYZE {t}: stats recomputed ({row_count} rows)")), Some(ev))
+            } else { (false, Some("missing table for ANALYZE".to_string()), None) }
         }
         "INCREASE_CONNECTIONS" => {
+            let target_db = req.target_db.clone().unwrap_or_else(|| "default".to_string());
+            let add = req.add_permits.unwrap_or(25).max(1);
+            let (before, after) = {
+                let mut semaphores = state.storage.db_semaphores.lock().expect("db_semaphores lock");
+                let sem = semaphores
+                    .entry(target_db.clone())
+                    .or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(crate::DEFAULT_DB_MAX_CONNECTIONS)))
+                    .clone();
+                let before = sem.available_permits();
+                sem.add_permits(add);
+                (before, sem.available_permits())
+            };
+            let ev = json!({ "db": target_db, "permits_added": add, "available_before": before, "available_after": after });
             append_audit_event(
-                &state, AuditEventKind::Autonomous, &operator.operator_id,
-                "ai_tune_apply_connections", "logged", "{}",
+                &state, AuditEventKind::Autonomous, &operator.operator_id, "ai_tune_apply_connections", "applied",
+                &ev.to_string(),
             );
-            Some("connection limit increase logged; adjust VNG_DB_MAX_CONNECTIONS and restart".to_string())
+            (true, Some(format!("pool '{target_db}' capacity increased by {add} (now {after} permits available)")), Some(ev))
         }
-        _ => Some("action_type_not_directly_executable".to_string()),
+        _ => (false, Some("action_type_not_directly_executable".to_string()), None),
     };
+
+    // Record the autonomous action with correlation for the audit companion (A-9).
+    let trace_id = next_action_trace_id();
+    append_action_record(&state, AutonomousActionExecutionRecord::new(
+        trace_id,
+        "performance_tune",
+        "session",
+        &operator.operator_id,
+        if applied { AutonomousActionDecision::Allow } else { AutonomousActionDecision::Deny },
+        &format!("ai_tune_apply:{}", rec.action),
+    ));
 
     Ok((StatusCode::OK, Json(TuneApplyResponse {
         status: "ok",
-        applied: true,
+        applied,
         action: rec.action,
         table: rec.table,
         column: rec.column,
         note,
+        evidence,
     })))
 }
 

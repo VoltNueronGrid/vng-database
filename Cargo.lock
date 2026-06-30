@@ -4774,6 +4774,7 @@ dependencies = [
 name = "voltnuerongrid-audit-companion"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
  "serde_json",
  "voltnuerongrid-ai",
  "voltnuerongrid-audit",

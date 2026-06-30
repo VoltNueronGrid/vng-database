@@ -4128,7 +4128,7 @@ fn parse_create_index_sql(sql: &str) -> Option<(String, String, Vec<String>, boo
 
 /// M-2: Execute a `CREATE [UNIQUE] INDEX` statement by registering the index in
 /// `IndexManager` and backfilling it from the current `PagedRowStore` snapshot.
-fn handle_create_index_ddl(state: &AppState, sql: &str, db: &str) {
+pub(crate) fn handle_create_index_ddl(state: &AppState, sql: &str, db: &str) {
     let parsed = match parse_create_index_sql(sql) {
         Some(p) => p,
         None => {
