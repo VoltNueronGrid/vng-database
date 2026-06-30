@@ -130,6 +130,63 @@ int vng_driver_build_sql_execute_request(
  */
 void vng_request_free(VngRequest* req);
 
+/* -------------------------------------------------------------------------
+ * D-2: End-to-end SQL execution API (connect → execute → iterate → free)
+ * ---------------------------------------------------------------------- */
+
+/** Opaque connection handle. Allocate with vng_connect(); free with vng_disconnect(). */
+typedef struct VngConn VngConn;
+
+/** Opaque result set. Returned by vng_execute(); free with vng_result_free(). */
+typedef struct VngResult VngResult;
+
+/**
+ * Connects to a VoltNueronGrid server.
+ *
+ * @param host       Host, e.g. "127.0.0.1"
+ * @param port       TCP port, e.g. 8080 (1..65535)
+ * @param admin_key  Admin API key, or NULL for none
+ * @return           Opaque connection, or NULL on invalid arguments.
+ *                   Free with vng_disconnect().
+ */
+VngConn* vng_connect(const char* host, int port, const char* admin_key);
+
+/**
+ * Executes a SQL batch and returns a fully-materialised result set.
+ *
+ * @param conn  Live connection from vng_connect()
+ * @param sql   SQL text to execute (null-terminated)
+ * @return      Result set, or NULL on transport/HTTP/argument error.
+ *              Free with vng_result_free().
+ */
+VngResult* vng_execute(const VngConn* conn, const char* sql);
+
+/** Returns the number of rows in the result set, or -1 on NULL. */
+int vng_result_row_count(const VngResult* result);
+
+/** Returns the number of columns in the result set, or -1 on NULL. */
+int vng_result_column_count(const VngResult* result);
+
+/**
+ * Advances the row cursor. Must be called before the first vng_result_get_str().
+ *
+ * @return 1 if a row is now current, 0 if exhausted, -1 on NULL.
+ */
+int vng_result_next(VngResult* result);
+
+/**
+ * Returns the value of column `col` in the current row as a null-terminated
+ * C string. The pointer is valid until the next vng_result_next() or
+ * vng_result_free(). Returns NULL if there is no current row / col is out of range.
+ */
+const char* vng_result_get_str(const VngResult* result, int col);
+
+/** Frees a result set from vng_execute(). NULL is a no-op. */
+void vng_result_free(VngResult* result);
+
+/** Disconnects and frees a connection from vng_connect(). NULL is a no-op. */
+void vng_disconnect(VngConn* conn);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

@@ -82,6 +82,50 @@ public final class VoltNueronGridDriver {
         }
     }
 
+    /**
+     * Executes a SQL batch end-to-end and returns a {@link VngResultSet}.
+     *
+     * <p>Retries on HTTP 503 (e.g. Raft quorum timeout) up to
+     * {@link DriverConfig#maxRetries} times with a short linear back-off.
+     *
+     * @param sql the SQL text to execute
+     * @return a forward-only result set over the returned rows
+     * @throws DriverError {@link DriverError.Kind#HTTP_STATUS} on a non-2xx
+     *         response (after retries), or transport/timeout errors from
+     *         {@link #execute(DriverRequest)}
+     */
+    public VngResultSet executeQuery(String sql) {
+        requireNonEmpty(sql, "sql");
+        DriverRequest req = buildSqlExecuteRequest(sql);
+
+        int attempts = Math.max(0, config.maxRetries) + 1;
+        DriverResponse resp = null;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            resp = execute(req);
+            if (resp.statusCode() != 503) {
+                break;
+            }
+            // Transient unavailability — back off and retry.
+            if (attempt + 1 < attempts) {
+                try {
+                    Thread.sleep(50L * (attempt + 1));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw DriverError.cancelled("interrupted while retrying");
+                }
+            }
+        }
+
+        if (resp == null) {
+            throw DriverError.transport("no response received");
+        }
+        if (!resp.isSuccess()) {
+            throw DriverError.httpStatus(resp.statusCode(),
+                    "sql/execute failed: HTTP " + resp.statusCode() + " body=" + resp.body());
+        }
+        return VngResultSet.fromJson(resp.body());
+    }
+
     // -------------------------------------------------------------------------
     // Request builders
     // -------------------------------------------------------------------------

@@ -2489,6 +2489,27 @@ pub(crate) async fn sql_execute(
             // M-2: Execute CREATE INDEX statements after releasing the catalog lock.
             // This avoids holding ddl_catalog while acquiring row_store + index_manager.
             drop(catalog);
+            // O-2: emit a structured audit event for every DDL statement so schema
+            // changes are recorded in the audit trail (not just the WAL).
+            for stmt in &ddl_snapshot {
+                if let Some(info) = parse_ddl_info(stmt) {
+                    append_runtime_audit_event(
+                        &state,
+                        AuditEventKind::Sql,
+                        &principal,
+                        "ddl_execute",
+                        "ok",
+                        json!({
+                            "route_scope": "sql/execute",
+                            "operation": info.operation,
+                            "object_kind": info.object_kind,
+                            "object": info.object_name,
+                            "database": info.database_name,
+                            "schema": info.schema_name,
+                        }),
+                    );
+                }
+            }
             for stmt in &ddl_snapshot {
                 let lower = stmt.trim().to_ascii_lowercase();
                 if lower.starts_with("create index ") || lower.starts_with("create unique index ") {

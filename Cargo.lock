@@ -4676,6 +4676,8 @@ dependencies = [
  "once_cell",
  "rustls",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "url",
  "webpki-roots 0.26.11",
 ]
@@ -4740,6 +4742,10 @@ version = "0.1.0"
 [[package]]
 name = "vng-driver-c"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "ureq",
+]
 
 [[package]]
 name = "vng-soak"

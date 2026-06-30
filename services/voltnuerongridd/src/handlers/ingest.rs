@@ -659,6 +659,7 @@ pub(crate) async fn ingest_connector_validate(
 
 // ─── Ingest format handlers ───────────────────────────────────────────────────
 
+#[tracing::instrument(skip_all, name = "ingest.csv")]
 pub(crate) async fn ingest_csv(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -739,6 +740,7 @@ pub(crate) async fn ingest_csv(
     ))
 }
 
+#[tracing::instrument(skip_all, name = "ingest.json")]
 pub(crate) async fn ingest_json(
     State(state): State<AppState>,
     headers: HeaderMap,

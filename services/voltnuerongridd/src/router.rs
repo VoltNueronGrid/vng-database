@@ -780,12 +780,25 @@ pub(crate) async fn propagate_trace_context(
         prop.extract(&HeaderExtractor(req.headers()))
     });
 
+    // O-1: enrich the per-request span with the coarsened route and the calling
+    // operator/user identity for distributed-trace correlation.
+    let route = coarsen_route_for_metrics(req.uri().path());
+    let operator_id = req
+        .headers()
+        .get("x-vng-operator-id")
+        .or_else(|| req.headers().get("x-vng-user-id"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
     // Create a per-request span and stitch it under the upstream trace.
     let span = tracing::info_span!(
         "vng.http_request",
         "otel.kind" = "server",
         "http.method" = %req.method(),
         "http.url"    = %req.uri(),
+        "http.route"  = %route,
+        "vng.operator_id" = %operator_id,
     );
     span.set_parent(parent_ctx);
 

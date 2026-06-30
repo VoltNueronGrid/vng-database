@@ -387,6 +387,7 @@ pub(crate) async fn security_plugins_provenance_register(
 }
 
 /// S6-WS5-03: Initiate a TLS cert rotation (scaffold — records attempt, does not hot-swap certs).
+#[tracing::instrument(skip_all, name = "security.tls_rotate")]
 pub(crate) async fn security_tls_rotate(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -920,6 +921,7 @@ pub(crate) struct KmsRotateResponse {
 
 /// AI-5: Re-wrap the active DEK under a new KMS key. Old DEK version is retained
 /// for decrypting existing rows. New version is marked active.
+#[tracing::instrument(skip_all, name = "security.kms_rotate")]
 pub(crate) async fn security_kms_rotate(
     State(state): State<AppState>,
     headers: HeaderMap,

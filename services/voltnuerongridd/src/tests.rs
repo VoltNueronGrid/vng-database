@@ -392,6 +392,140 @@ fn ingest_csv_appends_tenant_ingest_audit_event() {
     assert!(events[0].details_json.contains("orders-csv"));
 }
 
+// ── O-2: structured audit trail completeness ──────────────────────────────────
+
+#[test]
+fn o2_ddl_execute_emits_audit_event() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlExecuteRequest {
+        sql_batch: "CREATE TABLE o2tbl (id INT PRIMARY KEY, v TEXT)".to_string(),
+        max_rows: None,
+        ..Default::default()
+    };
+    rt.block_on(sql_execute(State(state.clone()), headers, Json(req)))
+        .expect("ddl ok");
+    let events = state.audit_sink.lock().expect("audit lock").latest(50);
+    let ddl = events.iter().find(|e| e.action == "ddl_execute")
+        .expect("a ddl_execute audit event must be emitted");
+    assert_eq!(ddl.kind, AuditEventKind::Sql);
+    assert_eq!(ddl.outcome, "ok");
+    assert!(ddl.details_json.contains("o2tbl"), "details: {}", ddl.details_json);
+    assert!(ddl.details_json.contains("\"operation\":\"create\""));
+}
+
+fn o2_insert_user(state: &AppState, username: &str, password: &str) -> String {
+    let user_id = format!("uid-{username}");
+    let hash = bcrypt::hash(password, 4).expect("hash");
+    let account = crate::user_store::UserAccount {
+        user_id: user_id.clone(),
+        username: username.to_string(),
+        role: "analyst".to_string(),
+        tenant_id: Some("acme".to_string()),
+        created_ms: 0,
+        password_hash: hash,
+    };
+    state.user_store.lock().expect("user lock").insert(account);
+    user_id
+}
+
+#[test]
+fn o2_login_failure_emits_security_audit() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    o2_insert_user(&state, "alice", "correct-horse");
+    let req = crate::handlers::user_mgmt::LoginRequest { username: "alice".to_string(), password: "wrong".to_string() };
+    let res = rt.block_on(crate::handlers::user_mgmt::auth_login(State(state.clone()), Json(req)));
+    assert!(res.is_err(), "bad password must be rejected");
+    let events = state.audit_sink.lock().expect("audit lock").latest(5);
+    let ev = events.iter().find(|e| e.action == "auth_login" && e.outcome == "rejected")
+        .expect("login failure must emit a rejected Security audit event");
+    assert_eq!(ev.kind, AuditEventKind::Security);
+    assert!(ev.details_json.contains("invalid_password"));
+}
+
+#[test]
+fn o2_login_unknown_user_emits_security_audit() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let req = crate::handlers::user_mgmt::LoginRequest { username: "ghost".to_string(), password: "x".to_string() };
+    let res = rt.block_on(crate::handlers::user_mgmt::auth_login(State(state.clone()), Json(req)));
+    assert!(res.is_err());
+    let events = state.audit_sink.lock().expect("audit lock").latest(5);
+    let ev = events.iter().find(|e| e.action == "auth_login" && e.outcome == "rejected")
+        .expect("unknown-user login must emit a rejected Security audit event");
+    assert!(ev.details_json.contains("unknown_user"));
+}
+
+#[test]
+fn o2_login_success_emits_security_audit() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    o2_insert_user(&state, "bob", "s3cret");
+    let req = crate::handlers::user_mgmt::LoginRequest { username: "bob".to_string(), password: "s3cret".to_string() };
+    let res = rt.block_on(crate::handlers::user_mgmt::auth_login(State(state.clone()), Json(req)));
+    assert!(res.is_ok(), "valid login must succeed");
+    let events = state.audit_sink.lock().expect("audit lock").latest(5);
+    let ev = events.iter().find(|e| e.action == "auth_login" && e.outcome == "ok")
+        .expect("successful login must emit an ok Security audit event");
+    assert_eq!(ev.kind, AuditEventKind::Security);
+}
+
+// ── O-1: OpenTelemetry span coverage ──────────────────────────────────────────
+
+#[test]
+fn o1_instrumented_handler_emits_named_span() {
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::Layer;
+
+    #[derive(Clone, Default)]
+    struct CaptureLayer { names: Arc<Mutex<Vec<String>>> }
+    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            self.names.lock().unwrap().push(attrs.metadata().name().to_string());
+        }
+    }
+
+    let cap = CaptureLayer::default();
+    let names = cap.names.clone();
+    let subscriber = tracing_subscriber::registry().with(cap);
+    tracing::subscriber::with_default(subscriber, || {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let state = state_with_key(Some("k"));
+        let headers = operator_headers("k", "admin");
+        let req = crate::handlers::sre::IncidentDiagnoseRequest {
+            failure_type: Some("disk_full".to_string()),
+            severity: Some("high".to_string()),
+            node_id: None,
+            message: Some("disk usage 99%".to_string()),
+        };
+        let _ = rt.block_on(crate::handlers::sre::sre_incident_diagnose(
+            State(state), headers, Json(req),
+        ));
+    });
+    let captured = names.lock().unwrap().clone();
+    assert!(
+        captured.iter().any(|n| n == "sre.incident_diagnose"),
+        "the #[instrument] span must be created when the handler runs; captured: {captured:?}"
+    );
+}
+
+#[test]
+fn o1_inject_trace_context_is_noop_safe() {
+    // Without an active OTEL propagator/span, injection must not panic and must
+    // return a usable builder.
+    let client = reqwest::Client::new();
+    let builder = client.post("http://127.0.0.1:9/none");
+    let _ = crate::helpers::raft_loop::inject_trace_context(builder);
+}
+
 #[test]
 fn sql_execute_accepts_tenant_analyst_headers() {
     let state = state_with_key(None);
@@ -4476,6 +4610,83 @@ fn q1_large_table_aggregate_reports_olap_route() {
         resp.route_path, "olap",
         "large-table aggregate must stay on the OLAP label"
     );
+}
+
+// ── CC-1: Codd's rules compliance ─────────────────────────────────────────────
+
+fn cc1_exec(rt: &tokio::runtime::Runtime, state: &AppState, headers: &HeaderMap, sql: &str)
+    -> (StatusCode, SqlExecuteResponse)
+{
+    let req = SqlExecuteRequest { sql_batch: sql.to_string(), max_rows: None, ..Default::default() };
+    match rt.block_on(sql_execute(State(state.clone()), headers.clone(), Json(req))) {
+        Ok((s, b)) => (s, b.0),
+        Err((s, b)) => (s, SqlExecuteResponse {
+            status: "error".to_string(),
+            route_path: "error".to_string(),
+            reason: b.0.reason,
+            ..Default::default()
+        }),
+    }
+}
+
+#[test]
+fn cc1_rule10_integrity_constraints_enforced() {
+    // Rule 10 (integrity independence): constraints declared in DDL are enforced.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_acct (id INT PRIMARY KEY, bal INT CHECK (bal >= 0))");
+    let (s, _) = cc1_exec(&rt, &state, &headers, "INSERT INTO cc_acct (id, bal) VALUES (1, 100)");
+    assert_eq!(s, StatusCode::OK);
+    let (s, body) = cc1_exec(&rt, &state, &headers, "INSERT INTO cc_acct (id, bal) VALUES (2, 5)");
+    // bal=5 satisfies >= 0 → ok
+    assert_eq!(s, StatusCode::OK, "valid row accepted: {}", body.reason);
+    let (s, _) = cc1_exec(&rt, &state, &headers, "INSERT INTO cc_acct (id, bal) VALUES (1, 50)");
+    assert_eq!(s, StatusCode::CONFLICT, "duplicate PK must be rejected (rule 10)");
+}
+
+#[test]
+fn cc1_rule6_updatable_view_insert_reaches_base_table() {
+    // Rule 6 (view updating): DML against a simple single-table view is rewritten
+    // to the base table.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_base (id INT PRIMARY KEY, v TEXT)");
+    cc1_exec(&rt, &state, &headers, "CREATE VIEW cc_view AS SELECT * FROM cc_base");
+    let (s, _) = cc1_exec(&rt, &state, &headers, "INSERT INTO cc_view (id, v) VALUES (1, 'hello')");
+    assert_eq!(s, StatusCode::OK, "INSERT into updatable view must succeed");
+    // The row must have landed in the base table.
+    assert!(t1_row_exists(&state, "cc_base:1"), "view INSERT must write to the base table");
+}
+
+#[test]
+fn cc1_rule5_subquery_in_from_executes() {
+    // Rule 5 (comprehensive sublanguage): subquery in FROM clause is supported.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    cc1_exec(&rt, &state, &headers, "CREATE TABLE cc_sub (id INT PRIMARY KEY, amount INT)");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_sub (id, amount) VALUES (1, 10)");
+    cc1_exec(&rt, &state, &headers, "INSERT INTO cc_sub (id, amount) VALUES (2, 20)");
+    let (s, body) = cc1_exec(&rt, &state, &headers,
+        "SELECT id, amount FROM (SELECT id, amount FROM cc_sub) AS t");
+    assert_eq!(s, StatusCode::OK, "subquery in FROM must execute: {}", body.reason);
+    assert_ne!(body.route_path, "error", "subquery-in-FROM must not error");
+}
+
+#[test]
+fn cc1_rule12_store_bypass_endpoint_requires_auth() {
+    // Rule 12 (non-subversion): the low-level row-store HTTP endpoints must not be
+    // an unauthenticated bypass — they require operator auth.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let res = rt.block_on(row_store_snapshot(State(state), HeaderMap::new()));
+    match res {
+        Err((status, _)) => assert_eq!(status, StatusCode::UNAUTHORIZED,
+            "row-store bypass endpoint must reject unauthenticated access"),
+        Ok(_) => panic!("row-store bypass endpoint must require auth"),
+    }
 }
 
 // â”€â”€ REQ-23: ACID transaction tracking tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

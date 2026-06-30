@@ -179,6 +179,16 @@ pub(crate) async fn admin_create_user(
         }
     }
 
+    // O-2: audit the user-account creation.
+    crate::audit_helpers::append_audit_event(
+        &state,
+        voltnuerongrid_audit::AuditEventKind::Security,
+        &user_id,
+        "admin_create_user",
+        "ok",
+        &format!("{{\"username\":\"{}\",\"role\":\"{}\"}}", username.replace('"', ""), role.replace('"', "")),
+    );
+
     Ok((
         StatusCode::CREATED,
         Json(CreateUserResponse {
@@ -270,6 +280,16 @@ pub(crate) async fn admin_delete_user(
         }
     }
 
+    // O-2: audit the user-account deletion.
+    crate::audit_helpers::append_audit_event(
+        &state,
+        voltnuerongrid_audit::AuditEventKind::Security,
+        &user_id,
+        "admin_delete_user",
+        "ok",
+        &format!("{{\"user_id\":\"{}\"}}", user_id.replace('"', "")),
+    );
+
     Ok((
         StatusCode::OK,
         Json(DeleteUserResponse {
@@ -348,7 +368,17 @@ pub(crate) async fn auth_login(
         store.get_by_username(&username).cloned()
     };
 
-    let account = account.ok_or_else(|| (
+    let account = account.ok_or_else(|| {
+        // O-2: audit the rejected login (unknown user) before returning 401.
+        crate::audit_helpers::append_audit_event(
+            &state,
+            voltnuerongrid_audit::AuditEventKind::Security,
+            &username,
+            "auth_login",
+            "rejected",
+            &format!("{{\"reason\":\"unknown_user\",\"username\":\"{}\"}}", username.replace('"', "")),
+        );
+        (
         StatusCode::UNAUTHORIZED,
         Json(AuthErrorResponse {
             status: "error",
@@ -356,7 +386,7 @@ pub(crate) async fn auth_login(
             locale: "en".to_string(),
             localized_message: "Invalid username or password".to_string(),
         }),
-    ))?;
+    )})?;
 
     let stored_hash = account.password_hash.clone();
     let password = req.password.clone();
@@ -368,6 +398,15 @@ pub(crate) async fn auth_login(
     .unwrap_or(false);
 
     if !valid {
+        // O-2: audit the rejected login (bad password) before returning 401.
+        crate::audit_helpers::append_audit_event(
+            &state,
+            voltnuerongrid_audit::AuditEventKind::Security,
+            &account.user_id,
+            "auth_login",
+            "rejected",
+            &format!("{{\"reason\":\"invalid_password\",\"username\":\"{}\"}}", username.replace('"', "")),
+        );
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(AuthErrorResponse {
@@ -402,6 +441,16 @@ pub(crate) async fn auth_login(
             Err(_) => return Err(lock_poisoned("session_store")),
         }
     }
+
+    // O-2: audit the successful login.
+    crate::audit_helpers::append_audit_event(
+        &state,
+        voltnuerongrid_audit::AuditEventKind::Security,
+        &account.user_id,
+        "auth_login",
+        "ok",
+        &format!("{{\"username\":\"{}\",\"role\":\"{}\"}}", account.username.replace('"', ""), account.role.replace('"', "")),
+    );
 
     Ok((
         StatusCode::OK,

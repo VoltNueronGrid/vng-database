@@ -20,6 +20,32 @@ use std::time::Duration;
 use reqwest::Client;
 use crate::{AppState, RaftAppendRequest, RaftAppendResponse, RaftDurableState, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse, RaftLogEntry, RaftRole, RaftVoteRequest, RaftVoteResponse};
 
+/// O-1: Inject the current span's W3C TraceContext (`traceparent` / `tracestate`)
+/// into an outbound Raft reqwest request so distributed traces stitch across the
+/// cluster. No-op when no OTEL propagator/active span is configured.
+pub(crate) fn inject_trace_context(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    use opentelemetry::propagation::Injector;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    struct HeaderInjector(Vec<(String, String)>);
+    impl Injector for HeaderInjector {
+        fn set(&mut self, key: &str, value: String) {
+            self.0.push((key.to_string(), value));
+        }
+    }
+
+    let ctx = tracing::Span::current().context();
+    let mut injector = HeaderInjector(Vec::new());
+    opentelemetry::global::get_text_map_propagator(|prop| {
+        prop.inject_context(&ctx, &mut injector);
+    });
+    let mut builder = builder;
+    for (k, v) in injector.0 {
+        builder = builder.header(k, v);
+    }
+    builder
+}
+
 // ---------------------------------------------------------------------------
 // H-2: Raft durable state persistence
 // ---------------------------------------------------------------------------
@@ -287,7 +313,7 @@ async fn run_election(
             let req = req.clone();
             let token = token.clone();
             join_set.spawn(async move {
-                let mut builder = client.post(&url).json(&req);
+                let mut builder = inject_trace_context(client.post(&url).json(&req));
                 if let Some(t) = &token {
                     builder = builder.header("Authorization", format!("Bearer {t}"));
                 }
@@ -317,6 +343,18 @@ async fn run_election(
             // Initialise per-peer progress indices (§5.3).
             let peer_urls: Vec<String> = state.raft_peers.as_ref().clone();
             node.init_leader_indices(&peer_urls);
+            let node_id = node.node_id.clone();
+            let new_term = node.current_term;
+            drop(node);
+            // O-2: audit the leadership change (Raft leader promotion).
+            crate::audit_helpers::append_audit_event(
+                state,
+                voltnuerongrid_audit::AuditEventKind::Failover,
+                &node_id,
+                "raft_leader_elected",
+                "ok",
+                &format!("{{\"new_leader_id\":\"{}\",\"term\":{}}}", node_id.replace('"', ""), new_term),
+            );
         }
     }
 }
@@ -382,7 +420,7 @@ async fn fanout_heartbeat(
                 rows: snapshot_rows.clone(),
             };
             snapshot_set.spawn(async move {
-                let mut builder = client.post(&url).json(&req);
+                let mut builder = inject_trace_context(client.post(&url).json(&req));
                 if let Some(t) = &token {
                     builder = builder.header("Authorization", format!("Bearer {t}"));
                 }
@@ -407,7 +445,7 @@ async fn fanout_heartbeat(
                 leader_commit: commit_index,
             };
             append_set.spawn(async move {
-                let mut builder = client.post(&url).json(&req);
+                let mut builder = inject_trace_context(client.post(&url).json(&req));
                 if let Some(t) = &token {
                     builder = builder.header("Authorization", format!("Bearer {t}"));
                 }

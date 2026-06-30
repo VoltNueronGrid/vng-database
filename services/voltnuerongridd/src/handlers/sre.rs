@@ -1467,6 +1467,7 @@ pub(crate) struct IncidentDiagnoseResponse {
 
 /// AI-3/AI-6: Rules-based incident root cause classification.
 /// Checks configurable `state.diagnosis_rules` before falling back to built-in patterns.
+#[tracing::instrument(skip_all, name = "sre.incident_diagnose")]
 pub(crate) async fn sre_incident_diagnose(
     State(state): State<AppState>,
     headers: HeaderMap,

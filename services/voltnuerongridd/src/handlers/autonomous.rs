@@ -1077,6 +1077,7 @@ fn classify_and_remediate(failure_type: &str, message: &str) -> (&'static str, &
     }
 }
 
+#[tracing::instrument(skip_all, name = "autonomous.self_heal_run")]
 pub(crate) async fn autonomous_self_heal_run(
     State(state): State<AppState>,
     headers: HeaderMap,
