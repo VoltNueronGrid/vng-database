@@ -2601,6 +2601,27 @@ pub(crate) async fn sql_execute(
                     }
                 }
             }
+            // C-2: Register shard tables for DISTRIBUTE BY HASH(col) DDL.
+            for stmt in &ddl_snapshot {
+                let upper = stmt.trim_start().to_ascii_uppercase();
+                if upper.starts_with("CREATE TABLE ") && upper.contains("DISTRIBUTE BY") {
+                    let default_shards = crate::read_env_usize("VNG_SHARD_DEFAULT_COUNT", 4);
+                    if let Some(cfg) =
+                        crate::helpers::dataplane::parse_distribute_by(stmt, default_shards)
+                    {
+                        let table_name = upper
+                            .trim_start_matches("CREATE TABLE ")
+                            .split_whitespace()
+                            .next()
+                            .map(|t| t.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'))
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        if !table_name.is_empty() {
+                            crate::helpers::dataplane::register_shard_config(&state, &table_name, cfg);
+                        }
+                    }
+                }
+            }
             // MV-1: Initial population for CREATE MATERIALIZED VIEW ... WITH DATA (not NO DATA).
             // Run after releasing the catalog lock to avoid holding two locks simultaneously.
             for stmt in &ddl_snapshot {

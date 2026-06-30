@@ -68,6 +68,7 @@ fn state_with_key(key: Option<&str>) -> AppState {
             sync_origin: Arc::new(Mutex::new(RowStoreSyncOrigin::new())),
             replication_transport: Arc::new(Mutex::new(InMemoryReplicationTransport::new())),
             replica_replay_states: Arc::new(Mutex::new(HashMap::new())),
+            htap_peer_cursors: Arc::new(Mutex::new(HashMap::new())),
         },
         storage: StorageState {
             row_store: Arc::new(Mutex::new(PagedRowStore::default())),
@@ -91,6 +92,7 @@ fn state_with_key(key: Option<&str>) -> AppState {
             trigger_registry: Arc::new(Mutex::new(voltnuerongrid_store::triggers::TriggerRegistry::new())),
             trigger_emitter: Arc::new(voltnuerongrid_store::trigger_emitter::NoOpTriggerEmitter),
             partition_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            shard_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),
@@ -17762,4 +17764,416 @@ fn ai6_load_diagnosis_rules_from_json() {
     assert_eq!(rules[0].root_cause, "custom_root");
     assert_eq!(rules[0].confidence, "high");
     let _ = std::fs::remove_file(tmp);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tasks-7 group C — distributed data-plane (C-4, C-3, C-5, C-1, C-2)
+//
+// Multi-node behaviour is simulated with two independent `AppState` instances
+// (node A = source/leader, node B = replica). The cross-node RPC payload built
+// on A is applied on B through the real receive handler, proving the transport
+// end-to-end without a live cluster. Live docker-compose validation is tracked
+// under E-5.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use crate::handlers::dataplane as dp;
+
+// ── C-4 · HTAP sync cross-node transport ──────────────────────────────────
+
+#[test]
+fn c4_htap_push_ships_committed_mutations_to_peer_olap() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let node_a = state_with_key(Some("secret"));
+    let node_b = state_with_key(Some("secret"));
+
+    // Node A commits two OLTP mutations into its sync origin.
+    {
+        let mut origin = node_a.cluster.sync_origin.lock().expect("sync_origin");
+        origin.append("orders", "orders:1", r#"{"id":"1","amt":"10"}"#, MutationOp::Insert);
+        origin.append("orders", "orders:2", r#"{"id":"2","amt":"20"}"#, MutationOp::Insert);
+    }
+
+    // Build the push batch for peer B and apply it through B's receive handler.
+    let (batch, last_seq) = crate::helpers::dataplane::htap_batch_for_peer(&node_a, "http://node-b", 1000);
+    assert_eq!(batch.len(), 2);
+    assert_eq!(last_seq, 2);
+
+    let resp = rt
+        .block_on(dp::cluster_htap_apply(
+            State(node_b.clone()),
+            admin_headers("secret"),
+            Json(dp::ClusterHtapApplyRequest { mutations: batch }),
+        ))
+        .expect("apply ok");
+    assert_eq!(resp.0, StatusCode::OK);
+    assert_eq!(resp.1.applied_count, 2);
+    assert_eq!(resp.1.last_applied_sequence, 2);
+
+    // Node B's OLAP replica now holds both rows shipped from A.
+    let olap = node_b.storage.olap_store.lock().expect("olap");
+    assert!(olap.contains_key("orders:1"));
+    assert!(olap.contains_key("orders:2"));
+}
+
+#[test]
+fn c4_htap_peer_cursor_advances_and_dedupes() {
+    let node_a = state_with_key(Some("secret"));
+    {
+        let mut origin = node_a.cluster.sync_origin.lock().expect("sync_origin");
+        origin.append("t", "t:1", "{}", MutationOp::Insert);
+    }
+    let (batch1, last1) = crate::helpers::dataplane::htap_batch_for_peer(&node_a, "peer", 1000);
+    assert_eq!(batch1.len(), 1);
+    crate::helpers::dataplane::advance_htap_peer_cursor(&node_a, "peer", last1);
+
+    // A second export with no new mutations yields nothing (cursor advanced).
+    let (batch2, _last2) = crate::helpers::dataplane::htap_batch_for_peer(&node_a, "peer", 1000);
+    assert!(batch2.is_empty());
+}
+
+#[test]
+fn c4_cross_node_lag_metric_reflects_mutation_time() {
+    let node_a = state_with_key(Some("secret"));
+    // No mutations yet → no lag measurement.
+    assert!(crate::helpers::dataplane::cross_node_htap_lag_ms(&node_a).is_none());
+    {
+        let mut origin = node_a.cluster.sync_origin.lock().expect("sync_origin");
+        origin.append("t", "t:1", "{}", MutationOp::Insert);
+    }
+    // After a commit, lag is a real measured value (>= 0 ms).
+    let lag = crate::helpers::dataplane::cross_node_htap_lag_ms(&node_a);
+    assert!(lag.is_some());
+}
+
+// ── C-3 · cross-node cache replication ────────────────────────────────────
+
+#[test]
+fn c3_cache_set_replicates_to_peer() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let node_b = state_with_key(Some("secret"));
+
+    let req = dp::ClusterCacheReplicateRequest {
+        cmd: "SET".to_string(),
+        partition_id: "p0".to_string(),
+        key: "user:1".to_string(),
+        value: Some(serde_json::json!({"name": "ada"})),
+        ttl_ms: None,
+    };
+    let resp = rt
+        .block_on(dp::cluster_cache_replicate(
+            State(node_b.clone()),
+            admin_headers("secret"),
+            Json(req),
+        ))
+        .expect("replicate ok");
+    assert!(resp.1.applied);
+
+    let now = crate::now_unix_ms_u64();
+    let got = node_b
+        .ops
+        .distributed_cache
+        .lock()
+        .expect("cache")
+        .get("p0", "user:1", now)
+        .expect("partition exists");
+    assert!(got.is_some());
+}
+
+#[test]
+fn c3_cache_del_replicates_removal_to_peer() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let node_b = state_with_key(Some("secret"));
+    // Seed the key on B first.
+    {
+        let now = crate::now_unix_ms_u64();
+        node_b
+            .ops
+            .distributed_cache
+            .lock()
+            .expect("cache")
+            .set("p0", "k".to_string(), serde_json::json!(1), None, now)
+            .expect("set");
+    }
+    let req = dp::ClusterCacheReplicateRequest {
+        cmd: "DEL".to_string(),
+        partition_id: "p0".to_string(),
+        key: "k".to_string(),
+        value: None,
+        ttl_ms: None,
+    };
+    let resp = rt
+        .block_on(dp::cluster_cache_replicate(
+            State(node_b.clone()),
+            admin_headers("secret"),
+            Json(req),
+        ))
+        .expect("replicate ok");
+    assert!(resp.1.applied);
+    let now = crate::now_unix_ms_u64();
+    let got = node_b
+        .ops
+        .distributed_cache
+        .lock()
+        .expect("cache")
+        .get("p0", "k", now)
+        .expect("partition exists");
+    assert!(got.is_none(), "key should be invalidated after DEL replication");
+}
+
+#[test]
+fn c3_cache_replicate_requires_cluster_credentials() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let node_b = state_with_key(Some("secret"));
+    let req = dp::ClusterCacheReplicateRequest {
+        cmd: "SET".to_string(),
+        partition_id: "p0".to_string(),
+        key: "k".to_string(),
+        value: Some(serde_json::json!(1)),
+        ttl_ms: None,
+    };
+    let err = rt
+        .block_on(dp::cluster_cache_replicate(
+            State(node_b.clone()),
+            HeaderMap::new(),
+            Json(req),
+        ))
+        .expect_err("missing credentials must be rejected");
+    assert_eq!(err, StatusCode::UNAUTHORIZED);
+}
+
+// ── C-5 · quorum event bus replication ────────────────────────────────────
+
+#[test]
+fn c5_events_replicate_in_order_and_persist_offset() {
+    use voltnuerongrid_ingest::{ReplayCursorStore, StreamDirection};
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let node_a = state_with_key(Some("secret"));
+    let node_b = state_with_key(Some("secret"));
+
+    // Node A publishes three ordered events.
+    {
+        let mut bus = node_a.ingest.ingest_event_bus.lock().expect("bus");
+        for i in 0..3 {
+            bus.publish(
+                "ops",
+                StreamDirection::Internal,
+                "node-a",
+                &format!("{{\"n\":{i}}}"),
+                std::collections::HashMap::new(),
+            )
+            .expect("publish");
+        }
+    }
+    let exported = node_a
+        .ingest
+        .ingest_event_bus
+        .lock()
+        .expect("bus")
+        .export_for_stream_since("ops", 0, 100);
+    assert_eq!(exported.len(), 3);
+    let events: Vec<crate::helpers::dataplane::ReplicatedEvent> = exported
+        .iter()
+        .map(|e| crate::helpers::dataplane::ReplicatedEvent {
+            transport_sequence: e.event_id,
+            stream_name: e.stream_name.clone(),
+            origin: e.origin.clone(),
+            payload_json: e.payload_json.clone(),
+        })
+        .collect();
+
+    let resp = rt
+        .block_on(dp::cluster_event_replicate(
+            State(node_b.clone()),
+            admin_headers("secret"),
+            Json(dp::ClusterEventReplicateRequest { events }),
+        ))
+        .expect("replicate ok");
+    assert_eq!(resp.1.applied_count, 3);
+    assert_eq!(resp.1.last_sequence, 3);
+
+    // Node B sees the same three events in the same order.
+    let b_events = node_b
+        .ingest
+        .ingest_event_bus
+        .lock()
+        .expect("bus")
+        .export_for_stream_since("ops", 0, 100);
+    assert_eq!(b_events.len(), 3);
+    let payloads: Vec<String> = b_events.iter().map(|e| e.payload_json.clone()).collect();
+    assert_eq!(payloads, vec!["{\"n\":0}", "{\"n\":1}", "{\"n\":2}"]);
+
+    // Consumer offset survives (persisted in the replay cursor store).
+    let cursor = node_b
+        .ingest
+        .ingest_outbox_cursors
+        .lock()
+        .expect("cursors")
+        .load("cluster.replicated");
+    assert_eq!(cursor, Some(3));
+}
+
+#[test]
+fn c5_events_out_of_order_batch_is_sorted_before_apply() {
+    let node_b = state_with_key(Some("secret"));
+    // Deliberately scrambled transport sequences.
+    let events = vec![
+        crate::helpers::dataplane::ReplicatedEvent { transport_sequence: 3, stream_name: "s".into(), origin: "a".into(), payload_json: "c".into() },
+        crate::helpers::dataplane::ReplicatedEvent { transport_sequence: 1, stream_name: "s".into(), origin: "a".into(), payload_json: "a".into() },
+        crate::helpers::dataplane::ReplicatedEvent { transport_sequence: 2, stream_name: "s".into(), origin: "a".into(), payload_json: "b".into() },
+    ];
+    let (applied, last) = crate::helpers::dataplane::apply_event_replication(&node_b, &events);
+    assert_eq!(applied, 3);
+    assert_eq!(last, 3);
+    let b_events = node_b.ingest.ingest_event_bus.lock().expect("bus").export_for_stream_since("s", 0, 100);
+    let payloads: Vec<String> = b_events.iter().map(|e| e.payload_json.clone()).collect();
+    assert_eq!(payloads, vec!["a", "b", "c"]); // applied in sorted order
+}
+
+// ── C-1 · distributed scheduler ───────────────────────────────────────────
+
+#[test]
+fn c1_distributed_olap_falls_back_to_local_when_no_peers() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let resp = rt
+        .block_on(dp::distributed_olap_query(
+            State(state.clone()),
+            admin_headers("secret"),
+            Json(dp::DistributedOlapRequest {
+                query: "SELECT * FROM t".to_string(),
+                max_rows: Some(10),
+            }),
+        ))
+        .expect("olap ok");
+    assert_eq!(resp.1.status, "ok");
+    assert_eq!(resp.1.partitions, 1);
+    assert!(resp.1.local_fallback, "single-node must report local fallback");
+    assert_eq!(resp.1.per_node.len(), 1);
+    assert_eq!(resp.1.per_node[0].node_id, "node-1");
+}
+
+#[test]
+fn c1_olap_subtask_returns_local_partial() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let resp = rt
+        .block_on(dp::cluster_olap_subtask(
+            State(state.clone()),
+            admin_headers("secret"),
+            Json(dp::OlapSubtaskRequest { query: "SELECT * FROM t".to_string(), max_rows: None }),
+        ))
+        .expect("subtask ok");
+    assert_eq!(resp.1.node_id, "node-1");
+}
+
+#[test]
+fn c1_merge_partials_sums_rows_across_nodes() {
+    use crate::helpers::dataplane::{merge_olap_partials, OlapSubtaskResult};
+    let partials = vec![
+        OlapSubtaskResult { node_id: "node-1".into(), rows: 3, elapsed_ms: 1, data_source: "rocksdb".into() },
+        OlapSubtaskResult { node_id: "node-2".into(), rows: 4, elapsed_ms: 1, data_source: "rocksdb".into() },
+        OlapSubtaskResult { node_id: "node-3".into(), rows: 5, elapsed_ms: 1, data_source: "rocksdb".into() },
+    ];
+    let merged = merge_olap_partials(partials, false);
+    assert_eq!(merged.total_rows, 12);
+    assert_eq!(merged.partitions, 3);
+    assert!(!merged.local_fallback);
+}
+
+// ── C-2 · shard coordinators ──────────────────────────────────────────────
+
+#[test]
+fn c2_distribute_by_ddl_registers_shard_config() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(None);
+    let headers = tenant_user_headers("analyst-acme", "acme");
+    let req = SqlExecuteRequest {
+        sql_batch: "CREATE TABLE shardt (id INT PRIMARY KEY, v TEXT) DISTRIBUTE BY HASH(id) SHARDS 4".to_string(),
+        max_rows: None,
+        ..Default::default()
+    };
+    rt.block_on(sql_execute(State(state.clone()), headers, Json(req))).expect("ddl ok");
+
+    let cfg = crate::helpers::dataplane::lookup_shard_config(&state, "shardt")
+        .expect("shard config registered");
+    assert_eq!(cfg.column, "id");
+    assert_eq!(cfg.shard_count, 4);
+}
+
+#[test]
+fn c2_shard_route_is_deterministic_and_local_single_node() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    crate::helpers::dataplane::register_shard_config(
+        &state,
+        "orders",
+        crate::helpers::dataplane::ShardTableConfig { column: "id".into(), shard_count: 8 },
+    );
+    let resp1 = rt
+        .block_on(dp::cluster_shard_route(
+            State(state.clone()),
+            admin_headers("secret"),
+            Json(dp::ShardRouteRequest { table: "orders".into(), primary_key: "user-42".into() }),
+        ))
+        .expect("route ok");
+    let resp2 = rt
+        .block_on(dp::cluster_shard_route(
+            State(state.clone()),
+            admin_headers("secret"),
+            Json(dp::ShardRouteRequest { table: "orders".into(), primary_key: "user-42".into() }),
+        ))
+        .expect("route ok");
+    assert!(resp1.1.sharded);
+    assert_eq!(resp1.1.shard_id, resp2.1.shard_id, "deterministic routing");
+    assert!(resp1.1.shard_id < 8);
+    // Single node owns every shard.
+    assert!(resp1.1.is_local);
+    assert_eq!(resp1.1.owning_node_index, 0);
+}
+
+#[test]
+fn c2_shard_info_reports_per_shard_row_distribution() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    crate::helpers::dataplane::register_shard_config(
+        &state,
+        "orders",
+        crate::helpers::dataplane::ShardTableConfig { column: "id".into(), shard_count: 4 },
+    );
+    // Insert rows under the `orders:` prefix so the scatter-gather view can count them.
+    {
+        let mut rs = state.storage.row_store.lock().expect("rs");
+        for i in 0..20 {
+            let xid = rs.begin_xid();
+            let mut data = std::collections::HashMap::new();
+            data.insert("id".to_string(), i.to_string());
+            rs.insert(xid, &format!("orders:{i}"), data);
+        }
+    }
+    let resp = rt
+        .block_on(dp::cluster_shard_info(
+            State(state.clone()),
+            admin_headers("secret"),
+            Path("orders".to_string()),
+        ))
+        .expect("info ok");
+    assert!(resp.1.sharded);
+    assert_eq!(resp.1.shard_count, 4);
+    assert_eq!(resp.1.per_shard_row_counts.iter().sum::<usize>(), 20);
+    assert_eq!(resp.1.shard_owners.len(), 4);
+}
+
+#[test]
+fn c2_unsharded_table_route_reports_local() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let resp = rt
+        .block_on(dp::cluster_shard_route(
+            State(state.clone()),
+            admin_headers("secret"),
+            Json(dp::ShardRouteRequest { table: "plain".into(), primary_key: "k".into() }),
+        ))
+        .expect("route ok");
+    assert!(!resp.1.sharded);
+    assert!(resp.1.is_local);
 }

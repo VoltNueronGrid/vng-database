@@ -701,6 +701,8 @@ pub(crate) struct ClusterState {
     pub(crate) sync_origin: Arc<Mutex<RowStoreSyncOrigin>>,
     pub(crate) replication_transport: Arc<Mutex<InMemoryReplicationTransport>>,
     pub(crate) replica_replay_states: Arc<Mutex<HashMap<String, ReplicaReplayState>>>,
+    /// C-4: Per-peer HTAP replication cursor (peer base URL → last shipped sequence).
+    pub(crate) htap_peer_cursors: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 /// Storage engine, MVCC, SQL catalog, transaction management, and locking.
@@ -735,6 +737,8 @@ pub(crate) struct StorageState {
     pub(crate) trigger_emitter: Arc<dyn TriggerEmitter>,
     /// PART-1: partition registry — maps table_name → partition column.
     pub(crate) partition_registry: Arc<Mutex<HashMap<String, String>>>,
+    /// C-2: shard registry — maps table_name → shard config (DISTRIBUTE BY HASH).
+    pub(crate) shard_registry: Arc<Mutex<HashMap<String, helpers::dataplane::ShardTableConfig>>>,
     pub(crate) pessimistic_locks: Arc<Mutex<HashMap<String, PessimisticLockRecord>>>,
     pub(crate) pessimistic_lock_waits: Arc<Mutex<HashMap<String, String>>>,
     pub(crate) pessimistic_lock_metrics: PessimisticLockContentionMetrics,
@@ -1783,6 +1787,7 @@ async fn main() {
             sync_origin: Arc::new(Mutex::new(RowStoreSyncOrigin::new())),
             replication_transport: Arc::new(Mutex::new(InMemoryReplicationTransport::new())),
             replica_replay_states: Arc::new(Mutex::new(HashMap::new())),
+            htap_peer_cursors: Arc::new(Mutex::new(HashMap::new())),
         },
         storage: StorageState {
             row_store: Arc::new(Mutex::new({
@@ -1837,6 +1842,7 @@ async fn main() {
             })),
             trigger_emitter: Arc::new(LoggingTriggerEmitter),
             partition_registry: Arc::new(Mutex::new(HashMap::new())),
+            shard_registry: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_locks: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_waits: Arc::new(Mutex::new(HashMap::new())),
             pessimistic_lock_metrics: PessimisticLockContentionMetrics::new(),

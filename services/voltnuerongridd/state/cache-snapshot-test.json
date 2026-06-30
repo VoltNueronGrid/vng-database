@@ -1,3 +1,8 @@
 {
   "ws27-test": {}
+} "temp-key": {
+      "expires_at_ms": 1782820838071,
+      "value": "ephemeral"
+    }
+  }
 }

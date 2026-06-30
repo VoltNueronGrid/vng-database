@@ -9,6 +9,7 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
     use crate::handlers::rows::*;
     use crate::handlers::raft::*;
     use crate::handlers::misc::*;
+    use crate::handlers::dataplane::*;
     use crate::handlers::wal::*;
     use crate::handlers::sql::*;
     use crate::handlers::sre::*;
@@ -42,6 +43,15 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         .route("/api/v1/sql/route", post(sql_route))
         .route("/api/v1/sql/execute", post(sql_execute))
         .route("/api/v1/olap/query", post(olap_query))
+        // Tasks-7 group C: distributed data-plane cross-node RPCs.
+        .route("/api/v1/cluster/htap/apply", post(cluster_htap_apply))
+        .route("/api/v1/cluster/htap/lag", get(cluster_htap_lag))
+        .route("/api/v1/cluster/cache/replicate", post(cluster_cache_replicate))
+        .route("/api/v1/cluster/events/replicate", post(cluster_event_replicate))
+        .route("/api/v1/cluster/scheduler/subtask", post(cluster_olap_subtask))
+        .route("/api/v1/cluster/scheduler/olap", post(distributed_olap_query))
+        .route("/api/v1/cluster/shards/route", post(cluster_shard_route))
+        .route("/api/v1/cluster/shards/:table", get(cluster_shard_info))
         .route("/api/v1/failover/status", get(failover_status))
         .route("/api/v1/failover/simulate", post(failover_simulate))
         .route("/api/v1/admin/cluster/topology", get(admin_cluster_topology))
