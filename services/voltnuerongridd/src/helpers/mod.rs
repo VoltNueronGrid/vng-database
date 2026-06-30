@@ -10,6 +10,8 @@ pub(crate) mod autonomous_exec;
 pub(crate) mod partition;
 pub(crate) mod op_events;
 pub(crate) mod jsonb;
+pub(crate) mod pg_wire;
+pub(crate) mod pg_listener;
 pub(crate) mod boot;
 pub(crate) mod native_protocol;
 pub(crate) mod raft_loop;

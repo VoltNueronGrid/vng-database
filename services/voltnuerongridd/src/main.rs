@@ -1969,6 +1969,8 @@ async fn main() {
 
     tokio::spawn(run_dr_hook_scheduler(state.clone()));
     tokio::spawn(crate::handlers::autonomous_ctl::run_ops_agent_scheduler(state.clone()));
+    // D-1: PostgreSQL wire-protocol front-end (opt-in via VNG_PGWIRE_ENABLED).
+    tokio::spawn(crate::helpers::pg_listener::run_pg_wire_listener(state.clone()));
 
     // CACHE-1: Restore distributed cache from on-disk snapshot (if available).
     crate::handlers::misc::load_cache_snapshot(&state);

@@ -43,10 +43,19 @@ test.describe("Welcome Screen", () => {
     await expect(mockedPage.locator(".conn-panel-title")).toHaveText("New Connection");
   });
 
-  test("clicking New Query card navigates to main workspace", async ({ mockedPage }) => {
+  test("clicking New Query card with an active connection opens the main workspace", async ({ mockedPage }) => {
+    // R9: the workspace/SQL editor only renders once a connection is active, so
+    // New Query activates the most-recent connection before opening the editor.
+    await seedConnection(mockedPage);
+    await mockedPage.reload();
     await mockedPage.locator(".welcome-card").filter({ hasText: "New Query" }).click();
     await expect(mockedPage.locator(".workspace")).toBeVisible();
     await expect(mockedPage.locator(".tabbar")).toBeVisible();
+  });
+
+  test("clicking New Query card with no connections navigates to the main screen", async ({ mockedPage }) => {
+    await mockedPage.locator(".welcome-card").filter({ hasText: "New Query" }).click();
+    await expect(mockedPage.locator(".main-layout")).toBeVisible();
   });
 
   test("clicking Dashboard card navigates to dashboard screen", async ({ mockedPage }) => {

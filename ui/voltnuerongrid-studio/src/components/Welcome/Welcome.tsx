@@ -6,17 +6,31 @@ export function Welcome() {
   const setScreen = useUiStore((s) => s.setScreen);
   const openConnectionPanel = useUiStore((s) => s.openConnectionPanel);
   const connections = useConnectionStore((s) => s.connections);
-  const setActive = useConnectionStore((s) => s.setActive);
+  const activeId = useConnectionStore((s) => s.activeId);
+  const validateConnection = useConnectionStore((s) => s.validateConnection);
   const openSqlTab = useEditorStore((s) => s.openSqlTab);
 
   function connect(id: string) {
-    setActive(id);
+    // D-4: drive the connection lifecycle (idle → validating → active) so the
+    // workspace/SQL editor opens. `setActive` alone leaves the lifecycle idle
+    // and the workspace never renders.
     setScreen("main");
+    void validateConnection(id);
   }
 
   function newQuery() {
+    // D-4: open a SQL tab and navigate to the main screen. When a connection
+    // exists, activate the active/most-recent one (R9) so the workspace/SQL
+    // editor renders; with no connection the main screen shows its empty states.
+    const sortedConns = [...connections].sort(
+      (a, b) => (b.lastUsed ?? b.createdAt) - (a.lastUsed ?? a.createdAt)
+    );
+    const target = activeId ?? sortedConns[0]?.id;
     openSqlTab();
     setScreen("main");
+    if (target) {
+      void validateConnection(target);
+    }
   }
 
   const sorted = [...connections].sort(

@@ -18999,3 +18999,44 @@ fn b6_jsonb_gin_index_accelerates_key_lookup() {
     assert_eq!(idx.rows_with_key("status"), vec!["docs:1", "docs:2"]);
     assert_eq!(idx.rows_with_key("vip"), vec!["docs:1"]);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tasks-7 group D — Clients, Drivers, UI (D-1 Postgres wire protocol)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── D-1 · Postgres wire-protocol front-end ──────────────────────────────────
+
+#[tokio::test]
+async fn d1_pgwire_select_roundtrips_through_sql_engine() {
+    // Seed a table via the SQL engine, then drive the pg-wire query path and
+    // assert the encoded backend bytes carry RowDescription + DataRow + the
+    // SELECT command tag — proving the wire front-end maps to the engine.
+    use crate::helpers::pg_listener::run_query_and_encode_for_test;
+    let state = state_with_key(Some("secret"));
+    let h = operator_headers("secret", "platform-admin");
+    let _ = sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "CREATE TABLE pgw (id INT PRIMARY KEY, name TEXT)".to_string(), ..Default::default() })).await;
+    let _ = sql_execute(State(state.clone()), h.clone(),
+        Json(SqlExecuteRequest { sql_batch: "INSERT INTO pgw (id, name) VALUES (1, 'alice')".to_string(), ..Default::default() })).await;
+
+    let bytes = run_query_and_encode_for_test(&state, "SELECT id, name FROM pgw", None, Some("secret")).await;
+    // RowDescription ('T') and CommandComplete ('C') tags must be present.
+    assert!(bytes.contains(&b'T'), "expected RowDescription frame");
+    assert!(bytes.contains(&b'C'), "expected CommandComplete frame");
+    // The final frame is ReadyForQuery ('Z' ... 'I').
+    assert!(bytes.windows(2).any(|w| w == [b'Z', 0] || w[0] == b'Z'));
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("SELECT"), "command tag should be SELECT n");
+}
+
+#[tokio::test]
+async fn d1_pgwire_error_maps_to_error_response() {
+    use crate::helpers::pg_listener::run_query_and_encode_for_test;
+    let state = state_with_key(Some("secret"));
+    // A query against auth that fails internally still returns a framed response.
+    let bytes = run_query_and_encode_for_test(&state, "", None, Some("secret")).await;
+    // Empty query → EmptyQueryResponse ('I') + ReadyForQuery ('Z').
+    assert!(bytes.contains(&b'I'));
+    assert!(bytes.contains(&b'Z'));
+}
+

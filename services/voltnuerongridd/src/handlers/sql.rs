@@ -583,7 +583,12 @@ pub(crate) async fn sql_transaction(
                 RuntimeAccessPrincipal::Operator(op) => op.operator_id.clone(),
                 RuntimeAccessPrincipal::TenantUser(tu) => tu.user_id.clone(),
             };
-            format!("tx-{}-{}", identity, now_ms)
+            // Append a process-global monotonic counter so two transactions begun
+            // by the same principal within the same millisecond still get distinct
+            // ids (otherwise OCC/serializable conflict detection would skip the
+            // "same" peer and miss a real write-write conflict).
+            let seq = crate::TX_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            format!("tx-{}-{}-{}", identity, now_ms, seq)
         };
         let has_begin = statements.iter().any(|s| {
             matches!(SqlAnalyzer::analyze_statement(s).kind, SqlStatementKind::Begin)

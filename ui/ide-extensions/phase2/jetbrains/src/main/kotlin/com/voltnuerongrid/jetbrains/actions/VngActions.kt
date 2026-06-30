@@ -13,7 +13,18 @@ class ExecuteSqlAction : AnAction("Execute SQL") {
             ?: run { Messages.showInfoMessage("No SQL to execute.", "VoltNueronGrid"); return }
         try {
             val result = VngApiClient().executeSql(sql)
-            Messages.showInfoMessage(result.toString(), "VoltNueronGrid — SQL Result")
+            if (result.isError) {
+                Messages.showErrorDialog(result.error(), "VoltNueronGrid")
+                return
+            }
+            // Render the result set as a compact text table for the result dialog.
+            val sb = StringBuilder()
+            sb.append(result.columns().joinToString(" | ")).append("\n")
+            for (row in result.rows()) {
+                sb.append(row.joinToString(" | ")).append("\n")
+            }
+            sb.append("\n").append(result.rowCount()).append(" row(s) — route ").append(result.routePath())
+            Messages.showInfoMessage(sb.toString(), "VoltNueronGrid — SQL Result")
         } catch (ex: Exception) {
             Messages.showErrorDialog("Error: ${ex.message}", "VoltNueronGrid")
         }

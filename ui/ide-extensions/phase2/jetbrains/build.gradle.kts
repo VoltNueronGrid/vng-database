@@ -8,6 +8,7 @@ version = "0.1.0"
 
 repositories {
     mavenCentral()
+    mavenLocal() // resolves the shared vng-ide-core after `mvn install`
 }
 
 intellij {
@@ -18,8 +19,10 @@ intellij {
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.google.code.gson:gson:2.10.1")
+    // D-5: shared, dependency-free query-runner core (no OkHttp/Gson needed).
+    // Install first with: mvn -f ../../shared/vng-ide-core install
+    implementation("com.voltnuerongrid.ide:vng-ide-core:0.1.0")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
 }
 
 tasks {
@@ -27,5 +30,8 @@ tasks {
     patchPluginXml {
         sinceBuild.set("241")
         untilBuild.set("251.*")
+    }
+    test {
+        useJUnitPlatform()
     }
 }

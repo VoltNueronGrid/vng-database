@@ -249,6 +249,10 @@ pub unsafe extern "C" fn vng_request_free(req: *mut VngRequest) {
 pub struct VngConn {
     base_url: String,
     admin_key: String,
+    /// Operator identity sent alongside the admin key so the server's SQL
+    /// runtime RBAC resolves a bound operator. Defaults to `admin` (a default
+    /// Dba binding); override with the `VNG_OPERATOR_ID` environment variable.
+    operator_id: String,
 }
 
 /// Opaque result set returned by `vng_execute`. Owns all row data.
@@ -273,11 +277,12 @@ fn parse_execute_response(body: &str) -> (Vec<String>, Vec<Vec<String>>) {
         Ok(v) => v,
         Err(_) => return (Vec::new(), Vec::new()),
     };
-    // Column list, if present.
+    // Column list, if present. Each entry may be a bare string or an object
+    // carrying a `name` field (`{"name":"id","data_type":"integer"}`).
     let mut columns: Vec<String> = v
         .get("columns")
         .and_then(|c| c.as_array())
-        .map(|arr| arr.iter().map(json_scalar_to_string).collect())
+        .map(|arr| arr.iter().map(json_column_name).collect())
         .unwrap_or_default();
 
     let rows_val = v.get("rows").and_then(|r| r.as_array());
@@ -314,6 +319,15 @@ fn json_scalar_to_string(v: &serde_json::Value) -> String {
     }
 }
 
+/// Resolve a column name from a `columns[]` entry: an object's `name` field when
+/// present, otherwise the stringified scalar.
+fn json_column_name(v: &serde_json::Value) -> String {
+    if let Some(name) = v.get("name") {
+        return json_scalar_to_string(name);
+    }
+    json_scalar_to_string(v)
+}
+
 /// Connect to a VoltNueronGrid server.
 ///
 /// `host` e.g. `"127.0.0.1"`, `port` e.g. `8080`, `admin_key` is the admin API
@@ -338,8 +352,12 @@ pub unsafe extern "C" fn vng_connect(
         return std::ptr::null_mut();
     }
     let admin_key = c_str_to_string(admin_key).unwrap_or_default();
+    let operator_id = std::env::var("VNG_OPERATOR_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "admin".to_string());
     let base_url = format!("http://{}:{}", host.trim_end_matches('/'), port);
-    Box::into_raw(Box::new(VngConn { base_url, admin_key }))
+    Box::into_raw(Box::new(VngConn { base_url, admin_key, operator_id }))
 }
 
 /// Execute a SQL batch and return a fully-materialised result set.
@@ -368,6 +386,7 @@ pub unsafe extern "C" fn vng_execute(
     let mut req = ureq::post(&url).set("content-type", "application/json");
     if !c.admin_key.is_empty() {
         req = req.set("x-vng-admin-key", &c.admin_key);
+        req = req.set("x-vng-operator-id", &c.operator_id);
     }
     let resp_body = match req.send_string(&body) {
         Ok(resp) => resp.into_string().unwrap_or_default(),

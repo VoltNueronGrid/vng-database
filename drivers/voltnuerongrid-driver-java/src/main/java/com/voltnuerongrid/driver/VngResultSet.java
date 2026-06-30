@@ -50,7 +50,7 @@ public final class VngResultSet {
         Object colsVal = obj.get("columns");
         if (colsVal instanceof List) {
             for (Object c : (List<Object>) colsVal) {
-                columns.add(scalar(c));
+                columns.add(columnName(c));
             }
         }
 
@@ -94,6 +94,22 @@ public final class VngResultSet {
             return Double.toString(d);
         }
         return v.toString();
+    }
+
+    /**
+     * Resolve a column name from a {@code columns[]} entry. The server may send
+     * either a bare string ({@code "id"}) or an object carrying a {@code name}
+     * field ({@code {"name":"id","data_type":"integer"}}); both yield the name.
+     */
+    @SuppressWarnings("unchecked")
+    private static String columnName(Object c) {
+        if (c instanceof Map) {
+            Object name = ((Map<String, Object>) c).get("name");
+            if (name != null) {
+                return scalar(name);
+            }
+        }
+        return scalar(c);
     }
 
     /** Advances to the next row. Returns {@code true} if a row is now current. */
