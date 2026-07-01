@@ -27,6 +27,8 @@ pub mod wal_adapter;
 pub mod storage_client;
 // H9-8: Snapshot Manager with lifecycle and freshness selection
 pub mod snapshot;
+// H9-6: Background Merge Manager (tail-to-base consolidation scheduler)
+pub mod merge;
 use wal_adapter::{WalAdapter, WalAdapterError};
 
 pub use triggers::{
@@ -45,6 +47,11 @@ pub use partition::{PartitionType, RangePartitionScheme, RangePartition, HashPar
 pub use mvcc::{MvccRowV2, VersionVisibility, xid_to_commit_ts, commit_ts_to_xid, snapshot_ts_to_xid};
 // H9-8: Snapshot Manager with lifecycle and freshness selection
 pub use snapshot::{SnapshotId, SnapshotHandle, SnapshotManager, SnapshotRequest, SnapshotMetrics, SnapshotGuard, PinnedBaseVersions};
+// H9-6: Background Merge Manager (tail-to-base consolidation scheduler)
+pub use merge::{
+    MergePolicy, MergeJobId, MergeJob, MergeStatus, MergeMetrics, MergePhase, MergeProgress,
+    MergeManager,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurabilityConfig {

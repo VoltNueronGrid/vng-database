@@ -1,16 +1,27 @@
 {
   "history": {
-    "rm-me": [
+    "p2": [
       {
-        "id": "rm-me",
-        "name": "Remove Me",
+        "id": "p2",
+        "name": "P2",
         "version": "1.0.0",
-        "checksum_sha256": "z",
+        "checksum_sha256": "a",
         "signed": true,
         "installed_at_ms": 0,
-        "state": "uninstalled"
+        "state": "active"
+      },
+      {
+        "id": "p2",
+        "name": "P2",
+        "version": "2.0.0",
+        "checksum_sha256": "b",
+        "signed": true,
+        "installed_at_ms": 1,
+        "state": "active"
       }
     ]
   },
-  "current": {}
+  "current": {
+    "p2": "1.0.0"
+  }
 }
