@@ -23,6 +23,8 @@ pub mod triggers;
 pub mod trigger_emitter;
 pub mod wal_adapter;
 pub mod storage_client;
+// H9-8: Snapshot Manager with lifecycle and freshness selection
+pub mod snapshot;
 use wal_adapter::{WalAdapter, WalAdapterError};
 
 pub use triggers::{
@@ -32,11 +34,13 @@ pub use trigger_emitter::{LoggingTriggerEmitter, NoOpTriggerEmitter, TriggerEmit
 // H9-1: HTAP storage traits and types
 pub use types::{PartitionId, SegmentId, RowId, CommitTs, SnapshotTs, VersionId};
 pub use traits::{TailStore, BaseColumnStore, SegmentCatalog, RowProjectionCache, MergeableSegmentStore, Row, ColumnBatch};
-pub use segment::{HtapSegmentRef, SegmentMetadata, SegmentStats, MinMaxStats, TailVersion};
+pub use segment::{HtapSegmentRef, SegmentMetadata, SegmentStats, MinMaxStats, TailVersion, ColumnEncoding, ColumnBlock, BaseSegmentVersion, BaseSegmentManifest};
 // H9-2: Partition routing and types
 pub use partition::{PartitionType, RangePartitionScheme, RangePartition, HashPartitionScheme, SegmentRouter};
 // H9-3: MVCC version compatibility and lineage support
 pub use mvcc::{MvccRowV2, VersionVisibility, xid_to_commit_ts, commit_ts_to_xid, snapshot_ts_to_xid};
+// H9-8: Snapshot Manager with lifecycle and freshness selection
+pub use snapshot::{SnapshotId, SnapshotHandle, SnapshotManager, SnapshotRequest, SnapshotMetrics, SnapshotGuard, PinnedBaseVersions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurabilityConfig {
