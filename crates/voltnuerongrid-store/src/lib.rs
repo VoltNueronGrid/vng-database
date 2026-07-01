@@ -41,6 +41,13 @@ pub mod htap_optimizer;
 pub mod hybrid_scan;
 // H9-12: Resource Manager and workload-class admission control
 pub mod resource_manager;
+// H9-15: Distributed partition ownership and OLAP snapshot routing
+pub mod partition_placement;
+// H9-14: Adaptive storage controller
+pub mod adaptive_controller;
+// H9-16: HTAP benchmark suite
+pub mod htap_benchmark;
+pub use htap_benchmark::{HtapBenchmarkSuite, BenchmarkConfig, BenchmarkScenario, BenchmarkResult};
 use wal_adapter::{WalAdapter, WalAdapterError};
 
 pub use triggers::{
@@ -85,6 +92,20 @@ pub use resource_manager::{
     ResourceManager, WorkloadClass, QueryRequest, ResourceBudget, ResourceAllocation,
     AdmissionQueue, ResourceMetrics,
 };
+// H9-15: Distributed partition ownership and OLAP snapshot routing
+pub use partition_placement::{
+    PlacementRegistry, PartitionPlacement, ClusterNode, NodeRole, RebalancePlan,
+    RebalanceStatus, RoutingDecision, DistributedAccessPath, PlacementMetrics,
+};
+// H9-14: Adaptive storage controller
+pub use adaptive_controller::{
+    AdaptiveStorageController, AdaptiveControllerConfig, SegmentWorkloadStats,
+    PolicyDecision, PolicyChange, ControllerMetrics,
+};
+
+// H9-13: HTAP observability and SLO metrics
+pub mod htap_observability;
+pub use htap_observability::{HtapMetrics, HtapDiagnostics, TableDiagnostics, HtapMetricsSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurabilityConfig {

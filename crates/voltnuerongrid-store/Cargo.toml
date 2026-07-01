@@ -12,9 +12,9 @@ voltnuerongrid-core = { path = "../voltnuerongrid-core" }
 # Enable with `--features rocksdb`. The service crate enables it by default via
 # its own `[features]` block (see services/voltnuerongridd/Cargo.toml).
 rocksdb = { version = "0.22", optional = true, default-features = false, features = ["snappy"] }
-serde = { version = "1", features = ["derive"], optional = true }
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
 
 [features]
 default = []
-rocksdb = ["dep:rocksdb", "dep:serde", "dep:serde_json"]
+rocksdb = ["dep:rocksdb", "dep:serde_json"]

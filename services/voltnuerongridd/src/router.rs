@@ -696,6 +696,11 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
             use crate::handlers::sre::sre_incident_evidence;
             post(sre_incident_evidence)
         })
+        // H9-13: HTAP observability and SLO metrics
+        .route("/api/v1/htap/diagnostics", {
+            use crate::handlers::htap::htap_diagnostics;
+            get(htap_diagnostics)
+        })
         .with_state(state.clone());
 
     // L-4: Outermost layer — extracts W3C traceparent/tracestate headers from every

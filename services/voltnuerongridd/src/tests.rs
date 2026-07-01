@@ -19283,3 +19283,31 @@ async fn e7_autonomous_actions_all_audited_and_policy_checked() {
     assert_eq!(policy_count, 9);
     let _ = StatusCode::OK;
 }
+
+#[tokio::test]
+async fn h13_htap_diagnostics_returns_ok_with_admin_key() {
+    use axum::extract::State;
+    let state = state_with_key(Some("secret"));
+    let headers = admin_headers("secret");
+    let resp = crate::handlers::htap::htap_diagnostics(
+        State(state),
+        headers,
+    ).await;
+    use axum::response::IntoResponse;
+    let resp = resp.into_response();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn h13_htap_diagnostics_rejects_missing_admin_key() {
+    use axum::extract::State;
+    let state = state_with_key(Some("secret"));
+    let headers = HeaderMap::new();
+    let resp = crate::handlers::htap::htap_diagnostics(
+        State(state),
+        headers,
+    ).await;
+    use axum::response::IntoResponse;
+    let resp = resp.into_response();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}

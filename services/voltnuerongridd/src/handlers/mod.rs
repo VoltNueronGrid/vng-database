@@ -22,3 +22,5 @@ pub(crate) mod udf;
 pub(crate) mod plugins;
 // SCALE-1: horizontal autoscale controller
 pub(crate) mod autoscale;
+// H9-13: HTAP observability and SLO metrics
+pub(crate) mod htap;
