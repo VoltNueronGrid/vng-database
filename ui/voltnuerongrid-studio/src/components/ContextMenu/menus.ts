@@ -7,7 +7,12 @@ import { useModalStore } from "@/store/modal";
 import { useUiStore } from "@/store/ui";
 import { useConnectionStore, type ConnectionSettings } from "@/store/connection";
 import { useEditorStore } from "@/store/editor";
-import type { SchemaTable, SchemaColumn } from "@/api/studio-client";
+import type {
+  SchemaTable,
+  SchemaColumn,
+  SchemaFunction,
+  SqlExecuteResponse,
+} from "@/api/studio-client";
 import { StudioApiClient } from "@/api/studio-client";
 import { useToastStore } from "@/store/toast";
 
@@ -15,6 +20,115 @@ const m = () => useModalStore.getState();
 const u = () => useUiStore.getState();
 const c = () => useConnectionStore.getState();
 const e = () => useEditorStore.getState();
+
+function activeClient(): StudioApiClient | null {
+  const conn = c().getActive();
+  if (!conn) return null;
+  return new StudioApiClient({
+    baseUrl: conn.baseUrl,
+    adminApiKey: conn.mode === "admin" ? c().getActiveKey() : undefined,
+    operatorId: conn.operatorId,
+    tenantId: conn.tenantId,
+    userId: conn.userId,
+    database: conn.database,
+  });
+}
+
+async function refreshSchema(): Promise<void> {
+  const conn = c().getActive();
+  if (!conn) return;
+  const client = activeClient();
+  if (!client) return;
+  const registry = await client.getSchemaTree();
+  c().setSchema(registry);
+}
+
+function extractRowsForExport(res: SqlExecuteResponse): {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+} {
+  if ((res.columns ?? []).length > 0 && (res.rows ?? []).length > 0) {
+    return {
+      columns: (res.columns ?? []).map((col) => col.name),
+      rows: res.rows ?? [],
+    };
+  }
+  const oltpRows = res.oltp_rows ?? [];
+  const colSet = new Set<string>();
+  for (const row of oltpRows) {
+    for (const key of Object.keys(row.data)) {
+      if (!key.startsWith("__")) colSet.add(key);
+    }
+  }
+  const columns = [...colSet].sort((a, b) => a.localeCompare(b));
+  const rows = oltpRows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const col of columns) out[col] = row.data[col] ?? null;
+    return out;
+  });
+  return { columns, rows };
+}
+
+function csvEscape(value: unknown): string {
+  const text = value == null ? "" : String(value);
+  return text.includes(",") || text.includes("\"") || text.includes("\n")
+    ? `"${text.replace(/\"/g, '""')}"`
+    : text;
+}
+
+function download(content: string, fileName: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function exportData(sql: string, baseName: string, format: "csv" | "parquet" | "excel"): Promise<void> {
+  const toast = useToastStore.getState();
+  const client = activeClient();
+  if (!client) {
+    toast.show("No active connection", "error");
+    return;
+  }
+  try {
+    const res = await client.executeSql({ sql_batch: sql });
+    if (res.status !== "ok") {
+      toast.show("Export failed: server did not return OK status", "error");
+      return;
+    }
+    const { columns, rows } = extractRowsForExport(res);
+    if (columns.length === 0) {
+      toast.show("No rows available to export", "error");
+      return;
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const csv = [
+      columns.join(","),
+      ...rows.map((row) => columns.map((col) => csvEscape(row[col])).join(",")),
+    ].join("\n");
+
+    if (format === "csv") {
+      download(csv, `${baseName}-${stamp}.csv`, "text/csv;charset=utf-8;");
+      toast.show("CSV export complete", "success");
+      return;
+    }
+
+    if (format === "excel") {
+      download(csv, `${baseName}-${stamp}.xls`, "application/vnd.ms-excel;charset=utf-8;");
+      toast.show("Excel export complete", "success");
+      return;
+    }
+
+    download(JSON.stringify({ columns, rows }, null, 2), `${baseName}-${stamp}.parquet.json`, "application/json");
+    toast.show("Parquet binary export is not available in browser mode. Exported JSON fallback.", "info");
+  } catch (err) {
+    toast.show(`Export failed: ${String(err)}`, "error");
+  }
+}
 
 /** Return a type-appropriate SQL literal for an INSERT template. */
 function typedDefault(dataType: string): string {
@@ -241,6 +355,212 @@ export function buildSchemaMenu(
         icon: "🗑",
         danger: true,
         onSelect: () => m().open({ kind: "drop-schema", target }),
+      },
+    ],
+  };
+}
+
+export function buildTablesSectionMenu(
+  dbName: string,
+  schemaName: string,
+): { items: ContextMenuItem[]; title?: string } {
+  const target = `${dbName}.${schemaName}`;
+  return {
+    title: `${target}.TABLES`,
+    items: [
+      {
+        id: "create-table",
+        label: "Create New Table...",
+        icon: "＋",
+        onSelect: () => m().open({ kind: "create-table", target }),
+      },
+      {
+        id: "import-tables",
+        label: "Import Tables...",
+        icon: "⤓",
+        onSelect: () => m().open({ kind: "import-tables", target }),
+      },
+      {
+        id: "export-tables",
+        label: "Export Tables...",
+        icon: "⤒",
+        onSelect: () => m().open({ kind: "export-tables", target }),
+      },
+    ],
+  };
+}
+
+export function buildViewsSectionMenu(
+  dbName: string,
+  schemaName: string,
+): { items: ContextMenuItem[]; title?: string } {
+  return {
+    title: `${dbName}.${schemaName}.VIEWS`,
+    items: [
+      {
+        id: "create-view",
+        label: "Create New View...",
+        icon: "＋",
+        onSelect: () => m().open({ kind: "create-view", target: `${dbName}.${schemaName}` }),
+      },
+    ],
+  };
+}
+
+export function buildFunctionsSectionMenu(
+  dbName: string,
+  schemaName: string,
+): { items: ContextMenuItem[]; title?: string } {
+  return {
+    title: `${dbName}.${schemaName}.FUNCTIONS`,
+    items: [
+      {
+        id: "create-function",
+        label: "Create New Function...",
+        icon: "＋",
+        onSelect: () => m().open({ kind: "create-function", target: `${dbName}.${schemaName}` }),
+      },
+      {
+        id: "export-functions",
+        label: "Export Functions...",
+        icon: "⤒",
+        onSelect: () => m().open({ kind: "export-functions", target: `${dbName}.${schemaName}` }),
+      },
+    ],
+  };
+}
+
+export function buildTriggersSectionMenu(
+  dbName: string,
+  schemaName: string,
+): { items: ContextMenuItem[]; title?: string } {
+  return {
+    title: `${dbName}.${schemaName}.TRIGGERS`,
+    items: [
+      {
+        id: "create-trigger",
+        label: "Create New Trigger...",
+        icon: "＋",
+        onSelect: () => m().open({ kind: "create-trigger", target: `${dbName}.${schemaName}` }),
+      },
+      {
+        id: "export-triggers",
+        label: "Export Triggers...",
+        icon: "⤒",
+        onSelect: () => m().open({ kind: "export-triggers", target: `${dbName}.${schemaName}` }),
+      },
+    ],
+  };
+}
+
+export function buildEventsSectionMenu(
+  dbName: string,
+  schemaName: string,
+): { items: ContextMenuItem[]; title?: string } {
+  return {
+    title: `${dbName}.${schemaName}.EVENTS`,
+    items: [
+      {
+        id: "create-event",
+        label: "Create New Event...",
+        icon: "＋",
+        onSelect: () => m().open({ kind: "create-event", target: `${dbName}.${schemaName}` }),
+      },
+      {
+        id: "export-events",
+        label: "Export Events...",
+        icon: "⤒",
+        onSelect: () => m().open({ kind: "export-events", target: `${dbName}.${schemaName}` }),
+      },
+    ],
+  };
+}
+
+export function buildViewMenu(
+  dbName: string,
+  schemaName: string,
+  viewName: string,
+  definition?: string,
+): { items: ContextMenuItem[]; title?: string } {
+  const target = `${dbName}.${schemaName}.${viewName}`;
+  return {
+    title: target,
+    items: [
+      {
+        id: "view-ddl",
+        label: "Show DDL",
+        icon: "{ }",
+        onSelect: () => m().open({ kind: "view-ddl", target, payload: { kind: "view", definition } }),
+      },
+      {
+        id: "export-view",
+        label: "Export Data...",
+        icon: "⤒",
+        onSelect: () => m().open({ kind: "export-view", target }),
+      },
+    ],
+  };
+}
+
+export function buildFunctionMenu(
+  dbName: string,
+  schemaName: string,
+  func: SchemaFunction,
+): { items: ContextMenuItem[]; title?: string } {
+  const target = `${dbName}.${schemaName}.${func.name}`;
+  return {
+    title: target,
+    items: [
+      {
+        id: "function-ddl",
+        label: "Show DDL",
+        icon: "{ }",
+        onSelect: () =>
+          m().open({
+            kind: "view-ddl",
+            target,
+            payload: { kind: "function", definition: func.definition },
+          }),
+      },
+    ],
+  };
+}
+
+export function buildTriggerMenu(
+  dbName: string,
+  schemaName: string,
+  triggerName: string,
+  definition?: string,
+): { items: ContextMenuItem[]; title?: string } {
+  const target = `${dbName}.${schemaName}.${triggerName}`;
+  return {
+    title: target,
+    items: [
+      {
+        id: "trigger-ddl",
+        label: "Show DDL",
+        icon: "{ }",
+        onSelect: () => m().open({ kind: "view-ddl", target, payload: { kind: "trigger", definition } }),
+      },
+    ],
+  };
+}
+
+export function buildEventMenu(
+  dbName: string,
+  schemaName: string,
+  eventName: string,
+  definition?: string,
+): { items: ContextMenuItem[]; title?: string } {
+  const target = `${dbName}.${schemaName}.${eventName}`;
+  return {
+    title: target,
+    items: [
+      {
+        id: "event-ddl",
+        label: "Show DDL",
+        icon: "{ }",
+        onSelect: () => m().open({ kind: "view-ddl", target, payload: { kind: "event", definition } }),
       },
     ],
   };

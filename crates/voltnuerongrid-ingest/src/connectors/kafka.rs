@@ -123,8 +123,8 @@ pub fn parse_kafka_records(json_str: &str) -> Vec<KafkaRecord> {
         .collect()
 }
 
-fn build_agent(cfg: &KafkaConnectorConfig) -> ureq::Agent {
-    let mut builder = ureq::AgentBuilder::new()
+fn build_agent(_cfg: &KafkaConnectorConfig) -> ureq::Agent {
+    let builder = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30));
     // SASL auth forwarded as HTTP Basic to the REST Proxy

@@ -346,6 +346,30 @@ fn parse_qualifiers(raw: &str) -> (String, String, String) {
     }
 }
 
+/// Parse a schema token into `(database, schema_name, object_name)` for schema DDL.
+///
+/// - `db.schema` -> `(db, schema, schema)`
+/// - `schema`    -> `(default, schema, schema)`
+fn parse_schema_qualifiers(raw: &str) -> (String, String, String) {
+    let base = raw
+        .trim_matches(|c: char| c == ')' || c == ';' || c == ',')
+        .to_ascii_lowercase();
+    let parts: Vec<&str> = base.split('.').collect();
+    match parts.as_slice() {
+        [db, schema] => ((*db).to_string(), (*schema).to_string(), (*schema).to_string()),
+        [schema] => (
+            "default".to_string(),
+            (*schema).to_string(),
+            (*schema).to_string(),
+        ),
+        _ => (
+            "default".to_string(),
+            base.clone(),
+            base,
+        ),
+    }
+}
+
 /// Try to extract DDL metadata from a SQL statement.
 ///
 /// Returns `None` for non-DDL statements or statements with ambiguous syntax.
@@ -384,6 +408,17 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
         }
         ["create", "or", "replace", "view", name, ..] => info!("create", "view", name, true),
         ["create", "or", "replace", "table", name, ..] => info!("create", "table", name, true),
+        ["create", "schema", name, ..] => {
+            let (database_name, schema_name, object_name) = parse_schema_qualifiers(name);
+            Some(DdlObjectInfo {
+                operation: "create",
+                object_kind: "schema",
+                object_name,
+                database_name,
+                schema_name,
+                replace_ok: false,
+            })
+        }
         // CREATE INDEX idx_name ON table_name (col)
         ["create", "index", name, ..] => info!("create", "index", name, false),
         // CREATE UNIQUE INDEX idx_name ON table_name (col)
@@ -405,6 +440,17 @@ pub fn parse_ddl_info(sql: &str) -> Option<DdlObjectInfo> {
         }
         ["drop", "event", "if", "exists", name, ..] | ["drop", "event", name, ..] => {
             info!("drop", "event", name, false)
+        }
+        ["drop", "schema", "if", "exists", name, ..] | ["drop", "schema", name, ..] => {
+            let (database_name, schema_name, object_name) = parse_schema_qualifiers(name);
+            Some(DdlObjectInfo {
+                operation: "drop",
+                object_kind: "schema",
+                object_name,
+                database_name,
+                schema_name,
+                replace_ok: false,
+            })
         }
         ["alter", "table", name, ..] => info!("alter", "table", name, false),
         _ => None,

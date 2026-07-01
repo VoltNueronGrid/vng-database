@@ -918,7 +918,7 @@ pub(crate) async fn sql_transaction(
                         // a transaction-wrapped UPDATE with a non-PK WHERE clause updates all
                         // matching rows instead of silently updating at most one.
                         if let Some((raw_k, d)) = extract_update_row_from_sql(stmt) {
-                            let table_name = d.get("__table").map(|t| t.clone()).unwrap_or_default();
+                            let _table_name = d.get("__table").map(|t| t.clone()).unwrap_or_default();
                             // Rule 7 (Codd): a UPDATE whose WHERE filters on a non-PK column
                             // is set-at-a-time — scan the table and update every matching row.
                             let is_scan_update = extract_bulk_update_target(stmt)
@@ -3089,7 +3089,7 @@ pub(crate) async fn sql_execute(
                             // Rule 7 (Codd) — set-at-a-time UPDATE: when the WHERE clause
                             // filters on a non-PK column, fall back to a full table scan
                             // filtered by the WHERE predicate (updates every matching row).
-                            let table_name = d.get("__table").map(|t| t.clone()).unwrap_or_default();
+                            let _table_name = d.get("__table").map(|t| t.clone()).unwrap_or_default();
                             let is_scan_update = extract_bulk_update_target(stmt)
                                 .map(|(_, _, _, ref wc, _)| !wc.eq_ignore_ascii_case("id") && !wc.is_empty())
                                 .unwrap_or(false);

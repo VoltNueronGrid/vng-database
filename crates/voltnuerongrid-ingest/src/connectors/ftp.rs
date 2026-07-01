@@ -234,10 +234,10 @@ pub fn ftp_fetch_files(cfg: &FtpConnectorConfig) -> Result<Vec<(String, Vec<u8>)
 
 /// LIST command via PASV — returns file names from the directory listing.
 fn ftp_list(
-    stream: &TcpStream,
+    _stream: &TcpStream,
     control: &mut TcpStream,
     reader: &mut BufReader<&TcpStream>,
-    cfg: &FtpConnectorConfig,
+    _cfg: &FtpConnectorConfig,
 ) -> Result<Vec<String>, FtpError> {
     // PASV to get data connection address
     send_command(control, "PASV")?;

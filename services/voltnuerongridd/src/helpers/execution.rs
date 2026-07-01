@@ -21,6 +21,7 @@ use crate::{udf_guard_policy_contract, udf_function_catalog_contract};
 /// Build a 503 SqlExecuteResponse for graceful degradation when an internal
 /// mutex is poisoned (which happens after a panic in a critical section).
 /// Returning 503 instead of expect()-panicking keeps the rest of the service alive.
+#[allow(dead_code)]
 pub(crate) fn svc_unavailable_sql_response(reason: &str) -> (StatusCode, Json<SqlExecuteResponse>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,

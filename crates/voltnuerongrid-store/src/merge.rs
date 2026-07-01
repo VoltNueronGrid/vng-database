@@ -147,7 +147,7 @@ pub struct MergeProgress {
 /// Background merge manager for tail-to-base consolidation
 pub struct MergeManager {
     /// Policy for all segments
-    policy: MergePolicy,
+    _policy: MergePolicy,
     /// Pending merge jobs (job_id -> job)
     pending_jobs: Arc<Mutex<VecDeque<MergeJob>>>,
     /// Active merge jobs (segment_id -> job)
@@ -165,7 +165,7 @@ pub struct MergeManager {
 impl MergeManager {
     pub fn new(policy: MergePolicy, max_history: usize) -> Self {
         MergeManager {
-            policy,
+            _policy: policy,
             pending_jobs: Arc::new(Mutex::new(VecDeque::new())),
             active_jobs: Arc::new(Mutex::new(HashMap::new())),
             completed_jobs: Arc::new(Mutex::new(VecDeque::new())),

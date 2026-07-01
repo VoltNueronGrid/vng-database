@@ -41,6 +41,7 @@ impl ReplicatedMutation {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn op_str(op: &MutationOp) -> &'static str {
         match op {
             MutationOp::Insert => "insert",
@@ -87,6 +88,7 @@ pub(crate) fn apply_htap_mutations_to_olap(
 /// Export the pending mutations that still need to be shipped to `peer`,
 /// based on the per-peer replication cursor. Returns the batch plus the
 /// highest sequence in it (0 when empty).
+#[allow(dead_code)]
 pub(crate) fn htap_batch_for_peer(
     state: &AppState,
     peer: &str,
@@ -116,6 +118,7 @@ pub(crate) fn htap_batch_for_peer(
 }
 
 /// Advance the per-peer HTAP replication cursor after a successful ship.
+#[allow(dead_code)]
 pub(crate) fn advance_htap_peer_cursor(state: &AppState, peer: &str, last_seq: u64) {
     if last_seq == 0 {
         return;
@@ -166,6 +169,7 @@ pub(crate) fn apply_cache_replication(
 }
 
 /// Whether a Redis command mutates state and therefore must be replicated.
+#[allow(dead_code)]
 pub(crate) fn cache_command_is_replicable(cmd: &str) -> bool {
     matches!(cmd.to_ascii_uppercase().as_str(), "SET" | "DEL")
 }

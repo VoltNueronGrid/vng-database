@@ -1366,6 +1366,7 @@ pub(crate) async fn htap_force_sync(
 #[derive(serde::Deserialize)]
 pub(crate) struct HtapPullQuery {
     pub(crate) since: Option<u64>,
+    #[allow(dead_code)]
     pub(crate) node_id: Option<String>,
     pub(crate) max_items: Option<usize>,
 }

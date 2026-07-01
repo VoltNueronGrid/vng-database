@@ -10,6 +10,8 @@
 //! - [`st_intersects`]           — any overlap between two geometries
 //! - [`GeoIndex`]                — per-table R-tree for fast spatial queries
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use rstar::{RTree, RTreeObject, PointDistance, AABB};
 

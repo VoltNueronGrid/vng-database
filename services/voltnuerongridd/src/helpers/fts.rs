@@ -7,6 +7,8 @@
 //! - [`ts_rank`] — BM25-inspired rank (0..1) of a match
 //! - [`FtsIndex`] — per-table inverted index for the `/api/v1/search/fulltext` endpoint
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 // ── Stop words (English) ──────────────────────────────────────────────────────

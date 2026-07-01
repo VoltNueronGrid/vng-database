@@ -2,6 +2,10 @@ import { useState, useMemo } from "react";
 import { useModalStore, type ResourceModalKind } from "@/store/modal";
 import { useEditorStore } from "@/store/editor";
 import type { SchemaColumn, SchemaTable } from "@/api/studio-client";
+import { useConnectionStore } from "@/store/connection";
+import { StudioApiClient } from "@/api/studio-client";
+import { useToastStore } from "@/store/toast";
+import { useSchema } from "@/hooks/useSchema";
 
 // ─── Column draft used by CreateTableForm ─────────────────────
 interface ColDraft {
@@ -26,6 +30,16 @@ const TITLES: Record<ResourceModalKind, string> = {
   "create-schema":   "Create Schema",
   "drop-schema":     "Drop Schema",
   "create-table":    "Create Table",
+  "create-view":     "Create View",
+  "create-function": "Create Function",
+  "create-trigger":  "Create Trigger",
+  "create-event":    "Create Event",
+  "import-tables":   "Import Tables",
+  "export-tables":   "Export Tables",
+  "export-view":     "Export Data",
+  "export-functions": "Export Functions",
+  "export-triggers": "Export Triggers",
+  "export-events":   "Export Events",
   "drop-table":      "Drop Table",
   "truncate-table":  "Truncate Table",
   "rename-table":    "Rename",
@@ -45,6 +59,10 @@ export function ResourceModal() {
   const ctx = useModalStore((s) => s.current);
   const close = useModalStore((s) => s.close);
   const openSqlTab = useEditorStore((s) => s.openSqlTab);
+  const getActive = useConnectionStore((s) => s.getActive);
+  const getActiveKey = useConnectionStore((s) => s.getActiveKey);
+  const showToast = useToastStore((s) => s.show);
+  const { refresh } = useSchema();
 
   if (!ctx) return null;
 
@@ -54,6 +72,58 @@ export function ResourceModal() {
   function runSql(sql: string, fileName: string) {
     openSqlTab(sql, fileName);
     close();
+  }
+
+  async function executeSql(sql: string, successMessage: string) {
+    const conn = getActive();
+    if (!conn) {
+      showToast("No active connection", "error");
+      return;
+    }
+    const client = new StudioApiClient({
+      baseUrl: conn.baseUrl,
+      adminApiKey: conn.mode === "admin" ? getActiveKey() : undefined,
+      operatorId: conn.operatorId,
+      tenantId: conn.tenantId,
+      userId: conn.userId,
+      database: conn.database,
+    });
+    try {
+      const result = await client.executeSql({ sql_batch: sql });
+      if (result.status !== "ok") {
+        showToast("Operation failed", "error");
+        return;
+      }
+      await refresh();
+      showToast(successMessage, "success");
+      close();
+    } catch (err) {
+      showToast(String(err), "error");
+    }
+  }
+
+  async function createDatabase(name: string, owner?: string, description?: string) {
+    const conn = getActive();
+    if (!conn) {
+      showToast("No active connection", "error");
+      return;
+    }
+    const client = new StudioApiClient({
+      baseUrl: conn.baseUrl,
+      adminApiKey: conn.mode === "admin" ? getActiveKey() : undefined,
+      operatorId: conn.operatorId,
+      tenantId: conn.tenantId,
+      userId: conn.userId,
+      database: conn.database,
+    });
+    try {
+      await client.createDatabase({ name, owner: owner || undefined, description: description || undefined, if_not_exists: true });
+      await refresh();
+      showToast(`Database ${name} created`, "success");
+      close();
+    } catch (err) {
+      showToast(String(err), "error");
+    }
   }
 
   return (
@@ -81,7 +151,7 @@ export function ResourceModal() {
         </div>
 
         <div className="conn-panel-body">
-          {renderBody(ctx, runSql)}
+          {renderBody(ctx, runSql, executeSql, createDatabase)}
         </div>
       </div>
     </div>
@@ -92,14 +162,27 @@ export function ResourceModal() {
 
 type CtxType = NonNullable<ReturnType<typeof useModalStore.getState>["current"]>;
 type RunSqlFn = (sql: string, fileName: string) => void;
+type ExecuteSqlFn = (sql: string, successMessage: string) => Promise<void>;
+type CreateDatabaseFn = (name: string, owner?: string, description?: string) => Promise<void>;
+type ExportFormat = "csv" | "parquet" | "excel";
 
-function renderBody(ctx: CtxType, runSql: RunSqlFn) {
+function renderBody(ctx: CtxType, runSql: RunSqlFn, executeSql: ExecuteSqlFn, createDatabase: CreateDatabaseFn) {
   switch (ctx.kind) {
-    case "create-database": return <CreateDatabaseForm onSubmit={runSql} />;
+    case "create-database": return <CreateDatabaseForm onSubmit={createDatabase} />;
     case "drop-database":   return <DropForm what="DATABASE" target={ctx.target!} onSubmit={runSql} />;
-    case "create-schema":   return <CreateSchemaForm db={ctx.target!} onSubmit={runSql} />;
+    case "create-schema":   return <CreateSchemaForm db={ctx.target!} onSubmit={executeSql} />;
     case "drop-schema":     return <DropForm what="SCHEMA" target={ctx.target!} onSubmit={runSql} />;
-    case "create-table":    return <CreateTableForm target={ctx.target!} onSubmit={runSql} />;
+    case "create-table":    return <CreateTableForm target={ctx.target!} onSubmit={executeSql} />;
+    case "create-view":     return <CreateViewForm target={ctx.target!} onSubmit={executeSql} />;
+    case "create-function": return <CreateFunctionForm target={ctx.target!} onSubmit={executeSql} />;
+    case "create-trigger":  return <CreateTriggerForm target={ctx.target!} onSubmit={executeSql} />;
+    case "create-event":    return <CreateEventForm target={ctx.target!} onSubmit={executeSql} />;
+    case "import-tables":   return <ImportTablesForm target={ctx.target!} onSubmit={executeSql} />;
+    case "export-tables":   return <ExportTablesForm target={ctx.target!} onSubmit={runSql} />;
+    case "export-view":     return <ExportViewForm target={ctx.target!} onSubmit={runSql} />;
+    case "export-functions": return <ExportDefinitionsForm title="Functions" target={ctx.target!} kind="FUNCTION" onSubmit={runSql} />;
+    case "export-triggers":  return <ExportDefinitionsForm title="Triggers" target={ctx.target!} kind="TRIGGER" onSubmit={runSql} />;
+    case "export-events":    return <ExportDefinitionsForm title="Events" target={ctx.target!} kind="EVENT" onSubmit={runSql} />;
     case "drop-table":      return <DropForm what="TABLE" target={ctx.target!} onSubmit={runSql} />;
     case "truncate-table":  return <TruncateForm target={ctx.target!} onSubmit={runSql} />;
     case "rename-table":    return <RenameForm kind={(ctx.payload?.kind as string) || "table"} target={ctx.target!} onSubmit={runSql} />;
@@ -158,25 +241,127 @@ function Footer({ onCancel, onSubmit, label = "Generate SQL", danger = false, di
   );
 }
 
+function extractRowsForExport(res: Awaited<ReturnType<StudioApiClient["executeSql"]>>): {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+} {
+  if ((res.columns ?? []).length > 0 && (res.rows ?? []).length > 0) {
+    return {
+      columns: (res.columns ?? []).map((col) => col.name),
+      rows: res.rows ?? [],
+    };
+  }
+
+  const rows = (res.oltp_rows ?? []).map((row) => row.data);
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row).filter((key) => !key.startsWith("__"))))]
+    .sort((a, b) => a.localeCompare(b));
+  return {
+    columns,
+    rows: rows.map((row) => {
+      const out: Record<string, unknown> = {};
+      for (const col of columns) out[col] = row[col] ?? null;
+      return out;
+    }),
+  };
+}
+
+function csvEscape(value: unknown): string {
+  const text = value == null ? "" : String(value);
+  return text.includes(",") || text.includes("\"") || text.includes("\n")
+    ? `"${text.replace(/\"/g, '""')}"`
+    : text;
+}
+
+function download(content: string, fileName: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function exportQuery(
+  client: StudioApiClient,
+  sql: string,
+  baseName: string,
+  format: ExportFormat,
+  showToast: (message: string, kind?: "info" | "success" | "error") => void,
+): Promise<void> {
+  const res = await client.executeSql({ sql_batch: sql });
+  if (res.status !== "ok") {
+    showToast("Export failed", "error");
+    return;
+  }
+  const { columns, rows } = extractRowsForExport(res);
+  if (columns.length === 0) {
+    showToast("No rows available to export", "error");
+    return;
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const csv = [
+    columns.join(","),
+    ...rows.map((row) => columns.map((col) => csvEscape(row[col])).join(",")),
+  ].join("\n");
+
+  if (format === "csv") {
+    download(csv, `${baseName}-${stamp}.csv`, "text/csv;charset=utf-8;");
+    showToast("CSV export complete", "success");
+    return;
+  }
+
+  if (format === "excel") {
+    download(csv, `${baseName}-${stamp}.xls`, "application/vnd.ms-excel;charset=utf-8;");
+    showToast("Excel export complete", "success");
+    return;
+  }
+
+  download(JSON.stringify({ columns, rows }, null, 2), `${baseName}-${stamp}.parquet.json`, "application/json");
+  showToast("Parquet binary export is not available in browser mode. Exported JSON fallback.", "info");
+}
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      out.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  out.push(current.trim());
+  return out;
+}
+
 // ─── Individual forms ─────────────────────────────────────────
 
-function CreateDatabaseForm({ onSubmit }: { onSubmit: RunSqlFn }) {
+function CreateDatabaseForm({ onSubmit }: { onSubmit: CreateDatabaseFn }) {
   const close = useModalStore((s) => s.close);
   const [name, setName] = useState("");
+  const [owner, setOwner] = useState("");
+  const [description, setDescription] = useState("");
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!name.trim()) return;
-    const sql = `CREATE TABLE ${name.trim().toLowerCase()}.public._init (id INT)`;
-    onSubmit(sql, `create-database-${name.trim().toLowerCase()}.sql`);
-    close();
+    await onSubmit(name.trim().toLowerCase(), owner.trim(), description.trim());
   }
 
   return (
     <>
       <div style={{ color: "var(--text-2)", fontSize: 12.5, lineHeight: 1.55, padding: "4px 2px 8px" }}>
-        Creates the new database by placing a system init table inside it.
-        You can also create tables in any database directly by using qualified names like{" "}
-        <code>CREATE TABLE mydb.myschema.customers (...)</code>.
+        Creates a clean database directly with no template tables.
       </div>
       <div className="form-row">
         <Field label="Database Name">
@@ -188,18 +373,35 @@ function CreateDatabaseForm({ onSubmit }: { onSubmit: RunSqlFn }) {
             autoFocus
           />
         </Field>
+        <Field label="Owner (optional)">
+          <input
+            className="form-input"
+            value={owner}
+            onChange={(e) => setOwner(e.target.value)}
+            placeholder="admin"
+          />
+        </Field>
       </div>
-      <Footer
-        onCancel={close}
-        onSubmit={handleSubmit}
-        label="Create Database"
-        disabled={!name.trim()}
-      />
+      <Field label="Description (optional)" full>
+        <input
+          className="form-input"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Short purpose"
+        />
+      </Field>
+      <div className="conn-panel-footer" style={{ borderTop: "1px solid var(--border)", marginTop: 14 }}>
+        <div style={{ flex: 1 }} />
+        <button className="btn-wide secondary" style={{ width: 110 }} onClick={close}>Cancel</button>
+        <button className="btn-wide primary" style={{ width: 160 }} onClick={handleSubmit} disabled={!name.trim()}>
+          Create Database
+        </button>
+      </div>
     </>
   );
 }
 
-function CreateSchemaForm({ db, onSubmit }: { db: string; onSubmit: RunSqlFn }) {
+function CreateSchemaForm({ db, onSubmit }: { db: string; onSubmit: ExecuteSqlFn }) {
   const close = useModalStore((s) => s.close);
   const [name, setName] = useState("");
   const [owner, setOwner] = useState("");
@@ -227,20 +429,18 @@ function CreateSchemaForm({ db, onSubmit }: { db: string; onSubmit: RunSqlFn }) 
       </div>
       <Footer
         onCancel={close}
-        onSubmit={() => {
+        label="Create Schema"
+        onSubmit={async () => {
           if (!name) return;
-          const ownerClause = owner ? `\n  AUTHORIZATION ${owner}` : "";
-          onSubmit(
-            `CREATE SCHEMA ${db}.${name}${ownerClause};`,
-            `create_schema_${name}.sql`
-          );
+          const ownerClause = owner ? ` AUTHORIZATION ${owner}` : "";
+          await onSubmit(`CREATE SCHEMA ${db}.${name}${ownerClause};`, `Schema ${name} created`);
         }}
       />
     </>
   );
 }
 
-function CreateTableForm({ target, onSubmit }: { target: string; onSubmit: RunSqlFn }) {
+function CreateTableForm({ target, onSubmit }: { target: string; onSubmit: ExecuteSqlFn }) {
   const close = useModalStore((s) => s.close);
   const [name, setName] = useState("");
   const [cols, setCols] = useState<ColDraft[]>([
@@ -375,7 +575,8 @@ function CreateTableForm({ target, onSubmit }: { target: string; onSubmit: RunSq
 
       <Footer
         onCancel={close}
-        onSubmit={() => {
+        label="Create Table"
+        onSubmit={async () => {
           if (!name || cols.length === 0) return;
           const colDdl = cols
             .filter((col) => col.name.trim())
@@ -387,10 +588,419 @@ function CreateTableForm({ target, onSubmit }: { target: string; onSubmit: RunSq
             });
           const pks = cols.filter((col) => col.pk).map((col) => col.name);
           if (pks.length) colDdl.push(`  PRIMARY KEY (${pks.join(", ")})`);
-          onSubmit(
-            `CREATE TABLE ${target}.${name} (\n${colDdl.join(",\n")}\n);`,
-            `create_${name}.sql`
+          await onSubmit(`CREATE TABLE ${target}.${name} (\n${colDdl.join(",\n")}\n);`, `Table ${name} created`);
+        }}
+      />
+    </>
+  );
+}
+
+function CreateViewForm({ target, onSubmit }: { target: string; onSubmit: ExecuteSqlFn }) {
+  const close = useModalStore((s) => s.close);
+  const [mode, setMode] = useState<"sql" | "builder">("sql");
+  const [name, setName] = useState("");
+  const [source, setSource] = useState("");
+  const [columns, setColumns] = useState("*");
+  const [where, setWhere] = useState("");
+  const [sql, setSql] = useState("CREATE VIEW my_view AS\nSELECT *\nFROM my_table;");
+
+  const sqlText =
+    mode === "sql"
+      ? sql
+      : `CREATE VIEW ${target}.${name} AS\nSELECT ${columns || "*"}\nFROM ${target}.${source}${where ? `\nWHERE ${where}` : ""};`;
+
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn btn-sm" onClick={() => setMode("sql")} style={{ background: mode === "sql" ? "var(--bg-active)" : undefined }}>SQL</button>
+        <button className="btn btn-sm" onClick={() => setMode("builder")} style={{ background: mode === "builder" ? "var(--bg-active)" : undefined }}>Builder</button>
+      </div>
+
+      {mode === "builder" && (
+        <>
+          <div className="form-row">
+            <Field label="View Name">
+              <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. active_orders" />
+            </Field>
+            <Field label="Source Table">
+              <input className="form-input" value={source} onChange={(e) => setSource(e.target.value)} placeholder="e.g. orders" />
+            </Field>
+          </div>
+          <div className="form-row">
+            <Field label="Columns">
+              <input className="form-input" value={columns} onChange={(e) => setColumns(e.target.value)} placeholder="* or id, name" />
+            </Field>
+            <Field label="Where (optional)">
+              <input className="form-input" value={where} onChange={(e) => setWhere(e.target.value)} placeholder="status = 'ACTIVE'" />
+            </Field>
+          </div>
+        </>
+      )}
+
+      {mode === "sql" && (
+        <textarea
+          className="form-input mono"
+          value={sql}
+          onChange={(e) => setSql(e.target.value)}
+          rows={10}
+          style={{ height: "auto", padding: 10, fontSize: 12, lineHeight: 1.5, resize: "vertical" }}
+        />
+      )}
+
+      <Footer
+        onCancel={close}
+        label="Create View"
+        onSubmit={async () => {
+          await onSubmit(sqlText, `View ${name || "created"} created`);
+        }}
+      />
+    </>
+  );
+}
+
+function CreateFunctionForm({ target, onSubmit }: { target: string; onSubmit: ExecuteSqlFn }) {
+  const close = useModalStore((s) => s.close);
+  const [name, setName] = useState("");
+  const [language, setLanguage] = useState<"sql" | "python" | "javascript">("sql");
+  const [args, setArgs] = useState("");
+  const [returns, setReturns] = useState("TEXT");
+  const [body, setBody] = useState("RETURN 'ok';");
+
+  return (
+    <>
+      <div className="form-row">
+        <Field label="Function Name">
+          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. compute_score" />
+        </Field>
+        <Field label="Language">
+          <select className="form-select" value={language} onChange={(e) => setLanguage(e.target.value as "sql" | "python" | "javascript")}>
+            <option value="sql">SQL</option>
+            <option value="python">Python</option>
+            <option value="javascript">JavaScript</option>
+          </select>
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Arguments">
+          <input className="form-input" value={args} onChange={(e) => setArgs(e.target.value)} placeholder="a INT, b INT" />
+        </Field>
+        <Field label="Returns">
+          <input className="form-input" value={returns} onChange={(e) => setReturns(e.target.value)} />
+        </Field>
+      </div>
+      <Field label="Body" full>
+        <textarea className="form-input mono" value={body} onChange={(e) => setBody(e.target.value)} rows={8} style={{ height: "auto", padding: 10, fontSize: 12, lineHeight: 1.5, resize: "vertical" }} />
+      </Field>
+      <Footer
+        onCancel={close}
+        label="Create Function"
+        onSubmit={async () => {
+          if (!name.trim()) return;
+          const normalizedBody = body.replace(/;/g, " ").trim() || "RETURN NULL";
+          const sql = `CREATE FUNCTION ${target}.${name}(${args}) RETURNS ${returns}\nLANGUAGE ${language}\nAS $$\n${normalizedBody}\n$$;`;
+          await onSubmit(sql, `Function ${name} created`);
+        }}
+      />
+    </>
+  );
+}
+
+function CreateTriggerForm({ target, onSubmit }: { target: string; onSubmit: ExecuteSqlFn }) {
+  const close = useModalStore((s) => s.close);
+  const [name, setName] = useState("");
+  const [tableName, setTableName] = useState("");
+  const [timing, setTiming] = useState("BEFORE");
+  const [eventType, setEventType] = useState("INSERT");
+  const [body, setBody] = useState("SELECT 1;");
+
+  return (
+    <>
+      <div className="form-row">
+        <Field label="Trigger Name">
+          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. orders_audit_trg" />
+        </Field>
+        <Field label="Table">
+          <input className="form-input" value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="e.g. orders" />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field label="Timing">
+          <select className="form-select" value={timing} onChange={(e) => setTiming(e.target.value)}>
+            <option>BEFORE</option>
+            <option>AFTER</option>
+          </select>
+        </Field>
+        <Field label="Event">
+          <select className="form-select" value={eventType} onChange={(e) => setEventType(e.target.value)}>
+            <option>INSERT</option>
+            <option>UPDATE</option>
+            <option>DELETE</option>
+          </select>
+        </Field>
+      </div>
+      <Field label="Body" full>
+        <textarea className="form-input mono" value={body} onChange={(e) => setBody(e.target.value)} rows={6} style={{ height: "auto", padding: 10, fontSize: 12, lineHeight: 1.5, resize: "vertical" }} />
+      </Field>
+      <Footer
+        onCancel={close}
+        label="Create Trigger"
+        onSubmit={async () => {
+          if (!name.trim() || !tableName.trim()) return;
+          const normalizedBody = body.replace(/;/g, " ").trim() || "SELECT 1";
+          const sql = `CREATE TRIGGER ${name}\n${timing} ${eventType} ON ${target}.${tableName}\nFOR EACH ROW\nBEGIN\n${normalizedBody}\nEND;`;
+          await onSubmit(sql, `Trigger ${name} created`);
+        }}
+      />
+    </>
+  );
+}
+
+function CreateEventForm({ target, onSubmit }: { target: string; onSubmit: ExecuteSqlFn }) {
+  const close = useModalStore((s) => s.close);
+  const [name, setName] = useState("");
+  const [schedule, setSchedule] = useState("EVERY 1 DAY");
+  const [body, setBody] = useState("SELECT 1;");
+
+  return (
+    <>
+      <div className="form-row">
+        <Field label="Event Name">
+          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. nightly_rollup" />
+        </Field>
+        <Field label="Schedule">
+          <input className="form-input" value={schedule} onChange={(e) => setSchedule(e.target.value)} />
+        </Field>
+      </div>
+      <Field label="Body" full>
+        <textarea className="form-input mono" value={body} onChange={(e) => setBody(e.target.value)} rows={6} style={{ height: "auto", padding: 10, fontSize: 12, lineHeight: 1.5, resize: "vertical" }} />
+      </Field>
+      <Footer
+        onCancel={close}
+        label="Create Event"
+        onSubmit={async () => {
+          if (!name.trim()) return;
+          const normalizedBody = body.replace(/;/g, " ").trim() || "SELECT 1";
+          const sql = `CREATE EVENT ${name}\nON SCHEDULE ${schedule}\nDO\n${normalizedBody};`;
+          await onSubmit(sql, `Event ${name} created`);
+        }}
+      />
+    </>
+  );
+}
+
+function ImportTablesForm({ target, onSubmit }: { target: string; onSubmit: ExecuteSqlFn }) {
+  const close = useModalStore((s) => s.close);
+  const showToast = useToastStore((s) => s.show);
+  const [tableName, setTableName] = useState("");
+  const [format, setFormat] = useState<ExportFormat>("csv");
+  const [file, setFile] = useState<File | null>(null);
+
+  return (
+    <>
+      <div className="form-row">
+        <Field label="Table Name">
+          <input className="form-input" value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="e.g. customers" />
+        </Field>
+        <Field label="Source Format">
+          <select className="form-select" value={format} onChange={(e) => setFormat(e.target.value as ExportFormat)}>
+            <option value="csv">CSV</option>
+            <option value="parquet">Parquet</option>
+            <option value="excel">Excel</option>
+          </select>
+        </Field>
+      </div>
+      <Field label="File" full>
+        <input className="form-input" type="file" accept=".csv,.parquet,.xls,.xlsx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      </Field>
+      <Footer
+        onCancel={close}
+        label="Import"
+        disabled={!tableName.trim() || !file}
+        onSubmit={async () => {
+          if (!file || !tableName.trim()) return;
+          if (format !== "csv") {
+            showToast("Parquet and Excel import are not available in browser mode yet. Use CSV for now.", "info");
+            return;
+          }
+          const text = await file.text();
+          const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+          if (lines.length < 2) {
+            showToast("CSV requires a header and at least one row", "error");
+            return;
+          }
+          const cols = parseCsvLine(lines[0]).map((col) => col.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase());
+          const createSql = `CREATE TABLE IF NOT EXISTS ${target}.${tableName} (${cols.map((col) => `${col} TEXT`).join(", ")});`;
+          const values = lines.slice(1).map((line) => `(${parseCsvLine(line).map((value) => `'${value.replace(/'/g, "''")}'`).join(", ")})`);
+          const insertSql = values.length > 0
+            ? `INSERT INTO ${target}.${tableName} (${cols.join(", ")}) VALUES\n${values.join(",\n")};`
+            : "";
+          await onSubmit(`${createSql}\n${insertSql}`.trim(), `Imported ${values.length} rows into ${tableName}`);
+        }}
+      />
+    </>
+  );
+}
+
+function ExportTablesForm({ target }: { target: string; onSubmit: RunSqlFn }) {
+  const close = useModalStore((s) => s.close);
+  const schema = useConnectionStore((s) => s.schema);
+  const getActive = useConnectionStore((s) => s.getActive);
+  const getActiveKey = useConnectionStore((s) => s.getActiveKey);
+  const showToast = useToastStore((s) => s.show);
+  const [format, setFormat] = useState<ExportFormat>("csv");
+  const [scope, setScope] = useState<"all" | "selected">("all");
+  const [selected, setSelected] = useState<string[]>([]);
+
+  const [dbName, schemaName] = target.split(".");
+  const tables = useMemo(() => {
+    const db = schema?.databases.find((d) => d.name === dbName);
+    const ns = db?.schemas.find((s) => s.name === schemaName);
+    return (ns?.tables ?? []).map((table) => table.name.split(".").pop() ?? table.name);
+  }, [schema, dbName, schemaName]);
+
+  async function handleExport() {
+    const conn = getActive();
+    if (!conn) return;
+    const client = new StudioApiClient({
+      baseUrl: conn.baseUrl,
+      adminApiKey: conn.mode === "admin" ? getActiveKey() : undefined,
+      operatorId: conn.operatorId,
+      tenantId: conn.tenantId,
+      userId: conn.userId,
+      database: conn.database,
+    });
+    const names = scope === "all" ? tables : selected;
+    if (names.length === 0) {
+      showToast("No tables selected", "error");
+      return;
+    }
+    for (const tableName of names) {
+      await exportQuery(client, `SELECT * FROM ${schemaName}.${tableName};`, `${schemaName}-${tableName}`, format, showToast);
+    }
+    close();
+  }
+
+  return (
+    <>
+      <div className="form-row">
+        <Field label="Export Format">
+          <select className="form-select" value={format} onChange={(e) => setFormat(e.target.value as ExportFormat)}>
+            <option value="csv">CSV</option>
+            <option value="parquet">Parquet</option>
+            <option value="excel">Excel</option>
+          </select>
+        </Field>
+        <Field label="Scope">
+          <select className="form-select" value={scope} onChange={(e) => setScope(e.target.value as "all" | "selected") }>
+            <option value="all">All Tables</option>
+            <option value="selected">Selected Tables</option>
+          </select>
+        </Field>
+      </div>
+      {scope === "selected" && (
+        <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--r-sm)", padding: 8 }}>
+          {tables.map((table) => (
+            <label key={table} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginBottom: 6 }}>
+              <input
+                type="checkbox"
+                checked={selected.includes(table)}
+                onChange={(e) =>
+                  setSelected((prev) =>
+                    e.target.checked ? [...prev, table] : prev.filter((name) => name !== table)
+                  )
+                }
+              />
+              {table}
+            </label>
+          ))}
+        </div>
+      )}
+      <Footer onCancel={close} label="Export" onSubmit={handleExport} />
+    </>
+  );
+}
+
+function ExportViewForm({ target }: { target: string; onSubmit: RunSqlFn }) {
+  const close = useModalStore((s) => s.close);
+  const getActive = useConnectionStore((s) => s.getActive);
+  const getActiveKey = useConnectionStore((s) => s.getActiveKey);
+  const showToast = useToastStore((s) => s.show);
+  const [format, setFormat] = useState<ExportFormat>("csv");
+
+  return (
+    <>
+      <Field label="Export Format" full>
+        <select className="form-select" value={format} onChange={(e) => setFormat(e.target.value as ExportFormat)}>
+          <option value="csv">CSV</option>
+          <option value="parquet">Parquet</option>
+          <option value="excel">Excel</option>
+        </select>
+      </Field>
+      <Footer
+        onCancel={close}
+        label="Export"
+        onSubmit={async () => {
+          const conn = getActive();
+          if (!conn) return;
+          const client = new StudioApiClient({
+            baseUrl: conn.baseUrl,
+            adminApiKey: conn.mode === "admin" ? getActiveKey() : undefined,
+            operatorId: conn.operatorId,
+            tenantId: conn.tenantId,
+            userId: conn.userId,
+            database: conn.database,
+          });
+          const parts = target.split(".");
+          const schemaName = parts[1];
+          const viewName = parts[2];
+          await exportQuery(client, `SELECT * FROM ${schemaName}.${viewName};`, `${schemaName}-${viewName}`, format, showToast);
+          close();
+        }}
+      />
+    </>
+  );
+}
+
+function ExportDefinitionsForm({
+  title,
+  target,
+  kind,
+}: {
+  title: string;
+  target: string;
+  kind: "FUNCTION" | "TRIGGER" | "EVENT";
+  onSubmit: RunSqlFn;
+}) {
+  const close = useModalStore((s) => s.close);
+  const schema = useConnectionStore((s) => s.schema);
+  const showToast = useToastStore((s) => s.show);
+  const [dbName, schemaName] = target.split(".");
+
+  return (
+    <>
+      <div style={{ color: "var(--text-2)", fontSize: 12.5, lineHeight: 1.55 }}>
+        Export all {title.toLowerCase()} definitions from {schemaName}.
+      </div>
+      <Footer
+        onCancel={close}
+        label={`Export ${title}`}
+        onSubmit={() => {
+          const db = schema?.databases.find((d) => d.name === dbName);
+          const ns = db?.schemas.find((s) => s.name === schemaName);
+          const payload =
+            kind === "FUNCTION"
+              ? ns?.functions ?? []
+              : kind === "TRIGGER"
+              ? ns?.triggers ?? []
+              : ns?.events ?? [];
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          download(
+            JSON.stringify(payload, null, 2),
+            `${schemaName}-${title.toLowerCase()}-${stamp}.json`,
+            "application/json",
           );
+          showToast(`${title} export complete`, "success");
+          close();
         }}
       />
     </>
@@ -797,6 +1407,9 @@ function ViewDdlForm({
         return `  ${col.name} ${col.data_type}${nn}${pk}`;
       });
       return `CREATE TABLE ${target} (\n${lines.join(",\n")}\n);`;
+    }
+    if (typeof payload?.definition === "string" && payload.definition.trim().length > 0) {
+      return payload.definition;
     }
     return `-- DDL for ${target}\n-- (server returns synthesized DDL — preview only)`;
   }, [target, payload]);

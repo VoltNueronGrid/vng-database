@@ -357,7 +357,7 @@ pub(crate) async fn restore_from_backup(
     }
 
     // Apply PITR filter if target_xid is specified.
-    let mut rows_skipped = 0usize;
+    let rows_skipped = 0usize;
     let filtered_rows: HashMap<String, HashMap<String, String>> = if let Some(target_xid) = req.target_xid {
         archive.rows
             .into_iter()

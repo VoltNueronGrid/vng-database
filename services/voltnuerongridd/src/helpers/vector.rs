@@ -5,6 +5,8 @@
 //! target; the `VectorIndex` API is identical to what an HNSW-backed store
 //! would expose so the engine can be swapped in the future.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 // ── Core index ────────────────────────────────────────────────────────────────

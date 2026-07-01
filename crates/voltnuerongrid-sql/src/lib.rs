@@ -54,6 +54,8 @@ pub enum SqlStatementKind {
     DropRole,
     CreateDatabase,
     DropDatabase,
+    CreateSchema,
+    DropSchema,
     Unknown,
 }
 
@@ -262,6 +264,8 @@ impl SqlAnalyzer {
             (Some("DROP"), Some("ROLE"), _) => SqlStatementKind::DropRole,
             (Some("CREATE"), Some("DATABASE"), _) => SqlStatementKind::CreateDatabase,
             (Some("DROP"), Some("DATABASE"), _) => SqlStatementKind::DropDatabase,
+            (Some("CREATE"), Some("SCHEMA"), _) => SqlStatementKind::CreateSchema,
+            (Some("DROP"), Some("SCHEMA"), _) => SqlStatementKind::DropSchema,
             _ => SqlStatementKind::Unknown,
         }
     }
@@ -309,6 +313,8 @@ impl SqlAnalyzer {
                     | SqlStatementKind::DropRole
                     | SqlStatementKind::CreateDatabase
                     | SqlStatementKind::DropDatabase
+                    | SqlStatementKind::CreateSchema
+                    | SqlStatementKind::DropSchema
             ),
             touches_catalog: matches!(
                 kind,
@@ -332,6 +338,8 @@ impl SqlAnalyzer {
                     | SqlStatementKind::DropRole
                     | SqlStatementKind::CreateDatabase
                     | SqlStatementKind::DropDatabase
+                    | SqlStatementKind::CreateSchema
+                    | SqlStatementKind::DropSchema
             ),
             kind,
         }

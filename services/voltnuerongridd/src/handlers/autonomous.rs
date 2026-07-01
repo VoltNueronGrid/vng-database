@@ -707,6 +707,7 @@ pub(crate) async fn ai_governance_audit(
 #[derive(Deserialize)]
 pub(crate) struct ChatSqlRequest {
     pub(crate) query: String,
+    #[allow(dead_code)]
     pub(crate) context: Option<String>,
 }
 

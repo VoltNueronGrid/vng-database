@@ -741,6 +741,7 @@ pub(crate) struct ClusterState {
     pub(crate) replication_transport: Arc<Mutex<InMemoryReplicationTransport>>,
     pub(crate) replica_replay_states: Arc<Mutex<HashMap<String, ReplicaReplayState>>>,
     /// C-4: Per-peer HTAP replication cursor (peer base URL → last shipped sequence).
+    #[allow(dead_code)]
     pub(crate) htap_peer_cursors: Arc<Mutex<HashMap<String, u64>>>,
 }
 
@@ -864,10 +865,12 @@ pub(crate) struct OpsState {
     /// S6-WS5-04: TDE runtime toggle override.
     pub(crate) tde_override: Arc<Mutex<Option<bool>>>,
     // PLUG-1: flat-scan cosine-similarity vector index.
+    #[allow(dead_code)]
     pub(crate) vector_index: Arc<Mutex<helpers::vector::VectorIndex>>,
     // PLUG-2: in-memory inverted full-text search index.
     pub(crate) fts_index: Arc<Mutex<helpers::fts::FtsIndex>>,
     // PLUG-3: R-tree geospatial index.
+    #[allow(dead_code)]
     pub(crate) geo_index: Arc<Mutex<helpers::geo::GeoIndex>>,
 }
 
@@ -2557,6 +2560,7 @@ struct FulltextSearchResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct FulltextNotEnabledError {
     error: String,
     enable_with: String,

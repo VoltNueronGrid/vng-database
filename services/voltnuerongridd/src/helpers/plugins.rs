@@ -240,6 +240,7 @@ impl PluginRegistry {
     }
 
     /// Return all recorded versions for a plugin (including uninstalled).
+    #[allow(dead_code)]
     pub(crate) fn history(&self, id: &str) -> &[PluginEntry] {
         self.state
             .history
@@ -248,6 +249,7 @@ impl PluginRegistry {
             .unwrap_or(&[])
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_installed(&self, id: &str) -> bool {
         self.state.current.contains_key(id)
     }

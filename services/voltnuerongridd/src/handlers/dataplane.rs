@@ -107,6 +107,7 @@ pub(crate) async fn cluster_htap_lag(
 /// endpoint (C-4 push transport, send side). Best-effort: failed peers keep
 /// their cursor and are retried on the next call. Returns the number of peers
 /// successfully updated.
+#[allow(dead_code)]
 pub(crate) async fn fanout_htap_to_peers(state: &AppState, client: &reqwest::Client) -> usize {
     let peers = state.cluster.raft_peers.as_ref().clone();
     if peers.is_empty() {
@@ -179,6 +180,7 @@ pub(crate) async fn cluster_cache_replicate(
 }
 
 /// Fan a SET/DEL out to every peer so their caches stay coherent (C-3 send).
+#[allow(dead_code)]
 pub(crate) async fn fanout_cache_command(
     state: &AppState,
     client: &reqwest::Client,
@@ -239,6 +241,7 @@ pub(crate) async fn cluster_event_replicate(
 }
 
 /// Replicate a batch of events to every peer in order (C-5 send).
+#[allow(dead_code)]
 pub(crate) async fn fanout_events_to_peers(
     state: &AppState,
     client: &reqwest::Client,

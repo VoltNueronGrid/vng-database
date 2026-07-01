@@ -8,7 +8,16 @@ import { openMenuFor } from "@/store/contextMenu";
 import {
   buildDatabaseMenu,
   buildSchemaMenu,
+  buildTablesSectionMenu,
+  buildViewsSectionMenu,
+  buildFunctionsSectionMenu,
+  buildTriggersSectionMenu,
+  buildEventsSectionMenu,
   buildTableMenu,
+  buildViewMenu,
+  buildFunctionMenu,
+  buildTriggerMenu,
+  buildEventMenu,
   buildColumnMenu,
 } from "@/components/ContextMenu/menus";
 import type {
@@ -131,10 +140,12 @@ function TableNode({
 
 function FunctionNode({
   fn: func,
+  dbName,
   schemaName,
   indentLevel = 4,
 }: {
   fn: SchemaFunction;
+  dbName: string;
   schemaName: string;
   indentLevel?: number;
 }) {
@@ -154,6 +165,7 @@ function FunctionNode({
         onClick={() => setOpen((o) => !o)}
         onDoubleClick={() => onDdlAction(func.name, func.definition)}
         title={actionLabel}
+        onContextMenu={openMenuFor(() => buildFunctionMenu(dbName, schemaName, func))}
       >
         <TreeIndents count={indentLevel} />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
@@ -198,14 +210,20 @@ function FunctionNode({
 function NamedObjectNode({
   icon,
   name,
+  dbName,
+  schemaName,
   badge,
   definition,
+  menuBuilder,
   indentLevel = 4,
 }: {
   icon: string;
   name: string;
+  dbName: string;
+  schemaName: string;
   badge?: string;
   definition?: string;
+  menuBuilder?: (dbName: string, schemaName: string, name: string, definition?: string) => { items: import("@/store/contextMenu").ContextMenuItem[]; title?: string };
   indentLevel?: number;
 }) {
   const onDdlAction = useDdlAction();
@@ -221,6 +239,11 @@ function NamedObjectNode({
       style={{ paddingLeft: 0 }}
       title={actionLabel}
       onDoubleClick={() => onDdlAction(name, definition)}
+      onContextMenu={
+        menuBuilder
+          ? openMenuFor(() => menuBuilder(dbName, schemaName, name, definition))
+          : undefined
+      }
     >
       <TreeIndents count={indentLevel} />
       <span className="tree-chevron" style={{ visibility: "hidden" }}>▶</span>
@@ -241,6 +264,7 @@ function SectionNode({
   count,
   indentLevel,
   defaultOpen = true,
+  onContextMenu,
   children,
 }: {
   icon: string;
@@ -248,6 +272,7 @@ function SectionNode({
   count: number;
   indentLevel: number;
   defaultOpen?: boolean;
+  onContextMenu?: React.MouseEventHandler<HTMLDivElement>;
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -258,6 +283,7 @@ function SectionNode({
         className="tree-node"
         style={{ paddingLeft: 0, opacity: 0.75 }}
         onClick={() => setOpen((value) => !value)}
+        onContextMenu={onContextMenu}
       >
         <TreeIndents count={indentLevel} />
         <span className={`tree-chevron ${open ? "open" : ""}`}>▶</span>
@@ -296,53 +322,95 @@ function SchemaNode({ ns, dbName }: { ns: SchemaNamespace; dbName: string }) {
 
       {open && (
         <>
-          <SectionNode icon="📋" label="Tables" count={ns.tables.length} indentLevel={3}>
+          <SectionNode
+            icon="📋"
+            label="Tables"
+            count={ns.tables.length}
+            indentLevel={4}
+            onContextMenu={openMenuFor(() => buildTablesSectionMenu(dbName, ns.name))}
+          >
             {ns.tables.map((table) => (
-              <TableNode key={table.name} table={table} schemaName={ns.name} dbName={dbName} indentLevel={4} />
+              <TableNode key={table.name} table={table} schemaName={ns.name} dbName={dbName} indentLevel={5} />
             ))}
           </SectionNode>
 
-          <SectionNode icon="👁" label="Views" count={views.length} indentLevel={3} defaultOpen={false}>
+          <SectionNode
+            icon="👁"
+            label="Views"
+            count={views.length}
+            indentLevel={4}
+            defaultOpen={false}
+            onContextMenu={openMenuFor(() => buildViewsSectionMenu(dbName, ns.name))}
+          >
             {views.map((view: SchemaView) => (
               <NamedObjectNode
                 key={view.name}
                 icon="👁"
                 name={view.name}
+                dbName={dbName}
+                schemaName={ns.name}
                 badge="view"
                 definition={view.definition}
-                indentLevel={4}
+                menuBuilder={buildViewMenu}
+                indentLevel={5}
               />
             ))}
           </SectionNode>
 
-          <SectionNode icon="⚡" label="Functions" count={functions.length} indentLevel={3}>
+          <SectionNode
+            icon="⚡"
+            label="Functions"
+            count={functions.length}
+            indentLevel={4}
+            onContextMenu={openMenuFor(() => buildFunctionsSectionMenu(dbName, ns.name))}
+          >
             {functions.map((func) => (
-              <FunctionNode key={func.name} fn={func} schemaName={ns.name} indentLevel={4} />
+              <FunctionNode key={func.name} fn={func} dbName={dbName} schemaName={ns.name} indentLevel={5} />
             ))}
           </SectionNode>
 
-          <SectionNode icon="⛓" label="Triggers" count={triggers.length} indentLevel={3} defaultOpen={false}>
+          <SectionNode
+            icon="⛓"
+            label="Triggers"
+            count={triggers.length}
+            indentLevel={4}
+            defaultOpen={false}
+            onContextMenu={openMenuFor(() => buildTriggersSectionMenu(dbName, ns.name))}
+          >
             {triggers.map((trigger: SchemaTrigger) => (
               <NamedObjectNode
                 key={trigger.name}
                 icon="⛓"
                 name={trigger.name}
+                dbName={dbName}
+                schemaName={ns.name}
                 badge="trigger"
                 definition={trigger.definition}
-                indentLevel={4}
+                menuBuilder={buildTriggerMenu}
+                indentLevel={5}
               />
             ))}
           </SectionNode>
 
-          <SectionNode icon="🗓" label="Events" count={events.length} indentLevel={3} defaultOpen={false}>
+          <SectionNode
+            icon="🗓"
+            label="Events"
+            count={events.length}
+            indentLevel={4}
+            defaultOpen={false}
+            onContextMenu={openMenuFor(() => buildEventsSectionMenu(dbName, ns.name))}
+          >
             {events.map((event: SchemaEvent) => (
               <NamedObjectNode
                 key={event.name}
                 icon="🗓"
                 name={event.name}
+                dbName={dbName}
+                schemaName={ns.name}
                 badge="event"
                 definition={event.definition}
-                indentLevel={4}
+                menuBuilder={buildEventMenu}
+                indentLevel={5}
               />
             ))}
           </SectionNode>

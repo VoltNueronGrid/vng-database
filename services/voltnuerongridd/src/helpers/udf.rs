@@ -97,6 +97,7 @@ pub(crate) enum UdfPayload {
     /// Compiled WASM bytes with per-instance limits.
     Wasm {
         bytes: Vec<u8>,
+        #[allow(dead_code)]
         memory_limit_mb: u64,
         fuel_limit: u64,
     },
@@ -117,6 +118,7 @@ pub(crate) enum UdfPayload {
 pub(crate) struct RegisteredUdf {
     pub(crate) name: String,
     pub(crate) language: String,
+    #[allow(dead_code)]
     pub(crate) registered_at_ms: u64,
     pub(crate) payload: UdfPayload,
 }
@@ -215,6 +217,7 @@ impl UdfRegistry {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get(&self, name: &str) -> Option<&RegisteredUdf> {
         self.udfs.get(name)
     }
@@ -481,7 +484,7 @@ fn execute_python_udf(
         "{source}\nimport sys as _sys\n_result = {func_name}({py_args_tuple})\nprint(str(_result))\n"
     );
 
-    let mut child = Command::new("python3")
+    let child = Command::new("python3")
         .args(["-I", "-c", &driver])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
