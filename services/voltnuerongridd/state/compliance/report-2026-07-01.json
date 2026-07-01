@@ -1,6 +1,6 @@
 {
   "status": "ok",
-  "generated_at_unix_ms": 1782871137046,
+  "generated_at_unix_ms": 1782871244379,
   "rbac_role_count": 6,
   "audit_event_count": 0,
   "encryption_at_rest_enabled": false,
