@@ -35,6 +35,12 @@ pub mod tail_gc;
 pub mod projection_cache;
 // H9-9: Freshness SLA Contract and Enforcement
 pub mod freshness_sla;
+// H9-10: Metis-style HTAP-aware optimizer and routing hints
+pub mod htap_optimizer;
+// H9-11: Hybrid base+tail scan execution
+pub mod hybrid_scan;
+// H9-12: Resource Manager and workload-class admission control
+pub mod resource_manager;
 use wal_adapter::{WalAdapter, WalAdapterError};
 
 pub use triggers::{
@@ -66,6 +72,18 @@ pub use projection_cache::ProjectionCacheMetrics;
 pub use freshness_sla::{
     FreshnessSlaEnforcer, FreshnessSlaRequest, FreshnessSlaConfig, FreshnessSlaMetrics,
     ComplianceStatus, FreshnessMetrics,
+};
+// H9-10: Metis-style HTAP-aware optimizer and routing hints
+pub use htap_optimizer::{
+    HtapOptimizer, PhysicalAccessPath, CostEstimate, SegmentStatistics, QueryCharacteristics,
+    SystemState,
+};
+// H9-11: Hybrid base+tail scan execution
+pub use hybrid_scan::{HybridScanExecutor, HybridScanResult, ScanStrategy, VersionInfo, ScanSource, HybridScanError};
+// H9-12: Resource Manager and workload-class admission control
+pub use resource_manager::{
+    ResourceManager, WorkloadClass, QueryRequest, ResourceBudget, ResourceAllocation,
+    AdmissionQueue, ResourceMetrics,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
