@@ -15,6 +15,8 @@ pub mod mvcc;
 pub mod types;
 pub mod traits;
 pub mod segment;
+// H9-2: Partition and segment routing
+pub mod partition;
 // S7-001/002: trigger framework
 pub mod triggers;
 // S7-003: trigger emitters
@@ -31,6 +33,8 @@ pub use trigger_emitter::{LoggingTriggerEmitter, NoOpTriggerEmitter, TriggerEmit
 pub use types::{PartitionId, SegmentId, RowId, CommitTs, SnapshotTs, VersionId};
 pub use traits::{TailStore, BaseColumnStore, SegmentCatalog, RowProjectionCache, MergeableSegmentStore, Row, ColumnBatch};
 pub use segment::{HtapSegmentRef, SegmentMetadata, SegmentStats, MinMaxStats, TailVersion};
+// H9-2: Partition routing and types
+pub use partition::{PartitionType, RangePartitionScheme, RangePartition, HashPartitionScheme, SegmentRouter};
 // H9-3: MVCC version compatibility and lineage support
 pub use mvcc::{MvccRowV2, VersionVisibility, xid_to_commit_ts, commit_ts_to_xid, snapshot_ts_to_xid};
 
