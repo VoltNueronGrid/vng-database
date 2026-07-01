@@ -29,6 +29,12 @@ pub mod storage_client;
 pub mod snapshot;
 // H9-6: Background Merge Manager (tail-to-base consolidation scheduler)
 pub mod merge;
+// H9-7: Tail Garbage Collection / Version Reclamation
+pub mod tail_gc;
+// H9-5: Row-Projection Cache for Hot Segments
+pub mod projection_cache;
+// H9-9: Freshness SLA Contract and Enforcement
+pub mod freshness_sla;
 use wal_adapter::{WalAdapter, WalAdapterError};
 
 pub use triggers::{
@@ -51,6 +57,15 @@ pub use snapshot::{SnapshotId, SnapshotHandle, SnapshotManager, SnapshotRequest,
 pub use merge::{
     MergePolicy, MergeJobId, MergeJob, MergeStatus, MergeMetrics, MergePhase, MergeProgress,
     MergeManager,
+};
+// H9-7: Tail Garbage Collection / Version Reclamation
+pub use tail_gc::{TailGcCollector, GcMetrics};
+// H9-5: Row-Projection Cache for Hot Segments
+pub use projection_cache::ProjectionCacheMetrics;
+// H9-9: Freshness SLA Contract and Enforcement
+pub use freshness_sla::{
+    FreshnessSlaEnforcer, FreshnessSlaRequest, FreshnessSlaConfig, FreshnessSlaMetrics,
+    ComplianceStatus, FreshnessMetrics,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
