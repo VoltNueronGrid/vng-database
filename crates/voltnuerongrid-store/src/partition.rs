@@ -227,11 +227,11 @@ mod tests {
                 RangePartition {
                     segment_id: SegmentId(0),
                     lower_bound: None,
-                    upper_bound: Some("500".to_string()),
+                    upper_bound: Some("00500".to_string()),
                 },
                 RangePartition {
                     segment_id: SegmentId(1),
-                    lower_bound: Some("500".to_string()),
+                    lower_bound: Some("00500".to_string()),
                     upper_bound: None,
                 },
             ],
@@ -239,12 +239,12 @@ mod tests {
         let router = SegmentRouter::new_range(scheme);
 
         // Below 500
-        assert_eq!(router.route_to_segment("100", &[]).unwrap(), SegmentId(0));
-        assert_eq!(router.route_to_segment("499", &[]).unwrap(), SegmentId(0));
+        assert_eq!(router.route_to_segment("00100", &[]).unwrap(), SegmentId(0));
+        assert_eq!(router.route_to_segment("00499", &[]).unwrap(), SegmentId(0));
 
         // At 500 and above
-        assert_eq!(router.route_to_segment("500", &[]).unwrap(), SegmentId(1));
-        assert_eq!(router.route_to_segment("600", &[]).unwrap(), SegmentId(1));
+        assert_eq!(router.route_to_segment("00500", &[]).unwrap(), SegmentId(1));
+        assert_eq!(router.route_to_segment("00600", &[]).unwrap(), SegmentId(1));
         assert_eq!(
             router.route_to_segment("999999", &[]).unwrap(),
             SegmentId(1)
@@ -258,27 +258,27 @@ mod tests {
                 RangePartition {
                     segment_id: SegmentId(0),
                     lower_bound: None,
-                    upper_bound: Some("1000".to_string()),
+                    upper_bound: Some("01000".to_string()),
                 },
                 RangePartition {
                     segment_id: SegmentId(1),
-                    lower_bound: Some("1000".to_string()),
-                    upper_bound: Some("5000".to_string()),
+                    lower_bound: Some("01000".to_string()),
+                    upper_bound: Some("05000".to_string()),
                 },
                 RangePartition {
                     segment_id: SegmentId(2),
-                    lower_bound: Some("5000".to_string()),
+                    lower_bound: Some("05000".to_string()),
                     upper_bound: None,
                 },
             ],
         };
         let router = SegmentRouter::new_range(scheme);
 
-        assert_eq!(router.route_to_segment("500", &[]).unwrap(), SegmentId(0));
-        assert_eq!(router.route_to_segment("1000", &[]).unwrap(), SegmentId(1));
-        assert_eq!(router.route_to_segment("3000", &[]).unwrap(), SegmentId(1));
-        assert_eq!(router.route_to_segment("4999", &[]).unwrap(), SegmentId(1));
-        assert_eq!(router.route_to_segment("5000", &[]).unwrap(), SegmentId(2));
+        assert_eq!(router.route_to_segment("00500", &[]).unwrap(), SegmentId(0));
+        assert_eq!(router.route_to_segment("01000", &[]).unwrap(), SegmentId(1));
+        assert_eq!(router.route_to_segment("03000", &[]).unwrap(), SegmentId(1));
+        assert_eq!(router.route_to_segment("04999", &[]).unwrap(), SegmentId(1));
+        assert_eq!(router.route_to_segment("05000", &[]).unwrap(), SegmentId(2));
         assert_eq!(router.route_to_segment("10000", &[]).unwrap(), SegmentId(2));
     }
 
@@ -288,23 +288,23 @@ mod tests {
             ranges: vec![
                 RangePartition {
                     segment_id: SegmentId(0),
-                    lower_bound: Some("100".to_string()),
-                    upper_bound: Some("200".to_string()),
+                    lower_bound: Some("00100".to_string()),
+                    upper_bound: Some("00200".to_string()),
                 },
             ],
         };
         let router = SegmentRouter::new_range(scheme);
 
         // Below range
-        let err = router.route_to_segment("50", &[]);
+        let err = router.route_to_segment("00050", &[]);
         assert!(err.is_err());
 
         // Above range
-        let err = router.route_to_segment("300", &[]);
+        let err = router.route_to_segment("00300", &[]);
         assert!(err.is_err());
 
         // Within range
-        assert_eq!(router.route_to_segment("150", &[]).unwrap(), SegmentId(0));
+        assert_eq!(router.route_to_segment("00150", &[]).unwrap(), SegmentId(0));
     }
 
     #[test]
@@ -361,11 +361,11 @@ mod tests {
                 RangePartition {
                     segment_id: SegmentId(0),
                     lower_bound: None,
-                    upper_bound: Some("1000".to_string()),
+                    upper_bound: Some("01000".to_string()),
                 },
                 RangePartition {
                     segment_id: SegmentId(1),
-                    lower_bound: Some("1000".to_string()),
+                    lower_bound: Some("01000".to_string()),
                     upper_bound: None,
                 },
             ],
@@ -385,24 +385,24 @@ mod tests {
                 RangePartition {
                     segment_id: SegmentId(0),
                     lower_bound: None,
-                    upper_bound: Some("1000".to_string()),
+                    upper_bound: Some("01000".to_string()),
                 },
                 RangePartition {
                     segment_id: SegmentId(1),
-                    lower_bound: Some("1000".to_string()),
-                    upper_bound: Some("5000".to_string()),
+                    lower_bound: Some("01000".to_string()),
+                    upper_bound: Some("05000".to_string()),
                 },
                 RangePartition {
                     segment_id: SegmentId(2),
-                    lower_bound: Some("5000".to_string()),
+                    lower_bound: Some("05000".to_string()),
                     upper_bound: None,
                 },
             ],
         };
         let router = SegmentRouter::new_range(scheme);
 
-        // Predicate: >= 3000
-        let segments = router.prune_segments(Some("3000"), None);
+        // Predicate: >= 03000
+        let segments = router.prune_segments(Some("03000"), None);
         assert_eq!(segments.len(), 2);
         assert!(segments.contains(&SegmentId(1)));
         assert!(segments.contains(&SegmentId(2)));
@@ -415,24 +415,24 @@ mod tests {
                 RangePartition {
                     segment_id: SegmentId(0),
                     lower_bound: None,
-                    upper_bound: Some("1000".to_string()),
+                    upper_bound: Some("01000".to_string()),
                 },
                 RangePartition {
                     segment_id: SegmentId(1),
-                    lower_bound: Some("1000".to_string()),
-                    upper_bound: Some("5000".to_string()),
+                    lower_bound: Some("01000".to_string()),
+                    upper_bound: Some("05000".to_string()),
                 },
                 RangePartition {
                     segment_id: SegmentId(2),
-                    lower_bound: Some("5000".to_string()),
+                    lower_bound: Some("05000".to_string()),
                     upper_bound: None,
                 },
             ],
         };
         let router = SegmentRouter::new_range(scheme);
 
-        // Predicate: 2000 <= x < 6000
-        let segments = router.prune_segments(Some("2000"), Some("6000"));
+        // Predicate: 02000 <= x < 06000
+        let segments = router.prune_segments(Some("02000"), Some("06000"));
         assert_eq!(segments.len(), 2);
         assert!(segments.contains(&SegmentId(1)));
         assert!(segments.contains(&SegmentId(2)));
