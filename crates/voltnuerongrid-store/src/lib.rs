@@ -11,6 +11,10 @@ pub mod ddl_catalog;
 pub mod htap_sync;
 pub mod index;
 pub mod mvcc;
+// H9-1: HTAP storage abstraction layer
+pub mod types;
+pub mod traits;
+pub mod segment;
 // S7-001/002: trigger framework
 pub mod triggers;
 // S7-003: trigger emitters
@@ -23,6 +27,12 @@ pub use triggers::{
     DdlTriggerDefinition, TriggerDefinition, TriggerEvent, TriggerGranularity, TriggerRegistry,
 };
 pub use trigger_emitter::{LoggingTriggerEmitter, NoOpTriggerEmitter, TriggerEmitter};
+// H9-1: HTAP storage traits and types
+pub use types::{PartitionId, SegmentId, RowId, CommitTs, SnapshotTs, VersionId};
+pub use traits::{TailStore, BaseColumnStore, SegmentCatalog, RowProjectionCache, MergeableSegmentStore, Row, ColumnBatch};
+pub use segment::{HtapSegmentRef, SegmentMetadata, SegmentStats, MinMaxStats, TailVersion};
+// H9-3: MVCC version compatibility and lineage support
+pub use mvcc::{MvccRowV2, VersionVisibility, xid_to_commit_ts, commit_ts_to_xid, snapshot_ts_to_xid};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurabilityConfig {

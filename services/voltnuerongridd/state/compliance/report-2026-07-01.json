@@ -1,0 +1,17 @@
+{
+  "status": "ok",
+  "generated_at_unix_ms": 1782867474505,
+  "rbac_role_count": 6,
+  "audit_event_count": 0,
+  "encryption_at_rest_enabled": false,
+  "tls_enabled": false,
+  "constraint_count": 0,
+  "active_ddl_objects": 0,
+  "active_operator_count": 0,
+  "compliance_score": 50,
+  "findings": [
+    "encryption_at_rest_disabled: VNG_KMS_KEY_ID/VNG_ENCRYPTION_KEY not set",
+    "tls_not_configured: VNG_TLS_CERT_PATH not set and native listener disabled",
+    "no_audit_events: audit log is empty or not configured"
+  ]
+}

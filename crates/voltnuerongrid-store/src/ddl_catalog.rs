@@ -65,6 +65,8 @@ fn qualified_key(db: &str, schema: &str, name: &str) -> String {
 #[derive(Default)]
 pub struct DdlCatalog {
     entries: HashMap<String, DdlCatalogEntry>,
+    /// Segment metadata registry: table name → Vec<SegmentMetadata>
+    segment_metadata: HashMap<String, Vec<crate::segment::SegmentMetadata>>,
 }
 
 impl DdlCatalog {
@@ -240,6 +242,61 @@ impl DdlCatalog {
         self.entries
             .values()
             .find(|e| !e.dropped && e.object_kind == "function" && e.object_name == lower)
+    }
+
+    /// Register partition segments for a table.
+    /// Replaces any existing segments for the table.
+    pub fn register_partition_segments(
+        &mut self,
+        table: &str,
+        segments: Vec<crate::segment::SegmentMetadata>,
+    ) {
+        self.segment_metadata
+            .insert(table.to_ascii_lowercase(), segments);
+    }
+
+    /// Get all segments registered for a table.
+    pub fn get_segments_for_table(&self, table: &str) -> Vec<crate::segment::SegmentMetadata> {
+        self.segment_metadata
+            .get(&table.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Get a specific segment by ID.
+    /// Searches across all tables for the given segment ID.
+    pub fn get_segment_by_id(
+        &self,
+        seg_id: crate::types::SegmentId,
+    ) -> Option<crate::segment::SegmentMetadata> {
+        for segments in self.segment_metadata.values() {
+            for seg in segments {
+                if seg.segment_id == seg_id {
+                    return Some(seg.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Update segment metadata for a specific segment ID.
+    pub fn update_segment_metadata(
+        &mut self,
+        seg_id: crate::types::SegmentId,
+        updated: crate::segment::SegmentMetadata,
+    ) -> Result<(), String> {
+        for segments in self.segment_metadata.values_mut() {
+            if let Some(seg) = segments.iter_mut().find(|s| s.segment_id == seg_id) {
+                *seg = updated;
+                return Ok(());
+            }
+        }
+        Err(format!("Segment {:?} not found", seg_id))
+    }
+
+    /// Drop all segments for a table (called when the table is dropped).
+    pub fn drop_table_segments(&mut self, table: &str) {
+        self.segment_metadata.remove(&table.to_ascii_lowercase());
     }
 }
 
@@ -606,5 +663,110 @@ mod tests {
 
         let info2 = parse_ddl_info("CREATE OR REPLACE TABLE t (id INT)").unwrap();
         assert!(info2.replace_ok);
+    }
+
+    #[test]
+    fn h9_2_register_partition_segments() {
+        use crate::types::{PartitionId, SegmentId};
+        use crate::segment::SegmentMetadata;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut cat = DdlCatalog::new();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let segments = vec![
+            SegmentMetadata::new(SegmentId(0), PartitionId(1), "orders".to_string(), now as u64),
+            SegmentMetadata::new(SegmentId(1), PartitionId(1), "orders".to_string(), now as u64),
+        ];
+
+        cat.register_partition_segments("orders", segments.clone());
+        let retrieved = cat.get_segments_for_table("orders");
+        assert_eq!(retrieved.len(), 2);
+        assert_eq!(retrieved[0].segment_id, SegmentId(0));
+        assert_eq!(retrieved[1].segment_id, SegmentId(1));
+    }
+
+    #[test]
+    fn h9_2_get_segment_by_id() {
+        use crate::types::{PartitionId, SegmentId};
+        use crate::segment::SegmentMetadata;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut cat = DdlCatalog::new();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let segments = vec![
+            SegmentMetadata::new(SegmentId(5), PartitionId(1), "users".to_string(), now as u64),
+            SegmentMetadata::new(SegmentId(10), PartitionId(2), "users".to_string(), now as u64),
+        ];
+
+        cat.register_partition_segments("users", segments);
+        
+        let seg5 = cat.get_segment_by_id(SegmentId(5));
+        assert!(seg5.is_some());
+        assert_eq!(seg5.unwrap().segment_id, SegmentId(5));
+
+        let seg10 = cat.get_segment_by_id(SegmentId(10));
+        assert!(seg10.is_some());
+        assert_eq!(seg10.unwrap().segment_id, SegmentId(10));
+
+        let seg99 = cat.get_segment_by_id(SegmentId(99));
+        assert!(seg99.is_none());
+    }
+
+    #[test]
+    fn h9_2_drop_table_segments() {
+        use crate::types::{PartitionId, SegmentId};
+        use crate::segment::SegmentMetadata;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut cat = DdlCatalog::new();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let segments = vec![
+            SegmentMetadata::new(SegmentId(0), PartitionId(1), "temp".to_string(), now as u64),
+        ];
+
+        cat.register_partition_segments("temp", segments);
+        assert_eq!(cat.get_segments_for_table("temp").len(), 1);
+
+        cat.drop_table_segments("temp");
+        assert_eq!(cat.get_segments_for_table("temp").len(), 0);
+    }
+
+    #[test]
+    fn h9_2_update_segment_metadata() {
+        use crate::types::{PartitionId, SegmentId};
+        use crate::segment::SegmentMetadata;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut cat = DdlCatalog::new();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let mut seg = SegmentMetadata::new(SegmentId(3), PartitionId(1), "sales".to_string(), now);
+        seg.row_count = 100;
+
+        cat.register_partition_segments("sales", vec![seg]);
+
+        let mut updated = cat.get_segment_by_id(SegmentId(3)).unwrap();
+        updated.row_count = 500;
+
+        let result = cat.update_segment_metadata(SegmentId(3), updated.clone());
+        assert!(result.is_ok());
+
+        let after = cat.get_segment_by_id(SegmentId(3)).unwrap();
+        assert_eq!(after.row_count, 500);
     }
 }

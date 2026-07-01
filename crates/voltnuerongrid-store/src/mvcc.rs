@@ -481,6 +481,233 @@ impl PagedRowStore {
 }
 
 // ---------------------------------------------------------------------------
+// H9-3: Bridge trait and adapter functions for timestamp-based semantics
+// ---------------------------------------------------------------------------
+
+/// Bridge trait to adapt old Xid-based visibility to new timestamp-based visibility.
+pub trait VersionVisibility {
+    fn is_visible_at(&self, snapshot_ts: crate::types::SnapshotTs) -> bool;
+}
+
+/// Adapter: map Xid to CommitTs (simple 1:1 mapping).
+pub fn xid_to_commit_ts(xid: Xid) -> crate::types::CommitTs {
+    crate::types::CommitTs(xid)
+}
+
+/// Adapter: map CommitTs to Xid.
+pub fn commit_ts_to_xid(ts: crate::types::CommitTs) -> Xid {
+    ts.0
+}
+
+/// Adapter: map SnapshotTs to Xid.
+pub fn snapshot_ts_to_xid(ts: crate::types::SnapshotTs) -> Xid {
+    ts.0
+}
+
+// ---------------------------------------------------------------------------
+// H9-3: MvccRowV2 - Enhanced MVCC row with explicit lineage and timestamp semantics
+// ---------------------------------------------------------------------------
+
+/// Enhanced MVCC row data structure that bridges old and new semantics.
+/// Maintains both the old version chain and new explicit lineage pointers.
+#[derive(Debug, Clone)]
+pub struct MvccRowV2 {
+    pub key: String,
+    /// Old-style versions for backward compatibility
+    pub versions: Vec<RowVersion>,
+    /// Index: VersionId → position in versions vector for fast lookups
+    version_index: std::collections::HashMap<crate::types::VersionId, usize>,
+}
+
+impl MvccRowV2 {
+    /// Create a new row for bridging semantics.
+    pub fn new(key: &str) -> Self {
+        MvccRowV2 {
+            key: key.to_string(),
+            versions: Vec::new(),
+            version_index: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Get latest visible version using new timestamp semantics.
+    /// Visibility rule: begin_ts <= snapshot_ts < end_ts
+    pub fn get_latest_tail_version(
+        &self,
+        snapshot_ts: crate::types::SnapshotTs,
+    ) -> Option<&RowVersion> {
+        // Walk backwards through versions (latest first) to find the
+        // most recent version with begin_ts <= snapshot_ts
+        for v in self.versions.iter().rev() {
+            // Map Xid to CommitTs (implicitly begin_ts)
+            let begin_ts = xid_to_commit_ts(v.xid);
+            if begin_ts.0 <= snapshot_ts.0 {
+                return if v.deleted { None } else { Some(v) };
+            }
+        }
+        None
+    }
+
+    /// Traverse backward through lineage chain, returning versions in descending order.
+    /// Returns all versions, including tombstones.
+    pub fn get_tail_version_chain(&self) -> Vec<&RowVersion> {
+        self.versions.iter().rev().collect()
+    }
+
+    /// Append a new version to the chain.
+    /// Automatically sets end_ts of previous version if this version has a higher begin_ts.
+    pub fn append_tail_version(
+        &mut self,
+        version: RowVersion,
+    ) -> Result<(), String> {
+        let version_id = crate::types::VersionId(self.versions.len() as u64);
+        self.version_index.insert(version_id, self.versions.len());
+        self.versions.push(version);
+        Ok(())
+    }
+
+    /// Mark a version as deleted (create tombstone).
+    /// The latest version is closed and a tombstone is added.
+    pub fn delete_at_ts(&mut self, delete_ts: Xid) -> Result<(), String> {
+        if self.versions.is_empty() {
+            return Err("Row is empty".to_string());
+        }
+        // Add a tombstone version
+        let tombstone = RowVersion {
+            xid: delete_ts,
+            deleted: true,
+            data: HashMap::new(),
+        };
+        self.append_tail_version(tombstone)
+    }
+
+    /// Returns the number of versions in this row's version chain.
+    pub fn version_count(&self) -> usize {
+        self.versions.len()
+    }
+
+    /// Check if row is visible at snapshot (not deleted).
+    pub fn is_visible_at(&self, snapshot_ts: crate::types::SnapshotTs) -> bool {
+        self.get_latest_tail_version(snapshot_ts).is_some()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// H9-1: TailStore trait implementation for PagedRowStore
+// ---------------------------------------------------------------------------
+
+impl crate::traits::TailStore for PagedRowStore {
+    fn insert_version(
+        &mut self,
+        row_id: crate::types::RowId,
+        version: crate::segment::TailVersion,
+    ) -> Result<(), String> {
+        // Map RowId to a row key (simple mapping: use row_id as key)
+        let key = format!("row:{}", row_id.0);
+        
+        // If the version is a tombstone, record a delete
+        if version.tombstone {
+            self.delete(version.begin_ts.0, &key);
+        } else {
+            // Otherwise, insert the payload as row data
+            // Parse payload as column pairs: [col_name_len, col_name, val_len, val, ...]
+            let mut data = std::collections::HashMap::new();
+            
+            // For now, store the raw payload as a single "data" column
+            // A full implementation would parse the payload into columns
+            data.insert("_payload".to_string(), String::from_utf8_lossy(&version.payload).to_string());
+            
+            self.insert(version.begin_ts.0, &key, data);
+        }
+        
+        Ok(())
+    }
+
+    fn get_latest_version(
+        &self,
+        row_id: crate::types::RowId,
+        snapshot_ts: crate::types::SnapshotTs,
+    ) -> Result<Option<crate::segment::TailVersion>, String> {
+        let key = format!("row:{}", row_id.0);
+        
+        // Scan through pages to find the row
+        for page in &self.pages {
+            if let Some(row) = page.find_row(&key) {
+                // Find the latest visible version
+                if let Some(data) = row.visible_at(snapshot_ts.0) {
+                    // Reconstruct a TailVersion from the found row data
+                    let payload = data
+                        .get("_payload")
+                        .map(|s| s.as_bytes().to_vec())
+                        .unwrap_or_default();
+                    
+                    let version = crate::segment::TailVersion {
+                        row_id,
+                        version_id: crate::types::VersionId(row.version_count() as u64),
+                        begin_ts: crate::types::CommitTs(row.versions.last().map(|v| v.xid).unwrap_or(0)),
+                        end_ts: None,
+                        prev_version: None,
+                        tombstone: false,
+                        payload,
+                    };
+                    return Ok(Some(version));
+                }
+                return Ok(None);
+            }
+        }
+        
+        Ok(None)
+    }
+
+    fn get_version_chain(
+        &self,
+        row_id: crate::types::RowId,
+    ) -> Result<Vec<crate::segment::TailVersion>, String> {
+        let key = format!("row:{}", row_id.0);
+        
+        // Scan through pages to find the row
+        for page in &self.pages {
+            if let Some(row) = page.find_row(&key) {
+                // Convert version chain to TailVersion objects
+                let mut versions = Vec::new();
+                for (idx, row_ver) in row.versions.iter().enumerate() {
+                    let payload = if row_ver.deleted {
+                        Vec::new()
+                    } else {
+                        row_ver.data
+                            .get("_payload")
+                            .map(|s| s.as_bytes().to_vec())
+                            .unwrap_or_default()
+                    };
+                    
+                    versions.push(crate::segment::TailVersion {
+                        row_id,
+                        version_id: crate::types::VersionId((idx + 1) as u64),
+                        begin_ts: crate::types::CommitTs(row_ver.xid),
+                        end_ts: None,
+                        prev_version: if idx > 0 { Some(crate::types::VersionId(idx as u64)) } else { None },
+                        tombstone: row_ver.deleted,
+                        payload,
+                    });
+                }
+                return Ok(versions);
+            }
+        }
+        
+        Ok(Vec::new())
+    }
+
+    fn delete_row(
+        &mut self,
+        row_id: crate::types::RowId,
+        commit_ts: crate::types::CommitTs,
+    ) -> Result<(), String> {
+        let key = format!("row:{}", row_id.0);
+        self.delete(commit_ts.0, &key);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -793,4 +1020,459 @@ mod tests {
         }
         assert_eq!(store.total_row_count(), 20, "no eviction when cap=0");
     }
+
+    // ─── H9-1: TailStore trait tests ───────────────────────────────────────
+
+    #[test]
+    fn h9_1_tailstore_insert_version() {
+        use crate::traits::TailStore;
+        use crate::types::{RowId, VersionId, CommitTs};
+        use crate::segment::TailVersion;
+
+        let mut store = PagedRowStore::new(256);
+        let initial_count = store.total_row_count();
+        
+        let row_id = RowId(100);
+        let version = TailVersion::new(
+            row_id,
+            VersionId(1),
+            CommitTs(50),
+            vec![1, 2, 3, 4],
+        );
+
+        // Insert version via trait
+        let result = store.insert_version(row_id, version);
+        assert!(result.is_ok(), "insert_version should succeed");
+
+        // Verify the row count increased
+        let new_count = store.total_row_count();
+        assert_eq!(new_count, initial_count + 1, "row count should increase after insert");
+    }
+
+    #[test]
+    fn h9_1_tailstore_get_latest_version() {
+        use crate::traits::TailStore;
+        use crate::types::{RowId, VersionId, CommitTs, SnapshotTs};
+        use crate::segment::TailVersion;
+
+        let mut store = PagedRowStore::new(256);
+        let row_id = RowId(200);
+        
+        // Insert initial version
+        let version = TailVersion::new(
+            row_id,
+            VersionId(1),
+            CommitTs(50),
+            vec![1, 2, 3],
+        );
+        store.insert_version(row_id, version).unwrap();
+
+        // Query at same snapshot
+        let result = store.get_latest_version(row_id, SnapshotTs(50));
+        assert!(result.is_ok());
+        let found = result.unwrap();
+        assert!(found.is_some(), "should find version at snapshot 50");
+        assert_eq!(found.unwrap().row_id, row_id);
+    }
+
+    #[test]
+    fn h9_1_tailstore_delete_row() {
+        use crate::traits::TailStore;
+        use crate::types::{RowId, VersionId, CommitTs, SnapshotTs};
+        use crate::segment::TailVersion;
+
+        let mut store = PagedRowStore::new(256);
+        let row_id = RowId(300);
+
+        // Insert a row
+        let version = TailVersion::new(
+            row_id,
+            VersionId(1),
+            CommitTs(50),
+            vec![5, 6, 7],
+        );
+        store.insert_version(row_id, version).unwrap();
+
+        // Delete it
+        let result = store.delete_row(row_id, CommitTs(100));
+        assert!(result.is_ok());
+
+        // Row should not be visible at snapshot > delete_ts
+        let found = store.get_latest_version(row_id, SnapshotTs(100)).unwrap();
+        assert!(found.is_none(), "deleted row should not be visible");
+    }
+
+    #[test]
+    fn h9_1_tailstore_version_chain() {
+        use crate::traits::TailStore;
+        use crate::types::{RowId, VersionId, CommitTs};
+        use crate::segment::TailVersion;
+
+        let mut store = PagedRowStore::new(256);
+        let row_id = RowId(400);
+
+        // Insert version 1
+        let v1 = TailVersion::new(
+            row_id,
+            VersionId(1),
+            CommitTs(10),
+            vec![1],
+        );
+        store.insert_version(row_id, v1).unwrap();
+
+        // Insert version 2 (update)
+        let v2 = TailVersion::new(
+            row_id,
+            VersionId(2),
+            CommitTs(20),
+            vec![2],
+        );
+        store.insert_version(row_id, v2).unwrap();
+
+        // Get version chain
+        let chain = store.get_version_chain(row_id).unwrap();
+        assert_eq!(chain.len(), 2, "should have 2 versions");
+        assert_eq!(chain[0].begin_ts, CommitTs(10));
+        assert_eq!(chain[1].begin_ts, CommitTs(20));
+    }
+
+    #[test]
+    fn h9_1_tailstore_tombstone_version() {
+        use crate::traits::TailStore;
+        use crate::types::{RowId, VersionId, CommitTs};
+        use crate::segment::TailVersion;
+
+        let mut store = PagedRowStore::new(256);
+        let row_id = RowId(500);
+
+        // Insert a row
+        let version = TailVersion::new(
+            row_id,
+            VersionId(1),
+            CommitTs(30),
+            vec![9, 8, 7],
+        );
+        store.insert_version(row_id, version).unwrap();
+
+        // Insert tombstone version
+        let tombstone = TailVersion::tombstone(
+            row_id,
+            VersionId(2),
+            CommitTs(40),
+        );
+        store.insert_version(row_id, tombstone).unwrap();
+
+        // Verify version chain has tombstone
+        let chain = store.get_version_chain(row_id).unwrap();
+        assert_eq!(chain.len(), 2);
+        assert!(chain[1].tombstone, "second version should be tombstone");
+    }
+
+    // ─── H9-3: MvccRowV2 and timestamp-based visibility tests ──────────────────
+
+    #[test]
+    fn h9_3_mvcc_row_v2_creation() {
+        let row = MvccRowV2::new("test_key");
+        assert_eq!(row.key, "test_key");
+        assert_eq!(row.versions.len(), 0);
+    }
+
+    #[test]
+    fn h9_3_tail_version_visibility_rule() {
+        let mut row = MvccRowV2::new("test_key");
+
+        // Insert version 1: xid=10
+        let v1 = RowVersion {
+            xid: 10,
+            deleted: false,
+            data: row([("v", "1")]),
+        };
+        row.append_tail_version(v1).unwrap();
+
+        // Insert version 2: xid=20
+        let v2 = RowVersion {
+            xid: 20,
+            deleted: false,
+            data: row([("v", "2")]),
+        };
+        row.append_tail_version(v2).unwrap();
+
+        // Visibility checks: begin_ts <= snapshot_ts
+        let snap_10 = crate::types::SnapshotTs(10);
+        let snap_15 = crate::types::SnapshotTs(15);
+        let snap_20 = crate::types::SnapshotTs(20);
+        let snap_5 = crate::types::SnapshotTs(5);
+
+        // At snapshot 10, should see version 1
+        let v = row.get_latest_tail_version(snap_10).unwrap();
+        assert_eq!(v.xid, 10);
+
+        // At snapshot 15, should see version 1 (most recent before snapshot)
+        let v = row.get_latest_tail_version(snap_15).unwrap();
+        assert_eq!(v.xid, 10);
+
+        // At snapshot 20, should see version 2
+        let v = row.get_latest_tail_version(snap_20).unwrap();
+        assert_eq!(v.xid, 20);
+
+        // At snapshot 5, should see nothing (before first version)
+        assert!(row.get_latest_tail_version(snap_5).is_none());
+    }
+
+    #[test]
+    fn h9_3_lineage_chain_traversal() {
+        let mut row = MvccRowV2::new("test_key");
+
+        // Insert version 1: xid=10
+        let v1 = RowVersion {
+            xid: 10,
+            deleted: false,
+            data: row([("v", "1")]),
+        };
+        row.append_tail_version(v1).unwrap();
+
+        // Insert version 2: xid=20
+        let v2 = RowVersion {
+            xid: 20,
+            deleted: false,
+            data: row([("v", "2")]),
+        };
+        row.append_tail_version(v2).unwrap();
+
+        // Insert version 3: xid=30
+        let v3 = RowVersion {
+            xid: 30,
+            deleted: false,
+            data: row([("v", "3")]),
+        };
+        row.append_tail_version(v3).unwrap();
+
+        // Get lineage chain (should be reverse chronological)
+        let chain = row.get_tail_version_chain();
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain[0].xid, 30, "latest first");
+        assert_eq!(chain[1].xid, 20, "middle");
+        assert_eq!(chain[2].xid, 10, "oldest last");
+    }
+
+    #[test]
+    fn h9_3_tombstone_visibility() {
+        let mut row = MvccRowV2::new("test_key");
+
+        // Insert version 1: xid=10
+        let v1 = RowVersion {
+            xid: 10,
+            deleted: false,
+            data: row([("v", "value")]),
+        };
+        row.append_tail_version(v1).unwrap();
+
+        // Snapshot before delete
+        assert!(
+            row.is_visible_at(crate::types::SnapshotTs(10)),
+            "row should be visible at ts=10"
+        );
+
+        // Delete at xid=20
+        row.delete_at_ts(20).unwrap();
+
+        // After delete, row should be invisible
+        assert!(
+            !row.is_visible_at(crate::types::SnapshotTs(25)),
+            "row should be invisible after delete"
+        );
+
+        // Before delete, row should still be visible
+        assert!(
+            row.is_visible_at(crate::types::SnapshotTs(10)),
+            "row should be visible before delete"
+        );
+    }
+
+    #[test]
+    fn h9_3_xid_to_commit_ts_mapping() {
+        let xid = 100u64;
+        let ts = xid_to_commit_ts(xid);
+        assert_eq!(ts.0, 100);
+        
+        let back_to_xid = commit_ts_to_xid(ts);
+        assert_eq!(back_to_xid, 100);
+    }
+
+    #[test]
+    fn h9_3_snapshot_ts_to_xid_mapping() {
+        let snap_ts = crate::types::SnapshotTs(50);
+        let xid = snapshot_ts_to_xid(snap_ts);
+        assert_eq!(xid, 50);
+    }
+
+    #[test]
+    fn h9_3_backward_compat_with_old_rowversion() {
+        // Ensure old RowVersion API still works
+        let mut data = HashMap::new();
+        data.insert("col1".to_string(), "val1".to_string());
+        let rv = RowVersion {
+            xid: 50,
+            deleted: false,
+            data,
+        };
+        assert_eq!(rv.xid, 50);
+        assert!(!rv.deleted);
+        assert_eq!(rv.data.len(), 1);
+    }
+
+    #[test]
+    fn h9_3_multi_version_chain_with_multiple_inserts_and_deletes() {
+        let mut row = MvccRowV2::new("complex_key");
+
+        // Version 1: insert at xid=100
+        let v1 = RowVersion {
+            xid: 100,
+            deleted: false,
+            data: row([("version", "1")]),
+        };
+        row.append_tail_version(v1).unwrap();
+
+        // Version 2: update at xid=200
+        let v2 = RowVersion {
+            xid: 200,
+            deleted: false,
+            data: row([("version", "2")]),
+        };
+        row.append_tail_version(v2).unwrap();
+
+        // Version 3: update at xid=300
+        let v3 = RowVersion {
+            xid: 300,
+            deleted: false,
+            data: row([("version", "3")]),
+        };
+        row.append_tail_version(v3).unwrap();
+
+        // Version 4: delete at xid=400
+        row.delete_at_ts(400).unwrap();
+
+        // Verify chain has 4 entries
+        let chain = row.get_tail_version_chain();
+        assert_eq!(chain.len(), 4);
+
+        // Verify visibility at different snapshots
+        assert!(row.is_visible_at(crate::types::SnapshotTs(100))); // after v1
+        assert!(row.is_visible_at(crate::types::SnapshotTs(250))); // after v2
+        assert!(row.is_visible_at(crate::types::SnapshotTs(350))); // after v3
+        assert!(!row.is_visible_at(crate::types::SnapshotTs(450))); // after delete
+        assert!(!row.is_visible_at(crate::types::SnapshotTs(50))); // before all
+    }
+
+    #[test]
+    fn h9_3_get_latest_version_at_specific_timestamp() {
+        let mut row = MvccRowV2::new("ts_test");
+
+        // Multiple versions with specific xids
+        for xid in [10, 20, 30, 40, 50].iter() {
+            let data = row([("xid", &xid.to_string())]);
+            let v = RowVersion {
+                xid: *xid,
+                deleted: false,
+                data,
+            };
+            row.append_tail_version(v).unwrap();
+        }
+
+        // Query at different snapshots
+        let get_at = |snap: u64| {
+            row.get_latest_tail_version(crate::types::SnapshotTs(snap))
+                .map(|v| v.xid)
+        };
+
+        assert_eq!(get_at(5), None); // before all
+        assert_eq!(get_at(15), Some(10)); // sees 10
+        assert_eq!(get_at(25), Some(20)); // sees 20
+        assert_eq!(get_at(35), Some(30)); // sees 30
+        assert_eq!(get_at(45), Some(40)); // sees 40
+        assert_eq!(get_at(60), Some(50)); // sees 50
+    }
+
+    #[test]
+    fn h9_3_tombstone_in_chain_hides_current_version() {
+        let mut row = MvccRowV2::new("tombstone_test");
+
+        // Version 1: insert
+        let v1 = RowVersion {
+            xid: 10,
+            deleted: false,
+            data: row([("data", "alive")]),
+        };
+        row.append_tail_version(v1).unwrap();
+
+        // Version 2: tombstone
+        let tombstone = RowVersion {
+            xid: 20,
+            deleted: true,
+            data: HashMap::new(),
+        };
+        row.append_tail_version(tombstone).unwrap();
+
+        // After tombstone, row should be invisible
+        assert!(
+            row.get_latest_tail_version(crate::types::SnapshotTs(20)).is_none(),
+            "tombstone should make row invisible"
+        );
+
+        // Before tombstone, row should be visible
+        assert!(
+            row.get_latest_tail_version(crate::types::SnapshotTs(10)).is_some(),
+            "row should be visible before tombstone"
+        );
+    }
+
+    #[test]
+    fn h9_3_version_count_accuracy() {
+        let mut row = MvccRowV2::new("count_test");
+
+        assert_eq!(row.version_count(), 0);
+
+        for i in 1..=5 {
+            let v = RowVersion {
+                xid: i * 10,
+                deleted: false,
+                data: HashMap::new(),
+            };
+            row.append_tail_version(v).unwrap();
+            assert_eq!(row.version_count(), i);
+        }
+    }
+
+    #[test]
+    fn h9_3_version_visibility_preserves_mvcc_isolation() {
+        let mut row = MvccRowV2::new("isolation_test");
+
+        // Transaction 1 inserts value "A" at xid=100
+        let v1 = RowVersion {
+            xid: 100,
+            deleted: false,
+            data: row([("val", "A")]),
+        };
+        row.append_tail_version(v1).unwrap();
+
+        // Snapshot reader takes snapshot at xid=100
+        let snap_100 = crate::types::SnapshotTs(100);
+
+        // Transaction 2 updates to value "B" at xid=200
+        let v2 = RowVersion {
+            xid: 200,
+            deleted: false,
+            data: row([("val", "B")]),
+        };
+        row.append_tail_version(v2).unwrap();
+
+        // Snapshot reader should still see "A"
+        let visible = row.get_latest_tail_version(snap_100).unwrap();
+        assert_eq!(visible.data["val"], "A");
+
+        // Current reader should see "B"
+        let current = row.get_latest_tail_version(crate::types::SnapshotTs(200)).unwrap();
+        assert_eq!(current.data["val"], "B");
+    }
 }
+

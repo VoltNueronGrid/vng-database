@@ -1,0 +1,569 @@
+# VoltNueronGrid DB — Tasks 9 (HTAP Spec/R&D Refactoring Plan)
+
+> **Created:** 2026-07-01
+> **Source documents:** `htap-spec (1).md`, `htap-issues (1).md`, `htap-rnd (1).md`
+> **Scope:** Audit current code against the target research-backed HTAP architecture: L-Store-style column base + row tail, HyPer-style snapshots, Metis-style optimizer, freshness-SLA routing, adaptive merges, and OLTP/OLAP resource isolation.
+> **Conclusion:** Refactoring is needed. The current code has a useful HTAP foundation (MVCC row store, DataFusion OLAP, HTAP routing, range partition helpers, freshness-lag reporting, and sync pipeline), but it is not yet the spec architecture. The largest gaps are physical base/tail storage, background merge manager, snapshot manager, freshness-aware optimizer, and resource manager/admission control.
+
+---
+
+## 1. Current Coverage Summary
+
+| Spec Area | Current Code Coverage | Status | % Complete | Evidence |
+|---|---|---|---:|---|
+| OLTP row execution | MVCC `PagedRowStore`, transactions, locks, serializable/read-committed support | 🟡 PARTIAL | 75% | `crates/voltnuerongrid-store/src/mvcc.rs`, `services/voltnuerongridd/src/handlers/sql.rs` |
+| OLAP execution | DataFusion/vectorized execution and in-memory `ColumnBatch`; Parquet/local columnar paths exist | 🟡 PARTIAL | 65% | `crates/voltnuerongrid-store/src/columnar.rs`, `crates/voltnuerongrid-exec-datafusion`, `helpers/execution.rs` |
+| HTAP query routing | Heuristic + stats-aware router; returns `freshness_lag_ms` | 🟡 PARTIAL | 55% | `crates/voltnuerongrid-exec/src/lib.rs`, `planner.rs`, `handlers/sql.rs` |
+| Partitioning | Range partition parse/pruning helpers; logical hash sharding exists | 🟡 PARTIAL | 45% | `services/voltnuerongridd/src/helpers/partition.rs`, `helpers/dataplane.rs` |
+| Column base + row tail storage | Row tail-ish MVCC exists; no immutable column base segments or explicit tail pages | 🟡 PARTIAL | 25% | `mvcc.rs`, `columnar.rs` |
+| Lineage / begin_ts / end_ts | Version chains use `xid`; no explicit `begin_ts`, `end_ts`, or lineage pointers | 🟡 PARTIAL | 30% | `mvcc.rs` |
+| Background merge manager | No tail-to-base merge manager; Parquet flush is export, not L-Store merge | ❌ MISSING | 0% | no `MergeManager`, no tail-to-base metadata swap |
+| Snapshot manager | Logical MVCC snapshots exist; no OS fork/COW process snapshots, no ref-count lifecycle | 🟡 PARTIAL | 20% | `mvcc.rs`, `helpers/execution.rs` |
+| Freshness SLA enforcement | Freshness lag is reported; no `max_staleness_ms` request contract/enforcement | 🟡 PARTIAL | 25% | `SqlExecuteResponse.freshness_lag_ms`, `htap_sync.rs` |
+| HTAP-aware cost model | Basic planner cost; no tail length, merge backlog, resource pressure, or runtime adaptation | 🟡 PARTIAL | 35% | `crates/voltnuerongrid-exec/src/planner.rs` |
+| Resource manager | No workload-class admission, CPU/memory partitioning, SLO-driven OLAP throttling | ❌ MISSING | 0% | no `WorkloadClass`, no admission queue/cgroup/affinity code |
+| HTAP-specific benchmark proof | KPI harness exists; no CH-Benchmark/HTAPBench-style isolation/freshness matrix | 🟡 PARTIAL | 40% | `tests/kpi`, `tests/benchmarks` |
+
+---
+
+## 2. Refactoring Tasks
+
+### H9-1 · Define HTAP storage traits and segment identifiers
+
+| Field | Value |
+|---|---|
+| **Status** | ❌ MISSING |
+| **% Complete** | 0% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | — |
+| **Effort** | M |
+
+**Problem:** Current `PagedRowStore` is a flat page-bucket MVCC row store. The spec requires partition/segment as the unit of base storage, tail storage, snapshotting, merge scheduling, and resource accounting.
+
+**Refactoring plan:** Introduce a storage abstraction layer before changing existing write paths. Keep `PagedRowStore` as a compatibility adapter while adding typed IDs and focused traits.
+
+**Implementation details:**
+- Add `PartitionId`, `SegmentId`, `RowId`, `CommitTs`, `SnapshotTs` types in `voltnuerongrid-store`.
+- Add traits: `TailStore`, `BaseColumnStore`, `SegmentCatalog`, `RowProjectionCache`, `MergeableSegmentStore`.
+- Add `HtapSegmentRef { table, partition_id, segment_id }` and `SegmentMetadata` shell with row range, min/max stats placeholder, base version id, tail watermark.
+- Add tests that current row-store adapter can map existing `table:key` rows into a default single segment.
+
+**Acceptance criteria:**
+- [ ] New traits compile without changing current public SQL behavior.
+- [ ] Existing `cargo test -p voltnuerongrid-store` remains green.
+- [ ] Adapter exposes current `PagedRowStore` as `TailStore` for a default segment.
+
+---
+
+### H9-2 · Physical partition/segment storage layout
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 30% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | H9-1 |
+| **Effort** | L |
+
+**Problem:** Range partition parsing/pruning exists, but storage is not physically partitioned. The HTAP spec requires partition/segment as the unit of storage layout and later merge/snapshot/resource accounting.
+
+**Refactoring plan:** Route writes into partition-aware segments while preserving existing key format compatibility.
+
+**Implementation details:**
+- Extend `RangePartitionConfig` with stable `PartitionId`/`SegmentId` metadata.
+- Add hash partition DDL support separate from distributed `DISTRIBUTE BY HASH` sharding.
+- Maintain `partition_segments: table -> Vec<SegmentMetadata>` in storage/catalog state.
+- Route INSERT/UPDATE/DELETE to segment-aware tail pages.
+- Add catalog endpoint for partition/segment row counts, watermarks, and min/max stats.
+
+**Acceptance criteria:**
+- [ ] `PARTITION BY RANGE` writes land in segment-specific tail storage.
+- [ ] `PARTITION BY HASH` writes land in deterministic segment buckets.
+- [ ] SELECT with partition predicate prunes physical segments.
+- [ ] Tests cover range and hash partition routing, pruning, and DROP cleanup.
+
+---
+
+### H9-3 · Tail row store with explicit lineage and timestamp visibility
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 30% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | H9-1, H9-2 |
+| **Effort** | L |
+
+**Problem:** `RowVersion` has `xid`, `deleted`, and `data`; visibility is `xid <= snapshot_xid`. The spec requires `begin_ts`, `end_ts`, and lineage pointer semantics.
+
+**Refactoring plan:** Introduce a new version record while preserving current `xid` APIs via compatibility conversions.
+
+**Implementation details:**
+- Add `VersionId` and `TailVersion { row_id, begin_ts, end_ts, prev_version, tombstone, payload }`.
+- On UPDATE/DELETE, set prior visible version `end_ts = commit_ts`; append new tail version.
+- Maintain `latest_version_by_row` per segment for point lookups.
+- Preserve current repeatable-read and serializable behavior by mapping `Xid` to `CommitTs`.
+- Add lineage traversal tests: insert/update/delete across snapshots.
+
+**Acceptance criteria:**
+- [ ] Visibility rule is `begin_ts <= snapshot_ts < end_ts`.
+- [ ] Previous versions are reachable via explicit lineage pointer.
+- [ ] Existing transaction isolation tests remain green.
+- [ ] New tests cover multi-version chain traversal and tombstones.
+
+---
+
+### H9-4 · Immutable column base segment store
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 15% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | H9-1, H9-2, H9-3 |
+| **Effort** | XL |
+
+**Problem:** `ColumnBatch` is an in-memory vectorized representation, not a persisted immutable base column store with blocks, compression metadata, min/max stats, and segment versions.
+
+**Refactoring plan:** Add a base column store independent of the DataFusion execution adapter.
+
+**Implementation details:**
+- Add `BaseSegmentVersion { segment_id, version_id, min_commit_ts, max_commit_ts, columns, stats }`.
+- Store column blocks with `ColumnBlock { values, encoding, min, max, null_count }`.
+- Initially support uncompressed and dictionary-encoded UTF-8/int blocks; add RLE/bit-packing later.
+- Persist base segment manifests to local disk/RocksDB metadata; use temp-write + atomic rename/swap.
+- Wire DataFusion/OLAP path to read base segments first, then tail if strict freshness is required.
+
+**Acceptance criteria:**
+- [ ] Base segments are immutable once published.
+- [ ] Atomic segment version swap is visible as old-or-new, never mixed.
+- [ ] Segment min/max stats are populated and usable for pruning.
+- [ ] Tests cover base segment creation, read, stats, and manifest swap.
+
+---
+
+### H9-5 · Row-projection cache for hot segments
+
+| Field | Value |
+|---|---|
+| **Status** | ❌ MISSING |
+| **% Complete** | 0% |
+| **Priority** | 🟠 High |
+| **Depends on** | H9-3, H9-4 |
+| **Effort** | M |
+
+**Problem:** OLTP reads still scan row pages/version chains. The spec calls for an optional row-oriented projection cache for hot segments.
+
+**Refactoring plan:** Add per-segment row-projection cache keyed by `RowId` to latest committed visible version.
+
+**Implementation details:**
+- Add `RowProjectionCache { segment_id, latest_by_row, built_at_ts, hit/miss metrics }`.
+- Rebuild lazily after merge or on hot-segment threshold.
+- Update projection on tail append for hot segments.
+- Add adaptive policy hook for enabling/disabling row projection per segment.
+
+**Acceptance criteria:**
+- [ ] Point lookup on cached segment uses row-projection cache.
+- [ ] Cache invalidates/rebuilds after base segment swap.
+- [ ] Metrics expose hits/misses and memory footprint.
+- [ ] Tests verify cache correctness after insert/update/delete/merge.
+
+---
+
+### H9-6 · Background Merge Manager (tail-to-base consolidation)
+
+| Field | Value |
+|---|---|
+| **Status** | ❌ MISSING |
+| **% Complete** | 0% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | H9-3, H9-4 |
+| **Effort** | XL |
+
+**Problem:** Current Parquet flush exports rows but does not implement a non-blocking tail-to-base merge. The spec requires merge windows, materialization into immutable base, atomic swap, tail reclamation, and freshness SLA enforcement.
+
+**Refactoring plan:** Add a `MergeManager` background service with per-segment merge scheduling.
+
+**Implementation details:**
+- Add `MergePolicy { max_tail_versions, max_tail_bytes, max_staleness_ms, idle_merge_ms }`.
+- Add `MergeJob { segment_id, window_start_ts, window_end_ts }`.
+- Merge procedure: pin base version, scan tail window, compute latest visible version at `T_max`, write new base version, atomically swap manifest, mark tail records obsolete.
+- Keep OLTP writes non-blocking by appending to new tail pages during merge.
+- Expose merge status endpoint and metrics: `merge_lag_ms`, `tail_versions`, `tail_bytes`, `merge_duration_ms`.
+
+**Acceptance criteria:**
+- [ ] Background task merges tail into base without blocking concurrent inserts.
+- [ ] OLAP sees either old or new base; never partial merge state.
+- [ ] Obsolete tail versions are marked reclaimable only after no snapshots need them.
+- [ ] Tests cover concurrent write during merge, atomic swap, and correctness of merged rows.
+
+---
+
+### H9-7 · Tail garbage collection / version reclamation
+
+| Field | Value |
+|---|---|
+| **Status** | ❌ MISSING |
+| **% Complete** | 0% |
+| **Priority** | 🟠 High |
+| **Depends on** | H9-3, H9-6, H9-8 |
+| **Effort** | M |
+
+**Problem:** Existing page eviction is not MVCC-tail garbage collection. The spec requires reclaiming obsolete tail records only after they are older than the oldest active snapshot.
+
+**Refactoring plan:** Add snapshot-aware tail GC.
+
+**Implementation details:**
+- Track `oldest_active_snapshot_ts` from active transactions and OLAP snapshots.
+- Mark tail records obsolete after merge; reclaim only if `end_ts < oldest_active_snapshot_ts`.
+- Add metrics: `tail_gc_reclaimed_versions`, `tail_gc_reclaimed_bytes`, `oldest_snapshot_age_ms`.
+
+**Acceptance criteria:**
+- [ ] Tail GC never removes a version visible to an active transaction or OLAP snapshot.
+- [ ] GC reclaims merged obsolete versions when safe.
+- [ ] Tests cover active snapshot protection and post-snapshot reclamation.
+
+---
+
+### H9-8 · Snapshot Manager with lifecycle and freshness selection
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 20% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | H9-3, H9-4 |
+| **Effort** | L |
+
+**Problem:** Logical MVCC snapshot reads exist. There is no explicit snapshot object lifecycle, no reference counting, no `max_staleness_ms` selection, and no OS fork/COW snapshot execution.
+
+**Refactoring plan:** Build a snapshot manager in two stages: logical snapshots first, then optional OS-level snapshot processes on supported platforms.
+
+**Implementation details:**
+- Add `SnapshotHandle { snapshot_id, snapshot_ts, pinned_base_versions, ref_count, created_at_ms }`.
+- Add `SnapshotManager` with create/get/release/expire APIs.
+- Add `max_staleness_ms` to OLAP query request and SQL route envelope.
+- For Linux/macOS, add optional experimental process snapshot adapter behind feature flag (`htap_fork_snapshot`) rather than making fork mandatory.
+- Route OLAP queries through `SnapshotHandle` to pin base versions.
+
+**Acceptance criteria:**
+- [ ] OLAP query pins a snapshot handle for its full execution.
+- [ ] Snapshot is reused only if it satisfies `max_staleness_ms`.
+- [ ] Snapshot lifecycle metrics show active/ref-count/age.
+- [ ] Feature-gated fork snapshot adapter has smoke tests on supported OS; logical snapshot remains portable default.
+
+---
+
+### H9-9 · Freshness SLA contract and enforcement
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 25% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | H9-6, H9-8 |
+| **Effort** | M |
+
+**Problem:** Freshness lag is reported but not enforced. The spec requires table/partition freshness SLAs and per-query `max_staleness_ms`.
+
+**Refactoring plan:** Make freshness an explicit contract in DDL, runtime config, and query requests.
+
+**Implementation details:**
+- Add table option: `WITH (freshness_sla_ms = N)` or equivalent parser hook.
+- Add request-level `max_staleness_ms` for `/api/v1/olap/query` and `/api/v1/sql/execute` route decisions.
+- If strict freshness is requested, use hybrid base+tail scan or reject/timeout if SLA cannot be met.
+- Emit `freshness_slo_violation_total` and include freshness explanation in query response.
+
+**Acceptance criteria:**
+- [ ] Queries with `max_staleness_ms` fail or switch to hybrid path when base is too stale.
+- [ ] Merge manager prioritizes segments nearing SLA breach.
+- [ ] Freshness lag and SLA compliance are exposed in `/metrics` and status endpoint.
+- [ ] Tests cover stale rejection, hybrid strict-current path, and merge-priority trigger.
+
+---
+
+### H9-10 · Metis-style HTAP-aware optimizer and routing hints
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 35% |
+| **Priority** | 🟠 High |
+| **Depends on** | H9-4, H9-6, H9-9, H9-12 |
+| **Effort** | L |
+
+**Problem:** The current planner has simple `CostEstimate { estimated_rows, relative_cost, recommended_path }` and stats-aware routing. The spec requires row/column/hybrid alternatives and cost inputs for tail length, merge backlog, freshness, cache residency, OLTP SLO pressure, and resource budgets.
+
+**Refactoring plan:** Extend the planner into an HTAP physical planner with route alternatives and cost explanations.
+
+**Implementation details:**
+- Add physical access paths: `ScanRow`, `ScanColumn`, `ScanHybrid`.
+- Extend `CostEstimate` with `tail_versions`, `merge_lag_ms`, `freshness_lag_ms`, `queue_depth`, `oltp_slo_pressure`, `base_scan_cost`, `tail_scan_cost`.
+- Add query hints: `/*+ ROUTE(OLTP|OLAP|HYBRID) */`, `/*+ MAX_STALENESS_MS(N) */`, and workload-class header support.
+- Add plan cache keyed by normalized SQL and invalidated by DDL/metadata changes.
+- Add runtime feedback table for route latency and rows read by path.
+
+**Acceptance criteria:**
+- [ ] Router can choose row/column/hybrid based on freshness and current load.
+- [ ] Query response includes plan/cost explanation for route choice.
+- [ ] Hints override cost model only within safety/freshness constraints.
+- [ ] Tests cover row, column, hybrid, stale, and hinted routing decisions.
+
+---
+
+### H9-11 · Hybrid base+tail scan execution
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 20% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | H9-3, H9-4, H9-8, H9-10 |
+| **Effort** | XL |
+
+**Problem:** True HTAP current-data analytics require reading immutable base plus recent tail/delta records. Current OLAP execution can query row snapshots/DataFusion but does not execute a lineage-aware base+tail hybrid scan.
+
+**Refactoring plan:** Add a hybrid scan operator that materializes visible rows from base segment plus tail overlay at snapshot timestamp.
+
+**Implementation details:**
+- Implement `HybridScanInput { base_version, tail_window, snapshot_ts, projected_columns, predicate }`.
+- Apply tail overlay: inserts add rows, updates replace base rows, deletes mask base rows.
+- Push min/max pruning into base segment scan; apply tail predicate after overlay.
+- Feed hybrid output into DataFusion as a record batch.
+
+**Acceptance criteria:**
+- [ ] Strict-current OLAP query sees base + committed tail changes.
+- [ ] Deletes/updates in tail correctly override base rows.
+- [ ] Segment pruning works for base, tail overlay remains correct.
+- [ ] Tests cover insert/update/delete overlays and aggregate correctness.
+
+---
+
+### H9-12 · Resource Manager and workload-class admission control
+
+| Field | Value |
+|---|---|
+| **Status** | ❌ MISSING |
+| **% Complete** | 0% |
+| **Priority** | 🔴 Critical |
+| **Depends on** | H9-8, H9-10 |
+| **Effort** | L |
+
+**Problem:** OLTP and OLAP share the same process and runtime without explicit budgets, queues, or SLO protection. The spec requires resource isolation and admission control.
+
+**Refactoring plan:** Add portable logical resource control first; add OS-level cgroup/affinity as optional adapters.
+
+**Implementation details:**
+- Add `WorkloadClass { Oltp, Olap, Hybrid, Maintenance }`.
+- Add `AdmissionController` with per-class concurrency limits, queue depth, wait timeout, and rejection reason.
+- Track rolling OLTP p95/p99 latency; throttle/defer OLAP when OLTP SLO pressure exceeds threshold.
+- Add separate Tokio semaphores/thread pools for OLTP, OLAP, merge, and maintenance tasks.
+- Optional OS adapters: CPU affinity/cgroups behind feature flags and no-op fallback on unsupported platforms.
+
+**Acceptance criteria:**
+- [ ] OLAP query can be queued/rejected when OLTP SLO is threatened.
+- [ ] Per-class queue depth, wait time, rejection metrics exposed.
+- [ ] Tests cover admission success, timeout, rejection, and OLTP-protection behavior.
+- [ ] OS-level adapter is optional and portable default remains deterministic.
+
+---
+
+### H9-13 · HTAP observability and SLO metrics
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 35% |
+| **Priority** | 🟠 High |
+| **Depends on** | H9-6, H9-8, H9-12 |
+| **Effort** | M |
+
+**Problem:** General Prometheus/tracing exists, but the HTAP spec needs metrics for tail size, merge lag, snapshot age/refcount, freshness SLA, admission queue, OLTP/OLAP SLO pressure, and resource class utilization.
+
+**Refactoring plan:** Add HTAP-specific metric names and a status endpoint.
+
+**Implementation details:**
+- Gauges: `vng_htap_tail_versions`, `vng_htap_tail_bytes`, `vng_htap_merge_lag_ms`, `vng_htap_snapshot_age_ms`, `vng_htap_admission_queue_depth`.
+- Counters: `vng_htap_freshness_slo_violations_total`, `vng_htap_admission_rejections_total`, `vng_htap_merge_failures_total`.
+- Histograms: `vng_htap_merge_duration_seconds`, `vng_htap_snapshot_create_seconds`, `vng_htap_hybrid_scan_seconds`.
+- Add `/api/v1/htap/diagnostics` endpoint for human-readable current state.
+
+**Acceptance criteria:**
+- [ ] Metrics emitted during merge, snapshot, hybrid scan, and admission paths.
+- [ ] Diagnostics endpoint returns per-table/partition freshness and tail backlog.
+- [ ] Tests assert metrics/diagnostics update after representative operations.
+
+---
+
+### H9-14 · Adaptive storage controller
+
+| Field | Value |
+|---|---|
+| **Status** | ❌ MISSING |
+| **% Complete** | 0% |
+| **Priority** | 🟡 Medium |
+| **Depends on** | H9-5, H9-6, H9-10, H9-13 |
+| **Effort** | L |
+
+**Problem:** The R&D document calls for joint adaptive storage optimization: choose row-projection caches, merge thresholds, and dual-format storage based on workload and sync overhead. No controller exists.
+
+**Refactoring plan:** Add rule-based adaptive controller first; leave ML/RL tuning as future work.
+
+**Implementation details:**
+- Evaluate per-segment read/write mix, scan frequency, tail growth, cache hit rate, and merge cost.
+- Adjust row-projection cache enablement, merge thresholds, and freshness priority per segment.
+- Emit proposed/adopted policy changes with audit trail.
+- Optional autonomous integration: performance tuning agent can recommend/adopt changes.
+
+**Acceptance criteria:**
+- [ ] Controller changes merge frequency for hot analytical segments.
+- [ ] Controller enables row projection for hot OLTP segments.
+- [ ] Policy changes are audited and reversible.
+- [ ] Tests cover rule decisions from synthetic workload stats.
+
+---
+
+### H9-15 · Distributed partition ownership and optional OLAP snapshot nodes
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 30% |
+| **Priority** | 🟡 Medium |
+| **Depends on** | H9-2, H9-8, H9-12 |
+| **Effort** | L |
+
+**Problem:** Logical shard ownership exists in parts of the data-plane work, but the HTAP spec requires shared-nothing nodes where partitions are the unit of ownership and optional OLAP snapshot nodes can serve analytics only.
+
+**Refactoring plan:** Extend cluster metadata to own partitions/segments, not just nodes/shards.
+
+**Implementation details:**
+- Add `NodeRole { Oltp, OlapSnapshot, Hybrid }`.
+- Add `PartitionPlacement { primary, replicas, olap_snapshot_replicas }`.
+- Persist placement changes through Raft metadata.
+- Route OLAP queries to eligible snapshot nodes when present; fallback to local hybrid execution.
+- Add rebalance primitive for moving base+tail+metadata by partition.
+
+**Acceptance criteria:**
+- [ ] Partition placement is visible in cluster topology.
+- [ ] OLAP-only node receives/serves snapshot/base segments but rejects OLTP writes.
+- [ ] Rebalance moves both tail and base state with consistency checks.
+- [ ] Multi-node test validates partition ownership and OLAP routing.
+
+---
+
+### H9-16 · HTAP benchmark suite (CH-Benchmark / freshness / isolation)
+
+| Field | Value |
+|---|---|
+| **Status** | 🟡 PARTIAL |
+| **% Complete** | 40% |
+| **Priority** | 🟠 High |
+| **Depends on** | H9-9, H9-10, H9-12, H9-13 |
+| **Effort** | M |
+
+**Problem:** Existing KPI gates validate local performance claims, but the HTAP R&D documents call for evaluating OLTP throughput, OLAP latency, freshness, and isolation using CH-Benchmark/HTAPBench-style workloads.
+
+**Refactoring plan:** Add a benchmark pack that explicitly measures HTAP tradeoffs and proves the refactor goals.
+
+**Implementation details:**
+- Add `tests/benchmarks/htap_isolation_benchmark.rs` with mixed OLTP+OLAP workload.
+- Metrics: OLTP p95/p99 under OLAP load, OLAP p95/p99 under write load, freshness lag, merge lag, tail size, admission rejections.
+- Add scenarios: row-only, column-only, hybrid strict-current, bounded-stale.
+- Emit JSON artifacts to `tests/kpi/results/htap/`.
+
+**Acceptance criteria:**
+- [ ] Benchmark quantifies OLTP degradation under OLAP load.
+- [ ] Benchmark quantifies OLAP degradation under write load.
+- [ ] Freshness SLA compliance is measured and asserted.
+- [ ] Results are suitable for release-gate evidence.
+
+---
+
+## 3. Dependency Graph
+
+```mermaid
+graph TD
+    H91[H9-1 Storage traits + IDs]
+    H92[H9-2 Physical partition/segment layout]
+    H93[H9-3 Tail row store lineage + timestamps]
+    H94[H9-4 Immutable column base segments]
+    H95[H9-5 Row-projection cache]
+    H96[H9-6 Background Merge Manager]
+    H97[H9-7 Tail GC]
+    H98[H9-8 Snapshot Manager]
+    H99[H9-9 Freshness SLA enforcement]
+    H910[H9-10 HTAP-aware optimizer]
+    H911[H9-11 Hybrid base+tail scan]
+    H912[H9-12 Resource Manager]
+    H913[H9-13 HTAP observability]
+    H914[H9-14 Adaptive storage controller]
+    H915[H9-15 Distributed partition ownership]
+    H916[H9-16 HTAP benchmark suite]
+
+    H91 --> H92
+    H91 --> H93
+    H92 --> H94
+    H93 --> H94
+    H93 --> H96
+    H94 --> H96
+    H93 --> H98
+    H94 --> H98
+    H96 --> H99
+    H98 --> H99
+    H94 --> H910
+    H96 --> H910
+    H99 --> H910
+    H98 --> H912
+    H910 --> H912
+    H93 --> H911
+    H94 --> H911
+    H98 --> H911
+    H910 --> H911
+    H96 --> H97
+    H98 --> H97
+    H96 --> H913
+    H98 --> H913
+    H912 --> H913
+    H95 --> H914
+    H96 --> H914
+    H910 --> H914
+    H913 --> H914
+    H92 --> H915
+    H98 --> H915
+    H912 --> H915
+    H99 --> H916
+    H910 --> H916
+    H912 --> H916
+    H913 --> H916
+```
+
+---
+
+## 4. Recommended Execution Order
+
+1. **Foundation:** H9-1 → H9-2 → H9-3
+2. **Storage core:** H9-4 → H9-6 → H9-7
+3. **Snapshot/freshness:** H9-8 → H9-9
+4. **Execution/routing:** H9-10 → H9-11
+5. **Isolation/observability:** H9-12 → H9-13
+6. **Adaptive/distributed:** H9-5 → H9-14 → H9-15
+7. **Proof:** H9-16
+
+---
+
+## 5. Refactoring Principles
+
+- Keep current SQL API and existing tests green throughout; introduce the HTAP architecture behind new traits/adapters.
+- Do not replace `PagedRowStore` in one large step. First wrap it as a tail-store adapter, then introduce segment-aware storage incrementally.
+- Prefer portable logical snapshots and admission control first; OS fork/COW snapshots and cgroup/NUMA pinning should be feature-gated adapters.
+- Treat freshness as a correctness contract, not only a response metric.
+- Every merge/snapshot/routing decision must emit enough metrics for operators to understand freshness-vs-isolation tradeoffs.
+
+---
+
+## 6. Bottom Line
+
+The current code addresses the **basic HTAP product surface**: OLTP/OLAP routing, MVCC snapshots, DataFusion execution, sync/freshness lag, partition helpers, and KPI gates. It does **not** yet implement the deeper research architecture described in the attached documents: L-Store-style base/tail storage, HyPer-style snapshot isolation, Metis-style freshness/load-aware optimization, and explicit resource isolation.
+
+Therefore, refactoring is recommended before claiming the engine is near "no-tradeoff" HTAP. The minimum meaningful refactor is H9-1 through H9-13; H9-14 through H9-16 complete adaptive optimization, distributed placement, and benchmark proof.
