@@ -17,6 +17,8 @@ pub mod traits;
 pub mod segment;
 // H9-2: Partition and segment routing
 pub mod partition;
+// H9-4: Base column store implementation
+pub mod base_store;
 // S7-001/002: trigger framework
 pub mod triggers;
 // S7-003: trigger emitters
@@ -35,6 +37,8 @@ pub use trigger_emitter::{LoggingTriggerEmitter, NoOpTriggerEmitter, TriggerEmit
 pub use types::{PartitionId, SegmentId, RowId, CommitTs, SnapshotTs, VersionId};
 pub use traits::{TailStore, BaseColumnStore, SegmentCatalog, RowProjectionCache, MergeableSegmentStore, Row, ColumnBatch};
 pub use segment::{HtapSegmentRef, SegmentMetadata, SegmentStats, MinMaxStats, TailVersion, ColumnEncoding, ColumnBlock, BaseSegmentVersion, BaseSegmentManifest};
+// H9-4: Base column store
+pub use base_store::{InMemoryBaseColumnStore, AtomicVersionManager};
 // H9-2: Partition routing and types
 pub use partition::{PartitionType, RangePartitionScheme, RangePartition, HashPartitionScheme, SegmentRouter};
 // H9-3: MVCC version compatibility and lineage support
