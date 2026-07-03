@@ -41,6 +41,36 @@ async fn setup_mock_runtime() -> MockRuntimeGuard {
         Json(json!({"status":"ok","columns":["v"],"rows":[[1]],"execution_time_ms":1,"rowcount":1,"route_path":"oltp","reason":"test"}))
     }
 
+    async fn sql_functions() -> Json<Value> {
+        Json(json!({
+            "status": "ok",
+            "total": 3,
+            "functions": [
+                {
+                    "name": "COALESCE",
+                    "canonical_name": "COALESCE",
+                    "category": "null_handling",
+                    "dialects": ["postgres", "mysql", "oracle", "snowflake"],
+                    "execution_paths": ["oltp", "olap"]
+                },
+                {
+                    "name": "IFNULL",
+                    "canonical_name": "COALESCE",
+                    "category": "null_handling",
+                    "dialects": ["mysql"],
+                    "execution_paths": ["oltp", "olap"]
+                },
+                {
+                    "name": "NVL",
+                    "canonical_name": "COALESCE",
+                    "category": "null_handling",
+                    "dialects": ["oracle"],
+                    "execution_paths": ["oltp", "olap"]
+                }
+            ]
+        }))
+    }
+
     async fn catalog() -> Json<Value> {
         Json(json!({"status":"ok","active_count":1,"total_count":1,"entries":[{"object_name":"users","object_kind":"table"}]}))
     }
@@ -103,6 +133,7 @@ async fn setup_mock_runtime() -> MockRuntimeGuard {
         .route("/health", get(health))
         .route("/api/v1/sre/reliability/status", get(reliability))
         .route("/api/v1/sql/execute", post(sql_execute))
+        .route("/api/v1/sql/functions", get(sql_functions))
         .route("/api/v1/catalog/schemas", get(catalog))
         .route("/api/v1/catalog/tables/:table_name/columns", get(catalog_table_columns))
         .route("/api/v1/benchmark/ingest", post(benchmark_ingest))
@@ -322,6 +353,48 @@ async fn mcp_007_admin_auth_precedence() {
     assert!(auth.is_admin);
     assert_eq!(auth.auth_level, AuthenticationLevel::Admin);
     assert!(auth.operator_id.is_none()); // Other fields should be None
+}
+
+#[tokio::test]
+#[serial]
+async fn mcp_008_operator_functions_tool_proxies_runtime_catalog() {
+    let _runtime = setup_mock_runtime().await;
+    let capabilities = McpServerCapabilities::default();
+
+    let operator_headers = McpRequestHeaders {
+        x_vng_admin_key: None,
+        x_vng_operator_id: Some("op-008".to_string()),
+        x_vng_tenant_id: None,
+        x_vng_user_id: None,
+    };
+
+    let req = McpRequest {
+        jsonrpc: "2.0".to_string(),
+        id: "8".to_string(),
+        method: "tools/functions".to_string(),
+        params: json!({}),
+        headers: operator_headers,
+    };
+
+    let resp = process_request(req, &capabilities).await;
+    assert!(resp.error.is_none());
+
+    let result = resp.result.expect("result payload expected");
+    assert_eq!(result.get("status").and_then(|v| v.as_str()), Some("ok"));
+    assert_eq!(result.get("total").and_then(|v| v.as_u64()), Some(3));
+
+    let functions = result
+        .get("functions")
+        .and_then(|v| v.as_array())
+        .expect("functions array expected");
+    assert!(functions.iter().any(|f| {
+        f.get("name").and_then(|v| v.as_str()) == Some("IFNULL")
+            && f
+                .get("dialects")
+                .and_then(|d| d.as_array())
+                .map(|arr| arr.iter().any(|v| v.as_str() == Some("mysql")))
+                .unwrap_or(false)
+    }));
 }
 
 #[tokio::test]

@@ -24,8 +24,8 @@ Current behavior summary:
 
 ## Enhancement-2: Cross-dialect built-in function catalog
 
-Status: In progress
-Completion: 75%
+Status: Completed (catalog/discovery scope)
+Completion: 100%
 
 Goal:
 - Build a comprehensive compatibility catalog for Oracle, PostgreSQL, MySQL, and Snowflake built-ins.
@@ -43,10 +43,16 @@ Implemented so far:
 - Added tests:
 	- `enhancement2_sql_functions_returns_vendor_aliases`
 	- MCP capability test updated for new `functions` tool.
+	- MCP integration test: `mcp_008_operator_functions_tool_proxies_runtime_catalog`
 
 Execution status:
 - OLAP/DataFusion path: the listed built-in and compatibility functions are queryable through normal SQL execution where DataFusion supports them.
 - OLTP path: full scalar compatibility execution parity is not complete yet (legacy OLTP executor still has reduced function coverage).
+- Cross-surface execution:
+	- Runtime endpoint available: `/api/v1/sql/functions`
+	- Studio client callable: `listSqlFunctions()`
+	- MCP callable: `tools/functions`
+	- IDE extension callable: `listSqlFunctions()` via shared contract
 
 Planned function families:
 - Null-handling and conditional: `COALESCE`, `NULLIF`, `IFNULL`, `NVL`, `NVL2`, `IFF`, `DECODE`, `ZEROIFNULL`, `NULLIFZERO`, `GREATEST`, `LEAST`
@@ -166,6 +172,47 @@ Output columns discovered in deterministic sorted order: `CPU`, `RAM`, `SSD`.
 |-----------|-----|-----|-----|
 | W1        | 12  | 20  | NULL|
 | W2        | 7   | NULL| 15  |
+
+5.1 Request/response-style examples (for Studio/MCP/IDE planning)
+
+Example request shape (logical, not final API contract):
+
+```json
+{
+	"source_sql": "SELECT region, month, amount FROM sales",
+	"group_by": ["region"],
+	"pivot_column": "month",
+	"aggregate": {"fn": "SUM", "value": "amount"},
+	"pivot_values": ["JAN", "FEB", "MAR"],
+	"null_fill": null,
+	"order_by": ["region ASC"]
+}
+```
+
+Example response metadata + rows:
+
+```json
+{
+	"status": "ok",
+	"columns": [
+		{"name": "region", "type": "TEXT"},
+		{"name": "JAN", "type": "NUMERIC"},
+		{"name": "FEB", "type": "NUMERIC"},
+		{"name": "MAR", "type": "NUMERIC"}
+	],
+	"rows": [
+		["East", 120, 100, null],
+		["West", 80, null, 90]
+	],
+	"row_count": 2,
+	"pivot_metadata": {
+		"group_by": ["region"],
+		"pivot_column": "month",
+		"pivot_values": ["JAN", "FEB", "MAR"],
+		"aggregate": "SUM(amount)"
+	}
+}
+```
 
 6. Validation rules
 - Reject non-aggregate `value_expression` in pivot measure slot.
