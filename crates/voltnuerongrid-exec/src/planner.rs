@@ -9,13 +9,14 @@ use voltnuerongrid_sql::{
     DeleteStatement, InsertStatement, JoinClause as SqlJoinClause, SelectStatement, Statement,
     UpdateStatement,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::QueryPath;
 
 // ─── Logical plan nodes ───────────────────────────────────────────────────────
 
 /// A node in the logical query plan tree.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LogicalPlan {
     /// Full or filtered table scan.
     Scan {

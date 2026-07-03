@@ -104,6 +104,11 @@
           "command": "vng.sql.analyzeSelectionOrFile",
           "when": "resourceExtname == .sql",
           "group": "navigation@2"
+        },
+        {
+          "command": "vng.sql.explainSelectionOrFile",
+          "when": "resourceExtname == .sql",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -500,6 +505,12 @@
         "icon": "$(search)"
       },
       {
+        "command": "vng.sql.explainSelectionOrFile",
+        "title": "VoltNueronGrid: Explain SQL (Selection/File)",
+        "category": "VoltNueronGrid",
+        "icon": "$(graph)"
+      },
+      {
         "command": "vng.openSettings",
         "title": "VoltNueronGrid: Settings",
         "category": "VoltNueronGrid"
@@ -559,6 +570,11 @@
       {
         "command": "vng.sql.analyzeSelectionOrFile",
         "key": "ctrl+shift+enter",
+        "when": "editorTextFocus && resourceExtname == .sql"
+      },
+      {
+        "command": "vng.sql.explainSelectionOrFile",
+        "key": "ctrl+alt+enter",
         "when": "editorTextFocus && resourceExtname == .sql"
       },
       {

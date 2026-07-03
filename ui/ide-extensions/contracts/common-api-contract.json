@@ -21,6 +21,11 @@
       "path": "/api/v1/sql/analyze"
     },
     {
+      "name": "sql_explain",
+      "method": "POST",
+      "path": "/api/v1/sql/explain"
+    },
+    {
       "name": "autonomous_authorize",
       "method": "POST",
       "path": "/api/v1/autonomous/actions/authorize"

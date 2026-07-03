@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useUiStore } from "@/store/ui";
 import { useConnectionStore } from "@/store/connection";
 import { TitleBar } from "@/components/TitleBar/TitleBar";
@@ -17,6 +18,9 @@ import { SettingsPanel } from "@/components/Settings/SettingsPanel";
 
 export function App() {
   const screen = useUiStore((s) => s.screen);
+  const sidebarWidth = useUiStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
+  const sidebarPinned = useUiStore((s) => s.sidebarPinned);
   const connectionPanelOpen = useUiStore((s) => s.connectionPanelOpen);
   const rightPanelOpen = useUiStore((s) => s.rightPanelOpen);
   const settingsPanelOpen = useUiStore((s) => s.settingsPanelOpen);
@@ -25,6 +29,32 @@ export function App() {
   const lifecycleState = useConnectionStore((s) => s.lifecycleState);
   const lifecycleError = useConnectionStore((s) => s.lifecycleError);
   const connectionActive = lifecycleState === "active";
+  const resizingRef = useRef(false);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!resizingRef.current) return;
+      setSidebarWidth(e.clientX);
+    };
+    const onUp = () => {
+      resizingRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [setSidebarWidth]);
+
+  function beginSidebarResize() {
+    if (!sidebarPinned) return;
+    resizingRef.current = true;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
 
   return (
     <div className="app">
@@ -42,7 +72,23 @@ export function App() {
         <>
           <div className="main-layout">
             <ErrorBoundary label="Sidebar">
-              <Sidebar />
+              <div
+                className={`sidebar-shell ${sidebarPinned ? "" : "unpinned"}`}
+                style={{
+                  width: sidebarPinned ? sidebarWidth : 56,
+                  minWidth: sidebarPinned ? sidebarWidth : 56,
+                  maxWidth: sidebarPinned ? sidebarWidth : 56,
+                }}
+              >
+                <Sidebar />
+                {sidebarPinned && (
+                  <div
+                    className="sidebar-resizer"
+                    onMouseDown={beginSidebarResize}
+                    title="Resize sidebar"
+                  />
+                )}
+              </div>
             </ErrorBoundary>
 
             {/* R9: Workspace and SQL editor are only rendered when lifecycle is active. */}

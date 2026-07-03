@@ -41,6 +41,7 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
         )
         .route("/api/v1/sql/analyze", post(sql_analyze))
         .route("/api/v1/sql/route", post(sql_route))
+        .route("/api/v1/sql/explain", post(sql_explain))
         .route("/api/v1/sql/execute", post(sql_execute))
         .route("/api/v1/olap/query", post(olap_query))
         // Tasks-7 group C: distributed data-plane cross-node RPCs.

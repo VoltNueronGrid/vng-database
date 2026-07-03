@@ -32,6 +32,7 @@ pub use tools::{
     ToolRequest,
     ToolResponse,
     QueryToolRequest,
+    ExplainToolRequest,
     SchemaToolRequest,
     HealthToolRequest,
     BenchmarkToolRequest,
@@ -81,6 +82,11 @@ impl McpServerCapabilities {
                 McpToolCapability {
                     name: "query".to_string(),
                     description: "Execute SQL queries (read-only)".to_string(),
+                    auth_level: AuthenticationLevel::Operator,
+                },
+                McpToolCapability {
+                    name: "explain".to_string(),
+                    description: "Generate SQL explain plans and routing estimates".to_string(),
                     auth_level: AuthenticationLevel::Operator,
                 },
                 McpToolCapability {
@@ -423,6 +429,7 @@ async fn validate_and_route_request(
     // Route to appropriate tool handler
     match request.method.as_str() {
         "tools/query" => handle_query_tool(&request.params, &request.headers, &auth).await,
+        "tools/explain" => handle_explain_tool(&request.params, &request.headers, &auth).await,
         "tools/schema" => handle_schema_tool(&request.params, &request.headers, &auth).await,
         "tools/health" => handle_health_tool(&request.params, &request.headers, &auth).await,
         "tools/benchmark" => handle_benchmark_tool(&request.params, &request.headers, &auth).await,
@@ -459,6 +466,32 @@ fn require_additional_key(env_name: &str, provided: &str) -> Result<(), McpServe
             Ok(())
         }
     }
+}
+
+async fn handle_explain_tool(
+    params: &Value,
+    headers: &McpRequestHeaders,
+    auth: &McpAuthContext,
+) -> Result<Value, McpServerError> {
+    auth.require_operator().map_err(McpServerError::AuthError)?;
+
+    let req: ExplainToolRequest = serde_json::from_value(params.clone())
+        .map_err(|e| McpServerError::InvalidRequest(format!("Invalid explain params: {}", e)))?;
+
+    let runtime_req = json!({
+        "sql_batch": req.sql_query,
+    });
+    let runtime_resp =
+        forward_to_runtime("POST", "/api/v1/sql/explain", Some(&runtime_req), headers).await?;
+
+    Ok(json!({
+        "status": runtime_resp.get("status").cloned().unwrap_or_else(|| json!("ok")),
+        "planner_path": runtime_resp.get("planner_path").cloned().unwrap_or_else(|| json!("unknown")),
+        "estimated_rows": runtime_resp.get("estimated_rows").cloned().unwrap_or_else(|| json!(0)),
+        "relative_cost": runtime_resp.get("relative_cost").cloned().unwrap_or_else(|| json!(0.0)),
+        "plan": runtime_resp.get("plan").cloned().unwrap_or_else(|| json!({})),
+        "plan_text": runtime_resp.get("plan_text").cloned().unwrap_or_else(|| json!("")),
+    }))
 }
 
 async fn handle_query_tool(

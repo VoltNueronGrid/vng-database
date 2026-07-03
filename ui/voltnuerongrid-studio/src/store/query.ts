@@ -1,6 +1,14 @@
 import { create } from "zustand";
 import type { RoutePath } from "@/api/studio-client";
 
+export interface ExplainPlan {
+  plannerPath: RoutePath;
+  estimatedRows: number;
+  relativeCost: number;
+  plan: unknown;
+  planText: string;
+}
+
 export interface ResultColumn {
   name: string;
   type: string;
@@ -17,6 +25,7 @@ export interface QueryResult {
   columns: ResultColumn[];
   rows: Array<Record<string, unknown>>;
   rowCount: number;
+  explainPlan: ExplainPlan | null;
   error: string | null;
   executedAt: number;
 }

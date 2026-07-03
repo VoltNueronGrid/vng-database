@@ -25,7 +25,7 @@ export function Toolbar() {
     activeTabId ? s.results[activeTabId] ?? null : null
   );
 
-  const { execute } = useQuery(activeTabId ?? "");
+  const { execute, explain } = useQuery(activeTabId ?? "");
 
   function run() {
     const tab = getActiveTab();
@@ -35,6 +35,15 @@ export function Toolbar() {
     const sql = selected ?? tab.sql;
     if (!sql.trim()) return;
     execute(sql);
+  }
+
+  function runExplain() {
+    const tab = getActiveTab();
+    if (!tab) return;
+    const selected = getSelectedSql();
+    const sql = selected ?? tab.sql;
+    if (!sql.trim()) return;
+    explain(sql);
   }
 
   const databases = getDatabases();
@@ -57,7 +66,12 @@ export function Toolbar() {
       <button className="btn" title="Format SQL">
         Format
       </button>
-      <button className="btn" title="Explain query plan">
+      <button
+        className="btn"
+        title="Explain query plan"
+        onClick={runExplain}
+        disabled={isExecuting || !activeTabId}
+      >
         Explain
       </button>
 

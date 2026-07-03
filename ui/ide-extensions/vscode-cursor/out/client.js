@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.runConnectivityChecks = runConnectivityChecks;
 exports.executeSql = executeSql;
 exports.analyzeSql = analyzeSql;
+exports.explainSql = explainSql;
 exports.getSchemaRegistry = getSchemaRegistry;
 exports.requestRuntime = requestRuntime;
 exports.toPermissionMessage = toPermissionMessage;
@@ -44,7 +45,17 @@ async function analyzeSql(connection, sql) {
         method: "POST",
         path: "/api/v1/sql/analyze",
         body: {
-            sql,
+            sql_batch: sql,
+            request_id: "ide-query-diagnostics",
+        },
+    });
+}
+async function explainSql(connection, sql) {
+    return requestRuntime(connection, {
+        method: "POST",
+        path: "/api/v1/sql/explain",
+        body: {
+            sql_batch: sql,
             request_id: "ide-query-diagnostics",
         },
     });

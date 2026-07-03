@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 export type Screen = "welcome" | "main" | "dashboard";
 export type SidebarTab = "connections" | "databases" | "users" | "history" | "saved";
@@ -6,6 +7,8 @@ export type SidebarTab = "connections" | "databases" | "users" | "history" | "sa
 interface UiState {
   screen: Screen;
   sidebarTab: SidebarTab;
+  sidebarWidth: number;
+  sidebarPinned: boolean;
   connectionPanelOpen: boolean;
   editingConnectionId: string | null;
   rightPanelOpen: boolean;
@@ -13,6 +16,9 @@ interface UiState {
   settingsPanelOpen: boolean;
 
   setScreen(s: Screen): void;
+  setSidebarWidth(width: number): void;
+  setSidebarPinned(pinned: boolean): void;
+  toggleSidebarPinned(): void;
   openConnectionPanel(id?: string | null): void;
   closeConnectionPanel(): void;
   setSidebarTab(t: SidebarTab): void;
@@ -22,44 +28,71 @@ interface UiState {
   closeSettings(): void;
 }
 
-export const useUiStore = create<UiState>()((set) => ({
-  screen: "welcome",
-  sidebarTab: "connections",
-  connectionPanelOpen: false,
-  editingConnectionId: null,
-  rightPanelOpen: false,
-  rightPanelTable: null,
-  settingsPanelOpen: false,
+export const useUiStore = create<UiState>()(
+  persist(
+    (set) => ({
+      screen: "welcome",
+      sidebarTab: "connections",
+      sidebarWidth: 300,
+      sidebarPinned: true,
+      connectionPanelOpen: false,
+      editingConnectionId: null,
+      rightPanelOpen: false,
+      rightPanelTable: null,
+      settingsPanelOpen: false,
 
-  setScreen(s) {
-    set({ screen: s });
-  },
+      setScreen(s) {
+        set({ screen: s });
+      },
 
-  openConnectionPanel(id = null) {
-    set({ connectionPanelOpen: true, editingConnectionId: id ?? null });
-  },
+      setSidebarWidth(width) {
+        const clamped = Math.min(560, Math.max(220, Math.round(width)));
+        set({ sidebarWidth: clamped });
+      },
 
-  closeConnectionPanel() {
-    set({ connectionPanelOpen: false, editingConnectionId: null });
-  },
+      setSidebarPinned(pinned) {
+        set({ sidebarPinned: pinned });
+      },
 
-  setSidebarTab(t) {
-    set({ sidebarTab: t });
-  },
+      toggleSidebarPinned() {
+        set((s) => ({ sidebarPinned: !s.sidebarPinned }));
+      },
 
-  openRightPanel(table) {
-    set({ rightPanelOpen: true, rightPanelTable: table });
-  },
+      openConnectionPanel(id = null) {
+        set({ connectionPanelOpen: true, editingConnectionId: id ?? null });
+      },
 
-  closeRightPanel() {
-    set({ rightPanelOpen: false, rightPanelTable: null });
-  },
+      closeConnectionPanel() {
+        set({ connectionPanelOpen: false, editingConnectionId: null });
+      },
 
-  openSettings() {
-    set({ settingsPanelOpen: true });
-  },
+      setSidebarTab(t) {
+        set({ sidebarTab: t });
+      },
 
-  closeSettings() {
-    set({ settingsPanelOpen: false });
-  },
-}));
+      openRightPanel(table) {
+        set({ rightPanelOpen: true, rightPanelTable: table });
+      },
+
+      closeRightPanel() {
+        set({ rightPanelOpen: false, rightPanelTable: null });
+      },
+
+      openSettings() {
+        set({ settingsPanelOpen: true });
+      },
+
+      closeSettings() {
+        set({ settingsPanelOpen: false });
+      },
+    }),
+    {
+      name: "vng-studio-ui",
+      partialize: (s) => ({
+        sidebarTab: s.sidebarTab,
+        sidebarWidth: s.sidebarWidth,
+        sidebarPinned: s.sidebarPinned,
+      }),
+    }
+  )
+);

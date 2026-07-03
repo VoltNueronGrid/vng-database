@@ -62,6 +62,22 @@ pub struct QueryToolResponse {
     pub rowcount: usize,
 }
 
+/// Request to build an execution plan for a SQL query.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExplainToolRequest {
+    pub sql_query: String,
+}
+
+/// Response from explain plan generation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExplainToolResponse {
+    pub planner_path: String,
+    pub estimated_rows: u64,
+    pub relative_cost: f64,
+    pub plan: Value,
+    pub plan_text: String,
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Schema Tool
 // ═══════════════════════════════════════════════════════════════════════════

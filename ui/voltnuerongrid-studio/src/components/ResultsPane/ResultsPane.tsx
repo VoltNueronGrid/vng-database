@@ -205,6 +205,16 @@ export function ResultsPane() {
                   {result.error}
                 </div>
               )}
+              {result.explainPlan && (
+                <div style={{ marginTop: 8 }}>
+                  <span style={{ color: "var(--text-3)" }}>planner_path: </span>
+                  <span>{result.explainPlan.plannerPath}</span>
+                  <span style={{ color: "var(--text-3)", marginLeft: 10 }}>estimated_rows: </span>
+                  <span>{result.explainPlan.estimatedRows}</span>
+                  <span style={{ color: "var(--text-3)", marginLeft: 10 }}>relative_cost: </span>
+                  <span>{result.explainPlan.relativeCost.toFixed(2)}</span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-muted">No messages.</div>
@@ -213,11 +223,37 @@ export function ResultsPane() {
       )}
 
       {!isExecuting && activeTab === "explain" && (
-        <div className="results-empty">
-          <div className="re-icon">🔍</div>
-          <div className="text-muted">
-            Query explain plan — coming soon.
-          </div>
+        <div className="panel-body" style={{ fontFamily: "monospace", fontSize: 12 }}>
+          {result?.explainPlan ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div>
+                <span style={{ color: "var(--text-3)" }}>planner_path: </span>
+                <span>{result.explainPlan.plannerPath}</span>
+                <span style={{ color: "var(--text-3)", marginLeft: 10 }}>estimated_rows: </span>
+                <span>{result.explainPlan.estimatedRows}</span>
+                <span style={{ color: "var(--text-3)", marginLeft: 10 }}>relative_cost: </span>
+                <span>{result.explainPlan.relativeCost.toFixed(2)}</span>
+              </div>
+              <pre
+                style={{
+                  whiteSpace: "pre-wrap",
+                  margin: 0,
+                  padding: "10px 12px",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  background: "var(--bg-2)",
+                  color: "var(--text-1)",
+                }}
+              >
+                {result.explainPlan.planText}
+              </pre>
+            </div>
+          ) : (
+            <div className="results-empty">
+              <div className="re-icon">🔍</div>
+              <div className="text-muted">Run Explain to see query plan details.</div>
+            </div>
+          )}
         </div>
       )}
     </div>

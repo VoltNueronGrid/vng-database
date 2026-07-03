@@ -4827,6 +4827,7 @@ dependencies = [
 name = "voltnuerongrid-exec"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "voltnuerongrid-core",
  "voltnuerongrid-sql",
 ]

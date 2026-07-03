@@ -50,7 +50,18 @@ export async function analyzeSql(connection: RuntimeConnection, sql: string): Pr
     method: "POST",
     path: "/api/v1/sql/analyze",
     body: {
-      sql,
+      sql_batch: sql,
+      request_id: "ide-query-diagnostics",
+    },
+  });
+}
+
+export async function explainSql(connection: RuntimeConnection, sql: string): Promise<HttpResult> {
+  return requestRuntime(connection, {
+    method: "POST",
+    path: "/api/v1/sql/explain",
+    body: {
+      sql_batch: sql,
       request_id: "ide-query-diagnostics",
     },
   });

@@ -105,6 +105,7 @@ export function useQuery(tabId: string) {
           columns,
           rows,
           rowCount: rows.length,
+          explainPlan: null,
           error: null,
           executedAt: Date.now(),
         });
@@ -122,6 +123,7 @@ export function useQuery(tabId: string) {
           columns: [],
           rows: [],
           rowCount: 0,
+          explainPlan: null,
           error: String(err),
           executedAt: Date.now(),
         });
@@ -132,5 +134,67 @@ export function useQuery(tabId: string) {
     [tabId, getActive, getActiveKey, setResult, setExecuting, defaultIsolationLevel, statementTimeoutMs]
   );
 
-  return { execute };
+  const explain = useCallback(
+    async (sql: string) => {
+      const conn = getActive();
+      if (!conn) return;
+
+      const client = new StudioApiClient({
+        baseUrl: conn.baseUrl,
+        adminApiKey: conn.mode === "admin" ? getActiveKey() : undefined,
+        operatorId: conn.operatorId,
+        tenantId: conn.tenantId,
+        userId: conn.userId,
+        database: conn.database,
+      });
+
+      const start = Date.now();
+      setExecuting(tabId, true);
+      try {
+        const res = await client.explainSql({ sql_batch: sql });
+        const prev = useQueryStore.getState().getResult(tabId);
+        setResult({
+          tabId,
+          status: res.status,
+          routePath: res.planner_path,
+          elapsedMs: Date.now() - start,
+          rejectedCount: 0,
+          transactionId: prev?.transactionId,
+          columns: prev?.columns ?? [],
+          rows: prev?.rows ?? [],
+          rowCount: prev?.rowCount ?? 0,
+          explainPlan: {
+            plannerPath: res.planner_path,
+            estimatedRows: res.estimated_rows,
+            relativeCost: res.relative_cost,
+            plan: res.plan,
+            planText: res.plan_text,
+          },
+          error: null,
+          executedAt: Date.now(),
+        });
+      } catch (err) {
+        const prev = useQueryStore.getState().getResult(tabId);
+        setResult({
+          tabId,
+          status: "error",
+          routePath: prev?.routePath ?? "unknown",
+          elapsedMs: Date.now() - start,
+          rejectedCount: prev?.rejectedCount ?? 0,
+          transactionId: prev?.transactionId,
+          columns: prev?.columns ?? [],
+          rows: prev?.rows ?? [],
+          rowCount: prev?.rowCount ?? 0,
+          explainPlan: prev?.explainPlan ?? null,
+          error: String(err),
+          executedAt: Date.now(),
+        });
+      } finally {
+        setExecuting(tabId, false);
+      }
+    },
+    [tabId, getActive, getActiveKey, setResult, setExecuting]
+  );
+
+  return { execute, explain };
 }

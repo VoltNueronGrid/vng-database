@@ -23,6 +23,19 @@ export interface SqlExecuteRequest {
   statement_timeout_ms?: number;
 }
 
+export interface SqlExplainRequest {
+  sql_batch: string;
+}
+
+export interface SqlExplainResponse {
+  status: string;
+  planner_path: RoutePath;
+  estimated_rows: number;
+  relative_cost: number;
+  plan: unknown;
+  plan_text: string;
+}
+
 export type RoutePath = "oltp" | "olap" | "hybrid" | "unknown";
 
 export interface SqlTransactionResult {
@@ -356,6 +369,10 @@ export class StudioApiClient {
 
   async executeSql(req: SqlExecuteRequest): Promise<SqlExecuteResponse> {
     return this.post<SqlExecuteResponse>("/api/v1/sql/execute", req);
+  }
+
+  async explainSql(req: SqlExplainRequest): Promise<SqlExplainResponse> {
+    return this.post<SqlExplainResponse>("/api/v1/sql/explain", req);
   }
 
   async getSchemaTree(): Promise<SchemaRegistry> {

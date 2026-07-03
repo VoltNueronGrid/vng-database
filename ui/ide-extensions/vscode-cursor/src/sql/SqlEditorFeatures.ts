@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { analyzeSql, executeSql } from "../client";
+import { analyzeSql, executeSql, explainSql } from "../client";
 import { RuntimeConnection } from "../config";
 import { ConnectionManager, QueryExecutionService, SchemaManager } from "../services";
 import { Connection, QueryResult } from "../models";
@@ -193,6 +193,28 @@ export function registerSqlEditorFeatures(deps: SqlEditorFeatureDependencies): v
     }
 
     await runSqlAndPresent("Analyze SQL", sql, runtimeConnection, deps.output, true);
+  });
+
+  const explainSelectionOrFile = vscode.commands.registerCommand("vng.sql.explainSelectionOrFile", async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !isSqlDocument(editor.document)) {
+      vscode.window.showWarningMessage("Open a .sql file to run this command.");
+      return;
+    }
+
+    const sql = getSqlToRun(editor);
+    if (!sql.trim()) {
+      vscode.window.showWarningMessage("No SQL found to explain.");
+      return;
+    }
+
+    const runtimeConnection = await deps.getConnection();
+    if (!runtimeConnection) {
+      vscode.window.showWarningMessage("No VoltNueronGrid connection configured.");
+      return;
+    }
+
+    await runSqlAndPresent("Explain SQL", sql, runtimeConnection, deps.output, false, true);
   });
 
   const completionProvider = vscode.languages.registerCompletionItemProvider(
@@ -488,6 +510,7 @@ export function registerSqlEditorFeatures(deps: SqlEditorFeatureDependencies): v
   return [
     executeSelectionOrFile,
     analyzeSelectionOrFile,
+    explainSelectionOrFile,
     completionProvider,
     saveHook,
     openHook,
@@ -516,9 +539,14 @@ async function runSqlAndPresent(
   sql: string,
   connection: RuntimeConnection,
   output: vscode.OutputChannel,
-  analyze: boolean
+  analyze: boolean,
+  explain = false
 ): Promise<void> {
-  const response = analyze ? await analyzeSql(connection, sql) : await executeSql(connection, sql);
+  const response = explain
+    ? await explainSql(connection, sql)
+    : analyze
+      ? await analyzeSql(connection, sql)
+      : await executeSql(connection, sql);
 
   output.appendLine(`[${operation}] HTTP ${response.status}`);
   output.appendLine(response.bodyText || "(empty response)");

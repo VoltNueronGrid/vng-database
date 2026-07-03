@@ -1,7 +1,7 @@
 //! MCP integration adapters for VoltNueronGrid
 
 use crate::auth::McpAuthContext;
-use crate::tools::{BenchmarkToolResponse, HealthToolResponse, QueryToolResponse, SchemaToolResponse};
+use crate::tools::{BenchmarkToolResponse, ExplainToolResponse, HealthToolResponse, QueryToolResponse, SchemaToolResponse};
 use crate::{process_request, McpRequest, McpRequestHeaders, McpServerCapabilities};
 use serde_json::{json, Value};
 
@@ -29,6 +29,29 @@ impl McpSqlExecutor {
 }
 
 pub struct McpSchemaProvider;
+
+pub struct McpExplainExecutor;
+
+impl McpExplainExecutor {
+    pub async fn explain_query(
+        query: &str,
+        headers: &McpRequestHeaders,
+    ) -> Result<ExplainToolResponse, String> {
+        let req = McpRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "integration-explain".to_string(),
+            method: "tools/explain".to_string(),
+            params: json!({ "sql_query": query }),
+            headers: headers.clone(),
+        };
+        let resp = process_request(req, &McpServerCapabilities::default()).await;
+        if let Some(err) = resp.error {
+            return Err(err.message);
+        }
+        let value = resp.result.ok_or_else(|| "missing result".to_string())?;
+        serde_json::from_value(value).map_err(|e| format!("explain response decode failed: {}", e))
+    }
+}
 
 impl McpSchemaProvider {
     pub async fn get_schema(headers: &McpRequestHeaders) -> Result<SchemaToolResponse, String> {

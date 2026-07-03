@@ -106,6 +106,28 @@ html, body, #root {
   min-height: 0;
 }
 
+.sidebar-shell {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 20;
+}
+
+.sidebar-resizer:hover {
+  background: linear-gradient(to right, transparent 35%, var(--brand-cyan-dim) 50%, transparent 65%);
+}
+
 /* ─── Title Bar ──────────────────────────────────────────────── */
 .titlebar {
   height: var(--titlebar-h);
@@ -212,14 +234,89 @@ html, body, #root {
 
 /* ─── Sidebar ────────────────────────────────────────────────── */
 .sidebar {
-  width: var(--sidebar-w);
-  min-width: var(--sidebar-w);
-  max-width: var(--sidebar-w);
+  width: 100%;
+  min-width: 100%;
+  max-width: 100%;
   background: var(--bg-1);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
   overflow: hidden;
   flex-shrink: 0;
+}
+
+.sidebar.unpinned {
+  border-right: 1px solid var(--border-strong);
+}
+
+.sidebar.unpinned .sidebar-activity {
+  height: 100%;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 4px;
+}
+
+.sidebar-tab-select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-3);
+  color: var(--text-1);
+  padding: 0 8px;
+  font-weight: 600;
+  outline: none;
+}
+
+.sidebar-tab-select:hover {
+  border-color: var(--brand-cyan);
+}
+
+.sidebar.unpinned .activity-btn {
+  flex: 0 0 auto;
+  width: 100%;
+  height: 28px;
+  padding: 0;
+  font-size: 10px;
+}
+
+.sidebar.unpinned .activity-btn.icon-only {
+  font-size: 15px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pin-btn {
+  max-width: 28px;
+  min-width: 28px;
+  font-weight: 700;
+}
+
+.sidebar.unpinned .pin-btn {
+  max-width: none;
+  min-width: 0;
+  margin-top: 2px;
+  background: var(--brand-cyan-dim);
+  color: var(--brand-cyan);
+  border: 1px solid #00d4ff44;
+  box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.55);
+  animation: pin-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pin-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.45);
+  }
+  60% {
+    box-shadow: 0 0 0 5px rgba(0, 212, 255, 0.06);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.0);
+  }
 }
 .sidebar-activity {
   height: 36px;

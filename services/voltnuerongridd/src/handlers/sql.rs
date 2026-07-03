@@ -6,8 +6,8 @@ use serde_json::json;
 use std::sync::{Arc, atomic::Ordering};
 use voltnuerongrid_audit::AuditEventKind;
 use voltnuerongrid_auth::PrivilegeAction;
-use voltnuerongrid_exec::QueryPath;
-use voltnuerongrid_sql::{eval_legacy_numeric_aggregation, I18nCatalog, SqlAnalyzer, SqlStatementKind};
+use voltnuerongrid_exec::{QueryPath, QueryPlanner};
+use voltnuerongrid_sql::{eval_legacy_numeric_aggregation, parse_one, I18nCatalog, SqlAnalyzer, SqlStatementKind, Statement};
 use voltnuerongrid_sql::legacy_aggregations::SUPPORTED_LEGACY_AGGREGATIONS;
 use voltnuerongrid_store::ddl_catalog::{parse_ddl_info, CatalogResult};
 use voltnuerongrid_store::triggers::TriggerEvent;
@@ -317,6 +317,21 @@ pub(crate) struct SqlAnalyzeResponse {
 #[derive(Clone, Deserialize)]
 pub(crate) struct SqlRouteRequest {
     pub(crate) sql_batch: String,
+}
+
+#[derive(Clone, Deserialize)]
+pub(crate) struct SqlExplainRequest {
+    pub(crate) sql_batch: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SqlExplainResponse {
+    pub(crate) status: &'static str,
+    pub(crate) planner_path: String,
+    pub(crate) estimated_rows: u64,
+    pub(crate) relative_cost: f64,
+    pub(crate) plan: serde_json::Value,
+    pub(crate) plan_text: String,
 }
 
 #[derive(Serialize)]
@@ -1313,6 +1328,75 @@ pub(crate) async fn sql_route(
     );
     release_sql_data_plane_connection(&state, &connection_id);
     Ok(Json(response.payload))
+}
+
+pub(crate) async fn sql_explain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SqlExplainRequest>,
+) -> Result<Json<SqlExplainResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/explain")?;
+    let connection_id = acquire_sql_data_plane_connection(&state, &headers, &principal, "sql/explain")?;
+
+    let raw = req.sql_batch.trim();
+    let explain_target = if raw.to_ascii_uppercase().starts_with("EXPLAIN ") {
+        raw["EXPLAIN ".len()..].trim()
+    } else {
+        raw
+    };
+
+    let stmt = parse_one(explain_target).map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: format!("invalid SQL for explain: {err}"),
+                locale: locale_from_headers(&headers).as_str().to_string(),
+                localized_message: "Unable to parse SQL for explain".to_string(),
+            }),
+        )
+    })?;
+
+    let plan = QueryPlanner::plan(&stmt);
+    let estimate = QueryPlanner::estimate_cost(&plan);
+    let plan_json = serde_json::to_value(&plan).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AuthErrorResponse {
+                status: "error",
+                reason: format!("failed to serialize explain plan: {err}"),
+                locale: "en".to_string(),
+                localized_message: "Failed to build explain plan".to_string(),
+            }),
+        )
+    })?;
+
+    let planner_path = route_path_name(estimate.recommended_path).to_string();
+    let plan_text = serde_json::to_string_pretty(&plan_json).unwrap_or_else(|_| "{}".to_string());
+
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Sql,
+        &principal,
+        "sql_explain",
+        "ok",
+        json!({
+            "route_scope": "sql/explain",
+            "planner_path": planner_path,
+            "estimated_rows": estimate.estimated_rows,
+            "relative_cost": estimate.relative_cost,
+        }),
+    );
+
+    release_sql_data_plane_connection(&state, &connection_id);
+    Ok(Json(SqlExplainResponse {
+        status: "ok",
+        planner_path: route_path_name(estimate.recommended_path).to_string(),
+        estimated_rows: estimate.estimated_rows,
+        relative_cost: estimate.relative_cost,
+        plan: plan_json,
+        plan_text,
+    }))
 }
 
 #[tracing::instrument(skip_all, name = "sql.execute")]
@@ -3857,7 +3941,6 @@ pub(crate) async fn sql_execute(
     // This is the primary path the UI uses to display query results.
     let (result_columns, result_rows): (Option<Vec<serde_json::Value>>, Option<Vec<serde_json::Value>>) =
         if !olap_statements.is_empty() {
-            use voltnuerongrid_sql::{parse_one, Statement};
             let rs = match state.storage.row_store.lock() {
                 Ok(g) => g,
                 Err(_) => return Err(lock_poisoned_err("row_store")),
@@ -3890,11 +3973,41 @@ pub(crate) async fn sql_execute(
             let limit = req.max_rows.unwrap_or(10_000).min(100_000);
             // final ordered column list and rows for this response
             let mut ordered_cols: Vec<String> = Vec::new();
+            let mut seen_cols: std::collections::HashSet<String> = std::collections::HashSet::new();
             // M-8 Rule 1: track best observed PG type per column (updated across all rows).
             let mut col_pg_types: std::collections::HashMap<String, &'static str> = std::collections::HashMap::new();
             let mut out_rows: Vec<serde_json::Value> = Vec::new();
 
+            let mut ddl_cols_cache: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            {
+                let catalog = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
+                for stmt_str in &olap_statements {
+                    if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
+                        if let Some(tbl) = sel.table.as_deref() {
+                            let table_name = tbl
+                                .split_ascii_whitespace()
+                                .next()
+                                .unwrap_or(tbl)
+                                .rsplit('.')
+                                .next()
+                                .unwrap_or(tbl)
+                                .to_ascii_lowercase();
+                            ddl_cols_cache.entry(table_name.clone()).or_insert_with(|| {
+                                catalog
+                                    .get(&table_name)
+                                    .map(|e| extract_column_names_from_ddl(&e.original_statement))
+                                    .unwrap_or_default()
+                            });
+                        }
+                    }
+                }
+            }
+
             for stmt_str in &olap_statements {
+                if out_rows.len() >= limit {
+                    break;
+                }
                 if let Ok(Statement::Select(sel)) = parse_one(stmt_str) {
                     // Determine which table to filter on (FROM clause table name)
                     let filter_table: Option<String> = sel.table.as_deref().map(|f| {
@@ -3910,12 +4023,11 @@ pub(crate) async fn sql_execute(
                     // Fetch real DDL column names for this table (CREATE TABLE definition order).
                     // These are used to (a) build the column header list in the right order,
                     // and (b) remap positional `col_N` storage keys back to readable names.
-                    let ddl_cols: Vec<String> = filter_table.as_deref().map(|tbl| {
-                        let catalog = state.storage.ddl_catalog.lock().unwrap_or_else(|e| e.into_inner());
-                        catalog.get(tbl)
-                            .map(|e| extract_column_names_from_ddl(&e.original_statement))
-                            .unwrap_or_default()
-                    }).unwrap_or_default();
+                    let ddl_cols: Vec<String> = filter_table
+                        .as_ref()
+                        .and_then(|tbl| ddl_cols_cache.get(tbl))
+                        .cloned()
+                        .unwrap_or_default();
 
                     // Build WHERE key filter (RHS of `col = 'val'`)
                     let key_filter: Option<String> = sel.where_clause.as_deref().and_then(|w| {
@@ -3929,6 +4041,7 @@ pub(crate) async fn sql_execute(
                     // `sel.columns` should contain ["*"] or explicit names.
                     let select_star = sel.columns.is_empty()
                         || sel.columns.iter().any(|c| c == "*");
+                    let mut fallback_sorted_keys: Option<Vec<String>> = None;
 
                     for (key, data) in &all_rows {
                         if out_rows.len() >= limit { break; }
@@ -3965,29 +4078,40 @@ pub(crate) async fn sql_execute(
                                         .or_insert_with(|| json_value_pg_type(&json_val));
                                 }
                                 row_obj.insert(col_name.clone(), json_val);
-                                if !ordered_cols.contains(col_name) {
+                                if seen_cols.insert(col_name.clone()) {
                                     ordered_cols.push(col_name.clone());
                                 }
                             }
                         } else {
                             // No DDL info: fall back to sorted storage keys, still readable.
-                            let mut sorted_keys: Vec<&str> = data.keys()
-                                .filter(|k| !k.starts_with("__"))
-                                .map(|k| k.as_str())
-                                .collect();
-                            sorted_keys.sort();
+                            let sorted_keys: Vec<String> = match &fallback_sorted_keys {
+                                Some(v) => v.clone(),
+                                None => {
+                                    let mut keys: Vec<String> = data
+                                        .keys()
+                                        .filter(|k| !k.starts_with("__"))
+                                        .cloned()
+                                        .collect();
+                                    keys.sort();
+                                    fallback_sorted_keys = Some(keys.clone());
+                                    keys
+                                }
+                            };
                             for col in &sorted_keys {
                                 // M-8 Rule 1: coerce to typed JSON value.
-                                let json_val = infer_json_value(&data[*col]);
+                                let json_val = match data.get(col) {
+                                    Some(v) => infer_json_value(v),
+                                    None => serde_json::Value::Null,
+                                };
                                 if !matches!(json_val, serde_json::Value::Null) {
-                                    let col_s = (*col).to_string();
+                                    let col_s = col.to_string();
                                     col_pg_types.entry(col_s.clone())
                                         .and_modify(|t| { if *t == "text" { *t = json_value_pg_type(&json_val); } })
                                         .or_insert_with(|| json_value_pg_type(&json_val));
                                 }
-                                row_obj.insert((*col).to_string(), json_val);
-                                if !ordered_cols.contains(&(*col).to_string()) {
-                                    ordered_cols.push((*col).to_string());
+                                row_obj.insert(col.to_string(), json_val);
+                                if seen_cols.insert(col.to_string()) {
+                                    ordered_cols.push(col.to_string());
                                 }
                             }
                         }

@@ -43,3 +43,10 @@ ui/voltnuerongrid-studio/test-results/
 data/
 scripts/by-poc-app.2026-06-23.private-key.pem
 .env
+data-smoke/rocksdb/000004.log
+data-smoke/rocksdb/CURRENT
+data-smoke/rocksdb/IDENTITY
+data-smoke/rocksdb/LOCK
+data-smoke/rocksdb/LOG
+data-smoke/rocksdb/MANIFEST-000005
+data-smoke/rocksdb/OPTIONS-000007
