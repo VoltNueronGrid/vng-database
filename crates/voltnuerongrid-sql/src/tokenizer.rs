@@ -41,8 +41,15 @@ fn is_keyword(word: &str) -> bool {
         | "WITH" | "RECURSIVE" | "WINDOW" | "FILTER" | "WITHIN" | "ROW"
         | "SUM" | "COUNT" | "AVG" | "MIN" | "MAX" | "COALESCE" | "CAST"
         | "EXTRACT" | "TRIM" | "UPPER" | "LOWER" | "SUBSTRING" | "REPLACE"
-        | "CONCAT" | "LENGTH" | "ROUND" | "FLOOR" | "CEIL" | "ABS"
+        | "CONCAT" | "CONCAT_WS" | "LENGTH" | "ROUND" | "FLOOR" | "CEIL" | "ABS"
         | "NOW" | "CURRENT_TIMESTAMP" | "CURRENT_DATE" | "CURRENT_TIME"
+        | "IFNULL" | "NVL" | "NVL2" | "IFF" | "DECODE" | "ZEROIFNULL" | "NULLIFZERO"
+        | "DATEDIFF" | "DATEADD" | "TO_CHAR" | "TO_DATE" | "TO_TIMESTAMP"
+        | "TO_TIMESTAMP_NTZ" | "TO_TIMESTAMP_TZ" | "TO_NUMBER" | "TO_VARCHAR"
+        | "INSTR" | "POSITION" | "LISTAGG" | "ANY_VALUE" | "APPROX_COUNT_DISTINCT"
+        | "ARRAY_CONSTRUCT" | "OBJECT_CONSTRUCT" | "OBJECT_AGG" | "MAP_CONSTRUCT"
+        | "ARRAY_TO_STRING" | "STRING_TO_ARRAY" | "REGEXP_SUBSTR" | "REGEXP_INSTR"
+        | "REGEXP_COUNT"
         | "IF" | "TRUNCATE" | "EXPLAIN" | "ANALYZE" | "SCHEMA" | "DATABASE"
     )
 }

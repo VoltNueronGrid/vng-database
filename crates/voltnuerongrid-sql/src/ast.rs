@@ -87,9 +87,9 @@ pub struct SelectStatement {
     pub has_cast: bool,
     /// True when the query contains a NULLIF() expression (S3-WS1-14).
     pub has_nullif: bool,
-    /// True when the query contains a string function (LENGTH, UPPER, LOWER, SUBSTR) (S3-WS1-15).
+    /// True when the query contains a string function (LENGTH, UPPER, LOWER, SUBSTR, INSTR) (S3-WS1-15).
     pub has_string_fn: bool,
-    /// True when the query contains a date/time function (NOW, DATE_TRUNC, EXTRACT) (S3-WS1-16).
+    /// True when the query contains a date/time function (NOW, DATE_TRUNC, EXTRACT, DATEADD) (S3-WS1-16).
     pub has_date_fn: bool,
     /// True when the query contains a string concatenation (CONCAT() or || operator) (S3-WS1-17).
     pub has_concat: bool,
@@ -2281,6 +2281,13 @@ mod coalesce_tests {
     }
 
     #[test]
+    fn select_with_ifnull_sets_has_coalesce_true() {
+        let stmt = parse_one("SELECT IFNULL(name, 'unknown') FROM users").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_coalesce, "IFNULL() expression must set has_coalesce = true");
+    }
+
+    #[test]
     fn select_with_coalesce_in_where_sets_has_coalesce_true() {
         let stmt = parse_one("SELECT id FROM orders WHERE COALESCE(status, 'pending') = 'active'").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
@@ -2388,6 +2395,13 @@ mod date_fn_tests {
         let stmt = parse_one("SELECT NOW() FROM dual").unwrap();
         let Statement::Select(s) = stmt else { panic!("expected Select") };
         assert!(s.has_date_fn, "NOW() expression must set has_date_fn = true");
+    }
+
+    #[test]
+    fn select_with_dateadd_sets_has_date_fn() {
+        let stmt = parse_one("SELECT DATEADD(day, 1, created_at) FROM events").unwrap();
+        let Statement::Select(s) = stmt else { panic!("expected Select") };
+        assert!(s.has_date_fn, "DATEADD() expression must set has_date_fn = true");
     }
 
     #[test]

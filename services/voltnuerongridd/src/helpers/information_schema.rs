@@ -213,7 +213,7 @@ fn col_schema(columns: &[&str]) -> Vec<Value> {
 }
 
 /// Distinct (database, schema) pairs plus always-present built-in schemas.
-fn synth_is_schemata(entries: &[DdlCatalogEntry]) -> (Vec<Value>, Vec<Value>) {
+fn synth_is_schemata(entries: &[DdlCatalogEntry], database_names: &[String]) -> (Vec<Value>, Vec<Value>) {
     let columns = col_schema(&[
         "catalog_name", "schema_name", "schema_owner",
         "default_character_set_catalog", "default_character_set_schema", "default_character_set_name",
@@ -221,18 +221,26 @@ fn synth_is_schemata(entries: &[DdlCatalogEntry]) -> (Vec<Value>, Vec<Value>) {
     let mut seen = std::collections::HashSet::new();
     let mut rows: Vec<Value> = Vec::new();
 
-    // Built-in schemas always present.
-    for schema in &["public", "pg_catalog", "information_schema"] {
-        if seen.insert(format!("voltdb.{schema}")) {
-            rows.push(json!({
-                "catalog_name": "voltdb",
-                "schema_name": schema,
-                "schema_owner": "voltdb",
-                "default_character_set_catalog": null,
-                "default_character_set_schema": null,
-                "default_character_set_name": "utf8",
-            }));
+    let mut add_standard_schemas = |catalog_name: &str| {
+        for schema in &["public", "pg_catalog", "information_schema"] {
+            if seen.insert(format!("{catalog_name}.{schema}")) {
+                rows.push(json!({
+                    "catalog_name": catalog_name,
+                    "schema_name": schema,
+                    "schema_owner": "voltdb",
+                    "default_character_set_catalog": null,
+                    "default_character_set_schema": null,
+                    "default_character_set_name": "utf8",
+                }));
+            }
         }
+    };
+
+    // Built-in schemas always present.
+    add_standard_schemas("voltdb");
+
+    for db_name in database_names {
+        add_standard_schemas(db_name);
     }
 
     for e in entries {
@@ -514,9 +522,13 @@ pub(crate) fn synthesize_virtual_catalog_response(
         let catalog = state.storage.ddl_catalog.lock().expect("ddl_catalog lock");
         catalog.active_entries().into_iter().cloned().collect()
     };
+    let database_names: Vec<String> = {
+        let catalog = state.storage.database_catalog.lock().expect("database_catalog lock");
+        catalog.list().iter().map(|db| db.name.as_str().to_string()).collect()
+    };
 
     match detect_virtual_table(sql_batch) {
-        VirtualTable::IsSchemata => synth_is_schemata(&entries),
+        VirtualTable::IsSchemata => synth_is_schemata(&entries, &database_names),
         VirtualTable::IsTables => synth_is_tables(&entries),
         VirtualTable::IsSettings => synth_is_settings(state),
         VirtualTable::IsColumns => synth_is_columns(&entries),
@@ -671,12 +683,26 @@ mod tests {
 
     #[test]
     fn synth_is_schemata_always_includes_builtin_schemas() {
-        let (_, rows) = synth_is_schemata(&[]);
+        let (_, rows) = synth_is_schemata(&[], &[]);
         let schema_names: Vec<&str> = rows.iter()
             .map(|r| r["schema_name"].as_str().unwrap_or(""))
             .collect();
         assert!(schema_names.contains(&"public"));
         assert!(schema_names.contains(&"pg_catalog"));
         assert!(schema_names.contains(&"information_schema"));
+    }
+
+    #[test]
+    fn synth_is_schemata_includes_each_created_database() {
+        let dbs = vec!["alpha".to_string(), "beta".to_string()];
+        let (_, rows) = synth_is_schemata(&[], &dbs);
+
+        let alpha_rows: Vec<&Value> = rows.iter().filter(|r| r["catalog_name"] == "alpha").collect();
+        let beta_rows: Vec<&Value> = rows.iter().filter(|r| r["catalog_name"] == "beta").collect();
+
+        assert_eq!(alpha_rows.len(), 3, "alpha should expose public, pg_catalog, and information_schema");
+        assert_eq!(beta_rows.len(), 3, "beta should expose public, pg_catalog, and information_schema");
+        assert!(alpha_rows.iter().any(|r| r["schema_name"] == "information_schema"));
+        assert!(beta_rows.iter().any(|r| r["schema_name"] == "information_schema"));
     }
 }

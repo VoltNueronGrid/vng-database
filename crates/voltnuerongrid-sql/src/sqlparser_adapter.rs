@@ -447,13 +447,16 @@ fn walk_predicate_flags(expr: &sa::Expr, out: &mut SelectStatement) {
 fn check_fn_kind(name: &str, out: &mut SelectStatement) {
     match name {
         "LENGTH" | "UPPER" | "LOWER" | "SUBSTR" | "SUBSTRING" | "TRIM"
-        | "REPLACE" | "LTRIM" | "RTRIM" | "POSITION" => out.has_string_fn = true,
+        | "REPLACE" | "LTRIM" | "RTRIM" | "POSITION" | "INSTR" | "CONCAT_WS"
+        | "REGEXP_SUBSTR" | "REGEXP_INSTR" | "REGEXP_COUNT" => out.has_string_fn = true,
         "NOW" | "DATE_TRUNC" | "EXTRACT" | "CURRENT_DATE" | "CURRENT_TIMESTAMP"
-        | "DATE" | "TIME" => out.has_date_fn = true,
+        | "DATE" | "TIME" | "DATEADD" | "DATEDIFF" | "TO_CHAR" | "TO_DATE"
+        | "TO_TIMESTAMP" | "TO_TIMESTAMP_NTZ" | "TO_TIMESTAMP_TZ" => out.has_date_fn = true,
         "ABS" | "ROUND" | "CEIL" | "CEILING" | "FLOOR" | "POWER" | "SQRT"
         | "MOD" | "EXP" | "LN" | "LOG" => out.has_math_fn = true,
         "CONCAT" => out.has_concat = true,
-        "COALESCE" => out.has_coalesce = true,
+        "COALESCE" | "IFNULL" | "NVL" | "NVL2" | "IFF" | "DECODE"
+        | "ZEROIFNULL" | "NULLIFZERO" => out.has_coalesce = true,
         "NULLIF" => out.has_nullif = true,
         _ => {}
     }
