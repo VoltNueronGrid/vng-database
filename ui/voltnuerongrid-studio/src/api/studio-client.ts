@@ -36,6 +36,22 @@ export interface SqlExplainResponse {
   plan_text: string;
 }
 
+export interface SqlFunctionEntry {
+  name: string;
+  language: string;
+  deterministic: boolean;
+  description: string;
+  category: string;
+  dialects: string[];
+  execution_paths: string[];
+}
+
+export interface SqlFunctionsResponse {
+  status: string;
+  total: number;
+  functions: SqlFunctionEntry[];
+}
+
 export type RoutePath = "oltp" | "olap" | "hybrid" | "unknown";
 
 export interface SqlTransactionResult {
@@ -373,6 +389,10 @@ export class StudioApiClient {
 
   async explainSql(req: SqlExplainRequest): Promise<SqlExplainResponse> {
     return this.post<SqlExplainResponse>("/api/v1/sql/explain", req);
+  }
+
+  async listSqlFunctions(): Promise<SqlFunctionsResponse> {
+    return this.get<SqlFunctionsResponse>("/api/v1/sql/functions");
   }
 
   async getSchemaTree(): Promise<SchemaRegistry> {

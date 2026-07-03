@@ -4367,11 +4367,65 @@ fn ws2_admin_schema_tree_returns_views_functions_triggers_and_events() {
 
     assert_eq!(response.0, StatusCode::OK);
     let body = response.1.0;
-    let schema = &body.databases[0].schemas[0];
+    let schema = body.databases[0]
+        .schemas
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case("public"))
+        .expect("public schema should exist");
     assert!(schema.views.iter().any(|view| view.name == "order_summary"));
     assert!(schema.functions.iter().any(|func| func.name == "compute_tax"));
     assert!(schema.triggers.iter().any(|trigger| trigger.name == "orders_audit" && trigger.table == "orders"));
     assert!(schema.events.iter().any(|event| event.name == "refresh_cache" && event.schedule == "EVERY 1 HOUR"));
+}
+
+#[test]
+fn enhancement1_schema_tree_exposes_system_schemas_for_empty_database() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let tenant_headers = tenant_user_headers("admin-acme", "acme");
+
+    let create_db = SqlExecuteRequest {
+        sql_batch: "CREATE DATABASE analytics".to_string(),
+        max_rows: None,
+        ..Default::default()
+    };
+    let create_resp = rt
+        .block_on(sql_execute(State(state.clone()), tenant_headers.clone(), Json(create_db)))
+        .expect("create database should succeed");
+    assert_eq!(create_resp.0, StatusCode::OK);
+
+    let tree = rt
+        .block_on(admin_schema_tree(
+            State(state.clone()),
+            admin_headers("secret"),
+            Query(SchemaTreeQuery { database: Some("analytics".to_string()) }),
+        ))
+        .expect("admin schema tree should succeed");
+
+    assert_eq!(tree.0, StatusCode::OK);
+    let db = tree.1 .0.databases.iter().find(|db| db.name == "analytics").expect("analytics database should exist in schema tree");
+    let schema_names: Vec<String> = db.schemas.iter().map(|s| s.name.clone()).collect();
+    assert!(schema_names.contains(&"public".to_string()));
+    assert!(schema_names.contains(&"pg_catalog".to_string()));
+    assert!(schema_names.contains(&"information_schema".to_string()));
+}
+
+#[test]
+fn enhancement2_sql_functions_returns_vendor_aliases() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let state = state_with_key(Some("secret"));
+    let headers = tenant_user_headers("analyst-acme", "acme");
+
+    let response = rt
+        .block_on(sql_functions(State(state.clone()), headers.clone()))
+        .expect("sql functions should succeed");
+
+    let body = response.0;
+    assert_eq!(body.status, "ok");
+    assert!(body.total > 0);
+    assert!(body.functions.iter().any(|f| f.name == "IFNULL" && f.dialects.contains(&"mysql".to_string())));
+    assert!(body.functions.iter().any(|f| f.name == "NVL" && f.dialects.contains(&"oracle".to_string())));
+    assert!(body.functions.iter().any(|f| f.name == "IFF" && f.dialects.contains(&"snowflake".to_string())));
 }
 
 // ── Q-3: CREATE TRIGGER DDL wires into TriggerRegistry and fires on DML ───────

@@ -33,6 +33,7 @@ pub use tools::{
     ToolResponse,
     QueryToolRequest,
     ExplainToolRequest,
+    FunctionsToolRequest,
     SchemaToolRequest,
     HealthToolRequest,
     BenchmarkToolRequest,
@@ -87,6 +88,11 @@ impl McpServerCapabilities {
                 McpToolCapability {
                     name: "explain".to_string(),
                     description: "Generate SQL explain plans and routing estimates".to_string(),
+                    auth_level: AuthenticationLevel::Operator,
+                },
+                McpToolCapability {
+                    name: "functions".to_string(),
+                    description: "List built-in SQL functions with dialect compatibility metadata".to_string(),
                     auth_level: AuthenticationLevel::Operator,
                 },
                 McpToolCapability {
@@ -430,6 +436,7 @@ async fn validate_and_route_request(
     match request.method.as_str() {
         "tools/query" => handle_query_tool(&request.params, &request.headers, &auth).await,
         "tools/explain" => handle_explain_tool(&request.params, &request.headers, &auth).await,
+        "tools/functions" => handle_functions_tool(&request.params, &request.headers, &auth).await,
         "tools/schema" => handle_schema_tool(&request.params, &request.headers, &auth).await,
         "tools/health" => handle_health_tool(&request.params, &request.headers, &auth).await,
         "tools/benchmark" => handle_benchmark_tool(&request.params, &request.headers, &auth).await,
@@ -491,6 +498,25 @@ async fn handle_explain_tool(
         "relative_cost": runtime_resp.get("relative_cost").cloned().unwrap_or_else(|| json!(0.0)),
         "plan": runtime_resp.get("plan").cloned().unwrap_or_else(|| json!({})),
         "plan_text": runtime_resp.get("plan_text").cloned().unwrap_or_else(|| json!("")),
+    }))
+}
+
+async fn handle_functions_tool(
+    params: &Value,
+    headers: &McpRequestHeaders,
+    auth: &McpAuthContext,
+) -> Result<Value, McpServerError> {
+    auth.require_operator().map_err(McpServerError::AuthError)?;
+
+    let _req: FunctionsToolRequest = serde_json::from_value(params.clone())
+        .map_err(|e| McpServerError::InvalidRequest(format!("Invalid functions params: {}", e)))?;
+
+    let runtime_resp = forward_to_runtime("GET", "/api/v1/sql/functions", None, headers).await?;
+
+    Ok(json!({
+        "status": runtime_resp.get("status").cloned().unwrap_or_else(|| json!("ok")),
+        "total": runtime_resp.get("total").cloned().unwrap_or_else(|| json!(0)),
+        "functions": runtime_resp.get("functions").cloned().unwrap_or_else(|| json!([])),
     }))
 }
 
@@ -1001,7 +1027,8 @@ mod tests {
     fn test_capabilities_default() {
         let cap = McpServerCapabilities::default();
         assert_eq!(cap.version, MCP_VERSION);
-        assert_eq!(cap.tools.len(), 12);
+        assert_eq!(cap.tools.len(), 14);
+        assert!(cap.tools.iter().any(|t| t.name == "functions"));
     }
 
     #[tokio::test]

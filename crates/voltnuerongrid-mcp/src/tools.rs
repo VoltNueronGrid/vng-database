@@ -78,6 +78,21 @@ pub struct ExplainToolResponse {
     pub plan_text: String,
 }
 
+/// Request to list built-in SQL functions and cross-dialect compatibility.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FunctionsToolRequest {
+    /// Reserved for future server-side filtering.
+    #[serde(default)]
+    pub category_filter: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FunctionsToolResponse {
+    pub status: String,
+    pub total: usize,
+    pub functions: Vec<Value>,
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Schema Tool
 // ═══════════════════════════════════════════════════════════════════════════

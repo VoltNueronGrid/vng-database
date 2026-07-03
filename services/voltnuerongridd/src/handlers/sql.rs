@@ -335,6 +335,24 @@ pub(crate) struct SqlExplainResponse {
 }
 
 #[derive(Serialize)]
+pub(crate) struct SqlBuiltinFunctionEntry {
+    pub(crate) name: String,
+    pub(crate) language: String,
+    pub(crate) deterministic: bool,
+    pub(crate) description: String,
+    pub(crate) category: String,
+    pub(crate) dialects: Vec<String>,
+    pub(crate) execution_paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SqlFunctionsResponse {
+    pub(crate) status: &'static str,
+    pub(crate) total: usize,
+    pub(crate) functions: Vec<SqlBuiltinFunctionEntry>,
+}
+
+#[derive(Serialize)]
 pub(crate) struct RoutedStatementResponse {
     pub(crate) statement: String,
     /// Routing path from `HtapQueryRouter` (heuristic).
@@ -1396,6 +1414,92 @@ pub(crate) async fn sql_explain(
         relative_cost: estimate.relative_cost,
         plan: plan_json,
         plan_text,
+    }))
+}
+
+pub(crate) async fn sql_functions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SqlFunctionsResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    let principal = require_sql_runtime_principal(&headers, &state, PrivilegeAction::Read, "sql/functions")?;
+
+    let mut functions: Vec<SqlBuiltinFunctionEntry> = voltnuerongrid_sql::builtin_function_catalog()
+        .into_iter()
+        .map(|f| {
+            let upper = f.name.to_ascii_uppercase();
+            let dialects = match upper.as_str() {
+                "IFNULL" => vec!["mysql".to_string()],
+                "NVL" | "NVL2" | "DECODE" => vec!["oracle".to_string()],
+                "IFF" | "ZEROIFNULL" | "NULLIFZERO" | "TO_TIMESTAMP_NTZ" | "TO_TIMESTAMP_TZ" => {
+                    vec!["snowflake".to_string()]
+                }
+                "JSONB_EXTRACT_PATH" => vec!["postgres".to_string()],
+                "LISTAGG" => vec!["oracle".to_string(), "snowflake".to_string()],
+                _ => vec![
+                    "postgres".to_string(),
+                    "mysql".to_string(),
+                    "oracle".to_string(),
+                    "snowflake".to_string(),
+                ],
+            };
+
+            let category = if upper.contains("JSON") || upper.contains("OBJECT") || upper.contains("ARRAY") || upper.contains("MAP") {
+                "json"
+            } else if upper.contains("DATE") || upper.contains("TIME") || upper == "NOW" || upper == "EXTRACT" {
+                "date_time"
+            } else if upper == "COUNT" || upper == "SUM" || upper == "AVG" || upper == "MIN" || upper == "MAX" || upper.contains("AGG") {
+                "aggregate"
+            } else if upper == "COALESCE" || upper == "NULLIF" || upper == "IFNULL" || upper == "NVL" || upper == "NVL2" || upper == "IFF" || upper == "DECODE" {
+                "conditional"
+            } else if upper == "ABS" || upper == "CEIL" || upper == "CEILING" || upper == "FLOOR" || upper == "ROUND" || upper == "POWER" || upper == "SQRT" || upper == "MOD" || upper == "SIGN" {
+                "numeric"
+            } else if upper == "CAST" || upper == "TRY_CAST" || upper.starts_with("TO_") || upper.starts_with("TRY_TO_") {
+                "conversion"
+            } else {
+                "string"
+            };
+
+            let execution_paths = if upper == "COUNT"
+                || upper == "SUM"
+                || upper == "AVG"
+                || upper == "MIN"
+                || upper == "MAX"
+            {
+                vec!["oltp".to_string(), "olap".to_string()]
+            } else {
+                vec!["olap".to_string()]
+            };
+
+            SqlBuiltinFunctionEntry {
+                name: f.name,
+                language: format!("{:?}", f.language).to_ascii_lowercase(),
+                deterministic: f.deterministic,
+                description: f.description,
+                category: category.to_string(),
+                dialects,
+                execution_paths,
+            }
+        })
+        .collect();
+
+    functions.sort_by(|a, b| a.name.cmp(&b.name));
+
+    append_runtime_audit_event(
+        &state,
+        AuditEventKind::Sql,
+        &principal,
+        "sql_functions",
+        "ok",
+        json!({
+            "route_scope": "sql/functions",
+            "function_count": functions.len(),
+        }),
+    );
+
+    Ok(Json(SqlFunctionsResponse {
+        status: "ok",
+        total: functions.len(),
+        functions,
     }))
 }
 

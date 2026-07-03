@@ -270,6 +270,21 @@ pub(crate) async fn admin_schema_tree(
         .filter(|s| !s.is_empty())
         .or_else(|| q.database.as_ref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()));
 
+    let catalog_databases: Vec<String> = {
+        let db_catalog = state.storage.database_catalog.lock().expect("database_catalog lock");
+        db_catalog
+            .list()
+            .into_iter()
+            .map(|db| db.name.as_str().to_string())
+            .filter(|name| {
+                db_filter
+                    .as_ref()
+                    .map(|f| name.eq_ignore_ascii_case(f))
+                    .unwrap_or(true)
+            })
+            .collect()
+    };
+
     let mut db_map: BTreeMap<String, BTreeMap<String, Vec<&DdlCatalogEntry>>> = BTreeMap::new();
     for entry in catalog.active_entries() {
         // Scope to a single database when requested
@@ -284,6 +299,23 @@ pub(crate) async fn admin_schema_tree(
             .entry(entry.schema_name.clone())
             .or_default()
             .push(entry);
+    }
+
+    // Enhancement-1: expose system schemas under every database, including
+    // newly created databases without user-defined objects.
+    for db_name in &catalog_databases {
+        let schema_map = db_map.entry(db_name.clone()).or_default();
+        for schema_name in ["public", "pg_catalog", "information_schema"] {
+            schema_map.entry(schema_name.to_string()).or_default();
+        }
+    }
+
+    // Backward compatibility: if a database appears only in DDL entries,
+    // still ensure the system schemas are present.
+    for schema_map in db_map.values_mut() {
+        for schema_name in ["public", "pg_catalog", "information_schema"] {
+            schema_map.entry(schema_name.to_string()).or_default();
+        }
     }
 
     let databases: Vec<AdminSchemaDatabase> = db_map

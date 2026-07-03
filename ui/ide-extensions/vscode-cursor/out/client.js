@@ -4,6 +4,7 @@ exports.runConnectivityChecks = runConnectivityChecks;
 exports.executeSql = executeSql;
 exports.analyzeSql = analyzeSql;
 exports.explainSql = explainSql;
+exports.listSqlFunctions = listSqlFunctions;
 exports.getSchemaRegistry = getSchemaRegistry;
 exports.requestRuntime = requestRuntime;
 exports.toPermissionMessage = toPermissionMessage;
@@ -58,6 +59,12 @@ async function explainSql(connection, sql) {
             sql_batch: sql,
             request_id: "ide-query-diagnostics",
         },
+    });
+}
+async function listSqlFunctions(connection) {
+    return requestRuntime(connection, {
+        method: "GET",
+        path: "/api/v1/sql/functions",
     });
 }
 async function getSchemaRegistry(connection) {

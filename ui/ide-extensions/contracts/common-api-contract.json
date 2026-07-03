@@ -26,6 +26,11 @@
       "path": "/api/v1/sql/explain"
     },
     {
+      "name": "sql_functions",
+      "method": "GET",
+      "path": "/api/v1/sql/functions"
+    },
+    {
       "name": "autonomous_authorize",
       "method": "POST",
       "path": "/api/v1/autonomous/actions/authorize"

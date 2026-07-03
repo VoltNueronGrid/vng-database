@@ -67,6 +67,13 @@ export async function explainSql(connection: RuntimeConnection, sql: string): Pr
   });
 }
 
+export async function listSqlFunctions(connection: RuntimeConnection): Promise<HttpResult> {
+  return requestRuntime(connection, {
+    method: "GET",
+    path: "/api/v1/sql/functions",
+  });
+}
+
 export async function getSchemaRegistry(connection: RuntimeConnection): Promise<HttpResult> {
   return requestRuntime(connection, {
     method: "GET",
