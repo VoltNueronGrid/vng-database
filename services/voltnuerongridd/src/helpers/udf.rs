@@ -222,6 +222,14 @@ impl UdfRegistry {
         self.udfs.get(name)
     }
 
+    /// Remove a registered UDF by name.
+    ///
+    /// Returns `true` when an entry was removed, `false` when no function with
+    /// this name was registered.
+    pub(crate) fn unregister(&mut self, name: &str) -> bool {
+        self.udfs.remove(name).is_some()
+    }
+
     // ── Execution ─────────────────────────────────────────────────────────────
 
     /// Call a registered UDF by name with positional string arguments.

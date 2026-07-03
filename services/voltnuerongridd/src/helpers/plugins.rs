@@ -211,6 +211,52 @@ impl PluginRegistry {
         Ok(())
     }
 
+    /// Disable a currently installed plugin without removing version history.
+    pub(crate) fn disable(&mut self, id: &str) -> Result<(), String> {
+        let current_ver = self
+            .state
+            .current
+            .get(id)
+            .ok_or_else(|| format!("plugin_not_installed: {id}"))?
+            .clone();
+
+        let history = self
+            .state
+            .history
+            .get_mut(id)
+            .ok_or_else(|| format!("plugin_not_installed: {id}"))?;
+        let entry = history
+            .iter_mut()
+            .find(|e| e.version == current_ver)
+            .ok_or_else(|| format!("plugin_version_not_found: {id}@{current_ver}"))?;
+        entry.state = PluginState::Disabled;
+        self.persist();
+        Ok(())
+    }
+
+    /// Enable a currently installed plugin.
+    pub(crate) fn enable(&mut self, id: &str) -> Result<(), String> {
+        let current_ver = self
+            .state
+            .current
+            .get(id)
+            .ok_or_else(|| format!("plugin_not_installed: {id}"))?
+            .clone();
+
+        let history = self
+            .state
+            .history
+            .get_mut(id)
+            .ok_or_else(|| format!("plugin_not_installed: {id}"))?;
+        let entry = history
+            .iter_mut()
+            .find(|e| e.version == current_ver)
+            .ok_or_else(|| format!("plugin_version_not_found: {id}@{current_ver}"))?;
+        entry.state = PluginState::Active;
+        self.persist();
+        Ok(())
+    }
+
     // ── Query operations ──────────────────────────────────────────────────────
 
     /// Return all currently active plugin entries.
@@ -223,7 +269,7 @@ impl PluginRegistry {
                     .history
                     .get(id)?
                     .iter()
-                    .find(|e| &e.version == ver)
+                    .find(|e| &e.version == ver && matches!(e.state, PluginState::Active))
                     .cloned()
             })
             .collect()

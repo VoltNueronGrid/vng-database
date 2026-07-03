@@ -16451,6 +16451,123 @@ fn plug4_plugin_registry_in_app_state_is_accessible() {
     assert_eq!(reg.list_active().len(), 1);
 }
 
+#[test]
+fn plug4_plugin_disable_and_enable_toggles_active_listing() {
+    use crate::helpers::plugins::{PluginEntry, PluginRegistry, PluginState};
+    let mut reg = PluginRegistry::new_empty();
+    let entry = PluginEntry {
+        id: "toggle-me".to_string(),
+        name: "Toggle Me".to_string(),
+        version: "1.0.0".to_string(),
+        checksum_sha256: "abc".to_string(),
+        signed: true,
+        installed_at_ms: 0,
+        state: PluginState::Active,
+    };
+    reg.install(entry).expect("install should succeed");
+    assert_eq!(reg.list_active().len(), 1, "installed plugin should be active");
+    reg.disable("toggle-me").expect("disable should succeed");
+    assert_eq!(reg.list_active().len(), 0, "disabled plugin should not appear in active list");
+    reg.enable("toggle-me").expect("enable should succeed");
+    assert_eq!(reg.list_active().len(), 1, "enabled plugin should return to active list");
+}
+
+#[test]
+fn plug4_pivot_plugin_enable_disable_manages_udf_lifecycle() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    let state = state_with_key(Some("secret"));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    rt.block_on(async {
+        let app = crate::router::build_router(state.clone());
+
+        let install_body = serde_json::json!({
+            "id": "function.pivot",
+            "name": "Pivot Function Plugin",
+            "version": "1.0.0",
+            "checksum_sha256": "pivotsha",
+            "signed": true
+        });
+        let install_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/plugins/install")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "secret")
+            .body(Body::from(install_body.to_string()))
+            .unwrap();
+        let install_resp = tower::ServiceExt::oneshot(app, install_req).await.unwrap();
+        assert_eq!(install_resp.status(), StatusCode::OK, "pivot plugin install should succeed");
+
+        let call_body = serde_json::json!({
+            "name": "pivot_table",
+            "args": [
+                "[{\"region\":\"East\",\"month\":\"JAN\",\"amount\":120},{\"region\":\"East\",\"month\":\"FEB\",\"amount\":100},{\"region\":\"West\",\"month\":\"JAN\",\"amount\":80}]",
+                "region",
+                "month",
+                "amount",
+                "SUM"
+            ]
+        });
+        let call_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/udf/call")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "secret")
+            .body(Body::from(call_body.to_string()))
+            .unwrap();
+        let call_resp = tower::ServiceExt::oneshot(crate::router::build_router(state.clone()), call_req)
+            .await
+            .unwrap();
+        assert_eq!(call_resp.status(), StatusCode::OK, "pivot UDF should execute when plugin enabled");
+
+        let disable_body = serde_json::json!({ "id": "function.pivot" });
+        let disable_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/plugins/disable")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "secret")
+            .body(Body::from(disable_body.to_string()))
+            .unwrap();
+        let disable_resp = tower::ServiceExt::oneshot(crate::router::build_router(state.clone()), disable_req)
+            .await
+            .unwrap();
+        assert_eq!(disable_resp.status(), StatusCode::OK, "pivot plugin disable should succeed");
+
+        let call_req_disabled = Request::builder()
+            .method("POST")
+            .uri("/api/v1/udf/call")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "secret")
+            .body(Body::from(call_body.to_string()))
+            .unwrap();
+        let call_resp_disabled = tower::ServiceExt::oneshot(
+            crate::router::build_router(state.clone()),
+            call_req_disabled,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            call_resp_disabled.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "pivot UDF must be unavailable when plugin is disabled"
+        );
+
+        let enable_body = serde_json::json!({ "id": "function.pivot" });
+        let enable_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/plugins/enable")
+            .header("Content-Type", "application/json")
+            .header("x-vng-admin-key", "secret")
+            .body(Body::from(enable_body.to_string()))
+            .unwrap();
+        let enable_resp = tower::ServiceExt::oneshot(crate::router::build_router(state.clone()), enable_req)
+            .await
+            .unwrap();
+        assert_eq!(enable_resp.status(), StatusCode::OK, "pivot plugin enable should succeed");
+    });
+}
+
 // ── MV-1: Materialized view — full refresh engine ────────────────────────────
 
 #[test]

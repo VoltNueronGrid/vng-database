@@ -655,6 +655,14 @@ pub(crate) fn build_router(state: crate::AppState) -> axum::Router {
             use crate::handlers::plugins::plugin_downgrade_handler;
             post(plugin_downgrade_handler)
         })
+        .route("/api/v1/plugins/disable", {
+            use crate::handlers::plugins::plugin_disable_handler;
+            post(plugin_disable_handler)
+        })
+        .route("/api/v1/plugins/enable", {
+            use crate::handlers::plugins::plugin_enable_handler;
+            post(plugin_enable_handler)
+        })
         .route("/api/v1/plugins/{id}", {
             use crate::handlers::plugins::plugin_uninstall_handler;
             axum::routing::delete(plugin_uninstall_handler)

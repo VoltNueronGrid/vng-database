@@ -21,6 +21,81 @@ use crate::{
 };
 use crate::auth::require_admin_api_key;
 
+const PIVOT_PLUGIN_ID: &str = "function.pivot";
+const PIVOT_UDF_NAME: &str = "pivot_table";
+
+fn pivot_udf_source() -> &'static str {
+        r#"
+function pivot_table(rows_json, group_key, pivot_key, value_key, agg_name) {
+    const rows = JSON.parse(rows_json || "[]");
+    const agg = (agg_name || "SUM").toUpperCase();
+    const groups = new Map();
+    const pivotValues = new Set();
+
+    for (const row of rows) {
+        const g = String(row[group_key]);
+        const p = String(row[pivot_key]);
+        const raw = row[value_key];
+        const v = Number(raw === undefined || raw === null || raw === "" ? 0 : raw);
+        pivotValues.add(p);
+        if (!groups.has(g)) groups.set(g, new Map());
+        const bucket = groups.get(g);
+        if (!bucket.has(p)) bucket.set(p, []);
+        bucket.get(p).push(v);
+    }
+
+    const pivots = Array.from(pivotValues).sort();
+    const outRows = [];
+
+    for (const [group, bucket] of groups.entries()) {
+        const out = { group_key: group };
+        for (const p of pivots) {
+            const vals = bucket.get(p) || [];
+            if (vals.length === 0) {
+                out[p] = null;
+            } else if (agg === "COUNT") {
+                out[p] = vals.length;
+            } else if (agg === "AVG") {
+                out[p] = vals.reduce((a, b) => a + b, 0) / vals.length;
+            } else if (agg === "MIN") {
+                out[p] = Math.min(...vals);
+            } else if (agg === "MAX") {
+                out[p] = Math.max(...vals);
+            } else {
+                out[p] = vals.reduce((a, b) => a + b, 0);
+            }
+        }
+        outRows.push(out);
+    }
+
+    return JSON.stringify({
+        status: "ok",
+        aggregate: agg,
+        columns: ["group_key", ...pivots],
+        rows: outRows
+    });
+}
+"#
+}
+
+fn ensure_pivot_udf_enabled(state: &AppState) -> Result<(), String> {
+        state
+                .ops
+                .udf_registry
+                .lock()
+                .expect("udf_registry lock")
+                .register_js(PIVOT_UDF_NAME, pivot_udf_source(), 1000)
+}
+
+fn ensure_pivot_udf_disabled(state: &AppState) {
+        let _ = state
+                .ops
+                .udf_registry
+                .lock()
+                .expect("udf_registry lock")
+                .unregister(PIVOT_UDF_NAME);
+}
+
 // ── DTOs ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +127,11 @@ pub(crate) struct PluginUpgradeRequest {
 pub(crate) struct PluginDowngradeRequest {
     pub(crate) id: String,
     pub(crate) target_version: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PluginStateRequest {
+    pub(crate) id: String,
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -113,14 +193,25 @@ pub(crate) async fn plugin_install_handler(
         .install(entry);
 
     match result {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "installed",
-                "id": req.id,
-            })),
-        )
-            .into_response(),
+        Ok(()) => {
+            if req.id == PIVOT_PLUGIN_ID {
+                if let Err(msg) = ensure_pivot_udf_enabled(&state) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "status": "error", "message": msg })),
+                    )
+                        .into_response();
+                }
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "installed",
+                    "id": req.id,
+                })),
+            )
+                .into_response()
+        }
         Err(msg) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "status": "error", "message": msg })),
@@ -190,11 +281,22 @@ pub(crate) async fn plugin_upgrade_handler(
         .upgrade(&req.id, entry);
 
     match result {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "status": "upgraded", "id": req.id })),
-        )
-            .into_response(),
+        Ok(()) => {
+            if req.id == PIVOT_PLUGIN_ID {
+                if let Err(msg) = ensure_pivot_udf_enabled(&state) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "status": "error", "message": msg })),
+                    )
+                        .into_response();
+                }
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "status": "upgraded", "id": req.id })),
+            )
+                .into_response()
+        }
         Err(msg) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "status": "error", "message": msg })),
@@ -254,11 +356,16 @@ pub(crate) async fn plugin_uninstall_handler(
         .uninstall(&id);
 
     match result {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "status": "uninstalled", "id": id })),
-        )
-            .into_response(),
+        Ok(()) => {
+            if id == PIVOT_PLUGIN_ID {
+                ensure_pivot_udf_disabled(&state);
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "status": "uninstalled", "id": id })),
+            )
+                .into_response()
+        }
         Err(msg) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "status": "error", "message": msg })),
@@ -304,4 +411,82 @@ pub(crate) async fn plugin_list_handler(
         })),
     )
         .into_response()
+}
+
+/// `POST /api/v1/plugins/disable`
+pub(crate) async fn plugin_disable_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PluginStateRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = require_admin_api_key(&headers, &state) {
+        return e.into_response();
+    }
+
+    let result = state
+        .ops
+        .plugin_registry
+        .lock()
+        .expect("plugin_registry lock")
+        .disable(&req.id);
+
+    match result {
+        Ok(()) => {
+            if req.id == PIVOT_PLUGIN_ID {
+                ensure_pivot_udf_disabled(&state);
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "status": "disabled", "id": req.id })),
+            )
+                .into_response()
+        }
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "status": "error", "message": msg })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/v1/plugins/enable`
+pub(crate) async fn plugin_enable_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PluginStateRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = require_admin_api_key(&headers, &state) {
+        return e.into_response();
+    }
+
+    let result = state
+        .ops
+        .plugin_registry
+        .lock()
+        .expect("plugin_registry lock")
+        .enable(&req.id);
+
+    match result {
+        Ok(()) => {
+            if req.id == PIVOT_PLUGIN_ID {
+                if let Err(msg) = ensure_pivot_udf_enabled(&state) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "status": "error", "message": msg })),
+                    )
+                        .into_response();
+                }
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "status": "enabled", "id": req.id })),
+            )
+                .into_response()
+        }
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "status": "error", "message": msg })),
+        )
+            .into_response(),
+    }
 }

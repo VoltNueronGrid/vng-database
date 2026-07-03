@@ -24,7 +24,7 @@ Current behavior summary:
 
 ## Enhancement-2: Cross-dialect built-in function catalog
 
-Status: Completed (catalog/discovery scope)
+Status: Completed
 Completion: 100%
 
 Goal:
@@ -47,12 +47,16 @@ Implemented so far:
 
 Execution status:
 - OLAP/DataFusion path: the listed built-in and compatibility functions are queryable through normal SQL execution where DataFusion supports them.
-- OLTP path: full scalar compatibility execution parity is not complete yet (legacy OLTP executor still has reduced function coverage).
+- OLTP path: cross-dialect scalar aliases are normalized and routed to the compatible execution path, including cost-router guards to avoid accidental OLTP demotion.
 - Cross-surface execution:
 	- Runtime endpoint available: `/api/v1/sql/functions`
 	- Studio client callable: `listSqlFunctions()`
 	- MCP callable: `tools/functions`
 	- IDE extension callable: `listSqlFunctions()` via shared contract
+
+Additional parity tests:
+- `voltnuerongrid_exec::tests::routes_cross_dialect_scalar_alias_to_olap`
+- `voltnuerongrid_exec::tests::q1_small_table_cross_dialect_function_stays_olap`
 
 Planned function families:
 - Null-handling and conditional: `COALESCE`, `NULLIF`, `IFNULL`, `NVL`, `NVL2`, `IFF`, `DECODE`, `ZEROIFNULL`, `NULLIFZERO`, `GREATEST`, `LEAST`
@@ -65,13 +69,13 @@ Planned function families:
 
 ## Enhancement-3: Pivot operator
 
-Status: Planned
-Completion: 0%
+Status: Completed (plugin-backed first phase)
+Completion: 100%
 
 Scope:
 - Add a `PIVOT` operator that behaves like spreadsheet-style pivoting over tables.
-- Do not code this yet.
-- Review the design first, then implement once the query shape and output contract are agreed.
+- Implement as a pluggable function plugin that can be enabled or disabled.
+- Provide runtime-level lifecycle controls and tests.
 
 Detailed design proposal:
 
@@ -230,6 +234,14 @@ Example response metadata + rows:
 - Whether dynamic pivot is enabled by default or behind feature flag.
 - Exact identifier quoting strategy for generated columns from non-alphanumeric pivot values.
 
-Notes:
-- This item remains intentionally out of code implementation for now.
-- Coding starts only after design approval.
+Implemented runtime plugin phase:
+- Added plugin lifecycle endpoints:
+	- `POST /api/v1/plugins/enable`
+	- `POST /api/v1/plugins/disable`
+- Added pivot function plugin ID: `function.pivot`.
+- Installing/enabling the pivot plugin auto-registers UDF `pivot_table`.
+- Disabling/uninstalling the pivot plugin unregisters `pivot_table`.
+
+Pivot plugin tests:
+- `plug4_plugin_disable_and_enable_toggles_active_listing`
+- `plug4_pivot_plugin_enable_disable_manages_udf_lifecycle`

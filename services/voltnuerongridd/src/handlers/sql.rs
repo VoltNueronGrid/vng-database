@@ -2560,6 +2560,7 @@ pub(crate) async fn sql_execute(
             // ISSUE-05: If the (view-expanded) SELECT calls a catalog UDF with a SQL
             // body, inline the function body as a subquery so the query can execute.
             let expanded = inline_catalog_udf_calls(expanded, &udf_catalog_snapshot);
+            let expanded = rewrite_compat_function_aliases(&expanded);
             olap_statements.push(expanded);
         } else {
             // M-8 Rule 6: For DML (INSERT/UPDATE/DELETE) targeting a simple updatable
@@ -2568,6 +2569,21 @@ pub(crate) async fn sql_execute(
             transaction_statements.push(rewritten);
         }
     }
+        /// Rewrite common cross-dialect aliases to canonical forms understood by the
+        /// executor/planner pipeline.
+        fn rewrite_compat_function_aliases(sql: &str) -> String {
+            let mut out = sql.to_string();
+            // Null-handling aliases.
+            out = out.replace("IFNULL(", "COALESCE(");
+            out = out.replace("ifnull(", "coalesce(");
+            out = out.replace("NVL(", "COALESCE(");
+            out = out.replace("nvl(", "coalesce(");
+            // Keep IFF as a CASE-like primitive by mapping to COALESCE for 2-arg fallback style calls.
+            out = out.replace("ZEROIFNULL(", "COALESCE(");
+            out = out.replace("zeroifnull(", "coalesce(");
+            out
+        }
+
 
     let mut transaction = None;
     let mut olap = None;

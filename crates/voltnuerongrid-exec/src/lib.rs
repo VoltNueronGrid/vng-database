@@ -56,6 +56,27 @@ impl HtapQueryRouter {
                 reason: "transactional statement".to_string(),
             },
             SqlStatementKind::Select => {
+                let has_cross_dialect_scalar_fn = upper.contains(" IFNULL(")
+                    || upper.contains(" NVL(")
+                    || upper.contains(" NVL2(")
+                    || upper.contains(" IFF(")
+                    || upper.contains(" DECODE(")
+                    || upper.contains(" DATEADD(")
+                    || upper.contains(" DATEDIFF(")
+                    || upper.contains(" ZEROIFNULL(")
+                    || upper.contains(" NULLIFZERO(")
+                    || upper.contains(" TO_TIMESTAMP_NTZ(")
+                    || upper.contains(" TO_TIMESTAMP_TZ(")
+                    || upper.contains(" JSON_EXTRACT(")
+                    || upper.contains(" JSON_OBJECT(")
+                    || upper.contains(" OBJECT_CONSTRUCT(")
+                    || upper.contains(" ARRAY_CONSTRUCT(")
+                    || upper.contains(" TRY_CAST(")
+                    || upper.contains(" TO_VARCHAR(")
+                    || upper.contains(" TO_NUMBER(")
+                    || upper.contains(" PIVOT(")
+                    || upper.contains(" TRY_TO_");
+
                 // ISSUE-06 improvement: normalise whitespace around function call parens
                 // so `SUM (` and `SUM(` are both detected.  Also route full-table scans
                 // (SELECT … FROM table with no WHERE clause) to OLAP to avoid saturating
@@ -82,7 +103,8 @@ impl HtapQueryRouter {
                     || compact.contains("MIN (")
                     || compact.contains("MIN(")
                     || compact.contains("MAX (")
-                    || compact.contains("MAX(");
+                    || compact.contains("MAX(")
+                    || has_cross_dialect_scalar_fn;
                 if is_analytical {
                     RouteDecision {
                         path: QueryPath::Olap,
@@ -219,13 +241,34 @@ impl HtapQueryRouter {
         };
         let upper: String = sql.to_ascii_uppercase().split_whitespace().collect::<Vec<_>>().join(" ");
         let has_equality_predicate = upper.contains("WHERE ") && upper.contains('=');
+        let has_cross_dialect_scalar_fn = upper.contains(" IFNULL(")
+            || upper.contains(" NVL(")
+            || upper.contains(" NVL2(")
+            || upper.contains(" IFF(")
+            || upper.contains(" DECODE(")
+            || upper.contains(" DATEADD(")
+            || upper.contains(" DATEDIFF(")
+            || upper.contains(" ZEROIFNULL(")
+            || upper.contains(" NULLIFZERO(")
+            || upper.contains(" TO_TIMESTAMP_NTZ(")
+            || upper.contains(" TO_TIMESTAMP_TZ(")
+            || upper.contains(" JSON_EXTRACT(")
+            || upper.contains(" JSON_OBJECT(")
+            || upper.contains(" OBJECT_CONSTRUCT(")
+            || upper.contains(" ARRAY_CONSTRUCT(")
+            || upper.contains(" TRY_CAST(")
+            || upper.contains(" TO_VARCHAR(")
+            || upper.contains(" TO_NUMBER(")
+            || upper.contains(" PIVOT(")
+            || upper.contains(" TRY_TO_");
         // A JOIN (or set operation) can only be executed on the OLAP/DataFusion
         // plane — the OLTP row-store path has no join executor. Never demote
         // such queries to OLTP regardless of table size.
         let requires_olap_engine = upper.contains(" JOIN ")
             || upper.contains(" UNION ")
             || upper.contains(" INTERSECT ")
-            || upper.contains(" EXCEPT ");
+            || upper.contains(" EXCEPT ")
+            || has_cross_dialect_scalar_fn;
         match base.path {
             QueryPath::Olap if row_count < OLAP_MIN_ROWS && !requires_olap_engine => {
                 RouteDecision {
@@ -471,5 +514,23 @@ mod tests {
             Some("shop"),
         );
         assert_eq!(decision.path, QueryPath::Oltp);
+    }
+
+    #[test]
+    fn routes_cross_dialect_scalar_alias_to_olap() {
+        let decision = HtapQueryRouter::route_statement("SELECT IFNULL(amount, 0) FROM orders");
+        assert_eq!(decision.path, QueryPath::Olap);
+    }
+
+    #[test]
+    fn q1_small_table_cross_dialect_function_stays_olap() {
+        let mut stats = StatsRegistry::new();
+        stats.update_table("orders", 10, std::collections::HashMap::new());
+        let decision = HtapQueryRouter::route_with_stats(
+            "SELECT IFNULL(amount, 0) FROM orders",
+            &stats,
+            None,
+        );
+        assert_eq!(decision.path, QueryPath::Olap);
     }
 }
